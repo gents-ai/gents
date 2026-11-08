@@ -449,7 +449,7 @@ mod tests {
                 .expect("create request");
         }
         let turn = super::super::store::query_node_json(
-            &state.node,
+            &state.reader,
             r#"{ AgentRequest(filter: { request_id: {_eq: "turn"} }) {_docID} }"#,
         )
         .await
@@ -459,7 +459,7 @@ mod tests {
             .expect("turn doc id");
 
         let response = super::super::store::query_node_json(
-            &state.node,
+            &state.reader,
             &gents_turn_progress_query(turn_doc_id, "thread"),
         )
         .await

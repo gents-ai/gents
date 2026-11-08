@@ -747,6 +747,8 @@ pub(in crate::commands::codex_shim) mod tests {
             graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1/graphql",
             ),
+            client_did: Arc::from("did:test:reasoning"),
+            reader: gents::store::config_client::ConfigAccess::local(node.clone()),
             node_did: Arc::from("did:test:reasoning"),
             agent_did: Arc::from("reasoning"),
             agent_signer: None,
@@ -1065,6 +1067,8 @@ pub(in crate::commands::codex_shim) mod tests {
             graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1/graphql",
             ),
+            client_did: Arc::from(crate::caused_sessions::fixtures::FIXTURE_DID),
+            reader: gents::store::config_client::ConfigAccess::local(node.clone()),
             node_did: Arc::from(crate::caused_sessions::fixtures::FIXTURE_DID),
             agent_did: Arc::from(agent.agent_did),
             agent_signer,

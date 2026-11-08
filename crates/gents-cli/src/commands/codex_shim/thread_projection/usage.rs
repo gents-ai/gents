@@ -163,7 +163,7 @@ async fn session_request_ids(
             }}
         }}"#
     );
-    let response = query_node_json(&state.node, &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     let rows = rows::<AgentRequestRow>(&response, "AgentRequest")
         .context("decoding AgentRequest rows for token usage")?;
     Ok(rows
@@ -196,7 +196,7 @@ async fn scoped_request_doc_ids(
         r#"request_id:{{_in:[{logical}]}},node_did:{{_eq:"{owner}"}},agent_did:{{_eq:"{agent}"}},requester_did:{{_eq:{requester}}}"#
     ));
     let response = query_node_json(
-        &state.node,
+        &state.reader,
         &format!(r#"{{AgentRequest(filter:{{{scope}}}){{_docID request_id}}}}"#),
     )
     .await?;
@@ -272,7 +272,7 @@ async fn gather_request_usage(
             }}
         }}"#
     );
-    let response = query_node_json(&state.node, &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     rows::<InferenceCallUsageRow>(&response, "InferenceCall")
         .context("decoding InferenceCall rows for token usage")
 }
@@ -324,7 +324,7 @@ async fn latest_requests_token_usage_scoped(
             }}
         }}"#
     );
-    let response = query_node_json(&state.node, &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     let rows = rows::<InferenceCallUsageRow>(&response, "InferenceCall")
         .context("decoding latest InferenceCall row for context usage")?;
     Ok(latest_usage_from_rows(rows, &positions))

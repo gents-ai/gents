@@ -513,3 +513,82 @@ async fn direct_relationship_changes_require_actor_signing_capability() {
     }
     node.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn offline_client_writes_travel_signed_through_the_held_loopback_endpoint() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = KeyIdentity::load_or_create(directory.path().join("node"), None).unwrap();
+    let user = KeyIdentity::load_or_create(directory.path().join("user"), None).unwrap();
+    let other = KeyIdentity::load_or_create(directory.path().join("other"), None).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(root.did())
+            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
+    node.add_collection("type SigningFact { value: String }")
+        .await
+        .unwrap();
+    let endpoint = |identity: &KeyIdentity| {
+        super::GraphqlEndpoint::as_principal(&url, identity.did())
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap()
+    };
+    let offline = || {
+        ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap())
+            .with_client_signed_configuration()
+    };
+    assert!(matches!(
+        offline()
+            .write(
+                "test.offline_unrouted",
+                "mutation { add_SigningFact(input: {value: \"unrouted\"}) { _docID } }"
+            )
+            .await,
+        Err(super::ConfigClientError::EmbeddedClientSigningUnavailable)
+    ));
+    assert!(matches!(
+        ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap())
+            .with_client_signed_writes_through(endpoint(&other)),
+        Err(super::ConfigClientError::ClientSignerMismatch)
+    ));
+    let routed = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap())
+        .with_client_signed_writes_through(endpoint(&user))
+        .unwrap();
+    routed
+        .write(
+            "test.offline_routed",
+            "mutation { add_SigningFact(input: {value: \"autocommit\"}) { _docID } }",
+        )
+        .await
+        .unwrap();
+    routed
+        .transact_write("test.offline_routed_txn", |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "mutation { add_SigningFact(input: {value: \"transaction\"}) { _docID } }",
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
+    let read = routed
+        .execute("{ SigningFact(order: {value: ASC}) { value } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        read["data"]["SigningFact"],
+        serde_json::json!([{"value": "autocommit"}, {"value": "transaction"}])
+    );
+    assert!(
+        routed.local_node().is_some(),
+        "reads stay on the owned node"
+    );
+    node.shutdown().await.unwrap();
+}

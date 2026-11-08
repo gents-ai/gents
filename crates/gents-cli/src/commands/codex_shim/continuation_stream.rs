@@ -289,7 +289,7 @@ async fn load_background_continuation_requests(
             }}
         }}"#,
     );
-    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)

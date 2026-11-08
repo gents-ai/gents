@@ -175,6 +175,11 @@ use serde_json::Value;
 
 type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
+pub(crate) enum WriteRoute<'a> {
+    Http(&'a GraphqlEndpoint),
+    Local(&'a LocalConfigAccess),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphqlEndpoint {
     url: String,
@@ -471,6 +476,31 @@ impl ConfigAccess {
     }
 
     /// Preserve client signing intent when the selected transport is embedded.
+    /// Embedded access whose client-signed writes travel through `endpoint`,
+    /// the loopback HTTP endpoint of this same node held by the same actor.
+    /// Reads stay on the embedded node as that actor.
+    pub fn with_client_signed_writes_through(mut self, endpoint: GraphqlEndpoint) -> Result<Self> {
+        let Self::Local(local) = &mut self else {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        };
+        let capability = endpoint.held_client_signing_capability()?;
+        if local.identity().map(identity::Did::as_str) != Some(capability.did()) {
+            return Err(ConfigClientError::ClientSignerMismatch);
+        }
+        local.route_client_signed_writes(endpoint);
+        Ok(self)
+    }
+
+    /// The transport a mutation takes from this access.
+    pub(crate) fn write_route(&self) -> WriteRoute<'_> {
+        match self {
+            Self::Graphql(endpoint) => WriteRoute::Http(endpoint),
+            Self::Local(local) => local
+                .client_endpoint()
+                .map_or(WriteRoute::Local(local), WriteRoute::Http),
+        }
+    }
+
     pub fn with_client_signed_configuration(mut self) -> Self {
         match &mut self {
             Self::Local(local) => local.require_client_signed_writes(),

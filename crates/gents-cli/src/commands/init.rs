@@ -201,6 +201,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
             tool_root: args.tool_root.as_deref(),
             reset: args.reset,
             store_key_custody: crate::cli::args::store_key_custody(args.store_key_custody),
+            store_lock: &store_lock,
         })
         .await?;
         let output = json!({
@@ -749,6 +750,8 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) tool_root: Option<&'a Path>,
     pub(crate) reset: bool,
     pub(crate) store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
+    /// The home's held store lock; an empty store is protected under it.
+    pub(crate) store_lock: &'a gents::store::local::home::StoreLock,
 }
 
 struct HomeIdentityOptions<'a> {
@@ -790,6 +793,19 @@ pub(crate) async fn write_identity_only_home_metadata(
     let data_dir = default_data_dir(options.home);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    // Every later opener requires the fresh-store provenance marker, so an
+    // identity-only home protects its empty store exactly as full init does.
+    let fresh_backend = if fs::read_dir(&data_dir)?.next().is_none() {
+        Some(
+            gents::store::local::backend_protection::FreshBackendStore::observe(
+                &data_dir,
+                options.store_lock,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
 
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: options.home,
@@ -822,13 +838,18 @@ pub(crate) async fn write_identity_only_home_metadata(
         tool_root: tool_root.clone(),
         store_encryption: None,
     };
-    initialize_home_store(
+    let store_key = initialize_home_store(
         options.home,
         &data_dir,
         options.store_key_custody,
         &mut stored,
     )
     .await?;
+    if let Some(fresh_backend) = fresh_backend {
+        fresh_backend
+            .initialize(&store_key, Some(initialized_identity.identity.did()))
+            .await?;
+    }
     write_init_config(options.home, &stored)?;
     let runtime_state_reset = if options.reset {
         clear_runtime_state(options.home)?
@@ -1665,6 +1686,43 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
     use gents::eval::runner::embedded::EmbeddedHome;
+
+    #[tokio::test]
+    async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = default_data_dir(&home);
+        let (lock_home, lock_data) = (home.clone(), data.clone());
+        let lock =
+            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
+                .await
+                .unwrap()
+                .unwrap();
+        let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
+            home: &home,
+            node_name: "identity-only",
+            key_path: None,
+            identity_backend: IdentityBackendArg::File,
+            keychain_label: None,
+            secure_enclave_label: None,
+            tool_package: ToolPackageArg::Readonly,
+            tool_root: None,
+            reset: false,
+            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_lock: &lock,
+        })
+        .await
+        .unwrap();
+        let key = gents::store::local::store_key::open_home_store_key(&home, &data)
+            .await
+            .unwrap();
+        gents::store::local::backend_protection::ProtectedBackendStore::open(&data, &key, &lock)
+            .await
+            .expect("the identity-only store carries fresh provenance")
+            .preflight(&key, Some(&summary.node_did))
+            .await
+            .expect("the protected store is bound to the home's Node DID");
+    }
 
     fn overwrite(home: &Path, user_home: &Path) -> Result<gents::store::local::home::StoreLock> {
         lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))

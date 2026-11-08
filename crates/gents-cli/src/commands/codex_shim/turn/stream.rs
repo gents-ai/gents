@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
@@ -209,7 +208,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         let progress_query =
             gents_turn_progress_query(&current.request_doc_id, &current.session_id);
         let response = tokio::select! {
-            response = query_node_json(state.node.as_ref(), &progress_query) => response?,
+            response = query_node_json(&state.reader, &progress_query) => response?,
             changed = cancel_rx.changed() => {
                 if changed.is_ok() && *cancel_rx.borrow() {
                     return finish_interrupted_turn(
@@ -279,12 +278,10 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         let canonical_request: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(request_row.cloned().context("live request row missing")?)
                 .context("decoding canonical Codex request")?;
-        let canonical_output = gents::session::observe_request_output(
-            &ConfigAccess::local(state.node.clone()),
-            &canonical_request,
-        )
-        .await
-        .context("observing canonical Codex output")?;
+        let canonical_output =
+            gents::session::observe_request_output(&state.reader, &canonical_request)
+                .await
+                .context("observing canonical Codex output")?;
         let presentation = match &canonical_output {
             gents::session::CanonicalRequestOutput::Live(value)
             | gents::session::CanonicalRequestOutput::Settling(value)
@@ -407,7 +404,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 continue;
             }
             let tool = match hydrate_gents_tool_call_progress(
-                &ConfigAccess::local(state.node.clone()),
+                &state.reader,
                 row,
                 &current.node_did,
                 &current.session_id,
@@ -727,7 +724,7 @@ async fn canonical_output_started_at_ms(
         return Ok(header.and_then(|header| timestamp_millis(&header.created_at)));
     };
     let response = query_node_json(
-        &state.node,
+        &state.reader,
         &format!(
             r#"{{ AgentOutputSegment(
                 filter: {{ request_doc_id: {{ _eq: "{}" }} }},
@@ -1216,12 +1213,12 @@ async fn announce_consumed_inputs(
         escape_graphql_string(gents::request::lifecycle::FOLDED_REASON),
         superseded = RequestLifecycleState::Superseded.as_str()
     );
-    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .context("consumed input query omitted rows")?;
-    let access = ConfigAccess::local(state.node.clone());
+    let access = state.reader.clone();
     let mut ready = Vec::new();
     for raw in rows {
         let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(raw.clone())?;
@@ -1243,7 +1240,7 @@ async fn announce_consumed_inputs(
             escape_graphql_string(&current.request_doc_id),
             gents::session::canonical_rows::AGENT_MESSAGE_FIELDS
         );
-        let headers = query_node_json(state.node.as_ref(), &query).await?;
+        let headers = query_node_json(&state.reader, &query).await?;
         let headers = headers
             .pointer("/data/AgentMessage")
             .and_then(Value::as_array)
@@ -1325,7 +1322,7 @@ async fn steering_input_for_request(
     let query = format!(
         r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}, node_did: {{_eq: "{owner}"}}, requester_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{logical}"}}}}, limit: 2) {{content input}} }}"#
     );
-    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
@@ -1398,11 +1395,13 @@ mod tests {
             trace_path: temp.path().join("reasoning.jsonl"),
             cwd: temp.path().to_path_buf(),
             fs_root: None,
-            node,
+            node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1/graphql",
             ),
+            client_did: Arc::from("did:test:reasoning"),
+            reader: gents::store::config_client::ConfigAccess::local(node.clone()),
             node_did: Arc::from("did:test:reasoning"),
             agent_did: Arc::from("reasoning"),
             agent_signer: None,

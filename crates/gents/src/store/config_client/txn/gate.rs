@@ -37,6 +37,9 @@ pub struct LocalConfigAccess {
     pub(super) identity: Option<identity::Did>,
     pub(super) agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     pub(super) client_signed_writes: bool,
+    /// The client-signed endpoint served by this same node; writes that
+    /// require client signing travel through it as the endpoint's principal.
+    pub(super) client_endpoint: Option<crate::store::config_client::GraphqlEndpoint>,
 }
 
 impl LocalConfigAccess {
@@ -48,6 +51,7 @@ impl LocalConfigAccess {
             identity: None,
             agent_signer: None,
             client_signed_writes: false,
+            client_endpoint: None,
         }
     }
 
@@ -66,6 +70,20 @@ impl LocalConfigAccess {
 
     pub(crate) fn require_client_signed_writes(&mut self) {
         self.client_signed_writes = true;
+    }
+
+    pub(crate) fn route_client_signed_writes(
+        &mut self,
+        endpoint: crate::store::config_client::GraphqlEndpoint,
+    ) {
+        self.client_signed_writes = true;
+        self.client_endpoint = Some(endpoint);
+    }
+
+    pub(crate) fn client_endpoint(&self) -> Option<&crate::store::config_client::GraphqlEndpoint> {
+        self.client_endpoint
+            .as_ref()
+            .filter(|_| self.client_signed_writes)
     }
 
     #[cfg(test)]
@@ -104,6 +122,7 @@ impl LocalConfigAccess {
             identity: None,
             agent_signer: None,
             client_signed_writes: false,
+            client_endpoint: None,
         })
     }
 

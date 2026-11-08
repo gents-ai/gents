@@ -317,11 +317,9 @@ async fn assemble_caused_record_parts(
     cwd: PathBuf,
     git_info: Option<Value>,
 ) -> Result<CodexThreadRecord> {
-    let session = gents::store::config_client::ConfigAccess::transact_local_write(
-        &state.node,
-        None,
-        "codex.caused.session",
-        |txn| {
+    let session = state
+        .reader
+        .transact_readonly("codex.caused.session", |txn| {
             let owner = &link.node_did;
             let id = &link.session_id;
             let requester = link.requester_did.as_deref();
@@ -332,9 +330,8 @@ async fn assemble_caused_record_parts(
                         .map(|row| row.session),
                 )
             })
-        },
-    )
-    .await?;
+        })
+        .await?;
     if let Some(session) = &session {
         anyhow::ensure!(
             session.agent_did == link.agent_did,

@@ -25,6 +25,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
+    let operator_did = support::graphql::cli_user_did(&home_dir)?;
     let default_backend_id = default_backend_id(&node_did);
     let default_model_selection = gents_model_selection_id(&default_backend_id, &model_name);
     let shim_port = allocate_port()?;
@@ -198,7 +199,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
             }}"#,
                 escape_graphql_string(&thread_id),
                 escape_graphql_string(&node_did),
-                escape_graphql_string(&node_did),
+                escape_graphql_string(&operator_did),
             ),
         ))
         .await?;
@@ -211,14 +212,14 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         session.get("node_did").and_then(Value::as_str),
         Some(node_did.as_str())
     );
-    let expected_agent_did = format!("{node_did}:default");
+    let expected_agent_did = agent_did_from_init(&init)?;
     assert_eq!(
         session.get("agent_did").and_then(Value::as_str),
         Some(expected_agent_did.as_str())
     );
     assert_eq!(
         session.get("requester_did").and_then(Value::as_str),
-        Some(node_did.as_str())
+        Some(operator_did.as_str())
     );
     assert_eq!(session.get("closed_at"), Some(&Value::Null));
     assert!(

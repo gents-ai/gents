@@ -121,7 +121,7 @@ pub(super) async fn load_thread_turns(
         }}"#,
         gents::session::canonical_rows::AGENT_MESSAGE_FIELDS,
     );
-    let response = query_node_json(&state.node, &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
 
     let requests = decode_rows::<AgentRequestRow>(&response, "AgentRequest")
         .context("decoding AgentRequest history rows")?;
@@ -247,7 +247,7 @@ async fn load_completed_compactions(
             }}
         }}"#
     );
-    let response = query_node_json(&state.node, &query).await?;
+    let response = query_node_json(&state.reader, &query).await?;
     decode_rows::<CompactionRow>(&response, "InferenceCall")
         .context("decoding completed InferenceCall compaction history rows")
 }
@@ -737,7 +737,7 @@ async fn decode_canonical_message_rows(
     state: &ShimState,
     response: &Value,
 ) -> Result<Vec<MessageRow>> {
-    let access = gents::store::config_client::ConfigAccess::local(state.node.clone());
+    let access = state.reader.clone();
     let mut messages = Vec::new();
     let mut physical_ids = BTreeSet::new();
     for raw in raw_rows(response, "AgentMessage") {
@@ -776,7 +776,7 @@ async fn decode_tool_rows(
     session_id: &str,
     requester: Option<&str>,
 ) -> Result<Vec<ToolRow>> {
-    let access = gents::store::config_client::ConfigAccess::local(state.node.clone());
+    let access = state.reader.clone();
     let mut tools = Vec::new();
     for row in raw_rows(response, "AgentToolCall") {
         if row.get("request_doc_id").is_none_or(Value::is_null) {

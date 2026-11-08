@@ -732,26 +732,21 @@ async fn resolve_config_access_inner(
     let protected = protected
         .preflight(&store_key, Some(runtime_identity.did()))
         .await?;
-    let (http, local_endpoint) = if local_http {
-        let (listener, address) = tokio::task::spawn_blocking(|| -> std::io::Result<_> {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-            let address = listener.local_addr()?;
-            Ok((listener, address))
-        })
-        .await??;
-        let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
-            format!("http://{address}/api/v0/graphql"),
-            client_identity.did(),
-        )
-        .with_client_signing_capability(client_identity.client_signing_capability()?)?
-        .with_client_signed_agent_creates();
-        (
-            Some(gents::defra_node::HttpConfig::with_listener(listener)?),
-            Some(endpoint),
-        )
-    } else {
-        (None, None)
-    };
+    // Offline client writes are signed by the client key and travel through
+    // this owned node's loopback endpoint, as `gents init` publishes them.
+    let (listener, address) = tokio::task::spawn_blocking(|| -> std::io::Result<_> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        Ok((listener, address))
+    })
+    .await??;
+    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://{address}/api/v0/graphql"),
+        client_identity.did(),
+    )
+    .with_client_signing_capability(client_identity.client_signing_capability()?)?
+    .with_client_signed_agent_creates();
+    let http = Some(gents::defra_node::HttpConfig::with_listener(listener)?);
     let (node, _admission) = protected
         .start_node(&store_key, runtime_identity.clone(), http, None, &home_dir)
         .await?;
@@ -761,7 +756,8 @@ async fn resolve_config_access_inner(
         claim,
         identity::Did::new(client_identity.did().to_owned())?,
     )?
-    .with_client_signed_configuration();
+    .with_client_signed_writes_through(endpoint.clone())?;
+    let local_endpoint = local_http.then_some(endpoint);
     gents::store::schema::migration::ensure_all_runtime_migrations(migration_node)
         .await
         .map_err(|error| {

@@ -1,3 +1,4 @@
+use crate::store::config_client::WriteRoute;
 use std::future::Future;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -56,6 +57,7 @@ impl ConfigAccess {
             identity: None,
             agent_signer: None,
             client_signed_writes: false,
+            client_endpoint: None,
         }))
     }
 
@@ -157,13 +159,13 @@ impl ConfigAccess {
     pub async fn write(&self, operation: &'static str, mutation: &str) -> Result<Value> {
         graphql::ensure_mutation_document(mutation)?;
         let operation = WriteOperation::new(operation)?;
-        match self {
-            Self::Graphql(endpoint) => {
+        match self.write_route() {
+            WriteRoute::Http(endpoint) => {
                 let telemetry = auto_commit_telemetry(operation, WriteBackend::Http)?;
                 let result = graphql::auto_commit(endpoint, mutation).await;
                 finish_auto_commit(&telemetry, result, graphql::affected_documents)
             }
-            Self::Local(local) => {
+            WriteRoute::Local(local) => {
                 local.require_mutation_signer()?;
                 let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
                 let response = Self::execute_local_mutation(

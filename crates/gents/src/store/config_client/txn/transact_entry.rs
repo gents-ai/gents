@@ -1,3 +1,4 @@
+use crate::store::config_client::WriteRoute;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -34,7 +35,7 @@ impl ConfigAccess {
         E: TransactionFailure + From<ConfigClientError> + Send + 'a,
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
-        if !matches!(self, Self::Graphql(_)) {
+        if !matches!(self.write_route(), WriteRoute::Http(_)) {
             return Err(E::from(ConfigClientError::ClientAgentTransportRequired));
         }
         transact_owned(
@@ -60,15 +61,15 @@ impl ConfigAccess {
         operation: WriteOperation,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
     ) -> Result<ConfigApplyTxn<'_>> {
-        match self {
-            Self::Graphql(endpoint) => {
+        match self.write_route() {
+            WriteRoute::Http(endpoint) => {
                 let mut txn =
                     ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled, false)
                         .await?;
                 txn.operation = Some(operation.as_str());
                 Ok(txn)
             }
-            Self::Local(local) => {
+            WriteRoute::Local(local) => {
                 local.require_mutation_signer()?;
                 ConfigApplyTxn::begin_local_owned_with_signer(
                     local.node(),
@@ -93,8 +94,8 @@ impl ConfigAccess {
         E: TransactionFailure + From<ConfigClientError> + Send + 'a,
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
-        let mode = match self {
-            Self::Graphql(endpoint) if endpoint.pack_replay.is_some() => {
+        let mode = match self.write_route() {
+            WriteRoute::Http(endpoint) if endpoint.pack_replay.is_some() => {
                 TransactionMode::SingleAttempt
             }
             _ => TransactionMode::ConflictRetry,
@@ -125,18 +126,17 @@ impl ConfigAccess {
         E: TransactionFailure + From<ConfigClientError> + Send + 'a,
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
-        let mode = match self {
-            Self::Graphql(endpoint)
+        let mode = match self.write_route() {
+            WriteRoute::Http(endpoint)
                 if endpoint.pack_replay.is_none()
                     && endpoint.held_client_signing_capability().is_ok() =>
             {
                 TransactionMode::SignedConflictRebuild
             }
-            Self::Graphql(endpoint) if endpoint.pack_replay.is_some() => {
+            WriteRoute::Http(endpoint) if endpoint.pack_replay.is_some() => {
                 TransactionMode::SingleAttempt
             }
-            Self::Graphql(_) => TransactionMode::ConflictRetry,
-            Self::Local(_) => TransactionMode::ConflictRetry,
+            WriteRoute::Http(_) | WriteRoute::Local(_) => TransactionMode::ConflictRetry,
         };
         transact_owned(
             operation,

@@ -80,7 +80,7 @@ fn spawn_background_tool_watcher_handle(
             }
 
             let response = match query_node_json(
-                state.node.as_ref(),
+                &state.reader,
                 &gents_tool_progress_query(&request_doc_id, &session_id),
             )
             .await
@@ -131,7 +131,7 @@ fn spawn_background_tool_watcher_handle(
                                 );
                                 continue;
                             };
-                            let access = ConfigAccess::local(state.node.clone());
+                            let access = state.reader.clone();
                             let presentation =
                                 match gents::tools::call::lifecycle::load_tool_call_presentation(
                                     &access,
@@ -461,11 +461,13 @@ mod tests {
                 .join("codex-home/log/codex-shim-events.jsonl"),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             fs_root: None,
-            node,
+            node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1/graphql",
             ),
+            client_did: Arc::from("did:test:background-watcher"),
+            reader: gents::store::config_client::ConfigAccess::local(node.clone()),
             node_did: Arc::from("did:test:background-watcher"),
             agent_did: Arc::from("did:test:background-watcher:default"),
             agent_signer: None,
@@ -919,7 +921,7 @@ mod tests {
 
     async fn job_state(state: &ShimState, session: &str, call: &str) -> JobState {
         gents::tools::background::job::view::load_job_view(
-            &ConfigAccess::local(state.node.clone()),
+            &state.reader,
             None,
             gents::tools::background::job::view::JobKey::Address {
                 session_id: session.into(),
@@ -937,7 +939,7 @@ mod tests {
         let query = format!(
             r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_call_id: {{ _eq: "{call}" }} }}) {{ tool_call_key }} }}"#
         );
-        let response = query_node_json(state.node.as_ref(), &query).await.unwrap();
+        let response = query_node_json(&state.reader, &query).await.unwrap();
         response["data"]["AgentToolCall"][0]["tool_call_key"]
             .as_str()
             .unwrap()
@@ -950,12 +952,9 @@ mod tests {
         let state = job_test_state(dir.path()).await;
         seed_running_job(&state, "codex-job", "call-a").await;
 
-        let rows = load_running_background_terminal_rows(
-            &ConfigAccess::local(state.node.clone()),
-            "codex-job",
-        )
-        .await
-        .unwrap();
+        let rows = load_running_background_terminal_rows(&state.reader, "codex-job")
+            .await
+            .unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].tool_call_key, "codex-job:call-a");

@@ -5,7 +5,7 @@ use gents::session::{
     decode_session_row, load_agent_session_row_in_txn, load_latest_request_in_txn,
     session_scope_filter, AGENT_SESSION_FIELDS,
 };
-use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents::store::config_client::ConfigApplyTxn;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::graphql::GraphqlTurnState;
 use gents_protocol::session::AgentSession;
@@ -41,36 +41,40 @@ pub(super) async fn load_thread_state(
     state: &ShimState,
     session_id: &str,
 ) -> Result<Option<(AgentSession, Option<GraphqlTurnState>)>> {
-    ConfigAccess::transact_local_write(&state.node, None, "codex.thread.read", |txn| {
-        Box::pin(async move {
-            let Some(row) = load_agent_session_row_in_txn(
-                txn,
-                &state.node_did,
-                session_id,
-                Some(state.local_requester_did()),
-            )
-            .await?
-            else {
-                return Ok(None);
-            };
-            if row.session.agent_did != state.agent_did.as_ref() || is_started(&row.session) {
-                return Ok(None);
-            }
-            let head = load_head_in_txn(txn, state, session_id).await?;
-            Ok(Some((row.session, head)))
+    state
+        .reader
+        .transact_readonly("codex.thread.read", |txn| {
+            Box::pin(async move {
+                let Some(row) = load_agent_session_row_in_txn(
+                    txn,
+                    &state.node_did,
+                    session_id,
+                    Some(state.local_requester_did()),
+                )
+                .await?
+                else {
+                    return Ok(None);
+                };
+                if row.session.agent_did != state.agent_did.as_ref() || is_started(&row.session) {
+                    return Ok(None);
+                }
+                let head = load_head_in_txn(txn, state, session_id).await?;
+                Ok(Some((row.session, head)))
+            })
         })
-    })
-    .await
+        .await
 }
 
 pub(super) async fn load_local_head(
     state: &ShimState,
     session_id: &str,
 ) -> Result<Option<GraphqlTurnState>> {
-    ConfigAccess::transact_local_write(&state.node, None, "codex.thread.pending_head", |txn| {
-        Box::pin(async move { load_head_in_txn(txn, state, session_id).await })
-    })
-    .await
+    state
+        .reader
+        .transact_readonly("codex.thread.pending_head", |txn| {
+            Box::pin(async move { load_head_in_txn(txn, state, session_id).await })
+        })
+        .await
 }
 
 async fn load_head_in_txn(
@@ -123,7 +127,7 @@ async fn load_head_in_txn(
 pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<AgentSession>> {
     let owner = escape_graphql_string(&state.node_did);
     let agent = escape_graphql_string(&state.agent_did);
-    ConfigAccess::transact_local_write(&state.node,None,"codex.thread.list",|txn| {
+    state.reader.transact_readonly("codex.thread.list",|txn| {
         let query = format!(r#"{{AgentSession(filter:{{node_did:{{_eq:"{owner}"}},requester_did:{{_eq:"{owner}"}},agent_did:{{_eq:"{agent}"}}}},order:{{created_at:DESC}}){{{AGENT_SESSION_FIELDS}}}}}"#);
         Box::pin(async move {
             let response = txn.execute(&query).await?;
