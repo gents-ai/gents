@@ -916,17 +916,17 @@ async fn serve_foreground(
         server_identity.node_identity_did.as_deref() == Some(identity.did()),
         "runtime identity does not match the protected store identity"
     );
-    let (node, backend_admission) = protected_backend
-        .start_node_with_tool_ceiling(
-            &backend_store_key,
-            identity.clone(),
-            Some(http_config),
-            p2p_config,
-            tool_ceiling.clone(),
-            &home_dir,
-        )
-        .await
-        .context("building protected embedded DefraDB node")?;
+    let (node, backend_admission) = gents::runtime::node_start::start_node(
+        protected_backend,
+        &backend_store_key,
+        identity.clone(),
+        Some(http_config),
+        p2p_config,
+        tool_ceiling.clone(),
+        &home_dir,
+    )
+    .await
+    .context("building protected embedded DefraDB node")?;
     let store_access = match gents::store::config_client::ConfigAccess::claimed_local(
         node.clone(),
         store_lock,

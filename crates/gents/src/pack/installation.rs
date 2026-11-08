@@ -763,8 +763,19 @@ async fn record_plugin_store_change_with_stage(
         .transact_write_with_finality("pack.record_plugin_store", |txn| {
             Box::pin(async move {
                 if let Some(changes) = changes {
-                    txn.stage_plugin_delete_roots(&changes.previous, &changes.installed)
-                        .await?;
+                    txn.stage_plugin_delete_roots(
+                        &changes
+                            .previous
+                            .iter()
+                            .map(|plugin| plugin.projected())
+                            .collect::<Vec<_>>(),
+                        &changes
+                            .installed
+                            .iter()
+                            .map(|plugin| plugin.projected())
+                            .collect::<Vec<_>>(),
+                    )
+                    .await?;
                 }
                 write_plugin_record(txn, owner, home, coordinate, installed, node_binding).await
             })

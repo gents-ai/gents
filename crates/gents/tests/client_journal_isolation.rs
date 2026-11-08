@@ -34,7 +34,7 @@ async fn runtime_http_test_node(identity: Arc<KeyIdentity>) -> (TestNode, String
             .with_document_projector(
                 gents::store::local::document_projector(
                     identity.clone(),
-                    gents::tools::surface::ToolCeiling::meta_only(),
+                    std::sync::Arc::new(gents::tools::surface::ToolCeiling::meta_only()),
                 )
                 .unwrap(),
             )

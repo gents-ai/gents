@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use futures::future::BoxFuture;
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::documents::automation::{
     ResolvedAutomation, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
@@ -15,15 +15,18 @@ pub use crate::documents::ScheduleCadence;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
 use crate::store::identity::RuntimeNode;
+use crate::tools::background::agent_identity_watch::{
+    AgentIdentityWatch, AgentIdentityWatchClosed,
+};
 use crate::tools::surface::ToolSurface;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::node_readiness::{
     effective_agent_readiness_admission, EffectiveAgentReadinessAdmission,
 };
+use gents_protocol::row::AgentRequest;
 
 pub type DispatcherMap = RapidHashMap<String, mpsc::Sender<AgentRequest>>;
 
-use gents_protocol::row::AgentRequest;
 #[derive(Clone)]
 pub(crate) struct ResolvedWatcherIdentity(pub(crate) Arc<dyn crate::store::identity::NodeIdentity>);
 
@@ -357,6 +360,41 @@ pub struct ActiveRuntimeSnapshot {
     pub dispatchers: DispatcherMap,
     pub agent_executor_capacities: RapidHashMap<String, usize>,
     pub agent_executor_queue_capacities: RapidHashMap<String, usize>,
+}
+
+/// The background owners' view of the active Agent signers: each consumer
+/// holds its own receiver, so its `changed` marks only its own observation.
+pub(crate) struct ActiveSnapshotAgentIdentities(watch::Receiver<Arc<ActiveRuntimeSnapshot>>);
+
+impl ActiveSnapshotAgentIdentities {
+    pub(crate) fn boxed(
+        snapshots: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    ) -> Box<dyn AgentIdentityWatch> {
+        Box::new(Self(snapshots))
+    }
+}
+
+impl AgentIdentityWatch for ActiveSnapshotAgentIdentities {
+    fn watcher_identities(&self) -> Result<Vec<Arc<dyn crate::store::identity::NodeIdentity>>> {
+        self.0.borrow().watcher_identities()
+    }
+
+    fn watched_and_active_agents(
+        &self,
+    ) -> Result<(
+        Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
+        RapidHashSet<String>,
+    )> {
+        let snapshot = self.0.borrow();
+        Ok((
+            snapshot.watcher_identities()?,
+            snapshot.agents.keys().cloned().collect(),
+        ))
+    }
+
+    fn changed(&mut self) -> BoxFuture<'_, std::result::Result<(), AgentIdentityWatchClosed>> {
+        Box::pin(async move { self.0.changed().await.map_err(|_| AgentIdentityWatchClosed) })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

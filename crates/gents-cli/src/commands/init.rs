@@ -899,15 +899,22 @@ async fn bootstrap_identity_only_owner(
 ) -> Result<()> {
     use gents::store::identity::GrantSet;
     let runtime_did = identity::Did::new(runtime.did())?;
-    let (node, _admission) =
-        gents::store::local::backend_protection::ProtectedBackendStore::open(
-            data_dir, store_key, store_lock,
-        )
-        .await?
-        .preflight(store_key, Some(runtime_did.as_str()))
-        .await?
-        .start_node(store_key, runtime, None, None, home)
-        .await?;
+    let preflight = gents::store::local::backend_protection::ProtectedBackendStore::open(
+        data_dir, store_key, store_lock,
+    )
+    .await?
+    .preflight(store_key, Some(runtime_did.as_str()))
+    .await?;
+    let (node, _admission) = gents::runtime::node_start::start_node(
+        preflight,
+        store_key,
+        runtime,
+        None,
+        None,
+        gents::tools::surface::ToolCeiling::meta_only(),
+        home,
+    )
+    .await?;
     let granted = GrantSet::HouseholdOwner
         .grant(
             &ConfigAccess::local_as(node.clone(), runtime_did),
@@ -1768,16 +1775,25 @@ mod tests {
             .unwrap();
         let config = read_init_config(&home).unwrap().unwrap();
         let runtime = crate::home_state::load_initialized_home_identity(&home, &config).unwrap();
-        let (node, _admission) =
-            gents::store::local::backend_protection::ProtectedBackendStore::open(&data, &key, &lock)
-                .await
-                .expect("the identity-only store carries fresh provenance")
-                .preflight(&key, Some(&summary.node_did))
-                .await
-                .expect("the protected store is bound to the home's Node DID")
-                .start_node(&key, runtime, None, None, &home)
-                .await
-                .unwrap();
+        let preflight = gents::store::local::backend_protection::ProtectedBackendStore::open(
+            &data, &key, &lock,
+        )
+        .await
+        .expect("the identity-only store carries fresh provenance")
+        .preflight(&key, Some(&summary.node_did))
+        .await
+        .expect("the protected store is bound to the home's Node DID");
+        let (node, _admission) = gents::runtime::node_start::start_node(
+            preflight,
+            &key,
+            runtime,
+            None,
+            None,
+            gents::tools::surface::ToolCeiling::meta_only(),
+            &home,
+        )
+        .await
+        .unwrap();
         let owned = ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did()).unwrap())
             .collection_version(gents_protocol::schemas::NODE_NAME)
             .await;
