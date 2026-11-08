@@ -495,6 +495,10 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE
     ),
     baseline_entry!(
+        gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT_NAME,
+        gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT
+    ),
+    baseline_entry!(
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST
     ),

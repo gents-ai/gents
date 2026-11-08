@@ -237,6 +237,7 @@ impl GraphqlEnrollmentStore {
         mutation: &str,
         collections: &[&str],
         recipient: &str,
+        withdrawal: Option<&crate::store::identity::EnrollmentGrantWithdrawal>,
     ) -> Result<Value> {
         use crate::store::config_client::ConfigAccess;
         use crate::store::graphql::escape_graphql_string;
@@ -283,6 +284,9 @@ impl GraphqlEnrollmentStore {
                             .await?;
                         txn.add_actor_relationship(collection, &doc, "reader", reader)
                             .await?;
+                    }
+                    if let Some(withdrawal) = withdrawal {
+                        withdrawal.stage_in_txn(txn, parent).await?;
                     }
                     Ok::<_, anyhow::Error>(response)
                 })
@@ -460,6 +464,7 @@ impl GraphqlEnrollmentStore {
                     &mutation,
                     &collections,
                     &pending.request.candidate_did,
+                    None,
                 )
                 .await?;
             let decision_doc_id = gents_protocol::graphql::extract_mutation_doc_id(
@@ -531,6 +536,8 @@ impl GraphqlEnrollmentStore {
             .find(|revoked| revoked.request.request_id == request_id)
         {
             let revoked = revoked.clone();
+            self.finish_grant_withdrawal(request_id, &revoked.request.candidate_did)
+                .await?;
             drop(guard);
             let delivery_pending = self
                 .deliver_terminal(
@@ -594,6 +601,9 @@ impl GraphqlEnrollmentStore {
         };
         revision.admin_sig = self.identity.sign(&revision.signing_payload()).await?;
         revision.validate_against_approval(&active.request, &active.decision)?;
+        let withdrawal = self
+            .prepare_grant_withdrawal(request_id, &active.request.candidate_did)
+            .await?;
         let mutation = revision_mutation(&revision);
         let response = self
             .publish_records(
@@ -601,6 +611,7 @@ impl GraphqlEnrollmentStore {
                 &mutation,
                 &["NetworkAuthorizationRevision"],
                 &active.request.candidate_did,
+                withdrawal.as_ref(),
             )
             .await;
         let revision_doc_id = match response {
@@ -638,6 +649,68 @@ impl GraphqlEnrollmentStore {
             revision_doc_id: Some(revision_doc_id),
             delivery_pending,
         })
+    }
+
+    fn runtime_access(&self) -> Result<crate::store::config_client::ConfigAccess> {
+        Ok(crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(self.identity.did())?,
+        ))
+    }
+
+    /// Lean `Identity.EnrollmentGrant.revoke`: plan the withdrawal of what an
+    /// explicit grant recorded for this request and revoke its node
+    /// permissions now, before the revision commits; the receipt and the
+    /// Node `administrator` relation retire in the revision's transaction.
+    async fn prepare_grant_withdrawal(
+        &self,
+        request_id: &str,
+        member: &str,
+    ) -> Result<Option<crate::store::identity::EnrollmentGrantWithdrawal>> {
+        let runtime = self.runtime_access()?;
+        let receipts = crate::store::identity::load_enrollment_grant_receipts(&runtime, member)
+            .await
+            .context("reading the enrollment grant receipts before revocation")?;
+        let withdrawal =
+            crate::store::identity::EnrollmentGrantWithdrawal::plan(request_id, &receipts)?;
+        if let Some(withdrawal) = &withdrawal {
+            withdrawal
+                .revoke_node_permissions(&runtime)
+                .await
+                .context("revoking the node permissions an enrollment grant derived")?;
+        }
+        Ok(withdrawal)
+    }
+
+    /// A revision that committed before its grant's withdrawal finished (or
+    /// before receipts existed) leaves a live receipt; retire it now.
+    async fn finish_grant_withdrawal(&self, request_id: &str, member: &str) -> Result<()> {
+        use crate::store::graphql::escape_graphql_string;
+        let Some(withdrawal) = self.prepare_grant_withdrawal(request_id, member).await? else {
+            return Ok(());
+        };
+        let runtime = identity::Did::new(self.identity.did())?;
+        self.runtime_access()?
+            .transact_write("p2p.withdraw_enrollment_grant", |txn| {
+                let (withdrawal, runtime) = (&withdrawal, &runtime);
+                Box::pin(async move {
+                    let query = format!(
+                        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                        escape_graphql_string(runtime.as_str())
+                    );
+                    let nodes = txn.execute(&query).await?;
+                    let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
+                    let [node] = nodes.as_slice() else {
+                        anyhow::bail!("grant withdrawal requires exactly one visible local Node");
+                    };
+                    let node = node["_docID"]
+                        .as_str()
+                        .context("grant withdrawal Node has no document ID")?;
+                    withdrawal.stage_in_txn(txn, node).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
     }
 
     async fn verify_live_candidate(
@@ -775,6 +848,7 @@ impl GraphqlEnrollmentStore {
                 &mutation,
                 &["NetworkEnrollmentRouteReceipt"],
                 recipient,
+                None,
             )
             .await;
         match committed {

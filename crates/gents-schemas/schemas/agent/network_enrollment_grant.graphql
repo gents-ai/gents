@@ -1,0 +1,13 @@
+# Local receipt of the authority one explicit enrollment grant derived for its
+# member (Lean `Identity.EnrollmentGrant.Receipt`). Native relations carry no
+# provenance, so revocation withdraws exactly the recorded tuples. Deliberately
+# NOT branchable: it accounts for this node's own relations only.
+type NetworkEnrollmentGrant @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "operations") {
+    request_id: String @index(unique: true) @immutable
+    member_did: String @index @immutable
+    tuples: [String]
+    granted_at: DateTime @immutable
+    withdrawn_at: DateTime
+    node_doc_id: String
+    parent_linked: Boolean
+}

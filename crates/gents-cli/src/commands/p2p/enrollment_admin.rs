@@ -183,8 +183,10 @@ pub(crate) async fn load_enrollment_query(
     Ok(body)
 }
 
-/// This explicit grant is separate from route admission. Each native operation
-/// commits independently; a failure reports which grants may already exist.
+/// This explicit grant is separate from route admission. Its receipt commits
+/// before any tuple is issued, so revoking the enrollment withdraws exactly
+/// what it derived (Lean `Identity.EnrollmentGrant`); a failed grant is
+/// finished by retrying it.
 pub(super) async fn grant_pending_client(args: P2pEnrollmentGrantArgs) -> Result<()> {
     let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let home = resolve_home_dir(args.home.as_deref());
@@ -294,19 +296,21 @@ pub(crate) async fn grant_verified_client(
     let doc_id = rows[0]["_docID"]
         .as_str()
         .context("Node has no document ID")?;
-    owner
-        .add_actor_relationship("Node", doc_id, "administrator", &candidate)
-        .await
-        .context("granting Node administrator as the client owner; the outcome may be unknown, so inspect the relationship before retrying")?;
     let runtime_access = ConfigAccess::Graphql(
         gents::store::config_client::GraphqlEndpoint::as_principal(endpoint.url(), runtime.did())
             .with_client_signing_capability(runtime.client_signing_capability()?)?,
     );
-    gents::store::identity::GrantSet::OperatorUser
-        .grant(&runtime_access, &candidate)
-        .await
-        .context("Node administrator was granted, but its operator node permissions were not")?;
+    let outcome = gents::store::identity::grant_enrollment_authority(
+        &owner,
+        &runtime_access,
+        doc_id,
+        request_id,
+        &candidate,
+    )
+    .await
+    .context("granting the enrollment's Node administration")?;
+    let recorded: Vec<_> = outcome.recorded.iter().map(|tuple| tuple.name()).collect();
     Ok(Some(
-        serde_json::json!({"request_id": request_id, "candidate_did": candidate.as_str(), "node_did": runtime.did(), "node_administrator_granted": true}),
+        serde_json::json!({"request_id": request_id, "candidate_did": candidate.as_str(), "node_did": runtime.did(), "node_administrator_granted": true, "recorded": recorded, "reissued": outcome.reissued}),
     ))
 }
