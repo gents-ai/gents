@@ -3,7 +3,7 @@ use crate::support::*;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
 
@@ -157,15 +157,82 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     );
     assert_eq!(graphql_query(&graphql, query).await?, installed);
 
-    let owner_escaped = escape_graphql_string(&owner);
-    let profile = escape_graphql_string(&gents::documents::default_inference_profile_id_for_node(
-        &owner,
-    ));
-    graphql_query(&graphql, &format!(r#"mutation {{
-        create_Tools(input: {{tools_id: "broken-tools", node_did: "{owner_escaped}", integrations: {{plugins: [{{plugin: "private/missing"}}]}}}}) {{_docID}}
-        create_AgentContext(input: {{context_id: "broken-context", node_did: "{owner_escaped}", tools_id: "broken-tools"}}) {{_docID}}
-        create_Agent(input: {{agent_did: "broken-agent", node_did: "{owner_escaped}", context_id: "broken-context", inference_profile_id: "{profile}", enabled: true}}) {{_docID}}
-    }}"#)).await?;
+    // The User creates a real managed Agent, then points its own Tools at a
+    // plugin the node does not hold; only that Agent's tool surface fails.
+    let default_agent = agent_did_from_init(&init)?;
+    let profile = init["inference_profile_id"]
+        .as_str()
+        .context("init output missing inference_profile_id")?
+        .to_owned();
+    let created = run_cli_json(
+        &home,
+        &[
+            "config",
+            "agent",
+            "create",
+            "--graphql",
+            &graphql,
+            "--node-did",
+            &owner,
+            "--display-name",
+            "Broken Agent",
+            "--clone-from",
+            &default_agent,
+            "--profile-id",
+            &profile,
+        ],
+    )?;
+    let broken_agent = created["agent_did"]
+        .as_str()
+        .context("created Agent DID")?
+        .to_owned();
+    let selection = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ context_id }} }}"#,
+            escape_graphql_string(&broken_agent)
+        ),
+    )
+    .await?;
+    let context_id = selection["data"]["Agent"][0]["context_id"]
+        .as_str()
+        .context("created Agent context")?
+        .to_owned();
+    let context = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{}"}}}}) {{ tools_id }} }}"#,
+            escape_graphql_string(&context_id)
+        ),
+    )
+    .await?;
+    let tools_id = context["data"]["AgentContext"][0]["tools_id"]
+        .as_str()
+        .context("created Agent Tools")?
+        .to_owned();
+    let mut tools = run_cli_json(
+        &home,
+        &["config", "tools", "show", &tools_id, "--graphql", &graphql],
+    )?;
+    tools
+        .as_object_mut()
+        .context("Tools document")?
+        .remove("_docID");
+    tools["integrations"] = json!({"plugins": [{"plugin": "private/missing"}]});
+    let tools_file = temp.path().join("broken-tools.json");
+    std::fs::write(&tools_file, serde_json::to_vec(&tools)?)?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--file",
+            tools_file.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+        ],
+    )?;
     wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
     let diagnosed = run_cli_json(&home, &["diagnose", "--graphql", &graphql])?;
     let unavailable = diagnosed
@@ -174,7 +241,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         .unwrap();
     let broken = unavailable
         .iter()
-        .find(|entry| entry["agent_did"] == "broken-agent")
+        .find(|entry| entry["agent_did"] == broken_agent.as_str())
         .unwrap();
     assert_eq!(broken["reason"], "tool_surface_unavailable");
     assert_eq!(
