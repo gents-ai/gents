@@ -2446,7 +2446,10 @@ async fn signed_http_advertisement_activates_an_iroh_only_runtime_endpoint() {
         sig: Vec::new(),
     };
     record.sig = admin.sign(&record.signing_payload()).unwrap();
-    let access = ConfigAccess::local_as(core.node_arc(), admin.did().parse().unwrap());
+    // Discovery lands in the desktop's own store, whose only local writer is
+    // its client key; the admin's signature on the record is what authorizes it.
+    let access =
+        ConfigAccess::local_as(core.node_arc(), core.node_identity().did().parse().unwrap());
     let mut tampered = record.clone();
     tampered.graphql_url = Some("https://other.example/api/v0/graphql".to_owned());
     access

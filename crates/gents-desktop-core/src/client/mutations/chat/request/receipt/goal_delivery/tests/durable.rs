@@ -1,6 +1,5 @@
 use super::*;
 use crate::client::mutations::submission_journal as journal;
-use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::graphql_with_transaction_retry;
 use std::sync::Arc;
 
@@ -28,9 +27,6 @@ async fn stored(node: &defra_node::Node) -> Result<Vec<Record>> {
 #[tokio::test]
 async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Result<()> {
     let cases = tokio::task::spawn_blocking(model_cases).await??;
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
-    node.add_collection(&crate::test_support::unbound_journal_schema())
-        .await?;
     let checked = async {
         let mut count = 0;
         for case in cases {
@@ -42,13 +38,11 @@ async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Res
             {
                 continue;
             }
-            ConfigAccess::write_local(
-                &node,
-                "test.goal_delivery.clear",
-                "mutation { delete_PendingChatSubmission { _docID } }",
-            )
-            .await?;
+            // Each history runs against the journal of the desktop whose client
+            // issues its first command.
             let mut facts = Facts::new()?;
+            let client = facts.client(number(&steps[0]["input"]["intent"], "client")?)?;
+            let node = crate::test_support::client_journal_node(&client).await?;
             for step in steps {
                 let input = &step["input"];
                 match input["kind"].as_str().context("action")? {
@@ -155,13 +149,13 @@ async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Res
                         .is_some());
                 }
             }
+            node.shutdown().await.unwrap();
             count += 1;
         }
         anyhow::ensure!(count == 16, "executed {count} durable Goal histories");
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await.unwrap();
     checked
 }
 
@@ -185,7 +179,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
     let open = || async {
         let node = Arc::new(
             defra_node::Node::builder()
-                .with_node_identity_did(&proposal.intent.node_did)
+                .with_node_identity_did(&proposal.intent.client_did)
                 .data_path(home.path())
                 .build()
                 .await?,
@@ -259,9 +253,7 @@ async fn competing_distinct_signed_proposals_share_one_committed_goal_preparatio
                 .await?,
         );
     }
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
-    node.add_collection(&crate::test_support::unbound_journal_schema())
-        .await?;
+    let node = crate::test_support::client_journal_node(&proposals[0].intent.client_did).await?;
     let checked = async {
         assert_ne!(proposals[0].reference, proposals[1].reference);
         let (left, right) = tokio::join!(

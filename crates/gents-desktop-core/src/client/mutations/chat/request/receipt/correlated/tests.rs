@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::store::identity::{KeyIdentity, NodeIdentity};
@@ -13,6 +14,7 @@ use super::*;
 struct Facts {
     root: tempfile::TempDir,
     nodes: BTreeMap<u64, KeyIdentity>,
+    client_keys: BTreeMap<u64, KeyIdentity>,
     clients: BTreeMap<String, u64>,
     envelopes: BTreeMap<String, u64>,
     payloads: BTreeMap<String, u64>,
@@ -23,6 +25,7 @@ impl Facts {
         Ok(Self {
             root: tempfile::tempdir()?,
             nodes: BTreeMap::new(),
+            client_keys: BTreeMap::new(),
             clients: BTreeMap::new(),
             envelopes: BTreeMap::new(),
             payloads: BTreeMap::new(),
@@ -42,10 +45,28 @@ impl Facts {
         Ok(self.nodes[&value].did().to_owned())
     }
 
+    /// The modeled requester's client key: a desktop journal is written by
+    /// the client whose key is its local node identity.
+    fn client(&mut self, value: u64) -> Result<String> {
+        if !self.client_keys.contains_key(&value) {
+            self.client_keys.insert(
+                value,
+                KeyIdentity::load_or_create(
+                    self.root.path().join(format!("client-{value}.key")),
+                    None,
+                )?,
+            );
+        }
+        let did = self.client_keys[&value].did().to_owned();
+        self.clients.insert(did.clone(), value);
+        Ok(did)
+    }
+
     fn intent(&mut self, input: &Value) -> Result<Intent> {
         let envelope = number(input, "envelope")?;
+        let client = self.client(number(&input["caller"], "requester")?)?;
         let intent = Intent::new(
-            format!("did:key:client-{}", number(&input["caller"], "requester")?),
+            client,
             self.node(number(input, "node")?)?,
             identity(number(&input["caller"], "request")?),
             format!("authored-envelope-{envelope}").as_bytes(),
@@ -211,7 +232,7 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
                 }
                 "observe" | "acknowledge" => {
                     let caller = &input["caller"];
-                    let client = format!("did:key:client-{}", number(caller, "requester")?);
+                    let client = facts.client(number(caller, "requester")?)?;
                     let request = identity(number(caller, "request")?);
                     let reference = facts.reference(&input["prepared"], context).await?;
                     if input["kind"] == "observe" {
@@ -243,17 +264,32 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
     Ok(())
 }
 
+/// One desktop journal per modeled client.
+#[derive(Default)]
+struct Journals(BTreeMap<String, Arc<defra_node::Node>>);
+
+impl Journals {
+    async fn open(&mut self, client: &str) -> Result<&Arc<defra_node::Node>> {
+        if !self.0.contains_key(client) {
+            let node = crate::test_support::client_journal_node(client).await?;
+            self.0.insert(client.to_owned(), node);
+        }
+        Ok(&self.0[client])
+    }
+
+    async fn shutdown(self) {
+        for node in self.0.into_values() {
+            node.shutdown().await.unwrap();
+        }
+    }
+}
+
 #[tokio::test]
 async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result<()> {
     use super::super::journal;
-    use gents::store::config_client::ConfigAccess;
     use gents::store::graphql::graphql_with_transaction_retry;
-    use std::sync::Arc;
 
     let cases = tokio::task::spawn_blocking(model_cases).await??;
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
-    node.add_collection(&crate::test_support::unbound_journal_schema())
-        .await?;
     let result = async {
         let mut count = 0;
         for case in cases {
@@ -263,24 +299,32 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
             {
                 continue;
             }
-            ConfigAccess::write_local(
-                &node,
-                "test.receipt.clear",
-                "mutation { delete_PendingChatSubmission { _docID } }",
-            )
-            .await?;
+            // The history runs against the journal of the desktop whose client
+            // prepares its first submission; its node identity is that key.
             let mut facts = Facts::new()?;
+            let mut journals = Journals::default();
+            let local =
+                facts.client(number(&steps[0]["input"]["intent"]["caller"], "requester")?)?;
+            journals.open(&local).await?;
             let context = &steps[0]["input"]["intent"];
             for step in steps {
                 let input = &step["input"];
                 match input["kind"].as_str().context("receipt action")? {
                     "prepare" => {
                         let proposal = facts.proposal(&input["intent"], &input["proposal"]).await?;
-                        let output = match journal::caller::reserve(&node, &proposal).await {
-                            Ok(record) => record.result(),
-                            Err(_) if step["output"]["kind"] == "refused" => Decision::Refused,
-                            Err(error) => return Err(error.context("reserving modeled receipt")),
-                        };
+                        let output =
+                            match journal::caller::reserve(journals.open(&local).await?, &proposal)
+                                .await
+                            {
+                                Ok(record) => record.result(),
+                                Err(_) if step["output"]["kind"] == "refused" => Decision::Refused,
+                                Err(error) => {
+                                    return Err(error.context(format!(
+                                        "reserving modeled receipt in {}",
+                                        case["name"]
+                                    )))
+                                }
+                            };
                         assert_eq!(
                             facts.decision_json(output)?,
                             step["output"],
@@ -291,7 +335,7 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                     "observe" | "acknowledge" => {
                         let mut binding = facts.intent(context)?;
                         binding.client_did =
-                            format!("did:key:client-{}", number(&input["caller"], "requester")?);
+                            facts.client(number(&input["caller"], "requester")?)?;
                         binding.request_id = identity(number(&input["caller"], "request")?);
                         let reference = facts.reference(&input["prepared"], context).await?;
                         let observation = if input["kind"] == "observe" {
@@ -299,25 +343,37 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                         } else {
                             None
                         };
-                        let _ =
-                            journal::caller::update(&node, &binding, &reference, observation).await;
+                        let _ = journal::caller::update(
+                            journals.open(&local).await?,
+                            &binding,
+                            &reference,
+                            observation,
+                        )
+                        .await;
                     }
                     "reconnect" => {}
                     _ => anyhow::bail!("unknown receipt action"),
                 }
-                let response = graphql_with_transaction_retry(
-                    &node,
-                    "{ PendingChatSubmission { payload } }",
-                    "test.receipt.snapshot",
-                )
-                .await?;
-                let rows = response
-                    .data
-                    .as_ref()
-                    .and_then(|data| data["PendingChatSubmission"].as_array())
-                    .context("journal snapshot")?;
+                let mut rows = Vec::new();
+                for node in journals.0.values() {
+                    let response = graphql_with_transaction_retry(
+                        node,
+                        "{ PendingChatSubmission { payload } }",
+                        "test.receipt.snapshot",
+                    )
+                    .await?;
+                    rows.extend(
+                        response
+                            .data
+                            .as_ref()
+                            .and_then(|data| data["PendingChatSubmission"].as_array())
+                            .context("journal snapshot")?
+                            .iter()
+                            .cloned(),
+                    );
+                }
                 let mut records = Vec::new();
-                for row in rows {
+                for row in &rows {
                     let envelope: Value =
                         serde_json::from_str(row["payload"].as_str().context("payload")?)?;
                     records.push(serde_json::from_value::<Record>(
@@ -333,8 +389,9 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                     input["kind"]
                 );
                 for record in &records {
+                    let node = journals.open(&local).await?;
                     let scoped = journal::caller::lookup(
-                        &node,
+                        node,
                         &record.intent.client_did,
                         &record.intent.node_did,
                         &record.intent.request_id,
@@ -345,12 +402,12 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                         facts.records_json(&[scoped])?,
                         facts.records_json(std::slice::from_ref(record))?
                     );
-                    let recovered = journal::caller::recover(&node, &record.intent)
+                    let recovered = journal::caller::recover(node, &record.intent)
                         .await?
                         .context("durable caller binding")?;
                     assert_eq!(recovered.reference, record.reference);
                     let pending =
-                        journal::load(&node, &record.intent.client_did, &record.intent.request_id)
+                        journal::load(node, &record.intent.client_did, &record.intent.request_id)
                             .await?;
                     assert_eq!(pending.is_some(), record.outcome == Outcome::Unresolved);
                     if let Some(pending) = pending {
@@ -359,23 +416,23 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                             record.reference.signed_payload_hash
                         );
                     }
-                    journal::forget(&node, &record.intent.client_did, &record.intent.request_id)
+                    journal::forget(node, &record.intent.client_did, &record.intent.request_id)
                         .await?;
                     assert!(
-                        journal::caller::recover(&node, &record.intent)
+                        journal::caller::recover(node, &record.intent)
                             .await?
                             .is_some(),
                         "cleanup erased caller correlation"
                     );
                 }
             }
+            journals.shutdown().await;
             count += 1;
         }
         anyhow::ensure!(count >= 15, "durable traces were not exercised");
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await.unwrap();
     result
 }
 
@@ -396,7 +453,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     let home = tempfile::tempdir()?;
     let node = Arc::new(
         defra_node::Node::builder()
-            .with_node_identity_did(&proposal.intent.node_did)
+            .with_node_identity_did(&proposal.intent.client_did)
             .data_path(home.path())
             .build()
             .await?,
@@ -416,7 +473,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
 
     let node = Arc::new(
         defra_node::Node::builder()
-            .with_node_identity_did(&proposal.intent.node_did)
+            .with_node_identity_did(&proposal.intent.client_did)
             .data_path(home.path())
             .build()
             .await?,
@@ -448,7 +505,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
 
     let node = Arc::new(
         defra_node::Node::builder()
-            .with_node_identity_did(&proposal.intent.node_did)
+            .with_node_identity_did(&proposal.intent.client_did)
             .data_path(home.path())
             .build()
             .await?,
@@ -512,9 +569,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
         } else {
             expected
         };
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
-        node.add_collection(&crate::test_support::unbound_journal_schema())
-            .await?;
+        let node = crate::test_support::client_journal_node(&proposal.intent.client_did).await?;
         let server = MockServer::start().await;
         let stored = Arc::new(AtomicBool::new(false));
         let stored_for_server = Arc::clone(&stored);
