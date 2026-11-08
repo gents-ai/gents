@@ -460,7 +460,6 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         vec![
             format!("read:{}", policy.p2p_read),
             format!("mutate:{}", policy.permits_p2p_mutation()),
-            format!("collections:{}", policy.p2p_collections.kind()),
         ],
     );
     summary.insert(

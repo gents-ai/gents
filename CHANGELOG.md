@@ -4,6 +4,21 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- Breaking: P2P carries only discovery and enrollment, so the agent-facing
+  application-collection pairing and sync surface is removed. The `p2p` tool
+  drops `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`,
+  `pairings_revoke` and `sync_documents`; enrollment approval now suggests
+  `enrollment_history`. `Tools.built_ins.p2p_collections` is removed and now
+  rejected, and `gents pack wire` no longer writes it: delete it from stored
+  Tools documents before upgrading. `gents p2p admin collections` and
+  `gents p2p admin documents` are removed, `--profile` accepts only
+  `discovery`, and `gents p2p templates list` no longer reports `replicate`
+  delivery or peer-DID and unscoped scopes. Pairing reconciliation installs
+  replicators only; it no longer installs or tears down DefraDB collection
+  subscriptions, and `PeerPairingApplied.collections` is no longer written.
+
 ## 1.0.0-rc1 - 2026-11-03
 
 - P2P DAG fetches rank providers by measured health, rotate past a provider

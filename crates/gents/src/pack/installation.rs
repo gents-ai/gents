@@ -19,7 +19,6 @@ mod documents;
 mod hosted;
 pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
 mod removal;
-mod scope_preview;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
@@ -31,7 +30,6 @@ pub use documents::{
 };
 pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
 pub use removal::ensure_plugins_unreferenced;
-pub use scope_preview::{preview_installed_pack_scope, InstalledPackScopePreview};
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 

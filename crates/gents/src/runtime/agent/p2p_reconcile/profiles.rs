@@ -4,35 +4,22 @@ use std::collections::BTreeSet;
 
 use anyhow::{bail, Result};
 
+/// The only P2P collection profile: the signed discovery documents. Runtime
+/// data is read through authenticated GraphQL, never replicated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum P2pCollectionProfile {
-    Runtime,
-    Agent,
-    DesktopConfig,
-    ChatRequests,
-    ToolServices,
     Discovery,
 }
 
 impl P2pCollectionProfile {
     pub fn id(self) -> &'static str {
         match self {
-            P2pCollectionProfile::Runtime => "runtime",
-            P2pCollectionProfile::Agent => "agent",
-            P2pCollectionProfile::DesktopConfig => "desktop-config",
-            P2pCollectionProfile::ChatRequests => "chat-requests",
-            P2pCollectionProfile::ToolServices => "tool-services",
             P2pCollectionProfile::Discovery => "discovery",
         }
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
         match id.trim() {
-            "runtime" => Some(P2pCollectionProfile::Runtime),
-            "agent" => Some(P2pCollectionProfile::Agent),
-            "desktop-config" => Some(P2pCollectionProfile::DesktopConfig),
-            "chat-requests" => Some(P2pCollectionProfile::ChatRequests),
-            "tool-services" => Some(P2pCollectionProfile::ToolServices),
             "discovery" => Some(P2pCollectionProfile::Discovery),
             _ => None,
         }
@@ -40,11 +27,6 @@ impl P2pCollectionProfile {
 
     pub fn collection_names(self) -> &'static [&'static str] {
         match self {
-            P2pCollectionProfile::Runtime => RUNTIME_COLLECTIONS,
-            P2pCollectionProfile::Agent => AGENT_COLLECTIONS,
-            P2pCollectionProfile::DesktopConfig => DESKTOP_CONFIG_COLLECTIONS,
-            P2pCollectionProfile::ChatRequests => CHAT_REQUEST_COLLECTIONS,
-            P2pCollectionProfile::ToolServices => TOOL_SERVICE_COLLECTIONS,
             P2pCollectionProfile::Discovery => DISCOVERY_COLLECTIONS,
         }
     }
@@ -68,9 +50,6 @@ pub fn expand_p2p_collection_profile_ids<'a>(
         }
         let profile = P2pCollectionProfile::from_id(profile_id)
             .ok_or_else(|| anyhow::anyhow!("unknown P2P collection profile {profile_id:?}"))?;
-        if profile.collection_names().is_empty() {
-            bail!("P2P profile {profile_id:?} contains runtime-local data; use authenticated GraphQL access");
-        }
         for collection in profile.collection_names() {
             collections.insert((*collection).to_string());
         }
@@ -88,9 +67,4 @@ pub fn expand_p2p_collection_profile_ids<'a>(
     Ok(collections)
 }
 
-const RUNTIME_COLLECTIONS: &[&str] = &[];
-const AGENT_COLLECTIONS: &[&str] = &[];
-const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[];
-const CHAT_REQUEST_COLLECTIONS: &[&str] = &[];
-const TOOL_SERVICE_COLLECTIONS: &[&str] = &[];
 const DISCOVERY_COLLECTIONS: &[&str] = &["PeerRegistry", "NodeDirectoryEntry"];

@@ -1,6 +1,4 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -9,12 +7,10 @@ use serde_json::{json, Map, Value};
 use crate::defra_node::Node as EmbeddedNode;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::runtime::agent::p2p_reconcile::{
-    templates::admit_app_collections, ActiveEnrollment, EmbeddedRemoteP2pAdmin,
-    EnrollmentOfferIssuer, GraphqlEnrollmentStore, RemoteP2pAdmin,
+    EmbeddedRemoteP2pAdmin, EnrollmentOfferIssuer, GraphqlEnrollmentStore, RemoteP2pAdmin,
 };
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, validate_collection_identifier};
-use crate::tools::surface::EndpointScope;
 use crate::NodeIdentity;
 use gents_protocol::enrollment::{AuthorizationLease, EnrollmentDecisionKind};
 
@@ -22,15 +18,12 @@ use gents_protocol::enrollment::{AuthorizationLease, EnrollmentDecisionKind};
 mod tests;
 
 pub const P2P_TOOL_NAME: &str = "p2p";
-const OVERLAY_SOURCE: &str = "engineer";
 
 #[derive(Clone)]
 pub struct P2pTool {
     node: Arc<EmbeddedNode>,
     identity: Option<Arc<dyn NodeIdentity>>,
-    invoking_agent: Option<Arc<dyn NodeIdentity>>,
     mutate: bool,
-    collections: EndpointScope<String, ()>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -42,14 +35,6 @@ pub struct P2pParams {
     pub topic: Option<String>,
     #[serde(default)]
     pub peer_id: Option<Value>,
-    #[serde(default)]
-    pub peer_did: Option<Value>,
-    #[serde(default)]
-    pub collections: Option<Value>,
-    #[serde(default)]
-    pub collection: Option<Value>,
-    #[serde(default)]
-    pub doc_ids: Option<Value>,
     #[serde(default)]
     pub request_id: Option<Value>,
     #[serde(default)]
@@ -69,11 +54,6 @@ const ACTIONS: &[&str] = &[
     "status",
     "network_list",
     "network_get",
-    "pairings_list",
-    "pairings_get",
-    "pairings_preview",
-    "pairings_apply",
-    "pairings_revoke",
     "enrollment_offer",
     "enrollment_request",
     "enrollment_pending",
@@ -81,26 +61,14 @@ const ACTIONS: &[&str] = &[
     "enrollment_deny",
     "enrollment_revoke",
     "enrollment_history",
-    "sync_documents",
 ];
-const HELP_TOPICS: &[&str] = &[
-    "status",
-    "network",
-    "pairings",
-    "enrollment",
-    "sync",
-    "scope",
-];
+const HELP_TOPICS: &[&str] = &["status", "network", "enrollment", "scope"];
 
 impl P2pParams {
     fn command(self) -> Result<(Vec<String>, Map<String, Value>)> {
         let mut options = self.options;
         for (key, value) in [
             ("peer_id", self.peer_id),
-            ("peer_did", self.peer_did),
-            ("collections", self.collections),
-            ("collection", self.collection),
-            ("doc_ids", self.doc_ids),
             ("request_id", self.request_id),
             ("offer_token", self.offer_token),
             ("details", self.details),
@@ -144,14 +112,6 @@ impl P2pParams {
     }
 }
 
-fn action_call(words: &[&str], fields: Value) -> Value {
-    let mut call = json!({ "action": words.join("_") });
-    if let (Some(call), Some(fields)) = (call.as_object_mut(), fields.as_object()) {
-        call.extend(fields.clone());
-    }
-    call
-}
-
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct P2pError(String);
@@ -169,32 +129,12 @@ impl P2pTool {
         node: Arc<EmbeddedNode>,
         identity: Option<Arc<dyn NodeIdentity>>,
         mutate: bool,
-        collections: EndpointScope<String, ()>,
     ) -> Self {
         Self {
             node,
             identity,
-            invoking_agent: None,
             mutate,
-            collections,
         }
-    }
-
-    pub(crate) fn with_invoking_agent(mut self, agent: Option<Arc<dyn NodeIdentity>>) -> Self {
-        self.invoking_agent = agent;
-        self
-    }
-
-    fn agent(&self) -> Result<Arc<dyn NodeIdentity>> {
-        let agent = self
-            .invoking_agent
-            .clone()
-            .context("P2P document access requires the invoking Agent identity")?;
-        ensure!(
-            Some(agent.did()) != self.node.node_identity_did(),
-            "P2P Agent must not be the runtime identity"
-        );
-        Ok(agent)
     }
 
     fn actor(&self) -> Result<Arc<dyn NodeIdentity>> {
@@ -217,23 +157,6 @@ impl P2pTool {
         Ok(identity)
     }
 
-    async fn enrollment(&self, peer: &str, expected_did: Option<&str>) -> Result<ActiveEnrollment> {
-        defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-            .map_err(anyhow::Error::msg)
-            .context("invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}")?;
-        let projection = GraphqlEnrollmentStore::new(self.node.clone(), self.actor()?)
-            .load_projection()
-            .await?;
-        ensure!(
-            projection.conflict.is_none(),
-            "enrollment authority is conflicted"
-        );
-        let active = projection.active.into_iter().find(|entry| entry.request.candidate_peer == peer)
-            .context("peer has no current authorized enrollment in this node's network. A pairing applied here needs the peer to have joined this node: it ran enrollment_request with this node's offer and this node approved it. Joining the peer's network does not count; pairing both ways needs each node enrolled in the other's network, so mint an offer here for the peer or have the peer apply its pairing toward this node; next call: p2p {\"action\":\"enrollment_pending\"}")?;
-        ensure!(expected_did.is_none_or(|did| did == active.request.candidate_did), "peer DID does not match signed enrollment; next call: p2p {{\"action\":\"pairings_list\"}}");
-        Ok(active)
-    }
-
     async fn rows(
         &self,
         collection: &str,
@@ -245,16 +168,7 @@ impl P2pTool {
             format!("filter: {filter}, limit: 50")
         });
         let access =
-            if collection == "DataPlanePairingDesired" || collection == "PeerPairingApplied" {
-                let agent = self.agent()?;
-                ConfigAccess::local_managed_agent(
-                    self.node.clone(),
-                    identity::Did::new(agent.did())?,
-                    agent.as_ref(),
-                )?
-            } else {
-                ConfigAccess::local_as(self.node.clone(), identity::Did::new(self.actor()?.did())?)
-            };
+            ConfigAccess::local_as(self.node.clone(), identity::Did::new(self.actor()?.did())?);
         let result = access
             .execute(&format!("{{{collection}({arguments}) {{{fields}}}}}"))
             .await?;
@@ -271,151 +185,6 @@ impl P2pTool {
             .context("P2P response omitted documents")
     }
 
-    async fn overlay(&self, peer: &str) -> Result<Option<Value>> {
-        let rows = self
-            .rows(
-                "DataPlanePairingDesired",
-                Some(&format!("{{peer_id: {{_eq: {}}}}}", quoted(peer))),
-                "_docID peer_id node_did actor_did collections replicator_addresses template source",
-            )
-            .await?;
-        ensure!(rows.len() <= 1, "ambiguous pairing document");
-        Ok(rows.into_iter().next())
-    }
-
-    fn owned_overlay(&self, row: &Value, runtime: &str, actor: &str) -> Result<()> {
-        ensure!(
-            row["node_did"].as_str() == Some(runtime)
-                && row["actor_did"].as_str() == Some(actor)
-                && row["source"].as_str() == Some(OVERLAY_SOURCE),
-            "pairing overlay is managed by another owner; do not change its policy"
-        );
-        Ok(())
-    }
-
-    async fn mutate_overlay(
-        &self,
-        peer: &str,
-        desired: Option<Value>,
-        fields: Option<String>,
-    ) -> Result<bool> {
-        let runtime = self.actor()?.did().to_owned();
-        let agent = self.agent()?;
-        let actor = agent.did().to_owned();
-        let access = ConfigAccess::local_managed_agent(
-            self.node.clone(),
-            identity::Did::new(&actor)?,
-            agent.as_ref(),
-        )?;
-        let node_binding = if fields.is_some() {
-            let runtime_did = identity::Did::new(&runtime)?;
-            let runtime_access = ConfigAccess::local_as(self.node.clone(), runtime_did.clone());
-            let (doc_id, record) = runtime_access
-                .transact_readonly("tool.p2p.node_binding", |txn| {
-                    let runtime = &runtime;
-                    Box::pin(async move {
-                        crate::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            crate::Collection::Node,
-                            runtime,
-                            runtime,
-                        )
-                        .await
-                    })
-                })
-                .await?
-                .context("P2P overlay requires a visible Node")?;
-            Some(crate::store::config_client::ConfigurationNodeBinding {
-                node_did: runtime_did,
-                doc_id,
-                enabled: record
-                    .get("enabled")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                default_agent_did: record
-                    .get("default_agent_did")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            })
-        } else {
-            None
-        };
-        let peer = peer.to_owned();
-        let collections_scope = self.collections.clone();
-        access.transact_write("tool.p2p.overlay", move |txn| {
-            let actor = actor.clone();
-            let runtime = runtime.clone();
-            let node_binding = node_binding.clone();
-            let peer = peer.clone();
-            let desired = desired.clone();
-            let fields = fields.clone();
-            let collections_scope = collections_scope.clone();
-            Box::pin(async move {
-                let response = txn.execute(&format!("{{DataPlanePairingDesired(filter: {{peer_id: {{_eq: {}}}}}, limit: 2) {{_docID peer_id node_did actor_did collections replicator_addresses template source}}}}", quoted(&peer))).await?;
-                let rows = response["data"]["DataPlanePairingDesired"].as_array().context("missing pairing documents")?;
-                ensure!(rows.len() <= 1, "ambiguous pairing document");
-                let before = rows.first();
-                if let Some(row) = before {
-                    ensure!(row["node_did"].as_str() == Some(runtime.as_str()) && row["actor_did"].as_str() == Some(actor.as_str()) && row["source"].as_str() == Some(OVERLAY_SOURCE), "pairing overlay is managed by another owner; do not change its policy");
-                    let doc = row["_docID"].as_str().context("overlay identity missing")?.to_owned();
-                    let owners = txn.document_owners("DataPlanePairingDesired", &[doc]).await?;
-                    ensure!(owners.len() == 1 && owners[0].visible && owners[0].owner.as_ref().is_some_and(|owner| owner.as_str() == actor.as_str()), "pairing overlay has another native owner");
-                    let before_collections: Vec<String> = if row["collections"].is_null() {Vec::new()} else {serde_json::from_value(row["collections"].clone()).context("malformed existing collection scope")?};
-                    ensure!(collections_scope.permits_all(before_collections.iter()), "existing pairing contains collections outside the P2P grant; next call: p2p {{\"action\":\"pairings_list\"}}");
-                    if !before_collections.is_empty() {
-                        admit_app_collections(before_collections.into_iter().collect()).context("existing pairing contains protocol collections")?;
-                    }
-                }
-                let unchanged = match (&desired, before) {
-                    (None, None) => true,
-                    (Some(desired), Some(before)) => desired.as_object().context("invalid desired pairing")?.iter().all(|(key, value)| before.get(key) == Some(value)),
-                    _ => false,
-                };
-                if unchanged { return Ok(true); }
-                let created = fields.is_some() && before.is_none();
-                let mutation = match (fields, before) {
-                    (Some(fields), Some(row)) => format!("mutation {{update_DataPlanePairingDesired(filter: {{_docID: {{_eq: {}}}}}, input: {fields}) {{_docID}}}}", quoted(row["_docID"].as_str().context("overlay identity missing")?)),
-                    (Some(fields), None) => {
-                        let fields = fields.strip_suffix('}').context("invalid overlay input")?;
-                        format!("mutation {{create_DataPlanePairingDesired(input: {fields}, actor_did: {}}}) {{_docID}}}}", quoted(&actor))
-                    },
-                    (None, Some(row)) => format!("mutation {{delete_DataPlanePairingDesired(filter: {{_docID: {{_eq: {}}}}}) {{_docID}}}}", quoted(row["_docID"].as_str().context("overlay identity missing")?)),
-                    (None, None) => unreachable!(),
-                };
-                let response = txn.execute(&mutation).await?;
-                if created {
-                    let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "DataPlanePairingDesired")?;
-                    let parent = crate::store::config_client::configuration_node_doc(txn, &runtime, node_binding.as_ref()).await?;
-                    txn.add_resource_relationship("DataPlanePairingDesired", &doc, "parent", "nodes", &parent).await?;
-                }
-                Ok(false)
-            })
-        }).await
-    }
-
-    async fn checked_collections(&self, options: &Map<String, Value>) -> Result<BTreeSet<String>> {
-        let collections: Vec<String> = serde_json::from_value(
-            options
-                .get("collections")
-                .cloned()
-                .context("collections is required")?,
-        )?;
-        ensure!(!collections.is_empty(), "collections must contain application collection names; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}");
-        let collections = admit_app_collections(collections.into_iter().collect())
-            .context("protocol collections, including credentials, are never supported by application pairing or sync; changing grants or ACP cannot enable this operation. Keep credentials with their existing operator owner; next call: p2p {\"action\":\"help\",\"topic\":\"scope\"}")?;
-        ensure!(
-            collections.len() <= 16,
-            "at most 16 application collections per pairing"
-        );
-        for name in &collections {
-            validate_collection_identifier(name)?;
-            ensure!(self.collections.permits(name), "application collection {name} is outside this tool's P2P collection grant. A configuration owner grants it in this agent's Tools built_ins.p2p_collections, and gents pack wire grants a wired plugin's pack collections. The grant this tool holds was fixed when this request started, so a new grant applies from the agent's next request, not in this turn: finish the turn and retry then. ACP document access remains separate; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}");
-            crate::runtime::agent::p2p_reconcile::resolve_embedded_collection_id(&self.node, name)?
-                .with_context(|| format!("collection {name} is unavailable on this node"))?;
-        }
-        Ok(collections)
-    }
-
     async fn call_one(&self, argv: Vec<String>, options: Map<String, Value>) -> Result<Reply> {
         let words: Vec<_> = argv.iter().map(String::as_str).collect();
         if words.first() == Some(&"help") || words.last() == Some(&"--help") {
@@ -428,7 +197,7 @@ impl P2pTool {
             };
             let mut outcome = json!({"help": help(resource)?});
             if resource == Some("scope") {
-                outcome["grant"] = json!({"mutations":self.mutate,"application_collections":{"scope":self.collections.kind(),"names":self.collections.keys()}});
+                outcome["grant"] = json!({"mutations":self.mutate});
             }
             return Ok(reply(outcome, None, Value::Null));
         }
@@ -436,23 +205,17 @@ impl P2pTool {
         let admin = EmbeddedRemoteP2pAdmin::new(self.node.clone());
         let options = &options;
         let allowed: &[&str] = match words.as_slice() {
-            ["status"] | ["pairings", "list"] => &["details"],
+            ["status"] => &["details"],
             ["network", "list"] | ["enrollment", "pending" | "history"] => &[],
             ["enrollment", "offer"] => &["valid_for_secs"],
-            ["pairings", "get"] => &["peer_id", "details"],
             ["network", "get"] => &["peer_id"],
-            ["pairings", "preview" | "apply"] => &["peer_id", "peer_did", "collections"],
-            ["pairings", "revoke"] => &["peer_id"],
             ["enrollment", "approve" | "deny" | "revoke"] => &["request_id"],
             ["enrollment", "request"] => &["offer_token"],
-            ["sync", "documents"] => &["peer_id", "collection", "doc_ids"],
             _ => {
-                let resource = words.first().copied().filter(|word| {
-                    matches!(
-                        *word,
-                        "status" | "network" | "pairings" | "enrollment" | "sync"
-                    )
-                });
+                let resource = words
+                    .first()
+                    .copied()
+                    .filter(|word| matches!(*word, "status" | "network" | "enrollment"));
                 let next = resource.map_or(
                     json!({"action":"help"}),
                     |resource| json!({"action":"help","topic":resource}),
@@ -531,81 +294,6 @@ impl P2pTool {
                     json!({"peer_id":peer,"registered_peers":peers,"connected":connected}),
                     peers.is_empty().then(|| json!({"action":"network_list"})),
                     Value::Null,
-                ))
-            }
-            ["pairings", "list" | "get"] => {
-                let peer = (words[1] == "get").then(|| text("peer_id")).transpose()?;
-                if let Some(peer) = peer {
-                    defra_p2p_adapter::TransportPeerId::new(peer.to_owned()).map_err(anyhow::Error::msg)
-                        .context("invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}")?;
-                }
-                let filter = peer.map(|peer| format!("{{peer_id: {{_eq: {}}}}}", quoted(peer)));
-                let desired = self
-                    .rows(
-                        "DataPlanePairingDesired",
-                        filter.as_deref(),
-                        "peer_id node_did collections source template",
-                    )
-                    .await?;
-                let applied_filter = match peer {
-                    Some(peer) => format!(
-                        "{{peer_id: {{_eq: {}}}, node_did: {{_eq: {}}}}}",
-                        quoted(peer),
-                        quoted(actor.did())
-                    ),
-                    None => format!("{{node_did: {{_eq: {}}}}}", quoted(actor.did())),
-                };
-                let applied = self
-                    .rows(
-                        "PeerPairingApplied",
-                        Some(&applied_filter),
-                        "peer_id collections replicator_addresses",
-                    )
-                    .await?;
-                let projection = GraphqlEnrollmentStore::new(self.node.clone(), actor)
-                    .load_projection()
-                    .await?;
-                let enrolled: Vec<_> = projection.active.iter()
-                    .filter(|entry| peer.is_none_or(|peer| entry.request.candidate_peer == peer))
-                    .take(50).map(|e| json!({"peer_id":e.request.candidate_peer,"peer_did":e.request.candidate_did,"request_id":e.request.request_id,"authorization_expires_at":e.revision.authorization_expires_at})).collect();
-                let connected: Vec<_> = admin
-                    .active_peers()
-                    .await?
-                    .into_iter()
-                    .filter(|entry| peer.is_none_or(|peer| peer_reference_matches(entry, peer)))
-                    .collect();
-                let replicators: Vec<_> = admin
-                    .list_replicators()
-                    .await?
-                    .into_iter()
-                    .filter(|entry| {
-                        peer.is_none_or(|peer| {
-                            entry
-                                .address
-                                .as_deref()
-                                .is_some_and(|address| peer_reference_matches(address, peer))
-                                || entry
-                                    .id
-                                    .as_deref()
-                                    .is_some_and(|id| peer_reference_matches(id, peer))
-                        })
-                    })
-                    .collect();
-                let replicators = if details {
-                    bounded_observation(replicators)
-                } else {
-                    bounded_observation(replicators.into_iter().map(|entry| {
-                        json!({"address":entry.address,"collection_count":entry.collections.len(),"filter_count":entry.filters.as_ref().map(|filters|filters.len())})
-                    }).collect())
-                };
-                let mut detail_options = json!({"details":true});
-                if let Some(peer) = peer {
-                    detail_options["peer_id"] = json!(peer);
-                }
-                Ok(reply(
-                    json!({"desired":desired,"applied":applied}),
-                    None,
-                    json!({"enrolled_peers":enrolled,"connected_peers":bounded_observation(connected),"replicators":replicators,"limit":50,"details_call":action_call(&words, detail_options)}),
                 ))
             }
             ["enrollment", "pending"] => {
@@ -721,107 +409,8 @@ impl P2pTool {
                 })?;
                 Ok(reply(
                     json!({"request_id":result.request_id,"state":result.state,"delivery_pending":result.delivery_pending,"decision_doc_id":result.decision_doc_id,"revision_doc_id":result.revision_doc_id}),
-                    Some(json!({"action":"pairings_list"})),
+                    Some(json!({"action":"enrollment_history"})),
                     Value::Null,
-                ))
-            }
-            ["pairings", operation @ ("preview" | "apply")] => {
-                let peer = text("peer_id")?;
-                let active = self.enrollment(peer, Some(text("peer_did")?)).await?;
-                let collections = self.checked_collections(options).await?;
-                let names = collections.iter().map(String::as_str).collect::<Vec<_>>();
-                let local_schema = crate::runtime::agent::p2p_reconcile::read_replicated_schema(
-                    self.node.clone(),
-                    &names,
-                )
-                .await?;
-                let before = self.overlay(peer).await?;
-                let agent = self.agent()?;
-                if let Some(row) = &before {
-                    self.owned_overlay(row, actor.did(), agent.did())?;
-                }
-                let desired = json!({"peer_id":peer,"node_did":actor.did(),"actor_did":agent.did(),"collections":collections,"replicator_addresses":[active.request.candidate_ticket],"template":"app-collections","source":OVERLAY_SOURCE});
-                if *operation == "preview" {
-                    return Ok(reply(
-                        json!({"proposed":desired,"current":before,"local_schema":local_schema,"peer_schema_compatibility":"not_checked"}),
-                        None,
-                        json!({"enrollment_request_id":active.request.request_id}),
-                    ));
-                }
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
-                let fields = format!("{{peer_id: {}, node_did: {}, collections: {}, replicator_addresses: {}, template: \"app-collections\", source: {}}}",
-                    quoted(peer), quoted(actor.did()), crate::store::graphql::graphql_string_list_literal(collections.iter().map(String::as_str)), crate::store::graphql::graphql_string_list_literal([active.request.candidate_ticket.as_str()]), quoted(OVERLAY_SOURCE));
-                let unchanged = self
-                    .mutate_overlay(peer, Some(desired.clone()), Some(fields))
-                    .await?;
-                Ok(reply(
-                    json!({"desired":desired,"unchanged":unchanged,"applied":"observe_existing_reconciler","local_schema":local_schema,"peer_schema_compatibility":"not_checked"}),
-                    Some(json!({"action":"pairings_get","peer_id":peer})),
-                    Value::Null,
-                ))
-            }
-            ["pairings", "revoke"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
-                let peer = text("peer_id")?;
-                let unchanged = self.mutate_overlay(peer, None, None).await?;
-                Ok(reply(
-                    json!({"managed_overlay_removed":peer,"unchanged":unchanged}),
-                    Some(json!({"action":"pairings_get","peer_id":peer})),
-                    Value::Null,
-                ))
-            }
-            ["sync", "documents"] => {
-                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
-                let peer = text("peer_id")?;
-                self.enrollment(peer, None).await?;
-                let collection = text("collection")?;
-                let scoped = Map::from_iter([("collections".into(), json!([collection]))]);
-                self.checked_collections(&scoped).await?;
-                let ids: Vec<String> = serde_json::from_value(
-                    options
-                        .get("doc_ids")
-                        .cloned()
-                        .context("doc_ids is required")?,
-                )?;
-                ensure!(
-                    !ids.is_empty()
-                        && ids.len() <= 16
-                        && ids.iter().all(|id| !id.trim().is_empty()),
-                    "sync requires 1 through 16 nonempty document IDs"
-                );
-                let result = admin
-                    .sync_documents(collection, &ids, Some(Duration::from_secs(10)))
-                    .await;
-                validate_collection_identifier(collection)?;
-                let doc_ids = crate::store::graphql::graphql_string_list_literal(
-                    ids.iter().map(String::as_str),
-                );
-                let observed = ConfigAccess::local(self.node.clone())
-                    .execute(&format!("{{{collection}(docIDs: {doc_ids}) {{_docID}}}}"))
-                    .await?;
-                ensure!(
-                    observed
-                        .get("errors")
-                        .is_none_or(|errors| errors.is_null()
-                            || errors.as_array().is_some_and(Vec::is_empty)),
-                    "P2P document observation failed: {}",
-                    observed["errors"]
-                );
-                let present = observed["data"][collection]
-                    .as_array()
-                    .context("P2P response omitted documents")?;
-                let arrived: BTreeSet<_> = present
-                    .iter()
-                    .filter_map(|r| r["_docID"].as_str())
-                    .collect();
-                let missing: Vec<_> = ids
-                    .iter()
-                    .filter(|id| !arrived.contains(id.as_str()))
-                    .collect();
-                Ok(reply(
-                    json!({"observed_document_ids":arrived,"missing_document_ids":missing}),
-                    (!missing.is_empty()).then(|| json!({"action":"status"})),
-                    json!({"peer_id":peer,"collection":collection,"sync_request_error":result.err().map(|e|e.to_string()),"source_peer_not_certified":true}),
                 ))
             }
             _ => unreachable!(),
@@ -842,13 +431,11 @@ fn reply(outcome: Value, next_call: Option<Value>, observations: Value) -> Reply
 
 fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
-        None => "Actions: status; network_list, network_get; pairings_list, pairings_get, pairings_preview, pairings_apply, pairings_revoke; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_deny, enrollment_revoke, enrollment_history; sync_documents. Action help with topic status, network, pairings, enrollment, sync or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node. Mutation and collection grants are explicit.",
+        None => "Actions: status; network_list, network_get; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_deny, enrollment_revoke, enrollment_history. Action help with topic status, network, enrollment or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node. Mutation grants are explicit.",
         Some("status" | "network") => "status returns native connected peer references (raw IDs or transport addresses) and native sync facts. network_list lists up to 50 registered peers with exact DIDs and addresses. network_get takes peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; network_get's connected field is the observed transport connection. status defaults to backlog facts; details:true returns native diagnostic counters.",
-        Some("pairings") => "pairings_get with peer_id inspects one peer; pairings_list shows desired, applied, enrolled and connected observations separately. Defaults show compact replicator counts; details:true includes native collection IDs and filters. pairings_preview and pairings_apply require peer_id, peer_did and collections (1-16 application names). The peer must have current signed enrollment; its DID/address come from that owner. Preview and apply report local schema identities but do not check the peer; the peer must have matching collection versions. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. pairings_revoke requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Replacing or revoking requires collection authority over the entire existing overlay. Inspect pairings_get after apply/revoke; submitted desired state is not proof of a live route.",
-        Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending, approves it and applies pairings. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for the default authorization lease and materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, so this node can pair toward it, not the reverse. Pairing in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned pairing document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted. Approved entries carry lease_state, lease_remaining_days and renewal_due, which turns true inside the last 7 days of the lease. Renewal is re-enrollment before expiry: the same four calls with a fresh offer, request and approval for the same peer; the approval takes the peer's next authorization sequence and supersedes the old generation in place, so pairings applied toward the peer stay. After expiry the peer's routes and remote requests stop until it re-enrolls.",
-        Some("sync") => "sync_documents requires peer_id, collection and doc_ids (1-16 physical document IDs). The peer needs current enrollment; only application collections in the tool grant are supported. Protocol collections, including credentials, are always excluded; neither broader grants nor ACP changes enable them. See help topic scope. The native adapter makes a bounded 10-second sync request, then this node observes actual document IDs. Missing IDs and request errors are explicit. DefraDB chooses providers; this does not certify which peer supplied a document. Use query for authorized document content.",
-        Some("scope") => "Pairing overlays and document sync support application collections only. Gents protocol/configuration and credential collections are permanently excluded from these actions, even with broader tool grants or document ACP. Keep credentials with their existing operator owner. For an application collection, an authorized configuration owner may grant the exact P2P collection in Tools built_ins.p2p_collections, and wiring a pack plugin to an agent whose Tools enable this tool grants the collections it uses; a grant applies from the agent's next request. Native ACP still controls document access. Enrollment is a separate signed authority. Sync accepts 1-16 known document IDs, not collection-wide discovery, and cannot certify the supplying peer.",
-        Some(resource) => { let next = if resource == "pairing" { "pairings" } else if resource == "documents" { "sync" } else { "scope" }; bail!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"{next}\"}}") },
+        Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending and approves it. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for the default authorization lease and materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, not this node in the requester's. Enrollment in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned enrollment document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted. Approved entries carry lease_state, lease_remaining_days and renewal_due, which turns true inside the last 7 days of the lease. Renewal is re-enrollment before expiry: the same four calls with a fresh offer, request and approval for the same peer; the approval takes the peer's next authorization sequence and supersedes the old generation in place, so the peer's enrollment route stays. After expiry the peer's routes and remote requests stop until it re-enrolls.",
+        Some("scope") => "P2P carries discovery and enrollment only. This tool never pairs or syncs application, protocol configuration or credential collections, whatever the tool grants or document ACP say; read authorized documents through query. Enrollment is a separate signed authority, and mutation authority gates offers, requests and decisions.",
+        Some(resource) => bail!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"),
     })
 }
 
@@ -863,7 +450,7 @@ impl Tool for P2pTool {
             |description: &str| json!({"type":"string","minLength":1,"description":description});
         ToolDefinition {
             name: Self::NAME.into(),
-            description: "Inspect this node's P2P peers, enroll nodes, manage authorized pairing overlays and request bounded sync. Pick an action and send only its fields: status [details]; network_list; network_get peer_id; pairings_list [details]; pairings_get peer_id [details]; pairings_preview and pairings_apply peer_id peer_did collections; pairings_revoke peer_id; enrollment_offer [valid_for_secs]; enrollment_request offer_token; enrollment_pending; enrollment_approve, enrollment_deny and enrollment_revoke request_id; enrollment_history; sync_documents peer_id collection doc_ids. A node joins in four calls: the approver's enrollment_offer, the joining node's enrollment_request, then the approver's enrollment_pending and enrollment_approve; the approver's pairings_apply then replicates collections toward the joiner. The reverse direction needs the same four calls the other way. Action help with a topic explains rules. Enrollment and DefraDB enforce access.".into(),
+            description: "Inspect this node's P2P peers and enroll nodes. Pick an action and send only its fields: status [details]; network_list; network_get peer_id; enrollment_offer [valid_for_secs]; enrollment_request offer_token; enrollment_pending; enrollment_approve, enrollment_deny and enrollment_revoke request_id; enrollment_history. A node joins in four calls: the approver's enrollment_offer, the joining node's enrollment_request, then the approver's enrollment_pending and enrollment_approve. The reverse direction needs the same four calls the other way. Action help with a topic explains rules. Enrollment and DefraDB enforce access.".into(),
             parameters: json!({
                 "type": "object",
                 "required": ["action"],
@@ -871,15 +458,11 @@ impl Tool for P2pTool {
                 "properties": {
                     "action": {"type": "string", "enum": ACTIONS, "description": "The P2P action; each lists its fields in the tool description."},
                     "topic": {"type": "string", "enum": HELP_TOPICS, "description": "help only: the topic to explain."},
-                    "peer_id": text("Remote node's transport peer ID (hex), from enrollment_pending, pairings_list enrolled_peers or network_list. network_get, pairings_get/preview/apply/revoke, sync_documents."),
-                    "peer_did": text("Remote node's DID from its signed enrollment (enrollment_pending peer_did). pairings_preview/apply."),
-                    "collections": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16, "description": "Application collection names to replicate to the peer, e.g. [\"DeploymentNote\"]; they must be in this tool's P2P grant. pairings_preview/apply."},
-                    "collection": text("One application collection name. sync_documents."),
-                    "doc_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16, "description": "Document IDs to fetch from the peer. sync_documents."},
+                    "peer_id": text("Remote node's transport peer ID (hex), from enrollment_pending or network_list. network_get."),
                     "request_id": text("Enrollment request ID (enroll-...) from enrollment_pending or the joining node's enrollment_request. enrollment_approve/deny/revoke."),
                     "offer_token": text("The approving node's token from its enrollment_offer, valid until its expires_at (5 minutes by default). enrollment_request, run on the joining node."),
                     "valid_for_secs": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300, "description": "enrollment_offer only: how long the offer, and a request made from it, stays valid. Raise it when the token is relayed by hand."},
-                    "details": {"type": "boolean", "description": "status, pairings_list, pairings_get: include native diagnostic counters, collection IDs and filters."}
+                    "details": {"type": "boolean", "description": "status only: include native diagnostic counters."}
                 }
             }),
         }
@@ -905,11 +488,6 @@ impl Tool for P2pTool {
         })?;
         serde_json::to_string(&result).map_err(|error| P2pError(error.to_string()))
     }
-}
-
-fn peer_reference_matches(reference: &str, peer: &str) -> bool {
-    reference == peer
-        || p2p::iroh::parse_public_peer_addr(reference).is_ok_and(|(id, _)| id.as_str() == peer)
 }
 
 fn bounded_observation<T>(mut items: Vec<T>) -> Value

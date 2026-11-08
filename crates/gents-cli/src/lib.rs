@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -226,8 +225,7 @@ Examples:
 
   # Low-level non-authoritative live wiring for diagnostics/repair:
   gents p2p admin connect --peer <peer-id-or-address>
-  gents p2p admin replicators add --peer <peer-id-or-address> --collection AgentRequest --filter AgentRequest:node_did=<node-did>
-  gents p2p admin documents sync --collection AgentRequest --doc-id <doc-id>";
+  gents p2p admin replicators add --peer <peer-id-or-address> --profile discovery";
 const SCHEMA_AFTER_HELP: &str = "\
 Apply app-specific DefraDB collection schemas to a running or local store.
 
@@ -607,21 +605,6 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
             .context("resolving current directory")?
             .join(path))
     }
-}
-
-pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Result<Vec<String>> {
-    let values = values
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
-
-    if values.is_empty() {
-        anyhow::bail!("provide at least one {flag_name}");
-    }
-
-    Ok(values.into_iter().collect())
 }
 
 pub(crate) async fn http_get_json<T>(request: reqwest::RequestBuilder) -> Result<T>

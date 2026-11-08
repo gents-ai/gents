@@ -33,8 +33,4 @@ enable_p2p_tool?: boolean | null,
  * remain the authorization owners. Unset is disabled.
  */
 enable_p2p_mutations?: boolean | null,
-/**
- * Exact collection names allowed for application pairing overlays and sync.
- * Missing or empty grants no collections; the policy ceiling can only narrow.
- */
-p2p_collections?: Array<string> | null, enable_context_budget?: boolean | null, };
+enable_context_budget?: boolean | null, };

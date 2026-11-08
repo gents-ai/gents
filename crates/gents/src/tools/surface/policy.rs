@@ -207,7 +207,6 @@ pub struct ToolPolicySurface {
     pub cli_tools: EndpointScope<String, BTreeSet<String>>,
     pub mcp_services: EndpointScope<String, ()>,
     pub defra_collections: EndpointScope<String, ()>,
-    pub p2p_collections: EndpointScope<String, ()>,
     pub self_config_categories: EndpointScope<String, ()>,
     pub agent_targets: EndpointScope<(String, String), ()>,
     pub background_tools: EndpointScope<String, ()>,
@@ -338,10 +337,6 @@ impl ToolPolicySurface {
         self.p2p_read && self.p2p_mutate
     }
 
-    pub fn permits_p2p_overlay_mutation(&self, before: &[String], after: &[String]) -> bool {
-        self.permits_p2p_mutation() && self.p2p_collections.permits_all(before.iter().chain(after))
-    }
-
     pub fn secure_minimal() -> Self {
         Self {
             file: FileToolMode::Off,
@@ -362,7 +357,6 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::none(),
             mcp_services: EndpointScope::none(),
             defra_collections: EndpointScope::none(),
-            p2p_collections: EndpointScope::none(),
             self_config_categories: EndpointScope::none(),
             agent_targets: EndpointScope::none(),
             background_tools: EndpointScope::none(),
@@ -404,7 +398,6 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::all(),
             mcp_services: EndpointScope::all(),
             defra_collections: EndpointScope::all(),
-            p2p_collections: EndpointScope::all(),
             self_config_categories: EndpointScope::all(),
             agent_targets: EndpointScope::all(),
             background_tools: EndpointScope::all(),
@@ -521,9 +514,6 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::only_map(cli_tools),
             mcp_services,
             defra_collections,
-            p2p_collections: EndpointScope::<String, ()>::only_units(
-                selection.p2p_collections.iter().cloned(),
-            ),
             self_config_categories,
             agent_targets: EndpointScope::<(String, String), ()>::only_units(
                 agent_tools.targets.iter().map(agent_target_key),
@@ -575,9 +565,6 @@ impl ToolPolicySurface {
             defra_collections: self
                 .defra_collections
                 .meet_with(&other.defra_collections, |(), ()| ()),
-            p2p_collections: self
-                .p2p_collections
-                .meet_with(&other.p2p_collections, |(), ()| ()),
             self_config_categories: self
                 .self_config_categories
                 .meet_with(&other.self_config_categories, |(), ()| ()),

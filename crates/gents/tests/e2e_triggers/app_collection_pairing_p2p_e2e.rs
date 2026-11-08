@@ -32,21 +32,15 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
         .expect("add_collection ChangeProposed");
 }
 
-/// The P2P owner refuses to subscribe or replicate an application or pack
-/// collection: only discovery and enrollment documents cross runtimes.
+/// The P2P owner refuses to replicate an application or pack collection: only
+/// discovery and enrollment documents cross runtimes.
 async fn refuse_app_collection_replication(
     node: &std::sync::Arc<EmbeddedNode>,
     peer_address: &str,
     collection: &str,
 ) {
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
-    let refused = |result: Result<(), RemoteP2pAdminError>| {
-        matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == collection)
-    };
-    assert!(
-        refused(admin.add_p2p_collections(&[collection.to_owned()]).await),
-        "{collection} must not be subscribed"
-    );
+    let refused = |result: Result<(), RemoteP2pAdminError>| matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == collection);
     assert!(
         refused(
             admin
@@ -61,16 +55,12 @@ async fn refuse_app_collection_replication(
     );
 }
 
-async fn fetch_pairing_applied(
-    node: &EmbeddedNode,
-    peer_id: &str,
-) -> Option<(Vec<String>, Vec<String>)> {
+async fn fetch_pairing_applied(node: &EmbeddedNode, peer_id: &str) -> Option<Vec<String>> {
     let escaped = escape_graphql_string(peer_id);
     let query = format!(
         r#"{{
             PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                 peer_id
-                collections
                 replicator_addresses
             }}
         }}"#
@@ -86,15 +76,6 @@ async fn fetch_pairing_applied(
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()?;
-    let collections = row
-        .get("collections")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
     let addresses = row
         .get("replicator_addresses")
         .and_then(Value::as_array)
@@ -104,7 +85,7 @@ async fn fetch_pairing_applied(
                 .collect()
         })
         .unwrap_or_default();
-    Some((collections, addresses))
+    Some(addresses)
 }
 
 async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
@@ -112,7 +93,9 @@ async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
     let Some(p2p) = gents::store::identity::node_p2p(node) else {
         return Vec::new();
     };
-    p2p.get_collections().await.expect("list subscribed collections")
+    p2p.get_collections()
+        .await
+        .expect("list subscribed collections")
 }
 
 async fn wait_for_subscribed_collections(
@@ -138,8 +121,8 @@ async fn wait_for_subscribed_collections(
     }
 }
 
-/// Several pairing sweeps pass without the application collection entering
-/// the applied pairing or the subscription, and the control pairing survives.
+/// Several pairing sweeps pass without the application collection being
+/// subscribed, and the control pairing stays applied.
 async fn assert_app_collection_refused(
     node: &EmbeddedNode,
     peer_id: &str,
@@ -148,13 +131,9 @@ async fn assert_app_collection_refused(
 ) {
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {
-        let applied = fetch_pairing_applied(node, peer_id)
+        fetch_pairing_applied(node, peer_id)
             .await
             .expect("control pairing stays applied");
-        assert!(
-            !applied.0.iter().any(|name| name == collection),
-            "{collection} entered the applied pairing: {applied:?}"
-        );
         let subscribed = fetch_subscribed_collection_names(node).await;
         assert!(
             !subscribed.iter().any(|name| name == collection),
@@ -186,12 +165,9 @@ async fn wait_for_enrollment_route_applied(
     let deadline = Instant::now() + timeout;
     let mut last = String::from("<none>");
     loop {
-        if let Some((collections, addresses)) = fetch_pairing_applied(node, peer_id).await {
+        if let Some(addresses) = fetch_pairing_applied(node, peer_id).await {
             let subscribed = fetch_subscribed_collection_names(node).await;
-            last = format!(
-                "applied_collections={collections:?} addresses={addresses:?} \
-                 subscribed={subscribed:?}"
-            );
+            last = format!("addresses={addresses:?} subscribed={subscribed:?}");
             let has_addr = addresses.iter().any(|a| !a.trim().is_empty());
             if has_addr {
                 return Vec::new();
@@ -591,9 +567,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     )
     .await;
 
-    let control =
-        wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
-            .await;
+    wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60)).await;
     let before = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
         .await
         .expect("control applied");
@@ -624,19 +598,14 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let after = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
         .await
         .expect("control applied after soft-skip");
-    for col in &control {
-        assert!(
-            after.0.contains(col),
-            "control collection {col} lost after blank app-collections row: before={before:?} after={after:?}"
-        );
-    }
-    assert!(
-        !after.0.iter().any(|c| c == "ChangeProposed"),
-        "blank app-collections must not install ChangeProposed: {after:?}"
-    );
     assert_eq!(
-        before.1, after.1,
+        before, after,
         "control replicator addresses should be unchanged"
+    );
+    let subscribed = fetch_subscribed_collection_names(db_a.node.as_ref()).await;
+    assert!(
+        !subscribed.iter().any(|c| c == "ChangeProposed"),
+        "blank app-collections must not subscribe ChangeProposed: {subscribed:?}"
     );
 
     let _ = shutdown_a_tx.send(true);
@@ -833,7 +802,8 @@ async fn document_pack_collections_stay_local_under_explicit_pairing() {
     write_fixture_move(&b, "move-b", "O").await;
     assert_stays_local(
         || async {
-            fixture_moves(&b, "move-a").await.is_empty() && fixture_moves(&a, "move-b").await.is_empty()
+            fixture_moves(&b, "move-a").await.is_empty()
+                && fixture_moves(&a, "move-b").await.is_empty()
         },
         "a pack document replicated to the paired peer",
     )

@@ -425,16 +425,6 @@ pub struct BuiltInTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_p2p_mutations: Option<bool>,
-    /// Exact collection names allowed for application pairing overlays and sync.
-    /// Missing or empty grants no collections; the policy ceiling can only narrow.
-    #[serde(
-        default,
-        skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
-    )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
-    #[schemars(schema_with = "crate::documents::string_list_schema")]
-    pub p2p_collections: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_context_budget: Option<bool>,
@@ -709,15 +699,6 @@ impl Tools {
             }
         }
         let mut errors = Vec::new();
-        if let Some(built_ins) = &self.built_ins {
-            for collection in &built_ins.p2p_collections {
-                if let Err(error) =
-                    crate::store::graphql::validate_collection_identifier(collection)
-                {
-                    errors.push(format!("built_ins.p2p_collections: {error}"));
-                }
-            }
-        }
         if let Some(host) = &self.host {
             if let Some(files) = &host.files {
                 at_most(
@@ -1107,10 +1088,7 @@ fn merge_job_blocks(
 /// the defaults over `targets_from`; a merge never widens an existing block),
 /// the targets, trusted packs and skills. Each `targets_from` entry is
 /// (pack coordinate, the AgentTarget ids that pack ships, its provenance).
-/// When the Tools enable the p2p tool, the collections the plugin's data
-/// declaration uses from its pack's own SDL join `built_ins.p2p_collections`,
-/// so its agent can pair them with enrolled peers; enrollment and ACP still
-/// gate every pairing. `agents.enabled` is never written.
+/// `agents.enabled` is never written.
 pub fn wire_plugin(
     tools: &Tools,
     context: &super::AgentContext,
@@ -1234,23 +1212,6 @@ pub fn wire_plugin(
         context.skill_ids.extend(skills);
     }
 
-    if let Some(built_ins) = tools
-        .built_ins
-        .as_mut()
-        .filter(|built_ins| built_ins.enable_p2p_tool == Some(true))
-    {
-        let granted: Vec<String> = plugin
-            .data_collection_fields
-            .keys()
-            .filter(|collection| !built_ins.p2p_collections.contains(collection))
-            .cloned()
-            .collect();
-        if !granted.is_empty() {
-            changed.push(format!("granted P2P pairing of {}", granted.join(", ")));
-            built_ins.p2p_collections.extend(granted);
-        }
-    }
-
     let next_call = (plugin.declaration.job.0 && job.is_none())
         .then(|| format!("gents pack wire {coordinate} --agent <agent> --targets-from <pack>"));
     Ok((
@@ -1270,9 +1231,7 @@ pub fn wire_plugin(
 /// plugin entry still needs it (skills are not recorded per plugin, so any
 /// remaining plugin keeps them). With `targets_from`, keeps the plugin and
 /// removes only those packs' targets and trust entries; a block left without
-/// targets is dropped. `agents.enabled`, `policy.dynamic` and
-/// `built_ins.p2p_collections` are never written: a P2P grant may back a live
-/// pairing or another plugin, so narrowing it stays an explicit Tools edit.
+/// targets is dropped. `agents.enabled` and `policy.dynamic` are never written.
 pub fn unwire_plugin(
     tools: &Tools,
     context: &super::AgentContext,

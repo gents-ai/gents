@@ -192,20 +192,10 @@ pub(crate) struct P2pTemplatesListArgs {
 pub(crate) enum P2pAdminCommand {
     #[command(about = "Connect the running runtime to another peer")]
     Connect(P2pConnectArgs),
-    #[command(about = "Manage live collection subscriptions on the running runtime")]
-    Collections {
-        #[command(subcommand)]
-        command: P2pCollectionsCommand,
-    },
     #[command(about = "Manage live push replicators on the running runtime")]
     Replicators {
         #[command(subcommand)]
         command: P2pReplicatorsCommand,
-    },
-    #[command(about = "Manage live document subscriptions and document sync")]
-    Documents {
-        #[command(subcommand)]
-        command: P2pDocumentsCommand,
     },
 }
 
@@ -228,20 +218,6 @@ pub(crate) struct P2pConnectArgs {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum P2pCollectionsCommand {
-    #[command(about = "List subscribed P2P collections")]
-    List(P2pAccessArgs),
-    #[command(about = "Subscribe collections or collection profiles for P2P replication")]
-    Add(P2pCollectionsMutateArgs),
-    #[command(about = "Remove subscribed P2P collections")]
-    Remove(P2pCollectionsMutateArgs),
-    #[command(about = "Fetch a branchable collection DAG from connected peers")]
-    SyncBranchable(P2pSyncBranchableArgs),
-    #[command(about = "Fetch collection-version DAG blocks from connected peers")]
-    SyncVersions(P2pSyncVersionsArgs),
-}
-
-#[derive(Subcommand)]
 pub(crate) enum P2pReplicatorsCommand {
     #[command(about = "List configured P2P replicators")]
     List(P2pAccessArgs),
@@ -249,18 +225,6 @@ pub(crate) enum P2pReplicatorsCommand {
     Add(P2pReplicatorAddArgs),
     #[command(about = "Remove a peer replicator for collections or profiles")]
     Remove(P2pReplicatorRemoveArgs),
-}
-
-#[derive(Subcommand)]
-pub(crate) enum P2pDocumentsCommand {
-    #[command(about = "List document subscriptions for P2P replication")]
-    List(P2pAccessArgs),
-    #[command(about = "Subscribe documents for P2P replication")]
-    Add(P2pDocumentsMutateArgs),
-    #[command(about = "Remove document subscriptions from P2P replication")]
-    Remove(P2pDocumentsMutateArgs),
-    #[command(about = "Fetch documents from connected peers")]
-    Sync(P2pDocumentsSyncArgs),
 }
 
 #[derive(Subcommand)]
@@ -314,38 +278,6 @@ pub(crate) struct P2pPairingsListArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct P2pCollectionsMutateArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long = "collection", value_name = "COLLECTION")]
-    pub(crate) collections: Vec<String>,
-    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
-    pub(crate) profiles: Vec<P2pCollectionProfileArg>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pSyncBranchableArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long = "collection-id", value_name = "COLLECTION_ID")]
-    pub(crate) collection_id: String,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pSyncVersionsArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long = "version-id", value_name = "VERSION_ID")]
-    pub(crate) version_ids: Vec<String>,
-}
-
-#[derive(clap::Args)]
 pub(crate) struct P2pReplicatorAddArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
@@ -380,34 +312,7 @@ pub(crate) struct P2pReplicatorRemoveArgs {
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
 }
 
-#[derive(clap::Args)]
-pub(crate) struct P2pDocumentsMutateArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long = "doc-id", value_name = "DOC_ID")]
-    pub(crate) doc_ids: Vec<String>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pDocumentsSyncArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long, value_name = "COLLECTION")]
-    pub(crate) collection: String,
-    #[arg(long = "doc-id", value_name = "DOC_ID")]
-    pub(crate) doc_ids: Vec<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum P2pCollectionProfileArg {
-    Runtime,
-    Agent,
-    DesktopConfig,
-    ChatRequests,
-    ToolServices,
     Discovery,
 }

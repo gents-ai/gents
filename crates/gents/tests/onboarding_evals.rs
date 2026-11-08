@@ -9,8 +9,6 @@ mod targets;
 #[path = "onboarding_evals/ladder.rs"]
 mod ladder;
 
-#[path = "onboarding_evals/p2p.rs"]
-mod p2p;
 #[path = "onboarding_evals/schema.rs"]
 mod schema;
 #[path = "onboarding_evals/sessions.rs"]

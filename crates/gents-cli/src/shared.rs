@@ -140,13 +140,6 @@ fn default_p2p_transport() -> String {
     "iroh".to_string()
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct P2pCollectionSubscriptionRow {
-    pub(crate) id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) name: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct P2pReplicatorRow {
     #[serde(rename = "ID", default)]
@@ -188,26 +181,6 @@ pub(crate) struct P2pReplicatorDeleteRequest {
     pub(crate) id: String,
     #[serde(rename = "Collections")]
     pub(crate) collections: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct P2pSyncDocumentsRequest {
-    #[serde(rename = "collectionName")]
-    pub(crate) collection_name: String,
-    #[serde(rename = "docIDs")]
-    pub(crate) doc_ids: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct P2pSyncBranchableRequest {
-    #[serde(rename = "collectionID")]
-    pub(crate) collection_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct P2pSyncVersionsRequest {
-    #[serde(rename = "versionIDs")]
-    pub(crate) version_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

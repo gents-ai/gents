@@ -113,7 +113,6 @@ pub struct ToolSurface {
     pub(crate) enable_schema_tool: bool,
     pub(crate) enable_p2p_tool: bool,
     pub(crate) enable_p2p_mutations: bool,
-    pub(crate) p2p_collections: EndpointScope<String, ()>,
     pub(crate) enable_defra_query: bool,
     pub(crate) defra_query_scope: CollectionScope,
     pub(crate) application_write_collections: Vec<String>,
@@ -426,15 +425,11 @@ impl ToolSurface {
             ));
         }
         if self.enable_p2p_tool {
-            tools.push(Box::new(
-                crate::tools::builtin::p2p::P2pTool::new(
-                    runtime.node.clone(),
-                    runtime.identity.clone(),
-                    self.enable_p2p_mutations,
-                    self.p2p_collections.clone(),
-                )
-                .with_invoking_agent(runtime.agent_identity.clone()),
-            ));
+            tools.push(Box::new(crate::tools::builtin::p2p::P2pTool::new(
+                runtime.node.clone(),
+                runtime.identity.clone(),
+                self.enable_p2p_mutations,
+            )));
         }
         if self.enable_session_history_tool {
             tools.push(build_session_history_tool(
@@ -689,7 +684,6 @@ impl std::fmt::Debug for ToolSurface {
             .field("enable_schema_tool", &self.enable_schema_tool)
             .field("enable_p2p_tool", &self.enable_p2p_tool)
             .field("enable_p2p_mutations", &self.enable_p2p_mutations)
-            .field("p2p_collections", &self.p2p_collections)
             .field(
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,
