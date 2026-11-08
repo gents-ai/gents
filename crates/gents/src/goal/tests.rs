@@ -40,7 +40,12 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
     let session_doc_id = user_access
         .transact_readonly("test.goal_usage.session", |txn| {
             Box::pin(async move {
-                crate::session::load_agent_session_owner_in_txn(txn, owner, "usage-session").await
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    owner,
+                    "usage-session",
+                )
+                .await
             })
         })
         .await
@@ -506,7 +511,7 @@ async fn goal_and_claim_publication_links_match_lean() {
             .transact_readonly("test.goal_links.session_document", |txn| {
                 let runtime = &runtime;
                 Box::pin(async move {
-                    crate::session::load_agent_session_owner_in_txn(
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         runtime.did(),
                         "links-session",

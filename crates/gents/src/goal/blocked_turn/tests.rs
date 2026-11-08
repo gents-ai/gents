@@ -669,7 +669,7 @@ async fn embedded() -> (
     let response = agent_access
         .execute(&format!(
             r#"{{AgentRequest(filter: {{request_id: {{_eq: "request-1"}}}}, limit: 2) {{{}}}}}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
@@ -681,7 +681,7 @@ async fn embedded() -> (
         panic!("blocked request must be unique");
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
-    let request: crate::AgentRequest = row.try_into().unwrap();
+    let request: gents_protocol::row::AgentRequest = row.try_into().unwrap();
     let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         db.node.clone(),

@@ -1,7 +1,7 @@
 use super::*;
 use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
-use crate::request::watcher::AgentRequest;
+use gents_protocol::row::AgentRequest;
 use crate::store::config_client::NodePermission;
 
 #[tokio::test]
@@ -472,7 +472,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             agent_identity.as_ref(),
         )
         .unwrap();
-        let query = format!("{{ AgentRequest {{ {} }} }}", crate::SIGNED_REQUEST_FIELDS);
+        let query = format!("{{ AgentRequest {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS);
         let response = agent_access.execute(&query).await.unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
@@ -621,7 +621,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         recover_claim, submit, ClaimPause,
     };
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::row::AwaitMode;
 
     let model = &crate::lean_vocab_test::lean_contract_snapshot().client_process_claim_cases;
     let grant_model = &crate::lean_vocab_test::lean_contract_snapshot().client_control_grant_cases;
@@ -751,7 +751,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let agent_access =
         ConfigAccess::local_managed_agent(node.clone(), agent.clone(), agent_identity.as_ref())
             .unwrap();
-    let query = format!("{{ AgentRequest {{ {} }} }}", crate::SIGNED_REQUEST_FIELDS);
+    let query = format!("{{ AgentRequest {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS);
     let response = agent_access.execute(&query).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
@@ -1537,7 +1537,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     .unwrap();
     let query = format!(
         "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"steer-head\" }} }}) {{ {} }} }}",
-        crate::SIGNED_REQUEST_FIELDS
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
     );
     let response = agent_access.execute(&query).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =

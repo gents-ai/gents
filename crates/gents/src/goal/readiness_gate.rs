@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime::status::{ReconcilePhase, ReconcileResult};
+use gents_protocol::node_readiness::{ReconcilePhase, ReconcileResult};
 use gents_protocol::row::{
     is_behavior_unavailable_rejection, project_node_readiness, AgentReadinessUnavailableReason,
     AgentReadinessUnknownReason, AgentRequestRow, ProjectedAgentReadiness,
@@ -280,7 +280,7 @@ pub async fn observe_goal_agent(
         .transact_readonly("goal.observe_readiness", |txn| {
             let actor = &actor;
             Box::pin(async move {
-                crate::runtime::node_readiness_publisher::observe_published_readiness(txn, actor)
+                crate::store::config_client::node_readiness::observe_published_readiness(txn, actor)
                     .await
             })
         })

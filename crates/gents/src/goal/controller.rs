@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::goal::GoalClaimFence;
 
 pub async fn update_goal_fields_if_status_from_access(
     access: &crate::ConfigAccess,
@@ -147,13 +148,6 @@ pub async fn claim_retry_continuation_from_access(
         .is_some_and(mutation_returned_rows))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GoalClaimFence {
-    Allowed,
-    Retired,
-    Rejected,
-}
-
 fn client_goal_claim_binding(
     goal: Option<&GoalDocument>,
     goal_id: Option<&str>,
@@ -189,7 +183,7 @@ async fn client_goal_opening_verified_in_txn(
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
         escape_graphql_string(root), escape_graphql_string(&goal.node_did),
-        escape_graphql_string(&goal.session_id), crate::request::admission::SIGNED_REQUEST_FIELDS,
+        escape_graphql_string(&goal.session_id), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
         response
@@ -209,7 +203,7 @@ async fn client_goal_opening_verified_in_txn(
 
 pub(crate) async fn fence_goal_continuation_claim_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    request: &crate::request::watcher::AgentRequest,
+    request: &gents_protocol::row::AgentRequest,
     now: &str,
     client_goal: bool,
 ) -> Result<GoalClaimFence> {

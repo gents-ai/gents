@@ -70,13 +70,14 @@ pub(crate) async fn edit_active_goal_from_access(
         .transact_write("goal.edit_active", |txn| {
             let actor = &actor;
             Box::pin(async move {
-                let session = crate::session::load_agent_session_owner_in_txn(
-                    txn,
-                    &observed.node_did,
-                    &observed.session_id,
-                )
-                .await?
-                .context("cannot edit a Goal without its session")?;
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        &observed.node_did,
+                        &observed.session_id,
+                    )
+                    .await?
+                    .context("cannot edit a Goal without its session")?;
                 anyhow::ensure!(
                     actor == &session.session.agent_did,
                     "Goal edit actor differs from session agent"

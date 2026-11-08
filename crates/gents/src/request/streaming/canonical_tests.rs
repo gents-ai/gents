@@ -63,7 +63,7 @@ async fn fixture_with_ids(
     let response = access
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -179,7 +179,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
     let response = access
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -238,7 +238,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
 
 #[tokio::test]
 async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix() {
-    use crate::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
     };
     use gents_protocol::output::{
@@ -478,7 +478,7 @@ fn provider_segment_for_message(
 #[tokio::test]
 #[ignore = "manual persistent provider publication benchmark"]
 async fn provider_publication_request_size_benchmark() {
-    use crate::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     use gents_protocol::output::{OutputSource, SourceClose};
@@ -665,7 +665,7 @@ async fn publication_and_replay_read_only_the_selected_source() {
     assert_eq!(scans, 0);
     assert_eq!(source_queries, 1);
     assert_eq!(published.message_doc_id, replayed.unwrap().message_doc_id);
-    let query = crate::session::canonical_rows::source_output_segments_query(
+    let query = gents_protocol::output::rows::source_output_segments_query(
         &lifecycle.request().doc_id,
         &gents_protocol::output::OutputSource::ProviderTurn {
             scope: "inference.1".parse().unwrap(),
@@ -724,7 +724,7 @@ async fn published_children(
                 {}
             }}
         }}"#,
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     )).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     response.data.unwrap()
@@ -891,7 +891,7 @@ async fn recovery_receipt_fixture(
     );
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }} }}"#,
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let response = fixture_query(&fixture_access(&node, &lifecycle), &query).await;
     let observed = crate::store::graphql::first_row(&response, "AgentRequest")
@@ -914,7 +914,7 @@ async fn recovery_snapshot(
             AgentSession {{ _docID observation }}
             AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }}
         }}"#,
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     )).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     response.data.unwrap()
@@ -1066,7 +1066,7 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
             AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ {} lifecycle_state terminal_output failure_reason terminalized_at }}
             AgentSession {{ _docID observation }}
         }}"#,
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let snapshot = || async {
         fixture_query(&fixture_access(&node, &lifecycle), &query)
@@ -1309,7 +1309,7 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} lifecycle_state terminal_output }} }}"#,
         crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
-        crate::request::watcher::AGENT_REQUEST_FIELDS,
+        gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
     let access = fixture_access(&node, &lifecycle);
     writer
@@ -1571,7 +1571,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(&lifecycle.request().doc_id),
-            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
+            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS
         ),
     )
     .await;
@@ -1579,7 +1579,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         .as_array()
         .unwrap()
         .iter()
-        .map(crate::session::canonical_rows::decode_output_segment_row)
+        .map(gents_protocol::output::rows::decode_output_segment_row)
         .collect::<anyhow::Result<Vec<_>>>()
         .unwrap();
     let close = rows.iter().find(|row| row.segment.close.is_some()).unwrap();
@@ -1640,8 +1640,8 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
     fixture_insert_child(
         &fixture_access(&node, &lifecycle),
         &lifecycle,
-        crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-        &crate::session::canonical_rows::output_segment_create_variables(&late).unwrap(),
+        gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        &gents_protocol::output::rows::output_segment_create_variables(&late).unwrap(),
         "AgentOutputSegment",
     )
     .await;
@@ -1925,7 +1925,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         lifecycle.request().requester_did.clone(),
         a.clone(),
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::row::AwaitMode::Foreground,
     )
     .unwrap();
     let mut replay_dispatch = crate::tools::call::lifecycle::ToolCallLifecycle::from_accepted(
@@ -1934,7 +1934,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         lifecycle.request().requester_did.clone(),
         b.clone(),
         deadline,
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::row::AwaitMode::Foreground,
     )
     .unwrap();
     let (first_start, replay_start) = tokio::join!(
@@ -2110,7 +2110,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
 
 #[tokio::test]
 async fn cancelled_flush_replays_before_inference_close_or_publication() {
-    use crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
+    use gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS;
     use crate::store::config_client::ConfigApplyTxn;
     use gents_protocol::message::Message;
     use gents_protocol::output::TerminalOutput;

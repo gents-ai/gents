@@ -54,7 +54,7 @@ fn decode_agent_request_by_retry_key(
         "AgentRequest retry key conflicts with a different immutable request"
     );
     let receipt: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
-    crate::request::admission::verify_request_receipt_signature(&receipt)?;
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&receipt)?;
     row.get("_docID")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
@@ -142,7 +142,7 @@ fn decode_goal_backed_request_recovery(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>> {
+) -> Result<Option<gents_protocol::request_lifecycle::EnqueuedAgentRequest>> {
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
@@ -160,7 +160,7 @@ fn decode_goal_backed_request_recovery(
         token_budget,
     )?;
     Ok(Some(
-        crate::request::lifecycle::materialize::EnqueuedAgentRequest {
+        gents_protocol::request_lifecycle::EnqueuedAgentRequest {
             doc_id,
             request_id: request.request_id.clone(),
             session_id: request.session_id.clone(),
@@ -175,12 +175,12 @@ pub(super) async fn load_goal_backed_request_by_retry_key_from_access(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>> {
+) -> Result<Option<gents_protocol::request_lifecycle::EnqueuedAgentRequest>> {
     access
         .transact_readonly("goal.backed_request.recover", |txn| {
             Box::pin(async move {
                 let Some(session) =
-                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
                         .await?
                 else {
                     return Ok(None);

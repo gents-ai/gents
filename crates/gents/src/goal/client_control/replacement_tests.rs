@@ -14,7 +14,12 @@ pub(super) async fn run(case: &Value) {
     let session = access
         .transact_readonly("test.replacement_session", |txn| {
             Box::pin(async {
-                crate::session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION).await
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    identity.did(),
+                    SESSION,
+                )
+                .await
             })
         })
         .await
@@ -179,7 +184,7 @@ pub(super) async fn run(case: &Value) {
                         "2026-01-01T00:00:01Z",
                     )
                     .await?;
-                    crate::session::load_agent_session_owner_in_txn(
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         identity.did(),
                         "replacement-alternate-session",
@@ -375,11 +380,13 @@ pub(super) async fn run(case: &Value) {
         );
         let after = access
             .transact_readonly("test.replacement.current_session_after", |txn| {
-                Box::pin(crate::session::load_agent_session_owner_in_txn(
-                    txn,
-                    identity.did(),
-                    SESSION,
-                ))
+                Box::pin(
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        identity.did(),
+                        SESSION,
+                    ),
+                )
             })
             .await
             .unwrap()
@@ -611,7 +618,12 @@ pub(super) async fn run(case: &Value) {
     let session_after = access
         .transact_readonly("test.replacement_session_after", |txn| {
             Box::pin(async {
-                crate::session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION).await
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    identity.did(),
+                    SESSION,
+                )
+                .await
             })
         })
         .await

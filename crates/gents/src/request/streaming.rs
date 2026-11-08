@@ -28,7 +28,7 @@ pub struct AcceptedToolCall {
     pub(crate) tool_name: String,
     pub(crate) execution_generation: String,
     pub(crate) arguments: gents_protocol::output::PayloadRef,
-    pub(crate) await_mode: crate::tools::call::lifecycle::AwaitMode,
+    pub(crate) await_mode: gents_protocol::row::AwaitMode,
 }
 
 /// Maximum UTF-8 byte length of the reasoning preview persisted while a
@@ -200,7 +200,7 @@ impl DefraStreamWriter {
         }
         let plan = canonical::ProviderPublicationPlan {
             final_flush: Some(segment),
-            message_key: crate::session::canonical_rows::authored_message_key(&request.doc_id, key),
+            message_key: gents_protocol::output::rows::authored_message_key(&request.doc_id, key),
             encoded,
             expected: Arc::new(message.clone()),
             tool_deadline_at: lifecycle
@@ -255,7 +255,7 @@ impl DefraStreamWriter {
 
     pub(crate) async fn flush_owned_partial(
         &self,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         generation: &str,
         message: &gents_protocol::message::Message,
     ) -> Result<bool> {
@@ -351,7 +351,7 @@ impl DefraStreamWriter {
 
     pub(crate) async fn close_owned_attempt(
         &self,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         generation: &str,
         turn: usize,
         attempt: u32,

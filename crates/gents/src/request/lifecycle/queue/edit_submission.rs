@@ -119,9 +119,11 @@ async fn submit_prepared_edit(
         .transact_readonly("queue.edit.targets", |txn| {
             Box::pin(async move {
                 let session =
-                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                        .await?
-                        .context("edit session unavailable")?;
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                    .context("edit session unavailable")?;
                 let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,

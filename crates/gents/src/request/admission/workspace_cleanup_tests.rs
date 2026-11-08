@@ -19,7 +19,7 @@ enum RejectionOwner {
 
 pub(crate) struct Fixture {
     pub(crate) node: Arc<defra_node::Node>,
-    pub(crate) request: crate::request::watcher::AgentRequest,
+    pub(crate) request: gents_protocol::row::AgentRequest,
     pub(crate) binding: WorkspaceBindingDoc,
     pub(crate) access: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,

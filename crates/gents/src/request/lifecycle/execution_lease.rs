@@ -88,7 +88,7 @@ impl ExecutionGeneration {
 pub(crate) struct RequestExecutionLease {
     pub(crate) generation: ExecutionGeneration,
     actor: identity::Did,
-    runtime: crate::runtime::drop_cleanup::DropCleanup,
+    runtime: crate::drop_cleanup::DropCleanup,
 }
 
 impl RequestExecutionLease {
@@ -96,7 +96,7 @@ impl RequestExecutionLease {
         Self {
             generation: ExecutionGeneration(generation),
             actor,
-            runtime: crate::runtime::drop_cleanup::DropCleanup::current(),
+            runtime: crate::drop_cleanup::DropCleanup::current(),
         }
     }
 }
@@ -649,7 +649,7 @@ async fn terminalize_execution_in_txn(
     }
     let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
     reader.observe_headers(&headers);
-    let eligible = |header: &&session::canonical_rows::TranscriptMessageRow| {
+    let eligible = |header: &&gents_protocol::output::rows::TranscriptMessageRow| {
         header.message.role == MessageRole::Assistant
             && matches!(
                 header.message.publication,
@@ -809,7 +809,7 @@ async fn terminalize_execution_in_txn(
 
 pub(super) fn validate_auxiliary_sources_decided(
     request_doc_id: &str,
-    records: &[crate::session::canonical_rows::OutputSegmentRow],
+    records: &[gents_protocol::output::rows::OutputSegmentRow],
     purpose: gents_protocol::request_admission::RequestPurpose,
 ) -> Result<()> {
     use gents_protocol::output::reconstruction::ObservedSegment;

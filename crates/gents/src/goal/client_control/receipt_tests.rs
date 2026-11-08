@@ -75,7 +75,7 @@ impl Driver {
         let session = access
             .transact_readonly("test.goal_receipt_session", |txn| {
                 Box::pin(async {
-                    crate::session::load_agent_session_owner_in_txn(
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         fixture.identity.did(),
                         SESSION,

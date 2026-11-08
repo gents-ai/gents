@@ -52,8 +52,12 @@ async fn session(f: &Fixture) -> SessionOwnerRow {
     f.agent_access()
         .transact_readonly("test.observed_session", |txn| {
             Box::pin(async {
-                crate::session::load_agent_session_owner_in_txn(txn, f.identity.did(), SESSION)
-                    .await
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    f.identity.did(),
+                    SESSION,
+                )
+                .await
             })
         })
         .await

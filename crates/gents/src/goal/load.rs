@@ -75,7 +75,10 @@ pub async fn load_canonical_goal_in_txn(
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
     let Some(session) =
-        crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id).await?
+        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+            txn, node_did, session_id,
+        )
+        .await?
     else {
         return Ok(None);
     };

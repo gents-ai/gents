@@ -1,5 +1,5 @@
 use super::*;
-use crate::request::admission::SIGNED_REQUEST_FIELDS;
+use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 
 pub(super) mod fingerprint;
 pub(super) mod recovery;
@@ -32,7 +32,7 @@ fn authorize_goal_submission_commit(
 
 fn resolve_ambiguous_goal_submission_commit(
     commit_error: anyhow::Error,
-    recovery: Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>>,
+    recovery: Result<Option<gents_protocol::request_lifecycle::EnqueuedAgentRequest>>,
 ) -> Result<GoalBackedRequestDisposition> {
     match recovery {
         Ok(Some(_)) => Ok(GoalBackedRequestDisposition::Idempotent),
@@ -66,7 +66,7 @@ async fn stage_goal_backed_request(
         request.session_id == session_id,
         "goal/request session mismatch"
     );
-    let session = crate::session::load_agent_session_row_in_txn(
+    let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
         txn,
         node_did,
         session_id,
@@ -125,7 +125,7 @@ async fn stage_goal_backed_request(
             .context("persisted Goal request lacks physical identity")?;
         let receipt: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(existing_request.clone())?;
-        crate::request::admission::verify_request_receipt_signature(&receipt)?;
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&receipt)?;
         let owners = txn
             .document_owners("AgentRequest", &[existing_doc.to_owned()])
             .await?;
@@ -211,7 +211,7 @@ async fn stage_goal_backed_request(
         .execute(&format!(
             r#"{{ AgentRequest(docIDs: ["{}"]) {{ {} }} }}"#,
             escape_graphql_string(&request_doc_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ))
         .await?;
     let rows = response["data"]["AgentRequest"]
@@ -219,7 +219,7 @@ async fn stage_goal_backed_request(
         .context("staged request lookup omitted rows")?;
     anyhow::ensure!(rows.len() == 1, "staged request is missing or ambiguous");
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(rows[0].clone())?;
-    let staged_request = crate::request::watcher::AgentRequest::try_from(row)?;
+    let staged_request = gents_protocol::row::AgentRequest::try_from(row)?;
     let provenance = crate::request::lifecycle::materialize::created_session_provenance_in_txn(
         txn,
         &staged_request,
@@ -353,7 +353,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
+) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
     stage_goal_backed_request_with_identity_in_txn(
         txn,
         node_did,
@@ -377,7 +377,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&GoalCreationIdentity>,
     client_graph: Option<&std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
-) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
+) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
     stage_goal_backed_request(
         txn,
         node_did,
@@ -409,7 +409,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
         rows.len() == 1,
         "staged goal request is missing or ambiguous"
     );
-    Ok(crate::request::lifecycle::EnqueuedAgentRequest {
+    Ok(gents_protocol::request_lifecycle::EnqueuedAgentRequest {
         doc_id: rows[0]["_docID"]
             .as_str()
             .context("staged goal request lacks _docID")?
@@ -427,7 +427,7 @@ pub async fn submit_goal_backed_request_local(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
+) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
     submit_goal_backed_request_with_identity(
         node,
         actor,
@@ -451,7 +451,7 @@ pub(crate) async fn submit_goal_backed_request_with_identity(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&dyn crate::store::identity::NodeIdentity>,
-) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
+) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
     let access = crate::ConfigAccess::local_with_optional_agent_signer(
         node.clone(),
         actor,

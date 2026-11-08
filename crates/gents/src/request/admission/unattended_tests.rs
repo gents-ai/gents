@@ -1,4 +1,5 @@
 use super::*;
+use crate::documents::observe_unattended_agent_in_txn;
 use crate::store::config_client::{ConfigAccess, NodePermission};
 use crate::store::identity::NodeIdentity;
 

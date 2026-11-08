@@ -8,12 +8,12 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::request::watcher::AgentRequest;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::row::AgentRequest;
 
-use super::materialize::EnqueuedAgentRequest;
 use super::ExecutionOrigin;
+use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 
 mod atomic_inputs;
 mod coalescing;

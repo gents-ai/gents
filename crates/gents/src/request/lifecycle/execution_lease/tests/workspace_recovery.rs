@@ -62,7 +62,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     let (session_doc, agent_doc) = access
         .transact_readonly("test.workspace_recovery_targets", |txn| {
             Box::pin(async move {
-                let session = crate::session::load_agent_session_owner_in_txn(
+                let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                     txn,
                     did,
                     "workspace-recovery-session",
@@ -212,7 +212,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         owner: &str,
         requester: &str,
     ) -> Vec<AgentRequest> {
-        let scope = crate::session::session_scope_filter(
+        let scope = gents_protocol::session::session_scope_filter(
             owner,
             "workspace-recovery-session",
             Some(requester),
@@ -220,7 +220,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         let response = access
             .execute(&format!(
                 "{{AgentRequest(filter: {{{scope}}}) {{{}}}}}",
-                crate::SIGNED_REQUEST_FIELDS
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
             ))
             .await
             .expect("AgentRequest read as its Agent");

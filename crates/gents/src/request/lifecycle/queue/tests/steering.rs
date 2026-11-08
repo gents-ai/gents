@@ -11,10 +11,10 @@ async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
 
 async fn enqueue_test_steering(
     db: &TestDb,
-    parent: &crate::request::watcher::AgentRequest,
+    parent: &gents_protocol::row::AgentRequest,
     content: &str,
     input: RequestInput,
-) -> anyhow::Result<crate::request::lifecycle::materialize::EnqueuedAgentRequest> {
+) -> anyhow::Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
     let signer = db
         .agent_identity
         .managed_agent_signer()

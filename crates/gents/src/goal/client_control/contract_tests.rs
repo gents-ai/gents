@@ -65,7 +65,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         let session = owner_access
             .transact_readonly("test.goal_session", |txn| {
                 Box::pin(async {
-                    crate::session::load_agent_session_owner_in_txn(
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         fixture.identity.did(),
                         SESSION,

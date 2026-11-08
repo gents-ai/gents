@@ -168,7 +168,7 @@ pub(crate) async fn prepare_goal_control(
     crate::store::graphql::fence_arrivals(txn, "AgentRequest").await?;
     crate::store::graphql::fence_arrivals(txn, "Goal").await?;
     crate::store::graphql::fence_arrivals(txn, "GoalCreationClaim").await?;
-    let session = crate::session::load_agent_session_owner_in_txn(
+    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn,
         &command.node_did,
         &command.session_id,

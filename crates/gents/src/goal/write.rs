@@ -22,9 +22,11 @@ pub async fn set_goal(
         .transact_write("goal.set", move |txn| {
             Box::pin(async move {
                 let session =
-                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                        .await?
-                        .context("cannot set a Goal for a missing session")?;
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                    .context("cannot set a Goal for a missing session")?;
                 anyhow::ensure!(
                     Some(session.session.agent_did.as_str()) == txn.actor_did(),
                     "only the session's working Agent may set its Goal through this owner"
@@ -226,9 +228,11 @@ pub(super) async fn set_goal_in_txn(
         wrapup_completed: status == GoalStatus::Complete,
     };
     let goal_id = deterministic_goal_id(node_did, session_id);
-    let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-        .await?
-        .context("goal creation requires a visible physical session")?;
+    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn, node_did, session_id,
+    )
+    .await?
+    .context("goal creation requires a visible physical session")?;
     let creator = txn
         .actor_did()
         .context("goal creation requires an authenticated actor")?;

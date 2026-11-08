@@ -76,7 +76,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
                 queue,
                 None,
                 &prepared,
-                crate::request::lifecycle::RequestHopCause::Continuation,
+                gents_protocol::request_lifecycle::RequestHopCause::Continuation,
             )
             .await
         });

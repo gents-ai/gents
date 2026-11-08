@@ -5,11 +5,10 @@ use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
-use crate::session::canonical_rows::{
-    output_segment_bound_variables, OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-};
+use crate::store::config_client::session_children::output_segment_bound_variables;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::created_doc_id;
+use gents_protocol::output::rows::{OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION};
 
 use super::{
     source::{load_request_in_txn, load_source_in_txn},
@@ -32,7 +31,7 @@ pub(in crate::request::streaming) async fn append_provider_segment_with_signer(
             |txn| Box::pin(async move { append_in_txn(txn, generation, prepared).await }),
         )
         .await?;
-    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
         &access,
         &prepared.node_did,
         &actor,
@@ -57,7 +56,7 @@ pub(crate) async fn append_provider_segment_at_with_access(
             |txn| Box::pin(async move { append_in_txn_at(txn, generation, prepared, now).await }),
         )
         .await?;
-    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
         access,
         &prepared.node_did,
         &actor,

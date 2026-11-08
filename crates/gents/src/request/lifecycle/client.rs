@@ -217,9 +217,12 @@ pub(crate) async fn ensure_request_session_in_txn(
     create: &AgentRequestCreate,
     actor: &str,
 ) -> anyhow::Result<(String, String, bool)> {
-    let existing =
-        crate::session::load_agent_session_owner_in_txn(txn, &create.node_did, &create.session_id)
-            .await?;
+    let existing = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn,
+        &create.node_did,
+        &create.session_id,
+    )
+    .await?;
     if let Some(existing) = existing {
         anyhow::ensure!(
             existing.session.requester_did.as_deref() == Some(create.requester_did.as_str()),
@@ -246,11 +249,14 @@ pub(crate) async fn ensure_request_session_in_txn(
         &create.created_at,
     )
     .await?;
-    let session =
-        crate::session::load_agent_session_owner_in_txn(txn, &create.node_did, &create.session_id)
-            .await?
-            .context("reserved client session disappeared")?
-            .doc_id;
+    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn,
+        &create.node_did,
+        &create.session_id,
+    )
+    .await?
+    .context("reserved client session disappeared")?
+    .doc_id;
     let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
@@ -376,10 +382,13 @@ async fn bind_existing_targets_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     create: &mut AgentRequestCreate,
 ) -> anyhow::Result<()> {
-    let session =
-        crate::session::load_agent_session_owner_in_txn(txn, &create.node_did, &create.session_id)
-            .await?
-            .context("client request session is unavailable")?;
+    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn,
+        &create.node_did,
+        &create.session_id,
+    )
+    .await?
+    .context("client request session is unavailable")?;
     anyhow::ensure!(
         session.session.agent_did == create.agent_did
             && session.session.requester_did.as_deref() == Some(create.requester_did.as_str()),
@@ -514,7 +523,7 @@ async fn validate_request_relationship_binding(
     let agent_doc = crate::store::graphql::escape_graphql_string(agent);
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ {} relationships_pending }} AgentSession(filter: {{ _docID: {{ _eq: "{session_doc}" }} }}, limit: 2) {{ _docID node_did session_id requester_did agent_did relationships_pending }} Agent(filter: {{ _docID: {{ _eq: "{agent_doc}" }} }}, limit: 2) {{ _docID node_did agent_did }} }}"#,
-        crate::SIGNED_REQUEST_FIELDS,
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
     )).await?;
     let rows = response["data"]["AgentRequest"]
         .as_array()
@@ -523,7 +532,7 @@ async fn validate_request_relationship_binding(
         anyhow::bail!("request publication requires one visible request");
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(value.clone())?;
-    crate::verify_request_receipt_signature(&row)?;
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     anyhow::ensure!(
         row.doc_id.as_deref() == Some(request_doc)
             && row.admission_signer_did.as_deref() == Some(actor)
@@ -607,13 +616,13 @@ async fn reconcile_client_request_inner(
     create: &AgentRequestCreate,
     actor: &str,
 ) -> anyhow::Result<bool> {
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &create.node_did,
         &create.session_id,
         Some(&create.requester_did),
     );
     let request = crate::store::graphql::escape_graphql_string(&create.request_id);
-    let response = access.execute(&format!("{{ AgentRequest(filter: {{{scope}, request_id: {{ _eq: \"{request}\" }} }}, limit: 2) {{ {} relationships_pending }} }}", crate::SIGNED_REQUEST_FIELDS)).await?;
+    let response = access.execute(&format!("{{ AgentRequest(filter: {{{scope}, request_id: {{ _eq: \"{request}\" }} }}, limit: 2) {{ {} relationships_pending }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
     let rows = response["data"]["AgentRequest"]
         .as_array()
         .context("request recovery omitted rows")?;
@@ -622,7 +631,7 @@ async fn reconcile_client_request_inner(
         return Ok(false);
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(value.clone())?;
-    crate::verify_request_receipt_signature(&row)?;
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let signature = bs58::encode(&create.admission.signature).into_string();
     anyhow::ensure!(
         row.request_id == create.request_id
@@ -647,13 +656,14 @@ async fn reconcile_client_request_inner(
     let (session, agent) = access
         .transact_readonly("request.client.recovery_scope", |txn| {
             Box::pin(async move {
-                let session = crate::session::load_agent_session_owner_in_txn(
-                    txn,
-                    &create.node_did,
-                    &create.session_id,
-                )
-                .await?
-                .context("client request session is unavailable")?;
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        &create.node_did,
+                        &create.session_id,
+                    )
+                    .await?
+                    .context("client request session is unavailable")?;
                 anyhow::ensure!(
                     session.session.agent_did == create.agent_did
                         && session.session.requester_did.as_deref()
@@ -694,7 +704,7 @@ pub(crate) async fn complete_client_request_relationships(
     let escaped = crate::store::graphql::escape_graphql_string(request_doc);
     let response = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} relationships_pending }} }}"#,
-        crate::SIGNED_REQUEST_FIELDS,
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
     )).await?;
     let rows = response["data"]["AgentRequest"]
         .as_array()
@@ -703,7 +713,7 @@ pub(crate) async fn complete_client_request_relationships(
         anyhow::bail!("request relationship recovery requires one visible document");
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(value.clone())?;
-    crate::verify_request_receipt_signature(&row)?;
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     anyhow::ensure!(
         row.doc_id.as_deref() == Some(request_doc),
         "request physical identity changed"
@@ -752,9 +762,11 @@ pub(crate) async fn complete_client_request_relationships(
                     "request creator differs from the authenticated signer"
                 );
                 let session =
-                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                        .await?
-                        .context("request session is unavailable")?;
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                    .context("request session is unavailable")?;
                 let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
@@ -814,8 +826,12 @@ pub(crate) async fn recover_delegated_client_request_relationships_with_access(
         .transact_readonly("request.client.recover_delegated_publications", |txn| {
             let filter = &filter;
             Box::pin(async move {
-                txn.cursor_rows("AgentRequest", crate::SIGNED_REQUEST_FIELDS, filter)
-                    .await
+                txn.cursor_rows(
+                    "AgentRequest",
+                    gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+                    filter,
+                )
+                .await
             })
         })
         .await?;
@@ -845,12 +861,12 @@ pub(crate) async fn recover_delegated_client_request_relationships_with_access(
         ) else {
             continue;
         };
-        let target = crate::session::origin::SessionScope {
+        let target = gents_protocol::session::SessionScope {
             node_did: row_node.to_owned(),
             session_id: session_id.to_owned(),
             requester_did: row.requester_did.clone(),
         };
-        let caller = crate::session::origin::SessionScope::from(source);
+        let caller = gents_protocol::session::SessionScope::from(source);
         match crate::session::origin::verified_agent_new_creation_for_opening(
             access,
             &target,
@@ -902,7 +918,7 @@ pub async fn reconcile_client_retry(
         let escaped = crate::store::graphql::escape_graphql_string(&key);
         let response = access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} relationships_pending }} }}"#,
-            crate::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         )).await?;
         let rows = response["data"]["AgentRequest"]
             .as_array()
@@ -912,7 +928,7 @@ pub async fn reconcile_client_retry(
             return Ok(None);
         };
         let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(value.clone())?;
-        crate::verify_request_receipt_signature(&row)?;
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
         anyhow::ensure!(
             row.admission_kind.as_deref() == Some("client")
                 && row.admission_signer_did.as_deref() == Some(actor.as_str())
@@ -964,7 +980,7 @@ pub async fn reconcile_client_retry(
             .transact_readonly("request.client.retry_recovery_scope", |txn| {
                 Box::pin(async move {
                     let session =
-                        crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
                             .await?
                             .context("retry session is unavailable")?;
                     let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
@@ -1493,7 +1509,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let rows = access.execute(&format!("{{ AgentSession {{_docID provenance}} AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} relationships_pending }} Goal {{_docID}} GoalCreationClaim {{_docID}} }}", crate::store::graphql::escape_graphql_string(&submitted.doc_id), crate::SIGNED_REQUEST_FIELDS)).await.unwrap();
+        let rows = access.execute(&format!("{{ AgentSession {{_docID provenance}} AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} relationships_pending }} Goal {{_docID}} GoalCreationClaim {{_docID}} }}", crate::store::graphql::escape_graphql_string(&submitted.doc_id), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
         let session = &rows["data"]["AgentSession"][0];
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
@@ -1514,7 +1530,7 @@ mod tests {
             session["provenance"]["opening_request_doc_id"],
             submitted.doc_id
         );
-        crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
         let user_rows = client
             .execute("{ AgentSession {_docID} AgentRequest {_docID} }")
             .await
@@ -1987,7 +2003,7 @@ mod tests {
                         "2026-11-04T00:00:00Z",
                     )
                     .await?;
-                    let session = crate::session::load_agent_session_owner_in_txn(
+                    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         runtime.did(),
                         "unattended",

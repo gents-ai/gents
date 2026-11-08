@@ -124,7 +124,7 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
     let session_doc = access
         .transact_readonly("test.capture.session_document", |txn| {
             Box::pin(async {
-                crate::session::load_agent_session_owner_in_txn(
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                     txn,
                     identity.did(),
                     "capture-session",
@@ -219,18 +219,19 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{ {} }} }}"#,
                 crate::store::graphql::escape_graphql_string(&doc),
-                crate::SIGNED_REQUEST_FIELDS,
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             ))
             .await
             .unwrap();
         let mut row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(stored["data"]["AgentRequest"][0].clone()).unwrap();
-        crate::verify_request_receipt_signature(&row).unwrap();
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
         row.input.as_mut().unwrap().captured_context[0]
             .content
             .push('!');
         assert!(
-            crate::verify_request_receipt_signature(&row).is_err(),
+            crate::store::identity::request_receipt::verify_request_receipt_signature(&row)
+                .is_err(),
             "{name}"
         );
     }

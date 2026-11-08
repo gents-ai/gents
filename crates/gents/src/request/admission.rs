@@ -9,16 +9,17 @@ use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_admission::{
     project_agent_request_admission_disposition, validate_signing_fields,
     AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
-    AgentRequestAdmissionRecord, AgentRequestSigningFields, RequestPurpose,
-    RuntimeInternalSourceKind,
+    AgentRequestAdmissionRecord, RequestPurpose, RuntimeInternalSourceKind, SIGNED_REQUEST_FIELDS,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::AgentRequestRow;
+use gents_protocol::row::{AgentRequest, AgentRequestRow};
 use serde::Deserialize;
 
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::p2p_reconcile::EnrollmentAuthorityHandle;
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::identity::request_receipt::{
+    row_admission, row_signing_fields, verify_auxiliary_request_shape,
+};
 use crate::store::identity::NodeIdentity;
 
 #[derive(Debug)]
@@ -58,68 +59,6 @@ impl std::error::Error for AgentRequestAdmissionError {
 }
 
 type AdmissionResult<T> = std::result::Result<T, AgentRequestAdmissionError>;
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum UnattendedAgentAdmissionError {
-    #[error("unattended admission actor does not match the selected Agent")]
-    ActorMismatch,
-    #[error("selected Agent configuration is unavailable")]
-    AgentUnavailable,
-    #[error("selected Agent is disabled")]
-    AgentDisabled,
-    #[error("selected Agent cannot invoke this Agent")]
-    InvokeDenied,
-    #[error("selected Agent invoke authority is unavailable")]
-    InvokeUnavailable,
-    #[error("selected Agent observation failed: {0}")]
-    Observation(#[source] anyhow::Error),
-}
-
-/// Observe the selected Agent's current native invoke authority in the fresh
-/// admission transaction. The caller authenticates the transaction actor;
-/// already admitted work continues under its own native effect checks.
-pub(crate) async fn observe_unattended_agent_in_txn(
-    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    owner: &str,
-    selected: &str,
-) -> std::result::Result<(), UnattendedAgentAdmissionError> {
-    use UnattendedAgentAdmissionError as Error;
-    if txn.actor_did() != Some(selected) {
-        return Err(Error::ActorMismatch);
-    }
-    let (doc, value) = crate::store::config_client::read_desired_state_record_in_txn(
-        txn,
-        crate::Collection::Agent,
-        owner,
-        selected,
-    )
-    .await
-    .map_err(Error::Observation)?
-    .ok_or(Error::AgentUnavailable)?;
-    let agent: crate::documents::Agent =
-        serde_json::from_value(value).map_err(|error| Error::Observation(error.into()))?;
-    if !agent.enabled {
-        return Err(Error::AgentDisabled);
-    }
-    let actor = identity::Did::new(selected).map_err(|error| Error::Observation(error.into()))?;
-    let decisions = txn
-        .observe_document_access(
-            &actor,
-            "Agent",
-            &[doc],
-            defra_node::DocumentAccessMode::Named {
-                permission: "invoke".into(),
-                node_permission: acp::nac::NodePermission::DocumentUpdate,
-            },
-        )
-        .await
-        .map_err(|error| Error::Observation(error.into()))?;
-    match decisions.as_slice() {
-        [defra_node::DocumentAccessDecision::Allowed] => Ok(()),
-        [defra_node::DocumentAccessDecision::Denied] => Err(Error::InvokeDenied),
-        _ => Err(Error::InvokeUnavailable),
-    }
-}
 
 pub fn final_claim_admission_disposition(
     observation_available: bool,
@@ -396,7 +335,10 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     }
                     match serde_json::from_value::<AgentRequestRow>(row.clone())
                         .map_err(anyhow::Error::from)
-                        .and_then(crate::request::watcher::AgentRequest::try_from)
+                        .and_then(|row| {
+                            gents_protocol::row::AgentRequest::try_from(row)
+                                .map_err(anyhow::Error::from)
+                        })
                     {
                         Ok(request) => {
                             crate::request::lifecycle::materialize::project_refused_request_session_in_txn(
@@ -559,12 +501,13 @@ impl ClientClaimAdmission {
             return Ok(Unavailable);
         };
         let owner_matches = owners.len() == 1 && owner.as_str() == retained.signer_did;
-        let Some(session) = crate::session::load_agent_session_owner_in_txn(
-            txn,
-            &request.node_did,
-            &request.session_id,
-        )
-        .await?
+        let Some(session) =
+            crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                txn,
+                &request.node_did,
+                &request.session_id,
+            )
+            .await?
         else {
             return Ok(Unavailable);
         };
@@ -769,7 +712,8 @@ impl AgentRequestAdmissionVerifier {
             unreachable!("negative common admission evidence cannot be admitted");
         }
         if row.purpose.is_some_and(RequestPurpose::is_auxiliary) {
-            verify_auxiliary_request_shape(&row, &admission)?;
+            verify_auxiliary_request_shape(&row, &admission)
+                .map_err(AgentRequestAdmissionError::denied)?;
         }
         // A default RequestInput is persisted as an absent field, so an absent
         // input is the canonical empty input, not a session creation.
@@ -1005,51 +949,6 @@ fn client_claim_queue_candidate(
     })
 }
 
-fn verify_auxiliary_request_shape(
-    row: &AgentRequestRow,
-    admission: &AgentRequestAdmissionRecord,
-) -> AdmissionResult<()> {
-    let target = required_row_string(row.agent_did.as_deref(), "agent_did")?;
-    let source = required_row_string(
-        admission.runtime_source_request_id.as_deref(),
-        "runtime source request ID",
-    )?;
-    deny_if(
-        admission.kind == AgentRequestAdmissionKind::RuntimeInternal
-            && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
-            && admission.signer_did == target
-            && admission.runtime_issuer_did.as_deref() == Some(target)
-            && row.requester_did.as_deref() == Some(target),
-        "auxiliary request requires target-runtime local-control admission",
-    )?;
-    deny_if(
-        !source.is_empty()
-            && source != row.request_id.as_str()
-            && row.caused_by_parent_request_id.as_deref() == Some(source)
-            && row.caused_by_parent_request_doc_id.is_some()
-            && row.caused_by_parent_tool_call_id.is_none()
-            && row.caused_by_parent_tool_call_doc_id.is_none()
-            && row.request_hop == Some(0),
-        "auxiliary request requires an exact parent-only request link",
-    )?;
-    deny_if(
-        row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT) == &*DEFAULT_REQUEST_INPUT
-            && row.retry_parent_request.is_none()
-            && row.retry_parent_request_doc_id.is_none()
-            && row.retry_root_request.as_deref() == Some(row.request_id.as_str())
-            && row.retry_key.is_none()
-            && row.retry_count == Some(0)
-            && row.max_retries == Some(0)
-            && row.caused_by_trigger_id.is_none()
-            && row.caused_by_trigger_doc_id.is_none()
-            && row.caused_by_trigger_kind.is_none()
-            && row.caused_by_correlation.is_none()
-            && row.caused_by_trigger_context.is_none()
-            && row.caused_by_source_doc_id.is_none(),
-        "auxiliary request cannot carry input, retry, or trigger lineage",
-    )
-}
-
 async fn verify_request_input(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
@@ -1216,12 +1115,14 @@ async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> Adm
 pub(crate) async fn max_request_hop(
     node: &EmbeddedNode,
     node_did: &str,
-) -> anyhow::Result<crate::request::lifecycle::RequestHopCapObservation> {
-    Ok(crate::request::lifecycle::RequestHopCapObservation::of(
-        crate::documents::load_node(node, node_did)
-            .await?
-            .map(|node_doc| node_doc.max_request_hop),
-    ))
+) -> anyhow::Result<gents_protocol::request_lifecycle::RequestHopCapObservation> {
+    Ok(
+        gents_protocol::request_lifecycle::RequestHopCapObservation::of(
+            crate::documents::load_node(node, node_did)
+                .await?
+                .map(|node_doc| node_doc.max_request_hop),
+        ),
+    )
 }
 
 fn request_workspace(row: &AgentRequestRow) -> crate::request::lifecycle::WorkspaceLineage {
@@ -1467,199 +1368,15 @@ async fn verify_automated_trigger_source(
     )
 }
 
-#[cfg(test)]
-thread_local! {
-    static RECEIPT_VERIFICATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn count_request_receipt_verifications<T, F>(operation: F) -> (T, usize)
-where
-    F: FnOnce() -> T,
-{
-    let before = RECEIPT_VERIFICATION_COUNT.get();
-    let value = operation();
-    (value, RECEIPT_VERIFICATION_COUNT.get() - before)
-}
-
-pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
-    #[cfg(test)]
-    RECEIPT_VERIFICATION_COUNT.set(RECEIPT_VERIFICATION_COUNT.get() + 1);
-    let admission = row_admission(row)?;
-    admission.validate_canonical_fields()?;
-    admission
-        .validate_branch_fields()
-        .map_err(anyhow::Error::msg)?;
-    let fields = row_signing_fields(row)?;
-    validate_signing_fields(&fields)?;
-    anyhow::ensure!(
-        crate::store::identity::verify_did_signature(
-            &admission.signer_did,
-            &admission.signing_payload(&fields),
-            &admission.signature,
-        )?,
-        "immutable request receipt signature is invalid"
-    );
-    Ok(())
-}
-
-pub(crate) fn signed_request_matches_create(
-    row: &AgentRequestRow,
-    expected: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<bool> {
-    verify_request_receipt_signature(row)?;
-    let admission = row_admission(row)?;
-    Ok(admission.signing_payload(&row_signing_fields(row)?) == expected.signing_payload())
-}
-
-pub(crate) fn verify_historical_auxiliary_receipt(
-    request: &AgentRequestRow,
-    parent: &AgentRequestRow,
-) -> Result<()> {
-    verify_request_receipt_signature(request)?;
-    verify_request_receipt_signature(parent)?;
-    verify_auxiliary_request_shape(request, &row_admission(request)?)?;
-    anyhow::ensure!(
-        request.purpose.is_some_and(RequestPurpose::is_auxiliary)
-            && parent.purpose == Some(RequestPurpose::Normal)
-            && request.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            && parent.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            && request.doc_id != parent.doc_id
-            && request.caused_by_parent_request_doc_id == parent.doc_id
-            && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
-            && request.node_did == parent.node_did
-            && request.session_id == parent.session_id
-            && request.agent_did == parent.agent_did,
-        "auxiliary receipt crosses its authenticated parent scope"
-    );
-    Ok(())
-}
-
-pub(crate) fn verify_runtime_local_control_receipt(
-    row: &AgentRequestRow,
-    expected_node_did: &str,
-    expected_source_request_id: &str,
-    expected_requester_did: &str,
-) -> Result<()> {
-    let admission = row_admission(row)?;
-    verify_request_receipt_signature(row)?;
-    anyhow::ensure!(
-        row.purpose == Some(RequestPurpose::Normal)
-            && admission.kind == AgentRequestAdmissionKind::RuntimeInternal
-            && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
-            && row.agent_did.as_deref() == Some(admission.signer_did.as_str())
-            && admission.runtime_issuer_did.as_deref() == row.agent_did.as_deref()
-            && row.node_did.as_deref() == Some(expected_node_did)
-            && row.requester_did.as_deref() == Some(expected_requester_did)
-            && admission.runtime_source_request_id.as_deref() == Some(expected_source_request_id)
-            && row.caused_by_parent_request_id.as_deref() == Some(expected_source_request_id)
-            && row
-                .caused_by_parent_request_doc_id
-                .as_deref()
-                .is_some_and(|id| !id.is_empty())
-            && row.caused_by_parent_tool_call_id.is_none()
-            && row.caused_by_parent_tool_call_doc_id.is_none(),
-        "runtime local-control receipt does not match expected target/source binding"
-    );
-    Ok(())
-}
-
-fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissionRecord> {
-    let admission = AgentRequestAdmissionRecord::from_wire_fields(
-        row.admission_kind.as_deref(),
-        row.admission_signer_did.as_deref(),
-        row.admission_signature.as_deref(),
-        row.enrollment_request_id.as_deref(),
-        row.enrollment_request_digest.as_deref(),
-        row.enrollment_admin_did.as_deref(),
-        row.enrollment_authorization_sequence,
-        row.enrollment_authorization_expires_at.as_deref(),
-        row.runtime_issuer_did.as_deref(),
-        row.runtime_source_request_id.as_deref(),
-        row.runtime_source_kind.as_deref(),
-    )
-    .map_err(anyhow::Error::msg)?;
-    if admission.kind == AgentRequestAdmissionKind::Client {
-        anyhow::ensure!(
-            row.session_doc_id
-                .as_deref()
-                .is_some_and(|id| !id.is_empty())
-                && row.agent_doc_id.as_deref().is_some_and(|id| !id.is_empty()),
-            "client request lacks signed physical session or agent identity"
-        );
-    }
-    Ok(admission)
-}
-
 static DEFAULT_REQUEST_INPUT: std::sync::LazyLock<gents_protocol::request_input::RequestInput> =
     std::sync::LazyLock::new(Default::default);
-
-fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields<'_>> {
-    let request_hop = row
-        .request_hop
-        .map(u32::try_from)
-        .transpose()
-        .context("AgentRequest request_hop must fit in u32")?
-        .unwrap_or(0);
-    Ok(AgentRequestSigningFields {
-        request_id: &row.request_id,
-        purpose: row.purpose.context("AgentRequest is missing purpose")?,
-        node_did: row
-            .node_did
-            .as_deref()
-            .context("AgentRequest is missing node_did")?,
-        requester_did: row.requester_did.as_deref(),
-        agent_did: row
-            .agent_did
-            .as_deref()
-            .context("AgentRequest is missing agent_did")?,
-        session_id: row
-            .session_id
-            .as_deref()
-            .context("AgentRequest is missing session_id")?,
-        session_doc_id: row.session_doc_id.as_deref(),
-        agent_doc_id: row.agent_doc_id.as_deref(),
-        retry_parent_request: row.retry_parent_request.as_deref(),
-        retry_parent_request_doc_id: row.retry_parent_request_doc_id.as_deref(),
-        retry_root_request: row.retry_root_request.as_deref(),
-        retry_key: row.retry_key.as_deref(),
-        content: row
-            .content
-            .as_deref()
-            .context("AgentRequest is missing content")?,
-        input: row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT),
-        execution_origin: row.execution_origin.as_deref(),
-        caused_by_trigger_id: row.caused_by_trigger_id.as_deref(),
-        caused_by_trigger_kind: row.caused_by_trigger_kind.as_deref(),
-        caused_by_correlation: row.caused_by_correlation.as_deref(),
-        caused_by_trigger_context: row.caused_by_trigger_context.as_deref(),
-        caused_by_source_doc_id: row.caused_by_source_doc_id.as_deref(),
-        caused_by_trigger_doc_id: row.caused_by_trigger_doc_id.as_deref(),
-        created_at: row
-            .created_at
-            .as_deref()
-            .context("AgentRequest is missing created_at")?,
-        retry_count: row.retry_count,
-        max_retries: row.max_retries,
-        valid_until: row.valid_until.as_deref(),
-        request_hop,
-        caused_by_parent_request_id: row.caused_by_parent_request_id.as_deref(),
-        caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id.as_deref(),
-        caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id.as_deref(),
-        caused_by_parent_tool_call_doc_id: row.caused_by_parent_tool_call_doc_id.as_deref(),
-        workspace_id: row.workspace_id.as_deref(),
-        workspace_owner_node_did: row.workspace_owner_node_did.as_deref(),
-        workspace_authority: row.workspace_authority.as_deref(),
-        workspace_seal_hash: row.workspace_seal_hash.as_deref(),
-    })
-}
 
 fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result<AgentRequest> {
     anyhow::ensure!(
         row.doc_id.as_deref() == Some(expected_doc_id),
         "fresh AgentRequest document binding changed before admission"
     );
-    AgentRequest::try_from(row)
+    Ok(AgentRequest::try_from(row)?)
 }
 
 fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResult<&'a str> {
@@ -1667,35 +1384,6 @@ fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResu
         AgentRequestAdmissionError::denied(anyhow::anyhow!("AgentRequest is missing {field}"))
     })
 }
-
-macro_rules! signed_request_receipt_fields {
-    () => {
-        r#"
-_docID request_id purpose node_did requester_did agent_did session_id session_doc_id agent_doc_id
-                retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
-                content input max_total_tokens
-                execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
-                caused_by_trigger_context caused_by_source_doc_id caused_by_trigger_doc_id
-                created_at deadline execution_generation execution_lease_expires_at retry_count
-                max_retries valid_until request_hop caused_by_parent_request_id
-                caused_by_parent_request_doc_id caused_by_parent_tool_call_id
-                caused_by_parent_tool_call_doc_id workspace_id workspace_owner_node_did workspace_authority
-                workspace_seal_hash admission_kind
-                admission_signer_did admission_signature enrollment_request_id
-                enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence
-                enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id
-                runtime_source_kind
-"#
-    };
-}
-
-/// Historical receipt verification does not depend on mutable lifecycle state.
-pub(crate) const SIGNED_REQUEST_RECEIPT_FIELDS: &str = signed_request_receipt_fields!();
-
-/// Lifecycle is included for callers decoding the row, but is not part of the
-/// signed payload.
-pub const SIGNED_REQUEST_FIELDS: &str =
-    concat!("lifecycle_state ", signed_request_receipt_fields!());
 
 async fn load_signed_request_as(
     node: &Arc<EmbeddedNode>,
@@ -2304,7 +1992,7 @@ mod tests {
                 .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
-                    crate::session::AGENT_SESSION_FIELDS,
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
             assert!(!selected.has_errors(), "{:?}", selected.errors);
@@ -2313,7 +2001,7 @@ mod tests {
                 .cloned()
                 .unwrap();
             assert_eq!(rows.len(), 1, "{request_id} must not add session rows");
-            let session = crate::session::decode_session_row(&rows[0])
+            let session = gents_protocol::session::decode_session_row(&rows[0])
                 .unwrap()
                 .session;
             if session_id == "session" {
@@ -2432,7 +2120,7 @@ mod tests {
                 .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
-                    crate::session::AGENT_SESSION_FIELDS,
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
             assert!(!sessions.has_errors(), "{:?}", sessions.errors);
@@ -2446,7 +2134,7 @@ mod tests {
                 "{session_id}: the refusal must not mint beside an undecodable row"
             );
             assert!(
-                crate::session::decode_session_row(&rows[0]).is_err(),
+                gents_protocol::session::decode_session_row(&rows[0]).is_err(),
                 "{session_id}: the refusal must leave the undecodable row untouched"
             );
         }
@@ -2534,7 +2222,7 @@ mod tests {
                 .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
-                    crate::session::AGENT_SESSION_FIELDS,
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
             assert!(!sessions.has_errors(), "{:?}", sessions.errors);
@@ -2543,7 +2231,7 @@ mod tests {
                 .cloned()
                 .unwrap();
             assert_eq!(rows.len(), 1, "{session_id}: one session row");
-            let session = crate::session::decode_session_row(&rows[0])
+            let session = gents_protocol::session::decode_session_row(&rows[0])
                 .unwrap()
                 .session;
             assert!(
@@ -2705,52 +2393,62 @@ mod tests {
         row.lifecycle_state =
             Some(gents_protocol::request_lifecycle::RequestLifecycleState::Completed);
         row.deadline = Some("2020-01-01T00:00:01Z".into());
-        super::verify_runtime_local_control_receipt(
+        crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
             &row,
             identity.did(),
             "receipt-parent",
             identity.did(),
         )
         .expect("terminal and expired original receipt remains authenticated");
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "different-parent",
-            identity.did(),
-        )
-        .is_err());
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "different-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
         let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            foreign.did(),
-            "receipt-parent",
-            foreign.did(),
-        )
-        .is_err());
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "receipt-parent",
-            foreign.did(),
-        )
-        .is_err());
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                foreign.did(),
+                "receipt-parent",
+                foreign.did(),
+            )
+            .is_err()
+        );
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                foreign.did(),
+            )
+            .is_err()
+        );
         row.content = Some("forged continuation".into());
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "receipt-parent",
-            identity.did(),
-        )
-        .is_err());
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
         row.content = Some("original continuation".into());
         row.admission_signature = Some("not-a-valid-signature".into());
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "receipt-parent",
-            identity.did(),
-        )
-        .is_err());
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
         node.shutdown().await.expect("shut down test node");
     }
 
@@ -2767,7 +2465,7 @@ mod tests {
         let row = super::load_signed_request(fixture.node().as_ref(), &doc_id)
             .await
             .unwrap();
-        super::verify_request_receipt_signature(&row)
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&row)
             .expect("original local-self immutable receipt signature");
         let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
         queued.content = "stale queued content".to_string();

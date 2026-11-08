@@ -7,9 +7,9 @@ use crate::request::lifecycle::queue::{
     RequestInput, RequestQueue,
 };
 use crate::request::lifecycle::ExecutionOrigin;
-use crate::request::watcher::AgentRequest;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::NodeIdentity;
+use gents_protocol::row::AgentRequest;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -127,7 +127,7 @@ async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&doc),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
@@ -217,7 +217,7 @@ async fn enqueue_generated_wake(
             background_completion_wake_version: None,
         },
         None,
-        crate::request::lifecycle::RequestHopCause::Continuation,
+        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap()
@@ -791,7 +791,7 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
             background_completion_wake_version: None,
         },
         None,
-        crate::request::lifecycle::RequestHopCause::Continuation,
+        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap()

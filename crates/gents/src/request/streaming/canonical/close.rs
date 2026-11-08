@@ -9,12 +9,14 @@ use gents_protocol::output::{
 };
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
-use crate::session::canonical_rows::{
-    output_segment_bound_variables, transcript_message_bound_variables, OutputSegmentRow,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+use crate::store::config_client::session_children::{
+    output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::created_doc_id;
+use gents_protocol::output::rows::{
+    OutputSegmentRow, CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 
 use super::{
     partial_message_key,
@@ -332,7 +334,7 @@ async fn close_provider_attempt_with_time(
             },
         )
         .await?;
-    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
         &access,
         &prepared.node_did,
         &actor,

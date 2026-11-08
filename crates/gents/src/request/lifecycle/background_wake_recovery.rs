@@ -370,7 +370,7 @@ async fn redrive_in_transaction(
     {
         return Ok(RedriveOutcome::Ineligible);
     }
-    let Some(_owner) = crate::session::load_agent_session_row_in_txn(
+    let Some(_owner) = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
         txn,
         node_did,
         session_id,
@@ -446,7 +446,7 @@ fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<St
                 lifecycle_state: {{ _eq: "{pending}" }}
             }}) {{ request_id input }}
         }}"#,
-        request_fields = crate::request::watcher::AGENT_REQUEST_FIELDS,
+        request_fields = gents_protocol::row::AGENT_REQUEST_FIELDS,
         failed = RequestLifecycleState::Failed.as_str(),
         pending = RequestLifecycleState::Pending.as_str()
     ))
@@ -516,6 +516,6 @@ async fn redrive_mutation(
         r#"mutation {{
             successor: create_AgentRequest(input: {{ {request_fields} }}) {{ {fields} }}
         }}"#,
-        fields = crate::request::watcher::AGENT_REQUEST_FIELDS,
+        fields = gents_protocol::row::AGENT_REQUEST_FIELDS,
     ))
 }

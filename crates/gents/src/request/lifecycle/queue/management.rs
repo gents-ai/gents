@@ -157,7 +157,7 @@ fn editable(row: &AgentRequestRow, requester: &str) -> bool {
     row.requester_did.as_deref() == Some(requester)
         && (row.admission_kind.as_deref() == Some("client")
             || row.admission_signer_did.as_deref() == Some(requester))
-        && crate::request::admission::verify_request_receipt_signature(row).is_ok()
+        && crate::store::identity::request_receipt::verify_request_receipt_signature(row).is_ok()
         && matches!(
             crate::request::lifecycle::parse_valid_until(
                 row.valid_until.as_deref(),

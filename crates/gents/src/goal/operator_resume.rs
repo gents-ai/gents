@@ -1,9 +1,10 @@
 use super::*;
-use crate::request::admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
 use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::request::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use crate::store::config_client::ConfigApplyTxn;
+use crate::store::identity::request_receipt::verify_request_receipt_signature;
 use crate::store::identity::NodeIdentity;
+use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
 
 #[cfg(test)]
@@ -299,7 +300,7 @@ async fn stage_resume_inner(
 ) -> Result<GoalResumeReceipt> {
     let (goal, requests, parent_row) =
         resume_context_in_txn(txn, node_did, session_id, from_request_id).await?;
-    let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
+    let parent = gents_protocol::row::AgentRequest::try_from(parent_row.clone())?;
     if agent_initiated {
         anyhow::ensure!(
             identity.did() == parent.agent_did && txn.actor_did() == Some(identity.did()),
@@ -394,9 +395,11 @@ async fn stage_resume_inner(
     )?;
     create.input.goal_assignment = Some(continuation_assignment(&goal, &parent, None)?);
     if agent_initiated {
-        let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-            .await?
-            .context("goal session is unavailable")?;
+        let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+            txn, node_did, session_id,
+        )
+        .await?
+        .context("goal session is unavailable")?;
         let (agent_doc_id, _) = crate::store::config_client::read_desired_state_record_in_txn(
             txn,
             crate::Collection::Agent,

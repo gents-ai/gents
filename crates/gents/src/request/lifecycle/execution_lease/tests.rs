@@ -124,7 +124,7 @@ async fn managed_agent_signs_transcript_and_plugin_effect_blocks() {
         lifecycle.request().requester_did.clone(),
         accepted,
         lifecycle.claimed_deadline_at().unwrap(),
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::row::AwaitMode::Foreground,
     )
     .unwrap();
     tool.start_running().await.unwrap();
@@ -976,7 +976,7 @@ async fn revocation_preserves_latest_published_header_for_supersession_and_dead_
 
 #[tokio::test]
 async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
-    use crate::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -1048,18 +1048,19 @@ async fn expired_conflicting_source_is_revoked_without_rewriting_its_records() {
 
 #[tokio::test]
 async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload() {
-    use crate::session::canonical_rows::{
+    use crate::tools::call::lifecycle::ToolCallLifecycle;
+    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
         AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
-    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
     };
+    use gents_protocol::row::AwaitMode;
 
     let (node, _dir, identity, agent) = test_node().await;
 
@@ -1678,7 +1679,7 @@ async fn observed_case_request(
 #[tokio::test]
 async fn generated_renewal_invalidates_real_publication_point_read_transaction() {
     use crate::lean_vocab_test::LeanRequestExecutionAction;
-    use crate::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };

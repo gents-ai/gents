@@ -77,7 +77,7 @@ pub use readiness_gate::{
 };
 pub(crate) use request_assignment::{
     latest_assignment_goals, load_request_assignment, load_request_assignment_in_txn,
-    load_request_assignment_scopes, RequestAssignmentObservation, RequestAssignmentScope,
+    load_request_assignment_scopes, RequestAssignmentObservation,
 };
 #[cfg(test)]
 pub(crate) use request_head::assignment_allows;
@@ -95,11 +95,11 @@ pub(crate) use backed_request::{
 pub use backed_request::{
     submit_goal_backed_request, submit_goal_backed_request_local, GoalBackedRequestDisposition,
 };
+pub(crate) use controller::fence_goal_continuation_claim_in_txn;
 pub use controller::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     update_goal_fields_if_status_from_access,
 };
-pub(crate) use controller::{fence_goal_continuation_claim_in_txn, GoalClaimFence};
 use creation::stage_goal_and_claim;
 pub(crate) use creation::{
     create_goal_for_request_from_access, load_goal_creation_claim_fingerprint_in_txn,
@@ -108,9 +108,8 @@ pub use creation::{
     create_goal_for_session, create_goal_for_session_from_access, replacement_goal_identity,
     CreateGoalForSessionError, CreateGoalForSessionOutcome, GoalCreationIdentity,
 };
-pub use document::{
-    deterministic_goal_creation_key, deterministic_goal_id, snapshot, GoalDocument, GOAL_FIELDS,
-};
+pub use document::{snapshot, GoalDocument};
+use gents_protocol::goal::{deterministic_goal_creation_key, deterministic_goal_id, GOAL_FIELDS};
 pub(crate) use load::sort_goals_canonical;
 pub use load::{
     load_canonical_goal, load_canonical_goal_in_txn, load_goal_by_id, load_goals_for_session,

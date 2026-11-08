@@ -16,7 +16,7 @@ pub(crate) async fn pending_rows_in_txn(
         }} }}"#,
             escape_graphql_string(node_did),
             escape_graphql_string(session_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
             pending = RequestLifecycleState::Pending.as_str()
         ))
         .await?;

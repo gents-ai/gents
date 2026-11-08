@@ -159,7 +159,7 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                     "review notifications",
                     queue(&parent, key),
                     None,
-                    crate::request::lifecycle::RequestHopCause::Continuation,
+                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                 )
                 .await
             }

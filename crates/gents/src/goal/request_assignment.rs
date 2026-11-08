@@ -1,5 +1,6 @@
 use super::GoalDocument;
-use crate::request::admission::verify_request_receipt_signature;
+use crate::store::identity::request_receipt::verify_request_receipt_signature;
+use gents_protocol::goal::RequestAssignmentScope;
 use gents_protocol::row::AgentRequestRow;
 
 /// Historical display uses the immutable signed request, independently of the
@@ -92,13 +93,6 @@ pub(super) fn observe_request_assignment(
     } else {
         RequestAssignmentObservation::None
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum RequestAssignmentScope {
-    Unassigned,
-    Unresolved { entry_doc_id: String },
-    Referenced(gents_protocol::request_input::GoalAssignmentInput),
 }
 
 fn request_assignment_scope(

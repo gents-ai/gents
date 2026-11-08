@@ -5,8 +5,8 @@ use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::request::watcher::AgentRequest;
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents_protocol::row::AgentRequest;
 
 pub(crate) async fn load_agent_request_by_doc_id_with_access(
     access: &crate::ConfigAccess,
@@ -16,7 +16,7 @@ pub(crate) async fn load_agent_request_by_doc_id_with_access(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
             escape_graphql_string(request_doc_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ))
         .await?;
     let mut matches: Vec<AgentRequestRow> =
@@ -43,7 +43,7 @@ pub(crate) async fn load_agent_request_with_access(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
             escape_graphql_string(request_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ))
         .await?;
     let mut matches: Vec<AgentRequestRow> =

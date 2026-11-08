@@ -192,7 +192,7 @@ pub(crate) async fn fold_candidates(
     rows.into_iter()
         .filter(|row| row.doc_id.as_deref() != Some(head.doc_id.as_str()))
         .filter(|row| folds_into(head, row, now))
-        .map(AgentRequest::try_from)
+        .map(|row| AgentRequest::try_from(row).map_err(anyhow::Error::from))
         .collect()
 }
 

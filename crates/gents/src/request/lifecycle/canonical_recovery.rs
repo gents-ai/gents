@@ -14,12 +14,15 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::session;
-use crate::session::canonical_rows::{
-    output_segment_bound_variables, transcript_message_bound_variables, OutputSegmentRow,
-    TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+use crate::store::config_client::session_children::{
+    output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::{escape_graphql_string, response_has_documents};
+use gents_protocol::output::rows::{
+    OutputSegmentRow, TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryResult {
@@ -55,7 +58,7 @@ pub(in crate::request::lifecycle) async fn request_segments(
 ) -> Result<Vec<OutputSegmentRow>> {
     let value = txn
         .execute_local_response(
-            &crate::session::canonical_rows::request_output_segments_query(request_doc_id),
+            &gents_protocol::output::rows::request_output_segments_query(request_doc_id),
         )
         .await?;
     let rows = value
@@ -64,7 +67,7 @@ pub(in crate::request::lifecycle) async fn request_segments(
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
         .context("AgentOutputSegment query omitted rows")?;
-    crate::session::canonical_rows::decode_scoped_request_output_segments(
+    gents_protocol::output::rows::decode_scoped_request_output_segments(
         rows,
         agent,
         Some(session_id),
@@ -560,7 +563,7 @@ async fn recover_expired_generation_with_access_and_facts(
             Ok(RecoveryResult::Won { published: published.len() })
         })},
     ).await?;
-    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
         access,
         &node_did,
         &actor,

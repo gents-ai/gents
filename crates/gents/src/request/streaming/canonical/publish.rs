@@ -8,13 +8,15 @@ use gents_protocol::output::{
 };
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
-use crate::session::canonical_rows::{
-    decode_transcript_message_row, output_segment_bound_variables,
-    transcript_message_bound_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
-    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+use crate::store::config_client::session_children::{
+    output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string, mutation_documents};
+use gents_protocol::output::rows::{
+    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 
 use super::{
     source::load_request_in_txn, ProviderCloseRejection, ProviderPublicationPlan,
@@ -227,14 +229,14 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             );
             let mut tool_call_keys = Vec::with_capacity(encoded.tool_calls.len());
             let mut tool_inputs = Vec::with_capacity(encoded.tool_calls.len());
-            let (session_doc_id, agent_did) = crate::session::canonical_rows::agent_session_child_binding_in_txn(
+            let (session_doc_id, agent_did) = crate::store::config_client::session_children::agent_session_child_binding_in_txn(
                 txn, &prepared.node_did, &prepared.session_id, prepared.requester_did.as_deref(),
             ).await?;
             for tool in &encoded.tool_calls {
                 let await_mode = if background_calls.contains(&tool.id) {
-                    crate::tools::call::lifecycle::AwaitMode::Background
+                    gents_protocol::row::AwaitMode::Background
                 } else {
-                    crate::tools::call::lifecycle::AwaitMode::Foreground
+                    gents_protocol::row::AwaitMode::Foreground
                 };
                 let tool_call_key = format!("{}:{}:{}", prepared.request_doc_id, message_key, tool.native_index);
                 tool_call_keys.push(tool_call_key.clone());
@@ -317,9 +319,9 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                     execution_generation: generation.to_owned(),
                     arguments: PayloadRef { close_doc_id: close_doc_id.clone(), stream: tool.arguments_stream },
                     await_mode: if background_calls.contains(&tool.id) {
-                        crate::tools::call::lifecycle::AwaitMode::Background
+                        gents_protocol::row::AwaitMode::Background
                     } else {
-                        crate::tools::call::lifecycle::AwaitMode::Foreground
+                        gents_protocol::row::AwaitMode::Foreground
                     },
                 }
             }).collect();
@@ -331,7 +333,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             })
         })},
     ).await?;
-    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
         &access,
         &node_did,
         &repair_actor,
@@ -460,16 +462,16 @@ async fn replay_publication_in_txn(
                     == Some("pending"),
             "publication replay pending tool binding changed"
         );
-        let await_mode = crate::tools::call::lifecycle::AwaitMode::from_persisted(
+        let await_mode = gents_protocol::row::AwaitMode::from_persisted(
             tool["await_mode"]
                 .as_str()
                 .context("publication replay lacks await mode")?,
         )
         .context("publication replay has invalid await mode")?;
         let planned = if background_calls.contains(id) {
-            crate::tools::call::lifecycle::AwaitMode::Background
+            gents_protocol::row::AwaitMode::Background
         } else {
-            crate::tools::call::lifecycle::AwaitMode::Foreground
+            gents_protocol::row::AwaitMode::Foreground
         };
         if await_mode != planned {
             return Err(ProviderReplayRejection::AwaitModeChanged.into());

@@ -116,9 +116,9 @@ mod tests {
         })).unwrap();
         for items in [Vec::new(), vec![unrelated]] {
             let (ids, verifications) =
-                crate::request::admission::count_request_receipt_verifications(|| {
-                    awaiting_goal_question_ids(&observation, &latest, &requests, &items, now)
-                });
+                crate::store::identity::request_receipt::count_request_receipt_verifications(
+                    || awaiting_goal_question_ids(&observation, &latest, &requests, &items, now),
+                );
             assert!(ids.is_empty());
             assert_eq!(verifications, 0);
         }

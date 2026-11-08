@@ -1,13 +1,14 @@
 mod wait_observation;
 
 use super::*;
-use crate::request::admission::{verify_runtime_local_control_receipt, SIGNED_REQUEST_FIELDS};
 use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::request::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 use crate::store::config_client::ConfigApplyTxn;
+use crate::store::identity::request_receipt::verify_runtime_local_control_receipt;
 use crate::store::identity::NodeIdentity;
+use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
 
 pub(crate) async fn publish_claimed_continuation_with_identity(
@@ -179,12 +180,12 @@ async fn stage_claimed_continuation(
         "claimed predecessor must uniquely belong to the goal owner and session"
     );
     let parent_row = parents[0];
-    let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
+    let parent = gents_protocol::row::AgentRequest::try_from(parent_row.clone())?;
     anyhow::ensure!(
         identity.did() == parent.agent_did,
         "claimed publication requires the selected agent's signing identity"
     );
-    let session = crate::session::load_agent_session_row_in_txn(
+    let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
         txn,
         &goal.node_did,
         &goal.session_id,
