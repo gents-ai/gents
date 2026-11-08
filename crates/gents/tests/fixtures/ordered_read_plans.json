@@ -896,5 +896,91 @@
         "SOURCE_SCAN_PAGE_SIZE": "1"
       }
     ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/runtime/agent/p2p_reconcile/enrollment_exchange.rs",
+      "collection": "EnrollmentRenewalIntent",
+      "arguments": "filter: { admin_did: { _eq: \"$GENTS_admin$\" }, expires_at: { _gt: \"$GENTS_now$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 4"
+    },
+    "bindings": [
+      {
+        "admin": "probe",
+        "now": "2026-01-01T00:00:00Z",
+        "after": ""
+      },
+      {
+        "admin": "probe",
+        "now": "2026-01-01T00:00:00Z",
+        "after": ", intent_id: {_gt: \"probe\"}"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/runtime/agent/p2p_reconcile/enrollment_exchange.rs",
+      "collection": "EnrollmentRenewalOffer",
+      "arguments": "filter: { admin_did: { _eq: \"$GENTS_admin$\" }, expires_at: { _lt: \"$GENTS_cutoff$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 32"
+    },
+    "bindings": [
+      {
+        "admin": "probe",
+        "cutoff": "2026-01-01T00:00:00Z",
+        "after": ""
+      },
+      {
+        "admin": "probe",
+        "cutoff": "2026-01-01T00:00:00Z",
+        "after": ", intent_id: {_gt: \"probe\"}"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/runtime/agent/p2p_reconcile/enrollment_member_renewal/persisted.rs",
+      "collection": "EnrollmentRenewalIntent",
+      "arguments": "filter: { member_did: { _eq: \"$GENTS_member$\" }, expires_at: { _lt: \"$GENTS_cutoff$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 32"
+    },
+    "bindings": [
+      {
+        "member": "probe",
+        "cutoff": "2026-01-01T00:00:00Z",
+        "after": ""
+      },
+      {
+        "member": "probe",
+        "cutoff": "2026-01-01T00:00:00Z",
+        "after": ", intent_id: {_gt: \"probe\"}"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents/src/runtime/agent/p2p_reconcile/enrollment_member_renewal/persisted.rs",
+      "collection": "EnrollmentRenewalIntent",
+      "arguments": "filter: { network_id: { _eq: \"$GENTS_0$\" }, admin_did: { _eq: \"$GENTS_1$\" }, server_peer: { _eq: \"$GENTS_2$\" }, member_did: { _eq: \"$GENTS_3$\" }, member_peer: { _eq: \"$GENTS_4$\" }, predecessor_sequence: { _eq: $GENTS_5$ }, expires_at: { _gt: \"$GENTS_6$\" } $GENTS_after$ }, order: { intent_id: ASC }, limit: 32"
+    },
+    "bindings": [
+      {
+        "0": "probe",
+        "1": "probe",
+        "2": "probe",
+        "3": "probe",
+        "4": "probe",
+        "5": "1",
+        "6": "2026-01-01T00:00:00Z",
+        "after": ""
+      },
+      {
+        "0": "probe",
+        "1": "probe",
+        "2": "probe",
+        "3": "probe",
+        "4": "probe",
+        "5": "1",
+        "6": "2026-01-01T00:00:00Z",
+        "after": ", intent_id: {_gt: \"probe\"}"
+      }
+    ]
   }
 ]
