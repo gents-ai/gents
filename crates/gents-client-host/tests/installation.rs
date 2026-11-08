@@ -32,6 +32,7 @@ async fn check_shared_installation(home: &str) {
             .unwrap(),
     );
     let peer_id = seed.local_peer_id().to_owned();
+    let seed_did = seed.node_identity().did().to_owned();
     seed.shutdown().await.unwrap();
     drop(seed);
     let log = std::fs::File::create(dir.path().join("server.log")).unwrap();
@@ -63,8 +64,8 @@ async fn check_shared_installation(home: &str) {
     .expect("native installation startup");
     let mut first = Attachment::start(&paths).await;
     let mut second = Attachment::start(&paths).await;
-    assert_eq!(first.snapshot(1).await["client"]["localPeerId"], peer_id);
-    assert_eq!(second.snapshot(1).await["client"]["localPeerId"], peer_id);
+    assert_eq!(first.snapshot(1).await["client"]["clientDid"], seed_did);
+    assert_eq!(second.snapshot(1).await["client"]["clientDid"], seed_did);
     let error = match ClientCore::start_with_paths_and_options(
         paths.clone(),
         ClientCoreOptions::local_only(),
@@ -82,7 +83,7 @@ async fn check_shared_installation(home: &str) {
         "{error:#}"
     );
     first.close().await;
-    assert_eq!(second.snapshot(2).await["client"]["localPeerId"], peer_id);
+    assert_eq!(second.snapshot(2).await["client"]["clientDid"], seed_did);
     second.close().await;
     #[cfg(unix)]
     {
@@ -177,7 +178,6 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     assert_eq!(hello["installationBuild"], "previous-build");
     let mut updated = Attachment::start(&paths).await;
     let snapshot = updated.snapshot(1).await;
-    assert_eq!(snapshot["client"]["localPeerId"], peer);
     assert_eq!(snapshot["client"]["clientDid"], client_did);
     tokio::time::timeout(Duration::from_secs(30), old)
         .await
@@ -310,8 +310,8 @@ async fn different_build_with_compatible_inventory_is_reused_without_retirement(
 
     let mut attachment = Attachment::start(&paths).await;
     assert_eq!(
-        attachment.snapshot(1).await["client"]["localPeerId"],
-        core.local_peer_id()
+        attachment.snapshot(1).await["client"]["clientDid"],
+        core.node_identity().did()
     );
     assert!(
         !server.is_finished(),

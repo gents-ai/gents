@@ -53,8 +53,8 @@ async fn two_attachments_share_a_core_and_detaching_does_not_close_it() {
             assert_eq!(response["id"], 1);
             assert!(response["error"].is_null(), "{response}");
             assert_eq!(
-                response["result"]["client"]["localPeerId"],
-                core.local_peer_id()
+                response["result"]["client"]["clientDid"],
+                core.node_identity().did()
             );
             assert_eq!(response["result"]["bootstrap"]["desktopHome"], "");
             break;
@@ -661,8 +661,8 @@ async fn retirement_requires_the_current_installation_build_and_never_retires_an
             if response["kind"] == "response" && response["id"] == 2 {
                 assert!(response["error"].is_null(), "{response}");
                 assert_eq!(
-                    response["result"]["client"]["localPeerId"],
-                    core.local_peer_id()
+                    response["result"]["client"]["clientDid"],
+                    core.node_identity().did()
                 );
                 break;
             }
