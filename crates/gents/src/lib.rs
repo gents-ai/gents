@@ -9,6 +9,7 @@ pub mod claude_gateway_login;
 mod claude_request_context;
 pub mod codex_shim_binding;
 pub mod documents;
+pub mod drop_cleanup;
 pub mod error;
 pub mod eval;
 pub mod file_inventory;
@@ -219,7 +220,7 @@ pub(crate) mod test_support {
             .transact_write("test.signed_node", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    crate::documents::apply_desired_state_plan(txn, plan).await
                 })
             })
             .await
@@ -335,7 +336,7 @@ pub(crate) mod test_support {
                             update: node,
                         },
                     ])?;
-                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(txn, &plan).await
                 })
             })
             .await
@@ -371,7 +372,7 @@ pub(crate) mod test_support {
                             update: node,
                         },
                     ])?;
-                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(txn, &plan).await
                 })
             })
             .await
@@ -475,7 +476,7 @@ pub(crate) mod test_support {
             .transact_write("test.install_agent", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    crate::documents::apply_desired_state_plan(txn, plan).await
                 })
             })
             .await
@@ -580,9 +581,11 @@ pub(crate) mod test_support {
                     )
                     .await?;
                     let session =
-                        crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                            .await?
-                            .ok_or_else(|| anyhow::anyhow!("created session is not visible"))?;
+                        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                            txn, node_did, session_id,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("created session is not visible"))?;
                     let (agent_doc, _) =
                         crate::store::config_client::read_desired_state_record_in_txn(
                             txn,
@@ -618,9 +621,9 @@ pub(crate) mod test_support {
 pub mod request;
 #[doc(hidden)]
 pub use request::admission::final_claim_admission_disposition;
+pub use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 pub use request::admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
-    verify_request_receipt_signature, SIGNED_REQUEST_FIELDS,
 };
 pub mod session;
 pub mod tools;
@@ -693,19 +696,22 @@ pub use request::interrupt::{
     fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
     interrupt_request_by_doc_id,
 };
+pub use gents_protocol::request_lifecycle::{
+    next_request_hop, request_hop_within_bound, EnqueuedAgentRequest, RequestHopCapObservation,
+    RequestHopCause,
+};
 pub use request::lifecycle::{
     background_wake_next_retry_at, background_wake_retry_delay,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, enqueue_local_steering_request, next_request_hop,
-    request_hop_within_bound, task_session_title, write_manual_agent_request,
-    write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
-    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestHopCapObservation, RequestHopCause,
-    RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec, RetryLink,
-    TerminalRedriveReport, TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT,
-    TERMINAL_REDRIVE_CAP,
+    build_signed_request, enqueue_local_steering_request, task_session_title,
+    write_manual_agent_request, write_manual_agent_request_with_conversation_title,
+    BackgroundWakeRedriveReport, ParentLink, RecoveryReport, RequestIdentity, RequestLifecycle,
+    RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport, TerminalRepairReport,
+    TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
 };
 pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
-pub use request::watcher::{AgentRequest, DefraWatcher, Watcher};
+pub use gents_protocol::row::AgentRequest;
+pub use request::watcher::{DefraWatcher, Watcher};
 pub use runtime::agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
@@ -723,15 +729,17 @@ pub use runtime::periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
     PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
-pub use runtime::snapshot::{
-    ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,
-    ResolvedEventTrigger, ResolvedSchedule, ResolvedTask, ScheduleCadence,
+pub use documents::automation::{
+    EventTriggerFireMode, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
+pub use documents::{ConcurrencyMode, ScheduleCadence};
+pub use runtime::snapshot::{ActiveRuntimeSnapshot, DispatcherMap};
 pub use session::load_history;
 pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
 pub use store::collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use store::config_client::ConfigAccess;
+pub use store::identity::request_receipt::verify_request_receipt_signature;
 pub use store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
@@ -791,7 +799,7 @@ pub mod __test_internals {
     pub use crate::request::lifecycle::activate_workspace_bound_request;
     pub use crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
-    pub use crate::request::lifecycle::materialize::EnqueuedAgentRequest;
+    pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
     pub use crate::request::lifecycle::queue::{
         reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
         QueueSource,

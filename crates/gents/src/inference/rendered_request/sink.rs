@@ -12,13 +12,13 @@ async fn capture_session_binding(
     rendered: &RenderedCompletionRequest,
 ) -> Result<(String, String)> {
     let scope: gents_protocol::rendered_request::CaptureScope = rendered.capture_scope.parse()?;
-    crate::session::canonical_rows::session_child_binding_for_request_in_txn(
+    session_child_binding_for_request_in_txn(
         txn,
         &rendered.node_did,
         &rendered.session_id,
         (!rendered.requester_did.is_empty()).then_some(rendered.requester_did.as_str()),
         &rendered.request_doc_id,
-        crate::session::canonical_rows::SessionChildSource::Capture(&scope),
+        SessionChildSource::Capture(&scope),
     )
     .await
 }
@@ -26,6 +26,9 @@ async fn capture_session_binding(
 use super::{
     canonical_json, canonical_json_string, RenderedCompletionRequest,
     RenderedRequestCaptureFactory, RenderedRequestCaptureSink, RenderedRequestContext,
+};
+use crate::store::config_client::session_children::{
+    session_child_binding_for_request_in_txn, SessionChildSource,
 };
 use crate::store::graphql::escape_graphql_string;
 

@@ -1,5 +1,4 @@
 pub mod agent;
-pub mod drop_cleanup;
 pub mod native_logging;
 pub(crate) mod node_readiness_publisher;
 pub mod oneshot;

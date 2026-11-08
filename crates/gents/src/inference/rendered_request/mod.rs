@@ -53,7 +53,7 @@ pub(crate) fn admission_kind_matches_scope(
 }
 
 pub(crate) fn context_for_claimed_request(
-    request: &crate::request::watcher::AgentRequest,
+    request: &gents_protocol::row::AgentRequest,
     request_commit_cid: &str,
     model_name: String,
     provider_family: Option<String>,
@@ -675,8 +675,8 @@ mod tests {
         );
     }
 
-    fn agent_request() -> crate::request::watcher::AgentRequest {
-        crate::request::watcher::AgentRequest {
+    fn agent_request() -> gents_protocol::row::AgentRequest {
+        gents_protocol::row::AgentRequest {
             retry_parent_request_doc_id: None,
             purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             doc_id: "doc-1".to_string(),

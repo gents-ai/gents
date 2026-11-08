@@ -297,9 +297,8 @@ fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
 
 #[tokio::test]
 async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
-    use crate::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyPlan,
-    };
+    use crate::documents::apply_desired_state_plan;
+    use crate::store::config_client::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
     use crate::NodeIdentity;
     let (db, user, access, default) =
         crate::test_support::signed_test_node("event-args-rollback").await;

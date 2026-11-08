@@ -7,6 +7,7 @@ mod labels;
 mod resolve;
 mod rows;
 mod serving;
+mod serving_accounts;
 mod sign_in;
 mod static_backend;
 pub(crate) mod token_endpoint;
@@ -56,11 +57,9 @@ pub use rows::{
 };
 use rows::{lookup_oauth_credential_by_id_on, provider_rows_in_txn};
 pub use serving::{backend_account, serving_account, AccountState, ServingAccount};
+pub use serving_accounts::{agent_accounts, serving_accounts};
 pub use sign_in::{store_sign_in, SignIn, SignInResult};
-pub(crate) use static_backend::{
-    backend_credential_in_txn, put_backend_credential_in_txn, resolve_runtime_backend_auth,
-    BackendCredential, BackendCredentialSecret,
-};
+pub(crate) use static_backend::resolve_runtime_backend_auth;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OAuthProduct {

@@ -1,7 +1,7 @@
 use super::*;
 
 async fn oauth_backend_configuration(access: &crate::ConfigAccess, backend: &InferenceBackend) {
-    crate::store::config_client::write_inference_backend_document(access, backend)
+    crate::documents::write_inference_backend_document(access, backend)
         .await
         .unwrap();
 }

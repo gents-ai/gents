@@ -5,6 +5,15 @@ use crate::inference::resolved::ReasoningEffort;
 use crate::openai_wire::OpenAiWireApi;
 pub use gents_loop::claude_platform::ClaudePlatform;
 
+mod metadata;
+pub mod observation_binding;
+
+pub(crate) use metadata::{
+    backend_metadata_fields, prepare_backend_metadata_in_txn, remove_backend_metadata_in_txn,
+    write_backend_metadata_in_txn, write_inference_backend_in_txn,
+};
+pub use metadata::write_inference_backend_document;
+
 /// Secret-free authentication selection stored in InferenceBackendMetadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendAuthSelection {

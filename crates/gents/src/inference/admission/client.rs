@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use super::controller::PendingCallMetadata;
 use super::permit::AdmissionPermit;
 use super::AdmissionRegistry;
-use crate::request::watcher::AgentRequest;
+use gents_protocol::row::AgentRequest;
 
 const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interrupt";
 

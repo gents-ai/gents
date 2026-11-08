@@ -215,7 +215,7 @@ async fn original_account_profiles(
             .map(|backend| backend.backend_id)
             .collect();
     Ok(
-        crate::store::config_client::list_inference_profiles_in_txn(txn, &credential.node_did)
+        crate::documents::list_inference_profiles_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|profile| backends.contains(&profile.backend_id))

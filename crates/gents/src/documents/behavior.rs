@@ -10,6 +10,10 @@ use super::serde_helpers::{
     is_enabled, rows_with_doc_id,
 };
 
+mod persistence;
+
+pub use persistence::write_agent_document;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -160,7 +164,7 @@ pub async fn upsert_agent(node: &std::sync::Arc<EmbeddedNode>, behavior: &Agent)
                         update: value,
                     },
                 ])?;
-                crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
+                crate::documents::apply_desired_state_plan(txn, &plan).await?;
                 Ok(())
             })
         },

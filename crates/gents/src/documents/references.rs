@@ -95,7 +95,7 @@ impl ConfigReferences {
         for collection in Collection::ALL {
             let name = collection.graphql_type();
             let fields = if collection == Collection::InferenceBackend {
-                crate::store::config_client::backend_metadata_fields()?
+                super::backend_metadata_fields()?
             } else {
                 config_projection(collection, None)?.0
             }
