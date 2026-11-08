@@ -461,6 +461,7 @@ export function CustomizeNavDialog() {
       onOpenChange={(next) => !next && sheet.setState({ open: false })}
     >
       <DialogContent
+        aria-modal="true"
         /* a long list scrolls between the title and the buttons */
         className="grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-md"
         data-testid="customize-nav"
