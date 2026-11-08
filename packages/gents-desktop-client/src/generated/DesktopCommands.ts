@@ -268,7 +268,7 @@ export type DesktopCommands = {
   desktop_session_reload: { args: { sessionId: string; nodeDid?: string | null }; result: void };
   desktop_session_rename: { args: { request: SessionRenameRequest }; result: void };
   desktop_session_rows: { args: { sessionId: string; nodeDid?: string | null; window: SessionRowsWindow; limit?: number | null }; result: SessionRowsView | null };
-  desktop_session_snapshot: { args: { sessionId: string; nodeDid?: string | null; requestId?: string | null; timelineLimit?: number | null; timelineBeforeItemKey?: string | null }; result: DesktopSessionSnapshot | null };
+  desktop_session_snapshot: { args: { sessionId: string; nodeDid?: string | null; requestId?: string | null; timelineLimit?: number | null }; result: DesktopSessionSnapshot | null };
   desktop_set_selected_node: { args: { nodeDid?: string | null }; result: void };
   desktop_skill_delete: { args: { request: SkillDeleteRequest }; result: DesktopClientSnapshot };
   desktop_skill_save: { args: { request: SkillSaveRequest }; result: DesktopClientSnapshot };

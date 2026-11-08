@@ -229,7 +229,6 @@ export type DesktopApiAdapter = {
     requestId?: string | null,
     timelinePage?: {
       limit?: number;
-      beforeItemKey?: string | null;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
   reloadSession: (

@@ -147,7 +147,6 @@ export function createBridgeHttpAdapter(
         nodeDid: nodeDid ?? null,
         requestId: requestId ?? null,
         timelineLimit: timelinePage?.limit,
-        timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
     reloadSession: async (sessionId, nodeDid) => {
       await client.postJson("/desktop/session/reload", {

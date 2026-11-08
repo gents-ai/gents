@@ -2324,7 +2324,6 @@ export function createDesktopUiHarness(
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
-      if (timelinePage?.beforeItemKey) await waitForOlderPage();
       const snapshot = clone(session);
       snapshot.projectionRevision = {
         storeVersion,
@@ -2339,23 +2338,13 @@ export function createDesktopUiHarness(
 
       const totalItems = snapshot.timelineItems.length;
       const limit = Math.max(1, Math.min(80, timelinePage.limit ?? 40));
-      const end = timelinePage.beforeItemKey
-        ? snapshot.timelineItems.findIndex(
-            (item) => item.itemKey === timelinePage.beforeItemKey,
-          )
-        : totalItems;
-      if (end < 0) {
-        throw new Error(
-          `session timeline cursor is no longer present: ${timelinePage.beforeItemKey}`,
-        );
-      }
-      const start = Math.max(0, end - limit);
-      snapshot.timelineItems = snapshot.timelineItems.slice(start, end);
+      const start = Math.max(0, totalItems - limit);
+      snapshot.timelineItems = snapshot.timelineItems.slice(start);
       snapshot.timelinePage = {
         totalItems,
         pageItems: snapshot.timelineItems.length,
         hasOlder: start > 0,
-        hasNewer: end < totalItems,
+        hasNewer: false,
         oldestItemKey: snapshot.timelineItems[0]?.itemKey ?? null,
         newestItemKey:
           snapshot.timelineItems[snapshot.timelineItems.length - 1]?.itemKey ?? null,

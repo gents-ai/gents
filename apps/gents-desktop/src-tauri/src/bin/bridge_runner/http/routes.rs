@@ -61,7 +61,6 @@ struct SessionSnapshotRequest {
     session_id: String,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -453,7 +452,6 @@ pub(super) async fn handle_request(
                 &request.session_id,
                 request.request_id.as_deref(),
                 request.timeline_limit,
-                request.timeline_before_item_key.as_deref(),
             )
             .await;
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))

@@ -327,7 +327,7 @@ impl ClientHost {
             ClientCommand::Snapshot {} => encode(
                 crate::snapshot::build_client_snapshot_with_grants(
                     Some(&self.core),
-                    Some(&self.policy),
+                    &self.policy,
                     self.policy.snapshot_grants,
                 )
                 .await
@@ -343,7 +343,6 @@ impl ClientHost {
                     Some(args.node_did),
                     args.request_id,
                     args.timeline_limit,
-                    args.timeline_before_item_key,
                 )
                 .await?,
             ),

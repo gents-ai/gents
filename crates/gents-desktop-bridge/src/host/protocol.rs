@@ -314,8 +314,6 @@ pub struct SessionSnapshotArgs {
     pub request_id: Option<String>,
     #[ts(optional = nullable)]
     pub timeline_limit: Option<usize>,
-    #[ts(optional = nullable)]
-    pub timeline_before_item_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]

@@ -74,21 +74,12 @@ pub async fn desktop_session_snapshot(
     node_did: Option<String>,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
-    session_snapshot(
-        &core,
-        session_id,
-        node_did,
-        request_id,
-        timeline_limit,
-        timeline_before_item_key,
-    )
-    .await
+    session_snapshot(&core, session_id, node_did, request_id, timeline_limit).await
 }
 
 pub(crate) use crate::commands::session_snapshot;

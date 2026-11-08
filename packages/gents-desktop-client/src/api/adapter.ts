@@ -81,7 +81,6 @@ export function createDesktopApiAdapter(
         nodeDid,
         requestId,
         timelineLimit: timelinePage?.limit,
-        timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
     reloadSession: (sessionId, nodeDid) =>
       invokeDesktop("desktop_session_reload", {

@@ -3040,26 +3040,13 @@ async fn read_session(
     node_did: &str,
     session: &str,
 ) -> Result<Value> {
-    read_session_page(client, id, node_did, session, None).await
-}
-
-async fn read_session_page(
-    client: &mut Attachment,
-    id: &mut u32,
-    node_did: &str,
-    session: &str,
-    before: Option<&str>,
-) -> Result<Value> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let result = client
                 .try_call(
                     *id,
                     "desktop_session_snapshot",
-                    json!({
-                        "nodeDid":node_did, "sessionId":session, "timelineLimit":40,
-                        "timelineBeforeItemKey":before,
-                    }),
+                    json!({"nodeDid":node_did, "sessionId":session, "timelineLimit":40}),
                 )
                 .await;
             *id += 1;

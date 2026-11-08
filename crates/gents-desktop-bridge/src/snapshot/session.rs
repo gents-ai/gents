@@ -1183,20 +1183,10 @@ mod paging_coverage_tests {
                     denied_dependency_doc_id: None,
                 },
             });
-        let full_snapshot = snapshot;
-        let mut newest = full_snapshot.clone();
-        apply_session_timeline_page(&mut newest, None, Some(1)).unwrap();
+        let mut newest = snapshot;
+        apply_session_timeline_page(&mut newest, Some(1)).unwrap();
         let cursor = newest.timeline_page.unwrap().oldest_item_key.unwrap();
         assert_eq!(cursor, "assistant-2");
-        let mut older = full_snapshot;
-        apply_session_timeline_page(&mut older, Some(&cursor), Some(1)).unwrap();
-        assert!(matches!(
-            older.timeline_items.as_slice(),
-            [RenderedTimelineItem::RequestContextReductionSummary {
-                reduction_count: 81,
-                ..
-            }]
-        ));
     }
 
     #[test]
