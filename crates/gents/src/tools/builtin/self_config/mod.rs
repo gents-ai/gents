@@ -197,6 +197,73 @@ pub fn build_self_config_tools(
     )
 }
 
+/// The physical Node that self-configuration publishes creates under, as the
+/// runtime observes it through its own native read grant. It travels with the
+/// Agent's operation and never changes that operation's actor.
+pub(crate) async fn runtime_node_binding(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    runtime_identity: &dyn NodeIdentity,
+) -> Result<crate::store::config_client::ConfigurationNodeBinding> {
+    anyhow::ensure!(
+        runtime_identity.did() == node_did && node.node_identity_did() == Some(node_did),
+        "self-configuration runtime identity does not match the Node"
+    );
+    let actor = identity::Did::new(runtime_identity.did())?;
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let (doc_id, node_record) = access
+        .transact_readonly("self_config.node_binding", |txn| {
+            Box::pin(async move {
+                crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Node,
+                    node_did,
+                    node_did,
+                )
+                .await
+            })
+        })
+        .await?
+        .context("runtime cannot observe its Node for self-configuration")?;
+    Ok(crate::store::config_client::ConfigurationNodeBinding {
+        node_did: actor,
+        doc_id,
+        enabled: node_record
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        default_agent_did: node_record
+            .get("default_agent_did")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+    })
+}
+
+/// The config tool as the runtime tool surface registers it: the Agent acts
+/// through its managed signer, and creates publish under the Node binding the
+/// runtime observes with its own identity.
+pub async fn build_runtime_self_config_tools(
+    usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
+    node: Arc<EmbeddedNode>,
+    agent_identity: Arc<dyn NodeIdentity>,
+    runtime_identity: Arc<dyn NodeIdentity>,
+    config: &SelfConfigToolConfig,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+) -> Result<Vec<Box<dyn ToolDyn>>> {
+    let node_did = runtime_identity.did().to_owned();
+    let binding = runtime_node_binding(&node, &node_did, runtime_identity.as_ref()).await?;
+    Ok(build_self_config_tools_with_runtime(
+        usage_cache,
+        node,
+        node_did,
+        Some(agent_identity),
+        Some(runtime_identity),
+        config,
+        plugins,
+        Some(binding),
+    ))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "runtime and physical Node binding are explicit capabilities"

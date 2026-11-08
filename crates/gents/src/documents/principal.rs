@@ -78,6 +78,7 @@ pub(crate) async fn load_node_record(
                 created_at
                 created_by
                 max_request_hop
+                tags
             }}
         }}"#
     );
