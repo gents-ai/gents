@@ -201,6 +201,8 @@ pub async fn desktop_ux_data_surfaces(
         .map_err(failed)
 }
 
+/// The page's endpoint is acquired here once, so a node that has no managed
+/// runtime fails the call, and again by the task at every connect.
 #[tauri::command]
 pub fn desktop_ux_data_watch<R>(
     window: tauri::WebviewWindow<R>,
@@ -221,17 +223,12 @@ where
     let access = core
         .local_home_operator_access(&request.node_did, &home)
         .map_err(failed)?;
-    let gents::ConfigAccess::Graphql(endpoint) = access else {
+    if !matches!(access, gents::ConfigAccess::Graphql(_)) {
         return Err(BridgeError::new(
             BridgeErrorCode::Unsupported,
             "pack observation needs a managed runtime",
         ));
-    };
-    let mut url = reqwest::Url::parse(endpoint.url())
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    url.set_path("/packs/ux/watch");
-    url.set_query(None);
-    url.set_fragment(None);
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let label = window.label().to_owned();
     let registry = state.ux_watches.clone();
@@ -242,17 +239,53 @@ where
         }
         registry.insert(&label, &id).map_err(failed)?
     };
+    let app = tauri::Manager::app_handle(&window).clone();
     let task_id = id.clone();
     tauri::async_runtime::spawn(async move {
-        let result = watch_stream(endpoint, url, request, &channel, &cancel).await;
-        if result.is_err() && !cancel.is_cancelled() {
-            let _ = channel.send(UxDataWatchEvent::Error {
-                message: "Pack updates are unavailable.".to_owned(),
-            });
-        }
+        let node_did = request.node_did.clone();
+        let acquire = || reacquire(&app, &node_did, &home);
+        let deliver = |event: UxDataWatchEvent| {
+            registry.deliver(&label, &task_id, || channel.send(event).is_ok())
+        };
+        let observe = |phase: crate::ux_watch::WatchPhase,
+                       event: crate::ux_watch::WatchEvent,
+                       next: crate::ux_watch::WatchPhase| {
+            tracing::debug!(?phase, ?event, ?next, "pack observation transition");
+        };
+        crate::ux_watch::run(
+            crate::ux_watch::WATCH_TIMING,
+            acquire,
+            &request,
+            deliver,
+            &cancel,
+            observe,
+        )
+        .await;
         registry.cancel(&label, &task_id);
     });
     Ok(id)
+}
+
+/// The User's current access to the node's managed runtime. A missing core
+/// or route is the client restarting, so the attempt is retried; an endpoint
+/// that is not a managed runtime cannot become one.
+fn reacquire<R>(
+    app: &tauri::AppHandle<R>,
+    node_did: &str,
+    home: &std::path::Path,
+) -> Result<gents::store::config_client::GraphqlEndpoint, crate::ux_watch::WatchEvent>
+where
+    R: tauri::Runtime,
+{
+    use crate::ux_watch::WatchEvent;
+    use tauri::Manager;
+    let state = app.state::<DesktopAppState>();
+    let core = current_core(&state).ok_or(WatchEvent::TransientError)?;
+    match core.local_home_operator_access(node_did, home) {
+        Ok(gents::ConfigAccess::Graphql(endpoint)) => Ok(endpoint),
+        Ok(_) => Err(WatchEvent::PermanentError),
+        Err(_) => Err(WatchEvent::TransientError),
+    }
 }
 
 #[tauri::command]
@@ -266,54 +299,32 @@ pub fn desktop_ux_data_unwatch<R>(
     state.ux_watches.cancel(window.label(), &id);
 }
 
-async fn watch_stream(
-    endpoint: gents::store::config_client::GraphqlEndpoint,
-    url: reqwest::Url,
-    request: UxDataCallRequest,
-    channel: &tauri::ipc::Channel<UxDataWatchEvent>,
-    cancel: &tokio_util::sync::CancellationToken,
-) -> anyhow::Result<()> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(35))
-        .build()?;
-    loop {
-        let started = tokio::time::Instant::now();
-        let builder = endpoint.authorize(client.post(url.clone()).json(&request))?;
-        let mut response = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Ok(()),
-            result = tokio::time::timeout(std::time::Duration::from_secs(12), builder.send()) => result??,
-        };
-        anyhow::ensure!(response.status().is_success(), "pack observation refused");
-        let mut buffer = Vec::new();
-        loop {
-            let next = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return Ok(()),
-                result = response.chunk() => result?,
-            };
-            let Some(chunk) = next else { break };
-            buffer.extend_from_slice(&chunk);
-            while let Some(value) = crate::ux_watch::take_event(&mut buffer)? {
-                if cancel.is_cancelled() {
-                    return Ok(());
-                }
-                channel.send(UxDataWatchEvent::Snapshot {
-                    value: serde_json::from_value(value)?,
-                })?;
-            }
-        }
-        anyhow::ensure!(
-            buffer.is_empty(),
-            "pack observation ended with an incomplete event"
-        );
-        // The server bounds each stream. Reconnect to obtain a fresh snapshot.
-        let delay = std::time::Duration::from_secs(1).saturating_sub(started.elapsed());
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Ok(()),
-            _ = tokio::time::sleep(delay) => {},
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy};
+    use crate::ux_watch::WatchEvent;
+
+    /// A watch whose client core is gone (the client is restarting) retries
+    /// its next attempt instead of ending the page's observation.
+    #[test]
+    fn reacquiring_without_a_client_core_is_transient() {
+        let temp = tempfile::tempdir().unwrap();
+        let policy = crate::state::resolve_policy(
+            &BridgeConfig {
+                home: HomePolicy::FixedRoot(temp.path().join("desktop")),
+                bootstrap: BootstrapPolicy::PairedRemoteOnly,
+                store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let app = tauri::test::mock_builder()
+            .manage(DesktopAppState::new(policy))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let error = reacquire(app.handle(), "did:key:node", temp.path()).unwrap_err();
+        assert_eq!(error, WatchEvent::TransientError);
     }
 }
