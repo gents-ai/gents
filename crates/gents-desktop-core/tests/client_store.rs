@@ -9,7 +9,7 @@ use gents_desktop_core::client::{
 use gents_desktop_core::test_fixtures::ServedRuntimeHome;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 
 #[test]
 fn focused_request_id_defaults_to_none() {
@@ -350,6 +350,22 @@ async fn served_core() -> Result<(tempfile::TempDir, ClientCore, ServedRuntimeHo
     Ok((tempdir, core, runtime))
 }
 
+/// Waits on the store's own update notice until `done` holds.
+async fn until<F>(core: &ClientCore, what: &str, mut done: F) -> Result<()>
+where
+    F: FnMut(&ClientCore) -> bool,
+{
+    let mut updates = core.store_updates();
+    timeout(Duration::from_secs(5), async {
+        while !done(core) {
+            updates.changed().await.context("store update channel closed")?;
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .with_context(|| format!("timed out waiting for {what}"))?
+}
+
 fn agent_message(alias: &str, key: &str, session: &str, node_did: &str, sequence: usize) -> String {
     format!(
         r#"{alias}: create_AgentMessage(input: {{
@@ -375,7 +391,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
         .publish_node(serde_json::json!({"display_name": "Test Agent", "enabled": true}))
         .await;
 
-    timeout(Duration::from_secs(15), async {
+    timeout(Duration::from_secs(5), async {
         loop {
             updates.changed().await.context("watch channel closed")?;
             if *updates.borrow() > baseline {
@@ -385,17 +401,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     })
     .await
     .context("timed out waiting for store update")??;
-
-    timeout(Duration::from_secs(15), async {
-        loop {
-            if store.snapshot().nodes.len() == 1 {
-                return Ok::<(), anyhow::Error>(());
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .context("timed out waiting for refreshed snapshot")??;
+    until(&core, "the refreshed snapshot", |core| core.store().snapshot().nodes.len() == 1).await?;
 
     assert_eq!(store.snapshot().nodes[0].node_did, runtime.node_did());
     Arc::new(core).shutdown().await?;
@@ -421,22 +427,16 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
             .await?;
     }
 
-    timeout(Duration::from_secs(15), async {
-        loop {
-            let snapshot = core.store().snapshot();
-            if (0..20usize).all(|i| {
-                snapshot
-                    .sessions
-                    .iter()
-                    .any(|session| session.session_id == format!("race-{i}"))
-            }) {
-                return Ok::<(), anyhow::Error>(());
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
+    until(&core, "all 20 sessions in the store", |core| {
+        let snapshot = core.store().snapshot();
+        (0..20usize).all(|i| {
+            snapshot
+                .sessions
+                .iter()
+                .any(|session| session.session_id == format!("race-{i}"))
+        })
     })
-    .await
-    .context("timed out waiting for all 20 sessions to appear in store")??;
+    .await?;
 
     Arc::new(core).shutdown().await?;
     runtime.shutdown().await;
@@ -447,33 +447,30 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
 async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Result<()> {
     let (_tempdir, core, runtime) = served_core().await?;
     runtime.publish_node(serde_json::json!({"enabled": true})).await;
-    timeout(Duration::from_secs(15), async {
-        while core.store().snapshot().nodes.is_empty() {
-            sleep(Duration::from_millis(50)).await;
-        }
+    until(&core, "the observer's first snapshot", |core| {
+        !core.store().snapshot().nodes.is_empty()
     })
-    .await
-    .context("the observer is connected")?;
+    .await?;
     let node_did = runtime.node_did().to_owned();
     let messages = (0..50usize)
         .map(|i| agent_message(&format!("m{i}"), &format!("long:{i}"), "long", &node_did, i))
         .collect::<Vec<_>>()
         .join("\n");
+    let mut updates = core.store_updates();
     runtime
         .user_graphql_access()
         .write("test.client_store.transcript", &format!("mutation {{ {messages} }}"))
         .await?;
-    timeout(Duration::from_secs(15), async {
+    timeout(Duration::from_secs(5), async {
         loop {
             if core
                 .observer_metrics()
                 .await
-                .map(|m| m.transcript_invalidations > 0)
-                .unwrap_or(false)
+                .is_some_and(|metrics| metrics.transcript_invalidations > 0)
             {
                 return Ok::<(), anyhow::Error>(());
             }
-            sleep(Duration::from_millis(50)).await;
+            updates.changed().await.context("store update channel closed")?;
         }
     })
     .await
@@ -545,8 +542,13 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
     Ok(())
 }
 
+/// The route is scoped to one Node: a neighbouring Node on the same runtime
+/// store never enters the observed projection, in the first snapshot or in
+/// the resnapshot a later change of the routed Node causes. (Before signed
+/// actors this test read a single local store holding every Node; scoping by
+/// route replaced that contract.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
+async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
     let (_tempdir, core, runtime) = served_core().await?;
     runtime.publish_node(serde_json::json!({"enabled": true})).await;
     let alpha = runtime.node_did().to_owned();
@@ -562,21 +564,38 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
         .await?;
 
     core.set_selected_node_did(Some(alpha.clone()));
+    let only_alpha = |core: &ClientCore| {
+        let nodes = core.store().snapshot().nodes.clone();
+        assert!(nodes.iter().all(|node| node.node_did != beta), "{nodes:?}");
+        nodes.iter().any(|node| node.node_did == alpha)
+    };
+    until(&core, "the routed node", only_alpha).await?;
 
-    // The route is scoped to alpha: the neighbouring Node on the same
-    // runtime store never enters the observed projection.
-    timeout(Duration::from_secs(15), async {
-        while !core.store().snapshot().nodes.iter().any(|node| node.node_did == alpha) {
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .context("timed out waiting for the routed node")?;
-    assert!(
-        core.store().snapshot().nodes.iter().all(|node| node.node_did != beta),
-        "{:?}",
-        core.store().snapshot().nodes
+    let escaped = gents::store::graphql::escape_graphql_string(&alpha);
+    let doc = runtime
+        .user_graphql_access()
+        .execute(&format!("{{ Node(filter: {{node_did: {{_eq: \"{escaped}\"}}}}) {{ _docID }} }}"))
+        .await?;
+    let doc = gents::store::graphql::escape_graphql_string(
+        doc["data"]["Node"][0]["_docID"].as_str().context("routed Node document")?,
     );
+    runtime
+        .user_graphql_access()
+        .write(
+            "test.client_store.resnapshot",
+            &format!("mutation {{ update_Node(docID: \"{doc}\", input: {{display_name: \"resnapshot\"}}) {{ _docID }} }}"),
+        )
+        .await?;
+    until(&core, "the resnapshot of the routed node", |core| {
+        only_alpha(core)
+            && core
+                .store()
+                .snapshot()
+                .nodes
+                .iter()
+                .any(|node| node.display_name.as_deref() == Some("resnapshot"))
+    })
+    .await?;
 
     let alpha_page = load_session_transcript_page_on(
         &runtime.user_access(),
