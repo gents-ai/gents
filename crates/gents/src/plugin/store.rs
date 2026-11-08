@@ -87,6 +87,12 @@ pub struct InstalledPlugin {
     /// write to a collection absent here is refused.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub data_collection_fields: std::collections::BTreeMap<String, Vec<String>>,
+    /// Each collection of `declaration.data` that the pack declares alone in
+    /// one schema file, with that file's exact SDL. A client-signed write
+    /// signs its document graph against this trusted schema; a collection
+    /// absent here can only be written natively by the runtime.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub data_collection_schemas: std::collections::BTreeMap<String, String>,
 }
 
 impl InstalledPlugin {
@@ -574,6 +580,7 @@ mod tests {
             model_binding: None,
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
         }
     }
 

@@ -89,6 +89,16 @@ fn native_presentation(message: &gents_protocol::message::Message) -> CanonicalP
     }
 }
 
+/// Whether a canonical read failed only because its output is still
+/// arriving (an unseen header or an incomplete reconstruction), the state a
+/// reader may wait out.
+pub(crate) fn canonical_read_loading(error: &anyhow::Error) -> bool {
+    matches!(
+        classify_terminal_read_error(error),
+        Some(CanonicalRequestOutput::Loading)
+    )
+}
+
 fn classify_terminal_read_error(error: &anyhow::Error) -> Option<CanonicalRequestOutput> {
     if matches!(
         error.downcast_ref::<super::CanonicalOutputReadError>(),

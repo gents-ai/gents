@@ -99,6 +99,7 @@ pub(crate) use query::{
     load_session_agent_did, load_session_agent_selection, load_session_requester_scope,
     require_session,
 };
+pub(crate) use request_output::canonical_read_loading;
 pub use request_output::{
     observe_request_output, CanonicalPresentation, CanonicalRequestOutput, CanonicalSelectedSource,
 };

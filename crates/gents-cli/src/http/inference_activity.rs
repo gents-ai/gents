@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 use defra_http::ExtractIdentity;
-use gents::observe::inference_observation::InferenceKey;
+use gents::observe::inference_observation::{InferenceKey, InferenceObservationRead};
 
 use super::router::RuntimeHttpState;
 
@@ -104,8 +104,14 @@ async fn read_authorized(
         .read_inference_observation(actor.clone(), &key)
         .await
     {
-        Ok(Some(observation)) => Json(observation).into_response(),
-        Ok(None) => failure(StatusCode::NOT_FOUND, "Inference activity is unavailable."),
+        Ok(InferenceObservationRead::Visible(observation)) => Json(observation).into_response(),
+        Ok(InferenceObservationRead::Unavailable) => {
+            failure(StatusCode::NOT_FOUND, "Inference activity is unavailable.")
+        }
+        Ok(InferenceObservationRead::Forbidden) => failure(
+            StatusCode::FORBIDDEN,
+            "This client is not authorized to read this runtime.",
+        ),
         Err(_) => failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "Inference activity is unavailable.",

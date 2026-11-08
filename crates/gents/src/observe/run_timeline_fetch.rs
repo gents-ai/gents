@@ -307,6 +307,41 @@ pub async fn load_run_activity_rows(
     })
 }
 
+/// How long [`load_settled_run_timeline_rows`] waits out a run's incomplete
+/// canonical output before failing.
+pub const RUN_TIMELINE_SETTLE_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+const RUN_TIMELINE_SETTLE_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Whether `error` is a canonical read that is incomplete rather than
+/// failed, as the canonical output owner classifies it: recoverable once its
+/// immutable dependencies arrive.
+fn reconstruction_incomplete(error: &anyhow::Error) -> bool {
+    crate::session::canonical_read_loading(error)
+}
+
+/// [`load_run_timeline_rows`] for a run read just after it ran: a header
+/// published before its segments' relationships (or an unresolved closing
+/// segment still replicating) is incomplete, not failed, so the read waits
+/// that window out for at most `bound`. Any other error, and incompleteness
+/// that outlives `bound`, fails.
+pub async fn load_settled_run_timeline_rows(
+    access: &ConfigAccess,
+    request_id: &str,
+    bound: std::time::Duration,
+) -> Result<RunTimelineRows> {
+    let deadline = tokio::time::Instant::now() + bound;
+    loop {
+        match load_run_timeline_rows(access, request_id).await {
+            Err(error)
+                if reconstruction_incomplete(&error) && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(RUN_TIMELINE_SETTLE_RETRY).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 pub async fn load_run_timeline_rows(
     access: &ConfigAccess,
     request_id: &str,
@@ -613,6 +648,35 @@ mod regression_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_incomplete_reconstruction_is_waited_out() {
+        use gents_protocol::output::ReconstructionError;
+        let wrapped = |error: ReconstructionError| {
+            anyhow::Error::new(error)
+                .context("resolving canonical AgentMessage header for timeline")
+                .context("timeline.canonical_session_messages")
+        };
+        assert!(reconstruction_incomplete(&wrapped(
+            ReconstructionError::UnresolvedClose {
+                close_doc_id: "close".into()
+            }
+        )));
+        assert!(reconstruction_incomplete(&wrapped(
+            ReconstructionError::MissingSegment {
+                close_doc_id: "close".into(),
+                ordinal: 1
+            }
+        )));
+        assert!(!reconstruction_incomplete(&wrapped(
+            ReconstructionError::AccessDenied {
+                doc_id: "denied".into()
+            }
+        )));
+        assert!(!reconstruction_incomplete(&anyhow::anyhow!(
+            "unresolved closing segment"
+        )));
+    }
 
     fn created_doc_id(response: &defra_node::QueryResponse, field: &str) -> String {
         let alternate = field

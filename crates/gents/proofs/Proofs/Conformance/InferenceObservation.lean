@@ -71,6 +71,22 @@ def visibilityCasesJson : String :=
       ",\"expected\":" ++ (if sourceVisible sessions requests active then "true" else "false") ++ "}"
   "[" ++ String.intercalate "," (cases.map render) ++ "]"
 
+def routeCasesJson : String :=
+  let cases : List (Bool × Nat × Nat × Bool) := [
+    (false, 1, 1, true), (false, 0, 0, false), (true, 1, 1, true), (true, 0, 1, true),
+    (true, 1, 1, false)]
+  let name : ActivityResponse → String
+    | .forbidden => "forbidden"
+    | .unavailable => "unavailable"
+    | .visible => "visible"
+  let render (c : Bool × Nat × Nat × Bool) : String :=
+    let (holds, sessions, requests, active) := c
+    "{\"holds_node_read\":" ++ (if holds then "true" else "false") ++
+      ",\"sessions\":" ++ toString sessions ++ ",\"requests\":" ++ toString requests ++
+      ",\"active\":" ++ (if active then "true" else "false") ++
+      ",\"expected\":\"" ++ name (activityResponse holds sessions requests active) ++ "\"}"
+  "[" ++ String.intercalate "," (cases.map render) ++ "]"
+
 def casesJson : String :=
   let traces : List (List Action) := [
     [.receive 0 (obs 0 1 10 .awaitingProvider), .receive 0 (obs 0 2 11 .retrying),

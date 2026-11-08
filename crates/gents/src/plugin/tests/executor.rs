@@ -56,6 +56,7 @@ pub(crate) fn installed_plugin(
         model_binding: None,
         data_unique_keys: Default::default(),
         data_collection_fields: Default::default(),
+        data_collection_schemas: Default::default(),
     };
     store::write_record(home.path(), &record).unwrap();
     (home, record)

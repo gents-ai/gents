@@ -10,7 +10,7 @@ use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
 use gents_protocol::plugin::WRITE_TOOL_NAME;
 
 mod plugin_writes;
-pub use plugin_writes::apply_plugin_writes_in_txn;
+pub use plugin_writes::{apply_plugin_writes_in_txn, apply_signed_plugin_writes_in_txn};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

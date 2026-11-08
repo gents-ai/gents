@@ -150,6 +150,8 @@ pub enum ConfigClientError {
     NodePermissionIdentity(#[source] identity::Error),
     #[error("native admin status could not be observed")]
     NativeAdminObservation(#[source] db::nac::Error),
+    #[error("native node permission could not be observed")]
+    NativePermissionObservation(#[source] db::nac::Error),
     #[error("node permission grant failed ({status}): {body}")]
     NodePermissionStatus {
         status: reqwest::StatusCode,

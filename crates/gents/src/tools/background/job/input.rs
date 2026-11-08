@@ -1694,6 +1694,7 @@ pub(crate) mod tests {
             model_binding: None,
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
         }
     }
 

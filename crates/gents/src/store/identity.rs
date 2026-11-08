@@ -7,6 +7,7 @@ use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 mod agent;
+mod enrollment_grant;
 mod error;
 mod file_key;
 mod grant_sets;
@@ -19,10 +20,15 @@ pub use agent::{
     derive_agent_identity, provision_agent_identity, provision_agent_identity_authorized,
     provision_agent_identity_for_agent, resolve_agent_identity, AgentProvisionError,
 };
-pub use grant_sets::{GrantSet, GrantSetError};
+pub use enrollment_grant::{
+    grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant, plan_withdrawal,
+    EnrollmentGrantError, EnrollmentGrantOutcome, EnrollmentGrantReceipt, EnrollmentGrantTuple,
+    EnrollmentGrantWithdrawal,
+};
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
+pub use grant_sets::{GrantSet, GrantSetError};
 pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
