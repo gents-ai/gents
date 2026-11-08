@@ -663,7 +663,20 @@ pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
 ) -> Result<(ConfigAccess, PathBuf)> {
-    let (access, home, _) = resolve_config_access_inner(home, explicit_graphql, false).await?;
+    let (access, home, _) =
+        resolve_config_access_inner(home, explicit_graphql, false, None).await?;
+    Ok((access, home))
+}
+
+/// [`resolve_config_access`] for a caller holding the home's exclusive plugin
+/// store lock across the access, so an offline open reads installed plugins
+/// under that guard instead of contending with it.
+pub(crate) async fn resolve_config_access_under_plugin_store(
+    home: &Path,
+    guard: &gents::plugin::store::StoreGuard,
+) -> Result<(ConfigAccess, PathBuf)> {
+    let (access, home, _) =
+        resolve_config_access_inner(Some(home), None, false, Some(guard)).await?;
     Ok((access, home))
 }
 
@@ -675,13 +688,14 @@ pub(crate) async fn resolve_pack_config_access(
     PathBuf,
     Option<gents::store::config_client::GraphqlEndpoint>,
 )> {
-    resolve_config_access_inner(home, explicit_graphql, true).await
+    resolve_config_access_inner(home, explicit_graphql, true, None).await
 }
 
 async fn resolve_config_access_inner(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
     local_http: bool,
+    plugin_guard: Option<&gents::plugin::store::StoreGuard>,
 ) -> Result<(
     ConfigAccess,
     PathBuf,
@@ -689,6 +703,9 @@ async fn resolve_config_access_inner(
 )> {
     use gents::NodeIdentity as _;
     let home_dir = resolve_home_dir(home);
+    if let Some(guard) = plugin_guard {
+        guard.for_home(&home_dir)?;
+    }
     let client_identity = load_client_identity().await?;
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
@@ -757,9 +774,24 @@ async fn resolve_config_access_inner(
     .with_client_signing_capability(client_identity.client_signing_capability()?)?
     .with_client_signed_agent_creates();
     let http = Some(gents::defra_node::HttpConfig::with_listener(listener)?);
-    let (node, _admission) = protected
-        .start_node(&store_key, runtime_identity.clone(), http, None, &home_dir)
-        .await?;
+    let (node, _admission) = match plugin_guard {
+        Some(guard) => {
+            protected
+                .start_node_under_plugin_store(
+                    &store_key,
+                    runtime_identity.clone(),
+                    http,
+                    None,
+                    guard,
+                )
+                .await?
+        }
+        None => {
+            protected
+                .start_node(&store_key, runtime_identity.clone(), http, None, &home_dir)
+                .await?
+        }
+    };
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
         node,

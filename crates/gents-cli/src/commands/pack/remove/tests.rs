@@ -55,12 +55,14 @@ fn assets_fixture_spec() -> String {
 #[tokio::test]
 async fn unconfigured_home_does_not_prove_a_plugin_is_unreferenced() {
     let home = tempfile::tempdir().unwrap();
-    super::ensure_home_plugins_unreferenced(home.path(), &BTreeSet::new())
+    let guard = gents::plugin::store::try_lock_store(home.path()).unwrap();
+    super::ensure_home_plugins_unreferenced(home.path(), &BTreeSet::new(), &guard)
         .await
         .unwrap();
     let error = super::ensure_home_plugins_unreferenced(
         home.path(),
         &BTreeSet::from(["acme/plugin".to_owned()]),
+        &guard,
     )
     .await
     .unwrap_err();
@@ -980,17 +982,27 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
         async move { super::remove_home_install(&home, "acme/tools").await }
     });
     pause.reached.notified().await;
-    let (access, owner) = super::super::resolve_scope_owner(&scope(home.path()))
-        .await
-        .unwrap();
-    let request = super::super::wire::WireRequest {
-        plugin: "acme/shared".into(),
-        agent: selected_agent(&access, &owner).await,
-        targets_from: vec![],
-        remove: false,
-        preview: false,
-    };
-    let result = super::super::wire::wire_in(&access, &owner, home.path(), &request).await;
+    // A wire while the removal holds the plugin store lock is refused, whether
+    // at the offline open that reads installed plugins or at the pin publish.
+    let result = async {
+        let (access, owner) = super::super::resolve_scope_owner(&scope(home.path())).await?;
+        let request = super::super::wire::WireRequest {
+            plugin: "acme/shared".into(),
+            agent: selected_agent(&access, &owner).await,
+            targets_from: vec![],
+            remove: false,
+            preview: false,
+        };
+        let wired = super::super::wire::wire_in(&access, &owner, home.path(), &request).await;
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
+        wired
+    }
+    .await;
     let snapshot: Value =
         tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
             .await
@@ -1005,13 +1017,6 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
         .unwrap();
     assert_eq!(result.is_ok(), allowed, "{result:?}");
     assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
-    access
-        .local_node()
-        .unwrap()
-        .shutdown()
-        .await
-        .expect("node shutdown");
-    drop(access);
     pause.release.notify_one();
     let error = remover.await.unwrap().unwrap_err();
     assert!(matches!(

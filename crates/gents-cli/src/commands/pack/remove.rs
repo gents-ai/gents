@@ -187,6 +187,7 @@ pub(super) static REMOVAL_TEST_PAUSE: std::sync::Mutex<Option<std::sync::Arc<Rem
 pub(crate) async fn ensure_home_plugins_unreferenced(
     home: &Path,
     plugins: &BTreeSet<String>,
+    guard: &gents::plugin::store::StoreGuard,
 ) -> Result<()> {
     if plugins.is_empty() {
         return Ok(());
@@ -207,12 +208,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
             pause.release.notified().await;
         }
     }
-    let scope = crate::cli::ScopeArgs {
-        home: Some(home.to_path_buf()),
-        graphql: None,
-        node_did: None,
-    };
-    let (access, owner) = super::resolve_scope_owner(&scope).await?;
+    let (access, owner) = super::resolve_home_owner_under_plugin_store(home, guard).await?;
     let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
@@ -245,7 +241,7 @@ pub(crate) async fn remove_home_install_with_guard(
         .iter()
         .map(|plugin| format!("{namespace}/{}", plugin.name))
         .collect();
-    ensure_home_plugins_unreferenced(home, &plugins).await?;
+    ensure_home_plugins_unreferenced(home, &plugins, &guard).await?;
     let checked_record = record;
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();
