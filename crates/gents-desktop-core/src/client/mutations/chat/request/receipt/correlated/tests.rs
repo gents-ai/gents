@@ -578,11 +578,13 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
 }
 
 /// The owner effects run on a served runtime as its User: the modeled caller
-/// is the User's client key and the modeled node its runtime. An accepted
-/// outcome is a commit whose reply the caller lost; a confirmed rejection is a
-/// request the owner refuses inside its transaction (its admission signature
-/// does not verify). Replays and recovery after the outcome is retained reach
-/// no owner: they run against an endpoint that records every request.
+/// is the User's client key and the modeled node its runtime, reached through
+/// a proxy that counts creates and can lose replies. An accepted outcome is
+/// the caller's own commit whose reply, and the receipt read after it, were
+/// lost; a confirmed rejection is a request refused inside its transaction
+/// (its admission signature does not verify). Replays and recovery after the
+/// outcome is retained reach no owner: they run against an endpoint that
+/// records every request.
 #[tokio::test]
 async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
     use super::super::{delivery, journal, SubmissionNotDelivered};
@@ -638,6 +640,8 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
         let proposal = Record::proposal(intent, pending);
         let node = crate::test_support::client_journal_node(user.did()).await?;
         let owner = home.user_access();
+        let proxy = crate::test_fixtures::ReplyLossProxy::start(home.graphql()).await;
+        let caller = proxy.user_access(user.as_ref());
         let unreachable = MockServer::start().await;
         let silent = super::super::test_access(
             &format!("{}/api/v0/graphql", unreachable.uri()),
@@ -654,20 +658,16 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                 )
                 .await?;
             }
-            if owner_outcome == Outcome::Accepted {
-                gents::request::lifecycle::submit_client_request(
-                    &owner,
-                    &proposal.pending.as_ref().context("signed proposal")?.create,
-                )
-                .await?;
-            }
             let reply = if expected == Outcome::Accepted && !stale {
-                // The caller lost the owner's reply: its receipt read fails.
-                let lost = delivery::reconcile(&node, Some(&silent), retained).await;
+                // The owner commits the caller's create, then the commit reply
+                // and the caller's receipt read are lost.
+                proxy.lose_replies_after_next_create();
+                let lost = delivery::reconcile(&node, Some(&caller), retained).await;
                 assert!(matches!(
                     lost.unwrap_err(),
                     super::super::SubmissionError::Unknown(_)
                 ));
+                proxy.restore();
                 let unknown = journal::caller::recover(&node, &proposal.intent)
                     .await?
                     .context("unknown outcome remains retained")?;
@@ -675,10 +675,15 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                     facts.records_json(std::slice::from_ref(&unknown))?,
                     trace[0]["after"]
                 );
-                delivery::reconcile(&node, Some(&owner), unknown).await
+                delivery::reconcile(&node, Some(&caller), unknown).await
             } else {
-                delivery::reconcile(&node, Some(&owner), retained).await
+                delivery::reconcile(&node, Some(&caller), retained).await
             };
+            assert_eq!(
+                proxy.creates(),
+                usize::from(owner_outcome == Outcome::Accepted),
+                "the caller issued exactly one owner create, and none once its outcome was settled"
+            );
             if expected == Outcome::Accepted {
                 assert_eq!(reply?, proposal.reference.request);
             } else {

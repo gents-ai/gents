@@ -397,10 +397,11 @@ fn reports_existing_request(error: &(dyn std::error::Error + 'static)) -> bool {
 
 /// Reconcile an earlier unknown send whose signed payload is no longer retained.
 ///
-/// A visible owner request with a completed publication marker proves delivery. Absence, or an
-/// unreadable lookup, proves nothing: the original write may still be in
-/// flight. Both return [`DeliveryUnconfirmed`] so the identity stays
-/// unresolved and no fresh request is minted.
+/// A visible owner request this client key signed, with a completed
+/// publication marker, proves delivery. Absence, or an unreadable or ambiguous
+/// lookup, proves nothing: the original write may still be in flight. Both
+/// return [`DeliveryUnconfirmed`] so the identity stays unresolved and no fresh
+/// request is minted; the person may set it aside (Lean `affordances`).
 pub async fn reconcile_unretained_submission(
     access: &ConfigAccess,
     node_did: &str,
@@ -423,7 +424,10 @@ pub async fn reconcile_unretained_submission(
     }
 }
 
-/// Whether the owner currently shows a request with this identity in its scope.
+/// Whether the owner shows a request with this identity that this client key
+/// signed. Request identity is not unique across signers at the owner, so
+/// another signer's request is never evidence for this send (Lean
+/// `ClientSubmissionReceipt`, one journal per client key).
 async fn submitted_request_exists(
     access: &ConfigAccess,
     node_did: &str,
@@ -433,19 +437,16 @@ async fn submitted_request_exists(
     let ConfigAccess::Graphql(endpoint) = access else {
         anyhow::bail!("only an owner connection can prove whether a send was delivered");
     };
-    // Scoped by node and session only: the requester authority may have changed
-    // since the send, and an exact requester match would then prove a false
-    // absence.
-    let scope = format!(
-        r#"node_did:{{_eq:"{}"}},session_id:{{_eq:"{}"}}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(session_id)
-    );
+    let signer = access
+        .actor_did()
+        .context("an owner receipt read requires the client signer")?;
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, Some(&signer));
     let logical = escape_graphql_string(request_id);
+    let signer = escape_graphql_string(&signer);
     let response = gents::store::config_client::query_graphql_with_options(
         endpoint,
         &format!(
-            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{request_id relationships_pending}}}}"
+            "{{AgentRequest(filter:{{{scope},admission_signer_did:{{_eq:\"{signer}\"}},request_id:{{_eq:\"{logical}\"}}}}){{request_id relationships_pending}}}}"
         ),
         GraphqlRequestOptions {
             timeout: Duration::from_secs(30),
@@ -625,6 +626,22 @@ mod tests {
                     row["admission_signature"].as_str().unwrap().to_owned()
                 })
                 .collect()
+        }
+
+        /// The owner's one row with this request identity.
+        async fn owner_row(&self) -> AgentRequestRow {
+            let response = self
+                .access()
+                .execute(&format!(
+                    "{{AgentRequest(filter:{{request_id:{{_eq:\"{}\"}}}}){{{}}}}}",
+                    escape_graphql_string(&self.pending.request_id),
+                    gents::SIGNED_REQUEST_FIELDS
+                ))
+                .await
+                .unwrap();
+            let rows = response["data"]["AgentRequest"].as_array().unwrap();
+            assert_eq!(rows.len(), 1);
+            serde_json::from_value(rows[0].clone()).unwrap()
         }
 
         fn signature(&self) -> String {
@@ -1061,16 +1078,35 @@ mod tests {
     async fn resolve_replays_identical_signed_mutation() {
         let served = Served::start().await;
         assert!(served.owner_signatures().await.is_empty());
+        let proxy = crate::test_fixtures::ReplyLossProxy::start(served.home.graphql()).await;
 
-        let resolved = resolve_unresolved_submission(&served.access(), &served.pending)
-            .await
-            .expect("a proven-absent receipt allows one identical replay");
+        let resolved = resolve_unresolved_submission(
+            &proxy.user_access(served.home.user().as_ref()),
+            &served.pending,
+        )
+        .await
+        .expect("a proven-absent receipt allows one identical replay");
 
         assert_eq!(resolved, served.pending.result);
+        assert_eq!(proxy.creates(), 1, "exactly one replay");
         assert_eq!(
             served.owner_signatures().await,
             vec![served.signature()],
-            "exactly one replay, carrying the retained signed request"
+            "the owner holds one request, carrying the retained admission signature"
+        );
+        // The stored request verifies under the retained signature, so its
+        // signed content is the retained signed payload byte-for-byte; the
+        // retained mutation is that payload's canonical rendering.
+        let row = served.owner_row().await;
+        gents::store::identity::request_receipt::verify_request_receipt_signature(&row)
+            .expect("the replay is the retained signed request");
+        assert_eq!(
+            served.pending.mutation,
+            served
+                .pending
+                .create
+                .graphql_client_publication_mutation()
+                .unwrap()
         );
         served.shutdown().await;
     }
@@ -1290,6 +1326,46 @@ mod tests {
                     .contains("create_AgentRequest")),
             "reconciliation must not create a fresh request"
         );
+    }
+
+    /// Request identity is not unique across signers at the owner: another
+    /// signer's request with this identity in the session is not evidence.
+    #[tokio::test]
+    async fn unretained_receipt_ignores_another_signers_request() {
+        let server = MockServer::start().await;
+        let signed = Signed::new().await;
+        let result = &signed.pending.result;
+        let did = signed.user.did();
+        Mock::given(method("POST"))
+            .and(path("/api/v0/graphql"))
+            .and(body_string_contains(format!(
+                r#"requester_did: {{ _eq: \"{did}\" }}"#
+            )))
+            .and(body_string_contains(format!(
+                r#"admission_signer_did:{{_eq:\"{did}\"}}"#
+            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data": {"AgentRequest": []}})),
+            )
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        mount_receipt(
+            &server,
+            vec![json!({"request_id": result.request_id, "relationships_pending": false})],
+        )
+        .await;
+
+        let error = reconcile_unretained_submission(
+            &signed.access(&server),
+            &result.node_did,
+            &result.session_id,
+            &result.request_id,
+        )
+        .await
+        .expect_err("another signer's request does not prove this send");
+
+        assert!(matches!(error, SubmissionError::Unconfirmed(_)));
     }
 
     #[tokio::test]
