@@ -780,7 +780,9 @@ pub use triggers::engine::goal_source::GoalSource;
 pub use triggers::engine::subscription_source::{
     collection_ids, subscribe_collections, UpdateSubscriptionSource,
 };
-pub use triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
+pub use triggers::engine::{
+    run_trigger_engine, FireIntent, FireResult, TriggerKind, TriggerSource,
+};
 pub use truncation::{TruncationLimits, TruncationMode};
 pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 

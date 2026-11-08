@@ -235,9 +235,10 @@ fn spawn_server_with_ready_json_inner(
         loop {
             let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
             if let Some(value) = server_readiness_json(&stdout_so_far) {
-                super::graphql::register_served_client(home_dir, envs, port)?;
                 super::graphql::register_served_home(
+                    home_dir,
                     &served_home_dir(home_dir, extra_args, envs),
+                    envs,
                     port,
                 )?;
                 return Ok((serve, port, value));
@@ -316,8 +317,12 @@ pub fn spawn_server_with_env(
         .stderr(Stdio::from(stderr));
     configure_foreground_server_env(&mut command, envs);
     let child = command.spawn().context("spawning gents server")?;
-    super::graphql::register_served_client(home_dir, envs, port)?;
-    super::graphql::register_served_home(&served_home_dir(home_dir, extra_args, envs), port)?;
+    super::graphql::register_served_home(
+        home_dir,
+        &served_home_dir(home_dir, extra_args, envs),
+        envs,
+        port,
+    )?;
     Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 

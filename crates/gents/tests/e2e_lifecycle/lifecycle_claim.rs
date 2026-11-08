@@ -1,9 +1,10 @@
 use gents::request::lifecycle::ClaimOutcome;
 use gents::request::watcher::{AgentRequest, DefraWatcher};
+use gents::Watcher as _;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::support::{first_row, test_db, AGENT_NAME, NODE_DID};
+use crate::support::{first_row, test_db};
 
 type StatusRow = AgentRequestRow;
 
@@ -240,96 +241,112 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
         ClaimOutcome::Claimed
     );
 }
+/// Every request writer is an admission owner (P2P carries no requests), and
+/// the client owner reserves the session in the same transaction that would
+/// switch its Agent, so the pin is refused there before any row exists.
 #[tokio::test]
-async fn claim_rejects_an_agent_change_without_mutating_the_session() {
+async fn agent_change_is_rejected_without_mutating_the_session() {
+    use crate::support::accepted_turn::enqueue_managed_accepted_request;
+    use gents::NodeIdentity as _;
     let db = test_db("lifecycle-agent-pin").await;
-    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
-    let mutation = format!(
-        r#"mutation {{
-            session: create_AgentSession(input: {{
-                session_id: "session-pinned",
-                node_did: "{NODE_DID}",
-                agent_did: "general",
-                created_at: "2026-03-23T00:00:00Z"
-            }}) {{ _docID }}
-            request: create_AgentRequest(input: {{
-                request_id: "req-switch",
-                purpose: "normal",
-                node_did: "{NODE_DID}",
-                agent_did: "code",
-                session_id: "session-pinned",
-                retry_root_request: "req-switch",
-                content: "switch agent",
-                lifecycle_state: "pending",
-                execution_origin: "interactive",
-                created_at: "2026-03-23T00:00:01Z",
-                retry_count: 0,
-                max_retries: 3
-            }}) {{ _docID }}
-        }}"#,
-    );
-    let response = db.node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    // The User opens the session with its first Agent, then addresses a
+    // second Agent it enrolled on the same Node under that session label.
+    let pinned = crate::support::managed_agent_fixture(&db).await;
+    let switched = crate::support::managed_agent_fixture(&db).await;
+    enqueue_managed_accepted_request(&db, &pinned, "req-open", "session-pinned", "open").await;
 
-    let doc_id = first_row::<crate::support::DocIdRow>(
-        &actors
-            .query(
-                r#"{
-                    AgentRequest(filter: { request_id: { _eq: "req-switch" } }) { _docID }
-                }"#,
-            )
-            .await,
-        "AgentRequest",
-    )
-    .doc_id;
-    let request = DefraWatcher::new(db.node.clone(), NODE_DID)
-        .expect("request watcher")
-        .try_fetch_request(&doc_id)
+    let mut switch = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "req-switch",
+        db.node_identity.did(),
+        switched.user.did(),
+        &switched.binding.agent_did,
+        "session-pinned",
+        "switch agent",
+        "interactive",
+        crate::support::agent_requests::canonical_now(),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(switched.user.did()),
+    );
+    let error = gents::request::lifecycle::reserve_goal_session(&switched.access, &switch)
         .await
-        .unwrap()
-        .expect("pending request");
-    let mut lifecycle = actors.lifecycle(
-        request,
-        300,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
-        "",
+        .expect_err("agent switch must fail");
+    let error = gents_protocol::error_chain::ErrorChain(&error).to_string();
+    assert!(
+        error.contains("client request changes selected session agent"),
+        "{error}"
     );
-    let error = lifecycle.claim().await.expect_err("agent switch must fail");
-    assert!(error.to_string().contains("pinned to agent general"));
-
-    let request = actors
-        .query(
-            r#"{
-                AgentRequest(filter: { request_id: { _eq: "req-switch" } }) {
-                    request_id
-                    lifecycle_state
-                }
-            }"#,
+    // A row naming the pinned session cannot publish either.
+    let pinned_session = pinned
+        .access
+        .execute(
+            r#"{ AgentSession(filter: { session_id: { _eq: "session-pinned" } }) { _docID } }"#,
         )
-        .await;
-    let request = first_row::<StatusRow>(&request, "AgentRequest");
-    assert_eq!(
-        request.lifecycle_state,
-        Some(RequestLifecycleState::Pending)
+        .await
+        .expect("read session as its User");
+    switch.session_doc_id = pinned_session["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .map(str::to_owned);
+    let node_did = db.node_identity.did();
+    let switched_agent = switched.binding.agent_did.as_str();
+    switch.agent_doc_id = Some(
+        switched
+            .access
+            .transact_readonly("test.agent_pin.agent", |txn| {
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        gents::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            gents::Collection::Agent,
+                            node_did,
+                            switched_agent,
+                        )
+                        .await?
+                        .expect("switched Agent")
+                        .0,
+                    )
+                })
+            })
+            .await
+            .expect("read switched Agent"),
+    );
+    gents::sign_agent_request_create(&switched.user, &mut switch)
+        .await
+        .expect("sign switch as the User");
+    let error = gents::request::lifecycle::submit_client_request(&switched.access, &switch)
+        .await
+        .expect_err("publishing an agent switch must fail");
+    let error = gents_protocol::error_chain::ErrorChain(&error).to_string();
+    assert!(
+        error.contains("client request changes selected session agent"),
+        "{error}"
     );
 
-    let sessions = actors
-        .query(
+    let requests = switched
+        .access
+        .execute(r#"{ AgentRequest(filter: { request_id: { _eq: "req-switch" } }) { _docID } }"#)
+        .await
+        .expect("read requests as the User");
+    assert_eq!(
+        requests["data"]["AgentRequest"].as_array().map(Vec::len),
+        Some(0),
+        "a refused switch leaves no request row"
+    );
+    let sessions = pinned
+        .access
+        .execute(
             r#"{
                 AgentSession(filter: { session_id: { _eq: "session-pinned" } }) { agent_did }
             }"#,
         )
-        .await;
-    let rows = sessions
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentSession"))
-        .and_then(serde_json::Value::as_array)
+        .await
+        .expect("read session as its User");
+    let rows = sessions["data"]["AgentSession"]
+        .as_array()
         .expect("session rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0].get("agent_did").and_then(serde_json::Value::as_str),
-        Some("general")
+        Some(pinned.binding.agent_did.as_str())
     );
 }
 #[tokio::test]
@@ -340,52 +357,21 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = crate::support::agent_requests::canonical_now();
     let invalid_deadline = "not-a-deadline";
-    let escaped_session_id = gents::store::graphql::escape_graphql_string(&session_id);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                purpose: "normal",
-                node_did: "{NODE_DID}",
-                agent_did: "{AGENT_NAME}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "hello",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{created_at}",
-                deadline: "{invalid_deadline}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let resp = db.node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create request failed: {:?}",
-        resp.errors
-    );
+    let doc_id = actors
+        .create_request(
+            crate::support::agent_requests::RequestSeed::new(request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
+    actors
+        .update_request(&doc_id, serde_json::json!({"deadline": invalid_deadline}))
+        .await;
 
-    let doc_id = first_row::<crate::support::DocIdRow>(
-        &actors
-            .query(
-                r#"{
-                    AgentRequest(
-                        filter: { request_id: { _eq: "req-invalid-deadline" } },
-                        limit: 1
-                    ) { _docID }
-                }"#,
-            )
-            .await,
-        "AgentRequest",
-    )
-    .doc_id;
-    let watcher = DefraWatcher::new(db.node.clone(), NODE_DID).expect("request watcher");
+    let mut watcher =
+        DefraWatcher::new(db.node.clone(), actors.node_did()).expect("request watcher");
+    watcher
+        .set_agent_identities(vec![actors.agent().clone()])
+        .expect("watcher Agent identity");
     let request = watcher
         .try_fetch_request(&doc_id)
         .await

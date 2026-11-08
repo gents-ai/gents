@@ -1,10 +1,10 @@
 use super::*;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use super::support::fixtures::test_identity;
-use super::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use super::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
+use super::support::interrupt::{managed_runtime_builder, spawn_runtime, BootedAgent};
 use super::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
 };
@@ -62,20 +62,21 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
         ],
     )
     .expect("start mock backend");
-    let agent = boot_agent(&db, backend.endpoint()).await;
+    let actors = RequestActors::new(&db).await;
+    let agent = boot_agent(&db, &actors, backend.endpoint()).await;
     let session_id = format!("session-{}", uuid::Uuid::new_v4());
-    seed_bulky_history(db.node.as_ref(), &agent.node_did, &session_id).await;
+    seed_bulky_history(&actors, &session_id).await;
 
-    let first = run_request(&db, &agent, &session_id, "first").await;
+    let first = run_request(&actors, &session_id, "first").await;
     assert_eq!(first.lifecycle_state, RequestLifecycleState::Completed);
     assert!(backend.observed_requests(compaction_marker) >= 1);
     assert_eq!(
-        tool_call_count(db.node.as_ref(), &session_id, REUSED_CALL_ID).await,
+        tool_call_count(&actors, &session_id, REUSED_CALL_ID).await,
         2,
         "the same provider call id is valid in two distinct request-local turns"
     );
     let first_entries =
-        support::snapshots::fetch_compaction_entry_snapshots_for_session(&db.node, &session_id)
+        support::snapshots::fetch_compaction_entry_snapshots_for_session(&actors, &session_id)
             .await;
     let checkpoint = first_entries
         .last()
@@ -87,11 +88,11 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
     assert!(checkpoint.request_doc_id.is_some());
     assert!(cursor < (SEEDED_TURNS as u32) * 2);
 
-    let second = run_request(&db, &agent, &session_id, "second").await;
+    let second = run_request(&actors, &session_id, "second").await;
     assert_eq!(second.lifecycle_state, RequestLifecycleState::Completed);
     assert!(backend.observed_requests(REQUEST_MARKER) >= 2);
     assert!(
-        support::snapshots::fetch_compaction_entry_snapshots_for_session(&db.node, &session_id)
+        support::snapshots::fetch_compaction_entry_snapshots_for_session(&actors, &session_id)
             .await
             .len()
             >= first_entries.len()
@@ -100,11 +101,11 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
     agent.shutdown().await;
 }
 
-async fn tool_call_count(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> usize {
+async fn tool_call_count(actors: &RequestActors, session_id: &str, tool_call_id: &str) -> usize {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let tool_call_id = gents::store::graphql::escape_graphql_string(tool_call_id);
-    let response = node
-        .execute(&format!(
+    let response = actors
+        .query(&format!(
             r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{ _docID }} }}"#
         ))
         .await;
@@ -114,58 +115,49 @@ async fn tool_call_count(node: &EmbeddedNode, session_id: &str, tool_call_id: &s
         .len()
 }
 
-async fn run_request(
-    db: &support::TestDb,
-    agent: &BootedAgent,
-    session_id: &str,
-    suffix: &str,
-) -> LifecycleStateRow {
+async fn run_request(actors: &RequestActors, session_id: &str, suffix: &str) -> LifecycleStateRow {
     let request_id = format!("{suffix}-{}", uuid::Uuid::new_v4());
-    let doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        AGENT_NAME,
-        &request_id,
-        session_id,
-        REQUEST_MARKER,
-    )
-    .await;
-    wait_for_terminal_request(db.node.as_ref(), &doc_id).await
+    let created_at = canonical_now();
+    let mut seed = RequestSeed::new(&request_id, session_id, &created_at);
+    seed.content = Some(REQUEST_MARKER);
+    let doc_id = actors.create_request(seed).await;
+    wait_for_terminal_request(actors, &doc_id).await
 }
 
-async fn seed_bulky_history(node: &EmbeddedNode, node_did: &str, session_id: &str) {
+/// Earlier turns of the Agent's own session, enough to cross the threshold.
+async fn seed_bulky_history(actors: &RequestActors, session_id: &str) {
+    use gents_protocol::output::MessageRole;
+    actors.session(session_id, &canonical_now()).await;
+    actors
+        .set_session_title(
+            session_id,
+            &gents_protocol::session::SessionTitle {
+                text: "compaction gate".into(),
+                source: gents_protocol::session::SessionTitleSource::Generated,
+            },
+        )
+        .await;
     let mut sequence = 0u32;
     for turn in 0..SEEDED_TURNS {
         let payload = "h".repeat(SEEDED_TURN_BYTES);
         for (role, content) in [
-            ("user", format!("turn {turn}: {payload}")),
-            ("assistant", format!("reply {turn}: {payload}")),
+            (MessageRole::User, format!("turn {turn}: {payload}")),
+            (MessageRole::Assistant, format!("reply {turn}: {payload}")),
         ] {
-            crate::support::create_agent_message_in_scope(
-                node,
-                node_did,
-                Some(node_did),
-                session_id,
-                sequence,
-                role,
-                &content,
-                &chrono::Utc::now().to_rfc3339(),
-            )
-            .await;
+            actors
+                .publish_history_message(session_id, sequence, role, &content, &canonical_now())
+                .await;
             sequence += 1;
         }
     }
 }
 
-async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
-    let identity: Arc<dyn gents::NodeIdentity> = Arc::new(test_identity("compaction-gate"));
-    support::fixtures::bind_agent_backend(&db, AGENT_NAME, BACKEND_ID, endpoint, MODEL).await;
-    let agent = gents::Gents::builder()
-        .node(db.node.clone())
-        .identity(identity)
-        .default_agent_did(AGENT_NAME)
-        .tool_ceiling(gents::ToolCeiling::meta_only())
-        .agent(AGENT_NAME)
+async fn boot_agent(db: &support::TestDb, actors: &RequestActors, endpoint: &str) -> BootedAgent {
+    support::fixtures::bind_managed_agent_backend(db, &actors.fixture, BACKEND_ID, endpoint, MODEL)
+        .await;
+    let runtime = managed_runtime_builder(db, actors.agent_did())
+        .agent(actors.agent_did())
+        .identity_binding(actors.fixture.binding.clone())
         .backend_id(BACKEND_ID)
         .model_name(MODEL)
         .stream_batch_ms(0)
@@ -175,19 +167,18 @@ async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
         .build()
         .await
         .expect("build compaction agent");
-    let node_did = agent.node_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
-    BootedAgent::new(shutdown_tx, handle, node_did)
+    spawn_runtime(db, runtime).await
 }
 
-async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> LifecycleStateRow {
+async fn wait_for_terminal_request(
+    actors: &RequestActors,
+    request_doc_id: &str,
+) -> LifecycleStateRow {
     let doc_id = gents::store::graphql::escape_graphql_string(request_doc_id);
     let started = std::time::Instant::now();
     loop {
-        let response = node
-            .execute(&format!(
+        let response = actors
+            .query(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
             ))
             .await;

@@ -55,6 +55,9 @@ fn checked_root_doc<'a>(row: &'a Value, node_did: &str, node_doc: &str) -> Resul
 
 /// This write is the native Node authorization check and the shared transaction
 /// conflict fence. A failed child write rolls the fence back with the child.
+/// Root publications read every input and write every effect inside their
+/// transaction, so a confirmed conflict with the runtime's own Node writes is
+/// rebuilt from fresh reads and signed again rather than surfaced.
 async fn fence_node(txn: &ConfigApplyTxn<'_>, node_doc: &str) -> Result<()> {
     let mutation = format!("mutation($input: NodeMutationInputArg!) {{ update_Node(docID: \"{}\", input: $input) {{ _docID }} }}", escape_graphql_string(node_doc));
     let response = txn
@@ -115,7 +118,7 @@ pub async fn set_workspace_root_with_readers(
     enabled: bool,
     reader_agents: &[String],
 ) -> std::result::Result<String, WorkspaceRootWriteError> {
-    let result: Result<String> = access.transact_write("workspace_root.set", |txn| Box::pin(async move {
+    let result: Result<String> = access.transact_signed_conflict_rebuild("workspace_root.set", |txn| Box::pin(async move {
         anyhow::ensure!(std::path::Path::new(root_path).is_absolute(), "workspace root path must be absolute");
         let node_doc = selected_node(txn, node_did).await?;
         let existing = root_row(txn, root_path).await?;
@@ -179,7 +182,7 @@ async fn change_workspace_root_reader(
     grant: bool,
 ) -> std::result::Result<(), WorkspaceRootWriteError> {
     let result: Result<()> = access
-        .transact_write("workspace_root.reader", |txn| {
+        .transact_signed_conflict_rebuild("workspace_root.reader", |txn| {
             Box::pin(async move {
                 let row = root_row(txn, root_path)
                     .await?
@@ -220,7 +223,7 @@ pub async fn delete_workspace_root(
     root_path: &str,
 ) -> std::result::Result<(), WorkspaceRootWriteError> {
     let result: Result<()> = access
-        .transact_write("workspace_root.delete", |txn| {
+        .transact_signed_conflict_rebuild("workspace_root.delete", |txn| {
             Box::pin(async move {
                 let row = root_row(txn, root_path)
                     .await?

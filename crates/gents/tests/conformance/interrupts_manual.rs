@@ -26,6 +26,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         RequestLifecycleState::Completed
     );
 
+    // The session's working Agent forks its own session.
     fork_on(
         &actors.agent_access,
         ForkParams {
@@ -63,18 +64,25 @@ async fn canonical_session_output(
 ) -> serde_json::Value {
     use gents::session::canonical_rows::{AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS};
     let session_id = escape_graphql_string(session_id);
-    let mut response = actors
-        .agent_access
-        .execute(&format!(
+    let response = actors
+        .query(&format!(
             r#"{{
                 AgentMessage(filter: {{session_id: {{_eq: "{session_id}"}}}}, order: {{_docID: ASC}}) {{ {AGENT_MESSAGE_FIELDS} }}
                 AgentOutputSegment(filter: {{session_id: {{_eq: "{session_id}"}}}}, order: {{_docID: ASC}}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
             }}"#
         ))
-        .await
-        .expect("canonical output snapshot as the parent's Agent");
-    let data = response["data"].take();
-    assert_eq!(data["AgentMessage"].as_array().map(Vec::len), Some(2));
+        .await;
+    assert!(
+        !response.has_errors(),
+        "canonical output snapshot: {:?}",
+        response.errors
+    );
+    let data = response.data.expect("canonical output snapshot data");
+    assert_eq!(
+        data["AgentMessage"].as_array().map(Vec::len),
+        Some(2),
+        "the parent session's history is visible to its Agent"
+    );
     data
 }
 #[tokio::test]

@@ -44,6 +44,34 @@ fn add_principal_skill_pair(root: &Path, node_did: &str) -> Result<()> {
     write_json_file(&config_path, &config)
 }
 
+/// Configuration writes are signed by the home's User over its running
+/// endpoint; an offline `config apply` has no endpoint to sign through.
+async fn apply_config_root_through_served_home(
+    home_dir: &Path,
+    node_did: &str,
+    root: &Path,
+) -> Result<()> {
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut serve = spawn_server(home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, node_did, Duration::from_secs(30)).await?;
+    run_cli_json(
+        home_dir,
+        &[
+            "config",
+            "apply",
+            "--graphql",
+            &graphql,
+            "--root",
+            root.to_str().context("pack root utf8")?,
+        ],
+    )?;
+    serve.child.kill()?;
+    serve.child.wait()?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -151,7 +179,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         &graphql,
         &format!(
             r#"{{
-                InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}) {{
+                InferenceBackendMetadata(filter: {{ backend_id: {{ _eq: "{}" }} }}) {{
                     backend_id
                 }}
             }}"#,
@@ -161,7 +189,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
     .await?;
     assert_eq!(
         backend_rows
-            .pointer("/data/InferenceBackend")
+            .pointer("/data/InferenceBackendMetadata")
             .and_then(Value::as_array)
             .map(Vec::len),
         Some(1)
@@ -344,15 +372,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
         ],
     )?;
     add_principal_skill_pair(&pack_root, &node_did)?;
-    run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "apply",
-            "--root",
-            pack_root.to_str().context("pack root utf8")?,
-        ],
-    )?;
+    apply_config_root_through_served_home(&home_dir, &node_did, &pack_root).await?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
     config["node"]["display_name"] = Value::String("Metadata-only rename".to_string());
@@ -410,15 +430,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
         ],
     )?;
     add_principal_skill_pair(&pack_root, &node_did)?;
-    run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "apply",
-            "--root",
-            pack_root.to_str().context("pack root utf8")?,
-        ],
-    )?;
+    apply_config_root_through_served_home(&home_dir, &node_did, &pack_root).await?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
     let agent_did = config["node"]
@@ -573,7 +585,7 @@ async fn init_openrouter_preset_applies_hosted_defaults() -> Result<()> {
 }
 
 #[test]
-fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> Result<()> {
+fn init_hosted_preset_error_fails_before_creating_the_identity_and_store_key() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -597,16 +609,20 @@ fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> 
     );
 
     let runtime_home = home_dir.join(".gents");
-    let stored = read_json_file(&runtime_home.join("init.json"))?;
-    let node_did = stored["node_did"].as_str().context("recorded identity")?;
-    let identity_path = stored["key_path"].as_str().context("recorded key path")?;
+    assert!(
+        !runtime_home.join("init.json").exists() && !runtime_home.join("data").exists(),
+        "a rejected preset must fail before creating an identity or store"
+    );
+
+    let retried = run_init_json(&home_dir, &["--model-name", "retry-model"])?;
+    let node_did = retried["node_did"].as_str().context("retried identity")?;
+    let identity_path = retried["key_path"].as_str().context("retried key path")?;
     let identity_bytes = fs::read(identity_path)?;
     let store_key_path = gents::store::local::store_key::home_key_file(&runtime_home);
     let store_key_bytes = fs::read(&store_key_path)?;
-    assert!(runtime_home.join("data/MANIFEST").exists());
 
-    let retried = run_init_json(&home_dir, &["--model-name", "retry-model"])?;
-    assert_eq!(retried["node_did"], node_did);
+    let repeated = run_init_json(&home_dir, &["--model-name", "retry-model"])?;
+    assert_eq!(repeated["node_did"], node_did);
     assert_eq!(fs::read(identity_path)?, identity_bytes);
     assert_eq!(fs::read(store_key_path)?, store_key_bytes);
 
@@ -877,10 +893,14 @@ fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
     Ok(())
 }
 
+/// Serve publishes nothing at startup: an operator `--tool-root` must already
+/// be covered by a published WorkspaceRoot, so `operator_roots` are published
+/// for the default Agent while this configuring server runs.
 async fn pin_default_tools_root(
     home_dir: &Path,
     node_did: &str,
     root: &str,
+    operator_roots: &[&str],
     scratch_dir: &Path,
 ) -> Result<()> {
     let port = allocate_port()?;
@@ -901,6 +921,24 @@ async fn pin_default_tools_root(
         .pointer("/data/Node/0/default_agent_did")
         .and_then(Value::as_str)
         .context("node default agent missing")?;
+    for operator_root in operator_roots {
+        run_cli_json(
+            home_dir,
+            &[
+                "config",
+                "workspace-root",
+                "set",
+                "--graphql",
+                &graphql,
+                "--node-did",
+                node_did,
+                "--path",
+                operator_root,
+                "--reader-agent",
+                agent_did,
+            ],
+        )?;
+    }
     let tools_id = generated_tools_id_for_agent(agent_did);
     let mut tools = response
         .pointer("/data/Tools")
@@ -973,7 +1011,14 @@ async fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<(
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    pin_default_tools_root(&home_dir, &node_did, recorded_root, tempdir.path()).await?;
+    pin_default_tools_root(
+        &home_dir,
+        &node_did,
+        recorded_root,
+        &[explicit_root],
+        tempdir.path(),
+    )
+    .await?;
 
     let port = allocate_port()?;
     let stderr = run_cli_failure_stderr(
@@ -1027,7 +1072,14 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    pin_default_tools_root(&home_dir, &node_did, recorded_root, tempdir.path()).await?;
+    pin_default_tools_root(
+        &home_dir,
+        &node_did,
+        recorded_root,
+        &[explicit_root],
+        tempdir.path(),
+    )
+    .await?;
 
     let port = allocate_port()?;
     let stderr = run_cli_failure_stderr_with_env(
@@ -1081,7 +1133,14 @@ async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    pin_default_tools_root(&home_dir, &node_did, project_root, tempdir.path()).await?;
+    pin_default_tools_root(
+        &home_dir,
+        &node_did,
+        project_root,
+        &[project_root],
+        tempdir.path(),
+    )
+    .await?;
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
@@ -1124,7 +1183,14 @@ async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Re
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    pin_default_tools_root(&home_dir, &node_did, workspace_root, tempdir.path()).await?;
+    pin_default_tools_root(
+        &home_dir,
+        &node_did,
+        workspace_root,
+        &[project_root],
+        tempdir.path(),
+    )
+    .await?;
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
@@ -1179,8 +1245,12 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
             "set",
             "--graphql",
             &graphql,
+            "--node-did",
+            &node_did,
             "--path",
             workspace_root,
+            "--reader-agent",
+            &agent_did_from_init(&init)?,
         ],
     )?;
     serve.child.kill()?;

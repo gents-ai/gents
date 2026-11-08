@@ -455,6 +455,193 @@ impl RequestActors {
             .await;
     }
 
+    /// Titles the Agent-owned session, so the runtime schedules no title turn.
+    pub async fn set_session_title(
+        &self,
+        session_id: &str,
+        title: &gents_protocol::session::SessionTitle,
+    ) {
+        let session_doc = self
+            .session_doc(session_id)
+            .await
+            .expect("seeded session exists");
+        let input =
+            gents_protocol::graphql::graphql_input_literal(&serde_json::json!({"title": title}))
+                .expect("render session title fixture");
+        self.agent_access
+            .write(
+                "test.agent_requests.session_title",
+                &format!(
+                    r#"mutation {{ update_AgentSession(docID: "{}", input: {input}) {{ _docID }} }}"#,
+                    escape_graphql_string(&session_doc)
+                ),
+            )
+            .await
+            .expect("title session as its Agent");
+    }
+
+    /// Publishes one completed transcript message into the Agent-owned
+    /// session as that Agent: its text segment, then the message citing it,
+    /// each related to the session and its working Agent.
+    pub async fn publish_history_message(
+        &self,
+        session_id: &str,
+        sequence: u32,
+        role: gents_protocol::output::MessageRole,
+        content: &str,
+        created_at: &str,
+    ) {
+        use gents::session::canonical_rows::{
+            output_segment_create_variables, transcript_message_create_variables,
+            CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        };
+        use gents_protocol::output::{
+            MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment,
+            OutputSource, OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload,
+            SegmentRun, SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
+        };
+        use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+        let session_doc = self.session(session_id, created_at).await;
+        let agent_did = self.agent_did().to_owned();
+        let requester_did = Some(agent_did.clone());
+        let generation = "fixture-history".to_owned();
+        let request_doc_id = format!("fixture-request:{session_id}:{sequence}");
+        let segment = OutputSegment {
+            node_did: self.node_did.clone(),
+            requester_did: requester_did.clone(),
+            session_id: session_id.into(),
+            request_doc_id: request_doc_id.clone(),
+            source: if role == MessageRole::Assistant {
+                OutputSource::ProviderTurn {
+                    scope: CaptureScope {
+                        kind: CaptureScopeKind::Inference,
+                        seq: u64::from(sequence),
+                    },
+                    turn_index: 0,
+                    attempt: 0,
+                }
+            } else {
+                OutputSource::Authored {
+                    key: format!("fixture:{sequence}"),
+                }
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: generation.clone(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: content.len().try_into().expect("fixture payload size"),
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Text,
+                }),
+            }],
+            payload: content.into(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![content.len() as u64],
+            }),
+            created_at: created_at.into(),
+        };
+        self.agent_access
+            .transact_write("test.agent_requests.history_message", |txn| {
+                let segment = &segment;
+                let session_doc = &session_doc;
+                let agent_did = &agent_did;
+                let requester_did = requester_did.as_deref();
+                let node_did = &self.node_did;
+                let generation = &generation;
+                let request_doc_id = &request_doc_id;
+                Box::pin(async move {
+                    let bind = |mut variables: serde_json::Value| {
+                        variables["input"]["session_doc_id"] = session_doc.as_str().into();
+                        variables["input"]["agent_did"] = agent_did.as_str().into();
+                        variables["input"]["creator_did"] = agent_did.as_str().into();
+                        variables["input"]["parent_linked"] = true.into();
+                        variables
+                    };
+                    let relate = |collection: &'static str, doc: String| async move {
+                        txn.add_resource_relationship(
+                            collection,
+                            &doc,
+                            "parent",
+                            "sessions",
+                            session_doc,
+                        )
+                        .await?;
+                        txn.add_actor_relationship(
+                            collection,
+                            &doc,
+                            "working_agent",
+                            &agent_did.parse()?,
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(doc)
+                    };
+                    let created = txn
+                        .execute_with_variables(
+                            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                            &bind(output_segment_create_variables(segment)?),
+                        )
+                        .await?;
+                    let close_doc_id = relate(
+                        "AgentOutputSegment",
+                        gents::store::graphql::created_doc_id(&created, "AgentOutputSegment")?,
+                    )
+                    .await?;
+                    let message = TranscriptMessage {
+                        native_request_id: None,
+                        message_key: gents::session::sequence_message_key(
+                            node_did,
+                            session_id,
+                            requester_did,
+                            sequence,
+                        ),
+                        session_id: session_id.into(),
+                        node_did: node_did.clone(),
+                        requester_did: requester_did.map(Into::into),
+                        request_doc_id: Some(request_doc_id.clone()),
+                        publication: MessagePublication::RequestExecution {
+                            execution_generation: generation.clone(),
+                        },
+                        outcome: OutputOutcome::Complete,
+                        sequence,
+                        role,
+                        native_id: (role == MessageRole::Assistant)
+                            .then(|| format!("native-{sequence}")),
+                        blocks: vec![MessageBlock::Text {
+                            text: PresentedPayload {
+                                output: PayloadRef {
+                                    close_doc_id,
+                                    stream: 0,
+                                },
+                                presentation: PayloadPresentation::Full,
+                            },
+                        }],
+                        created_at: segment.created_at.clone(),
+                    };
+                    let created = txn
+                        .execute_with_variables(
+                            CREATE_AGENT_MESSAGE_MUTATION,
+                            &bind(transcript_message_create_variables(&message)?),
+                        )
+                        .await?;
+                    relate(
+                        "AgentMessage",
+                        gents::store::graphql::created_doc_id(&created, "AgentMessage")?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .expect("publish history message as the session Agent");
+    }
+
     /// Runs a read as the working Agent, shaped like a native query response.
     pub async fn query(&self, query: &str) -> gents::defra_node::QueryResponse {
         let response = self

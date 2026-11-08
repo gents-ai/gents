@@ -111,6 +111,12 @@ impl RequestLifecycle {
             );
 
             let response = access.execute(&query).await?;
+            if !response["data"]["AgentRequest"].is_array() {
+                // A denied actor (a disabled Agent holds no baseline) does not
+                // block the healthy actors' re-drive; it is retried next tick.
+                tracing::warn!(agent_did = %actor, "terminal re-drive scan omitted rows for this actor");
+                continue;
+            }
             let agent_rows: Vec<AgentRequestRow> =
                 serde_json::from_value(response["data"]["AgentRequest"].clone())
                     .context("decoding terminal requests to re-drive")?;

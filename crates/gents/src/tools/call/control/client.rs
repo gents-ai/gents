@@ -667,9 +667,13 @@ pub(crate) async fn run(
             );
             match access.execute(&claims_query).await {
                 Ok(result) => {
-                    let claims = result["data"]["AgentToolControlClaim"]
-                        .as_array()
-                        .context("claim recovery sweep omitted rows")?;
+                    // An Agent without the baseline (a disabled one is still
+                    // watched) cannot read its claims; that Agent's sweep is
+                    // unavailable, not the runtime's.
+                    let Some(claims) = result["data"]["AgentToolControlClaim"].as_array() else {
+                        tracing::warn!(agent_did = %agent, "tool control claim sweep omitted rows");
+                        continue;
+                    };
                     for id in claims.iter().filter_map(|row| row["_docID"].as_str()) {
                         if failed.contains(id) {
                             continue;
@@ -708,9 +712,10 @@ pub(crate) async fn run(
                     continue;
                 }
             };
-            let rows = result["data"]["AgentToolControl"]
-                .as_array()
-                .context("tool control sweep omitted rows")?;
+            let Some(rows) = result["data"]["AgentToolControl"].as_array() else {
+                tracing::warn!(agent_did = %agent, "tool control sweep omitted rows");
+                continue;
+            };
             for id in rows.iter().filter_map(|row| row["_docID"].as_str()) {
                 if failed.contains(id) {
                     continue;

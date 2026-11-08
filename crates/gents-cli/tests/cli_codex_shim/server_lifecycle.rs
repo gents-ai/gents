@@ -36,7 +36,7 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     let url = format!("ws://127.0.0.1:{shim_port}/");
-    let endpoint = crate::support::graphql::served_endpoint(&format!(
+    let endpoint = crate::support::graphql::node_principal_endpoint(&format!(
         "http://127.0.0.1:{server_port}/api/v0/graphql"
     ));
     let health = endpoint

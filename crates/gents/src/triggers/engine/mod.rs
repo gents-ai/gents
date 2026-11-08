@@ -23,6 +23,23 @@ type TriggerLockKey = (String, String, Option<String>);
 type TriggerLock = Arc<Mutex<()>>;
 type TriggerLockMap = RapidHashMap<TriggerLockKey, TriggerLock>;
 
+/// Dispatches every fire from `sources` through the production materializer
+/// until `cancel` fires: the trigger task the runtime starts once its startup
+/// barrier releases.
+pub async fn run_trigger_engine(
+    node: Arc<defra_node::Node>,
+    snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    sources: Vec<Box<dyn TriggerSource>>,
+    cancel: CancellationToken,
+) {
+    let materializer: Arc<dyn MaterializerHandle> = Arc::new(
+        production_materializer::ProductionMaterializer::new(node, snapshot_rx.clone()),
+    );
+    TriggerEngine::new(snapshot_rx, materializer)
+        .run(sources, cancel)
+        .await;
+}
+
 pub(crate) fn durable_fire_key(namespace: &str, components: &[&str]) -> String {
     let mut key = format!("{}:{namespace}", namespace.chars().count());
     for component in components {

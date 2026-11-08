@@ -198,7 +198,7 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
             "reason": "backend_disabled",
         }],
     });
-    graphql_query(
+    crate::support::graphql::node_graphql_query(
         &graphql,
         &format!(
             r#"mutation {{

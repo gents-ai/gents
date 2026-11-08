@@ -323,6 +323,12 @@ async fn job_control(args: JobControlArgs, kind: JobControlKind) -> Result<()> {
         .context("resolving job owner node_did")?;
     let (access, _home_dir) =
         resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
+    // Job control is delivered to the hosting runtime; a Local access holds
+    // the home store with no runtime to receive the signed control.
+    anyhow::ensure!(
+        matches!(access, ConfigAccess::Graphql(_)),
+        "start the hosting runtime to control a job, or pass --graphql"
+    );
     let view = resolve_job(&access, &actor, &args.selector, args.session.as_deref()).await?;
     for line in control_job(&access, &view, kind).await? {
         println!("{line}");

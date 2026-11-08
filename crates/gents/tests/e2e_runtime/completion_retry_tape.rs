@@ -1,21 +1,20 @@
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents::{
-    build_run_timeline, Gents, NodeIdentity, RunTimeline, RunTimelineRows,
-    TimelineInferenceCallRow, TimelineRequestRow, ToolCeiling,
+    build_run_timeline, Gents, RunTimeline, RunTimelineRows, TimelineInferenceCallRow,
+    TimelineRequestRow, ToolCeiling,
 };
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
-use crate::support::fixtures::test_identity;
+use crate::support::agent_requests::RequestActors;
+use crate::support::builder_runtime::{
+    builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
+};
 use crate::support::interrupt::{
-    create_runtime_request, create_runtime_request_with_execution_origin,
-    wait_for_request_terminal_state, wait_for_runtime_ready, BootedAgent,
-    REQUEST_TERMINAL_PUBLICATION_MARGIN,
+    wait_for_request_terminal_state, BootedAgent, REQUEST_TERMINAL_PUBLICATION_MARGIN,
 };
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{
@@ -25,7 +24,6 @@ use crate::support::{first_row, test_db};
 
 const RETRY_MODEL: &str = "retry-tape-model";
 const RETRY_BACKEND_ID: &str = "retry-tape-backend";
-const RETRY_AGENT_DID: &str = "retry-tape";
 const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
 
 #[tokio::test]
@@ -46,19 +44,18 @@ async fn backend_restart_cluster_recovers() {
         .collect::<Vec<_>>();
     let backend = MockStreamingBackend::start_with_plans(RETRY_MODEL, plans).unwrap();
     let db = test_db("completion-retry-cluster").await;
-    let agent = boot_retry_agent(&db, "completion-retry-cluster", backend.endpoint(), 3, 30).await;
+    let (actors, agent) = boot_retry_agent(&db, backend.endpoint(), 3, 30).await;
 
     let mut request_doc_ids = Vec::new();
     for index in 0..3 {
         let request_id = format!("req-cluster-restart-{index}");
         let session_id = format!("session-cluster-restart-{index}");
         let marker = format!("cluster-restart-{index}");
-        let doc_id = create_runtime_request(
-            db.node.as_ref(),
-            &agent.node_did,
-            RETRY_AGENT_DID,
+        let doc_id = submit_request(
+            &actors,
             &request_id,
             &session_id,
+            "interactive",
             &format!("please recover {marker}"),
         )
         .await;
@@ -67,12 +64,11 @@ async fn backend_restart_cluster_recovers() {
 
     for (doc_id, request_id, marker) in &request_doc_ids {
         let terminal_state =
-            wait_for_request_terminal_state(db.node.as_ref(), doc_id, Duration::from_secs(60))
-                .await;
+            wait_for_request_terminal_state(&actors, doc_id, Duration::from_secs(60)).await;
         if terminal_state != RequestLifecycleState::Completed {
-            let snapshot = fetch_request_snapshot(db.node.as_ref(), doc_id).await;
-            let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
-            let all_calls = fetch_call_diagnostics(db.node.as_ref(), request_id).await;
+            let snapshot = fetch_request_snapshot(&actors, doc_id).await;
+            let calls = fetch_inference_calls(&actors, request_id).await;
+            let all_calls = fetch_call_diagnostics(&actors, request_id).await;
             let request_counts = request_doc_ids
                 .iter()
                 .map(|(_, request_id, marker)| {
@@ -88,7 +84,7 @@ async fn backend_restart_cluster_recovers() {
             );
         }
 
-        let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+        let calls = fetch_inference_calls(&actors, request_id).await;
         assert_retry_recovered(&calls, 1);
         assert_eq!(
             backend.observed_requests(marker),
@@ -96,13 +92,13 @@ async fn backend_restart_cluster_recovers() {
             "request {request_id} should issue one failed provider call and one recovery call"
         );
 
-        let timeline = build_timeline(db.node.as_ref(), request_id).await;
+        let timeline = build_timeline(&actors, request_id).await;
         assert_eq!(timeline.request.retry_summary.retry_count, 1);
         assert!(timeline.request.retry_summary.recovered);
     }
 
     let failed_count = count_requests_not_in_state(
-        db.node.as_ref(),
+        &actors,
         &request_doc_ids
             .iter()
             .map(|(_, request_id, _)| request_id.as_str())
@@ -133,9 +129,8 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     .unwrap();
     let db = test_db("completion-retry-backoff-liveness").await;
     let deadline_duration_secs = 60u64;
-    let runtime = build_retry_agent_with_liveness(
+    let (actors, runtime) = build_retry_agent_with_liveness(
         &db,
-        "completion-retry-backoff-liveness",
         backend.endpoint(),
         1,
         deadline_duration_secs,
@@ -147,14 +142,11 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         .iter()
         .map(|agent| agent.agent_identity.clone())
         .collect::<Vec<_>>();
-    let node_did = runtime.node_did().to_owned();
-    let agent = spawn_agent(db.node.as_ref(), runtime, node_did).await;
+    let agent = spawn_runtime(&db, runtime).await;
 
     let request_id = "req-backoff-vs-liveness";
-    let doc_id = create_runtime_request_with_execution_origin(
-        db.node.as_ref(),
-        &agent.node_did,
-        RETRY_AGENT_DID,
+    let doc_id = submit_request(
+        &actors,
         request_id,
         "session-backoff-vs-liveness",
         "scheduled",
@@ -163,7 +155,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     .await;
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+            let calls = fetch_inference_calls(&actors, request_id).await;
             if call_states(&calls) == vec!["failed"] {
                 break;
             }
@@ -178,9 +170,8 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     .expect("first provider failure must be durably observed");
     assert_eq!(backend.observed_requests(marker), 1);
     let escaped_doc_id = escape_graphql_string(&doc_id);
-    let tuple = db
-        .node
-        .execute(&format!(
+    let tuple = actors
+        .query(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }} ) {{
         lifecycle_state execution_generation execution_lease_expires_at
     }} }}"#
@@ -200,19 +191,22 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     ) {{ _docID }} }}"#,
         escape_graphql_string(&expired)
     );
-    let expired = db.node.execute(&mutation).await;
-    assert!(!expired.has_errors(), "{:?}", expired.errors);
+    // The working Agent owns its execution lease; the fixture stands in for
+    // the lease running out by writing the elapsed expiry as that Agent.
+    let expired = actors
+        .agent_access
+        .write("test.retry_tape.expire_lease", &mutation)
+        .await
+        .expect("expire the observed execution lease as the working Agent");
     assert!(
         expired
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentRequest"))
+            .pointer("/data/update_AgentRequest")
             .is_some_and(gents::store::graphql::response_has_documents),
         "observed execution lease must be expired by the fixture"
     );
 
     let terminal_state = wait_for_request_terminal_state(
-        db.node.as_ref(),
+        &actors,
         &doc_id,
         Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
     )
@@ -222,9 +216,8 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         RequestLifecycleState::Failed,
         "an expired execution lease must fail the request, not run the planned retry"
     );
-    let rows = db
-        .node
-        .execute(&format!(
+    let rows = actors
+        .query(&format!(
             r#"{{
         AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
             lifecycle_state failure_reason terminal_output
@@ -261,9 +254,9 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
             );
         }
     }
-    let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+    let calls = fetch_inference_calls(&actors, request_id).await;
     assert_eq!(call_states(&calls), vec!["failed"]);
-    let timeline = build_timeline(db.node.as_ref(), request_id).await;
+    let timeline = build_timeline(&actors, request_id).await;
     assert!(!timeline.request.retry_summary.recovered);
     let repeated = gents::RequestLifecycle::recover_all_with_identities(
         &db.node,
@@ -298,28 +291,21 @@ async fn deadline_tight_fails_cleanly() {
     .unwrap();
     let db = test_db("completion-retry-deadline-tight").await;
     let deadline_duration_secs = 1u64;
-    let agent = boot_retry_agent(
-        &db,
-        "completion-retry-deadline-tight",
-        backend.endpoint(),
-        1,
-        deadline_duration_secs,
-    )
-    .await;
+    let (actors, agent) =
+        boot_retry_agent(&db, backend.endpoint(), 1, deadline_duration_secs).await;
 
     let request_id = "req-deadline-tight";
-    let request_doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        RETRY_AGENT_DID,
+    let request_doc_id = submit_request(
+        &actors,
         request_id,
         "session-deadline-tight",
+        "interactive",
         &format!("tight deadline {marker}"),
     )
     .await;
 
     let terminal_state = wait_for_request_terminal_state(
-        db.node.as_ref(),
+        &actors,
         &request_doc_id,
         Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
     )
@@ -334,7 +320,7 @@ async fn deadline_tight_fails_cleanly() {
         observed_requests <= 1,
         "deadline overshoot should prevent a second provider call"
     );
-    let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+    let calls = fetch_inference_calls(&actors, request_id).await;
     assert!(calls.len() <= 1, "deadline must prevent a retry: {calls:?}");
     if observed_requests == 1 {
         assert_eq!(
@@ -347,7 +333,7 @@ async fn deadline_tight_fails_cleanly() {
         call_states(&calls).iter().all(|state| *state == "failed"),
         "deadline must fail every started inference call: {calls:?}"
     );
-    let request = fetch_terminal_request(db.node.as_ref(), &request_doc_id).await;
+    let request = fetch_terminal_request(&actors, &request_doc_id).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
     assert_eq!(request.terminal_output, TerminalOutput::NoMessage);
     assert!(
@@ -376,29 +362,22 @@ async fn interactive_budget_is_quick() {
     .unwrap();
     let db = test_db("completion-retry-interactive-budget").await;
     let deadline_duration_secs = 30u64;
-    let agent = boot_retry_agent(
-        &db,
-        "completion-retry-interactive-budget",
-        backend.endpoint(),
-        1,
-        deadline_duration_secs,
-    )
-    .await;
+    let (actors, agent) =
+        boot_retry_agent(&db, backend.endpoint(), 1, deadline_duration_secs).await;
 
     let started = Instant::now();
     let request_id = "req-interactive-budget";
-    let request_doc_id = create_runtime_request(
-        db.node.as_ref(),
-        &agent.node_did,
-        RETRY_AGENT_DID,
+    let request_doc_id = submit_request(
+        &actors,
         request_id,
         "session-interactive-budget",
+        "interactive",
         &format!("interactive request {marker}"),
     )
     .await;
 
     let terminal_state = wait_for_request_terminal_state(
-        db.node.as_ref(),
+        &actors,
         &request_doc_id,
         Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
     )
@@ -419,9 +398,9 @@ async fn interactive_budget_is_quick() {
         "interactive default allows exactly one retry"
     );
 
-    let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+    let calls = fetch_inference_calls(&actors, request_id).await;
     assert_eq!(call_states(&calls), vec!["failed", "failed"]);
-    let timeline = build_timeline(db.node.as_ref(), request_id).await;
+    let timeline = build_timeline(&actors, request_id).await;
     assert_eq!(timeline.request.retry_summary.retry_count, 1);
     assert!(!timeline.request.retry_summary.recovered);
 
@@ -435,6 +414,7 @@ async fn start_stall_tape(
 ) -> (
     MockStreamingBackend,
     crate::support::TestDb,
+    RequestActors,
     BootedAgent,
     String,
     Instant,
@@ -446,46 +426,41 @@ async fn start_stall_tape(
     .unwrap();
     let test_name = format!("completion-retry-{marker}");
     let db = test_db(&test_name).await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(&test_name));
-    upsert_retry_backend(&db.node, identity.did(), backend.endpoint(), 1).await;
-    let agent = Gents::builder()
-        .node(db.node.clone())
-        .identity(identity)
-        .default_agent_did(RETRY_AGENT_DID)
-        .tool_ceiling(ToolCeiling::meta_only())
-        .agent(RETRY_AGENT_DID)
-        .backend_id(RETRY_BACKEND_ID)
-        .model_name(RETRY_MODEL)
-        .stream_batch_ms(0)
-        .deadline_duration_secs(60)
-        .provider_idle_timeout_secs(1)
-        .done()
-        .build()
-        .await
-        .expect("build stall tape agent");
-    let node_did = agent.node_did().to_string();
-    let agent = spawn_agent(db.node.as_ref(), agent, node_did).await;
+    let actors = builder_actors(&db, RETRY_BACKEND_ID, backend.endpoint(), RETRY_MODEL, 1).await;
+    let runtime = fixture_agent(
+        runtime_builder(&db, &actors).tool_ceiling(ToolCeiling::meta_only()),
+        &actors,
+        "retry-tape",
+    )
+    .backend_id(RETRY_BACKEND_ID)
+    .model_name(RETRY_MODEL)
+    .stream_batch_ms(0)
+    .deadline_duration_secs(60)
+    .provider_idle_timeout_secs(1)
+    .done()
+    .build()
+    .await
+    .expect("build stall tape agent");
+    let agent = spawn_runtime(&db, runtime).await;
     let started = Instant::now();
-    let doc_id = create_runtime_request_with_execution_origin(
-        db.node.as_ref(),
-        &agent.node_did,
-        RETRY_AGENT_DID,
+    let doc_id = submit_request(
+        &actors,
         &format!("req-{marker}"),
         &format!("session-{marker}"),
         execution_origin,
         &format!("stall the provider {marker}"),
     )
     .await;
-    (backend, db, agent, doc_id, started)
+    (backend, db, actors, agent, doc_id, started)
 }
 
 async fn assert_stall_recovered(marker: &str, responses: Vec<StreamResponse>) {
-    let (backend, db, agent, doc_id, started) =
+    let (backend, _db, actors, agent, doc_id, started) =
         start_stall_tape(marker, responses, "interactive").await;
-    wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(60)).await;
+    wait_for_request_terminal_state(&actors, &doc_id, Duration::from_secs(60)).await;
     let elapsed = started.elapsed();
-    let request = fetch_terminal_request(db.node.as_ref(), &doc_id).await;
-    let calls = fetch_inference_calls(db.node.as_ref(), &format!("req-{marker}")).await;
+    let request = fetch_terminal_request(&actors, &doc_id).await;
+    let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
     assert_eq!(
         request.lifecycle_state,
         RequestLifecycleState::Completed,
@@ -557,7 +532,7 @@ async fn provider_silent_between_chunks_retracts_and_retries() {
 #[tokio::test]
 async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     let marker = "stall-releases-permit";
-    let (backend, db, agent, doc_id, _) = start_stall_tape(
+    let (backend, _db, actors, agent, doc_id, _) = start_stall_tape(
         marker,
         vec![
             StreamResponse::Stream(StreamScript::paused_before(
@@ -572,7 +547,7 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     let request_id = format!("req-{marker}");
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let calls = fetch_inference_calls(db.node.as_ref(), &request_id).await;
+            let calls = fetch_inference_calls(&actors, &request_id).await;
             if calls
                 .first()
                 .is_some_and(|call| call.call_state == "failed")
@@ -591,7 +566,7 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     .await
     .expect("stalled call must reach a terminal state during backoff");
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(60)).await,
+        wait_for_request_terminal_state(&actors, &doc_id, Duration::from_secs(60)).await,
         RequestLifecycleState::Completed
     );
     assert_eq!(backend.observed_requests(marker), 2);
@@ -601,7 +576,7 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
 #[tokio::test]
 async fn repeated_provider_silence_fails_the_request_through_the_retry_owner() {
     let marker = "stall-exhausts-retry";
-    let (backend, db, agent, doc_id, started) = start_stall_tape(
+    let (backend, _db, actors, agent, doc_id, started) = start_stall_tape(
         marker,
         vec![
             StreamResponse::Stream(StreamScript::paused_before(
@@ -614,10 +589,10 @@ async fn repeated_provider_silence_fails_the_request_through_the_retry_owner() {
         "interactive",
     )
     .await;
-    wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(60)).await;
+    wait_for_request_terminal_state(&actors, &doc_id, Duration::from_secs(60)).await;
     let elapsed = started.elapsed();
-    let request = fetch_terminal_request(db.node.as_ref(), &doc_id).await;
-    let calls = fetch_inference_calls(db.node.as_ref(), &format!("req-{marker}")).await;
+    let request = fetch_terminal_request(&actors, &doc_id).await;
+    let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
     assert!(
         request.failure_reason.contains("retry budget exhausted"),
@@ -647,20 +622,10 @@ async fn deterministic_400_tape() {
     )
     .unwrap();
     let db = test_db("completion-retry-deterministic-400").await;
-    let agent = build_retry_agent(
-        &db,
-        "completion-retry-deterministic-400",
-        backend.endpoint(),
-        1,
-        30,
-    )
-    .await;
-    let node_did = agent.node_did().to_string();
+    let (actors, agent) = build_retry_agent(&db, backend.endpoint(), 1, 30).await;
     let request_id = "req-deterministic-400";
-    let request_doc_id = create_runtime_request_with_execution_origin(
-        db.node.as_ref(),
-        &node_did,
-        RETRY_AGENT_DID,
+    let request_doc_id = submit_request(
+        &actors,
         request_id,
         "session-deterministic-400",
         "scheduled",
@@ -668,24 +633,23 @@ async fn deterministic_400_tape() {
     )
     .await;
 
-    let agent = spawn_agent(db.node.as_ref(), agent, node_did).await;
+    let agent = spawn_runtime(&db, agent).await;
     let terminal_state =
-        wait_for_request_terminal_state(db.node.as_ref(), &request_doc_id, Duration::from_secs(60))
-            .await;
+        wait_for_request_terminal_state(&actors, &request_doc_id, Duration::from_secs(60)).await;
 
-    let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+    let calls = fetch_inference_calls(&actors, request_id).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Completed,
         "deterministic parse-400 should recover; calls={calls:?}"
     );
-    let request = fetch_terminal_request(db.node.as_ref(), &request_doc_id).await;
+    let request = fetch_terminal_request(&actors, &request_doc_id).await;
     assert!(matches!(
         request.terminal_output,
         TerminalOutput::Message { .. }
     ));
     assert_retry_recovered(&calls, 2);
-    let timeline = build_timeline(db.node.as_ref(), request_id).await;
+    let timeline = build_timeline(&actors, request_id).await;
     assert_eq!(timeline.request.retry_summary.retry_count, 2);
     assert!(timeline.request.retry_summary.recovered);
 
@@ -694,146 +658,56 @@ async fn deterministic_400_tape() {
 
 async fn boot_retry_agent(
     db: &crate::support::TestDb,
-    test_name: &str,
     endpoint: &str,
-    max_concurrent: i64,
+    max_concurrent: usize,
     deadline_duration_secs: u64,
-) -> BootedAgent {
-    boot_retry_agent_with_liveness(
-        db,
-        test_name,
-        endpoint,
-        max_concurrent,
-        deadline_duration_secs,
-        None,
-    )
-    .await
-}
-
-async fn boot_retry_agent_with_liveness(
-    db: &crate::support::TestDb,
-    test_name: &str,
-    endpoint: &str,
-    max_concurrent: i64,
-    deadline_duration_secs: u64,
-    stream_liveness_timeout_secs: Option<u64>,
-) -> BootedAgent {
-    let agent = build_retry_agent_with_liveness(
-        db,
-        test_name,
-        endpoint,
-        max_concurrent,
-        deadline_duration_secs,
-        stream_liveness_timeout_secs,
-    )
-    .await;
-    let node_did = agent.node_did().to_string();
-    spawn_agent(db.node.as_ref(), agent, node_did).await
+) -> (RequestActors, BootedAgent) {
+    let (actors, runtime) =
+        build_retry_agent_with_liveness(db, endpoint, max_concurrent, deadline_duration_secs, None)
+            .await;
+    let agent = spawn_runtime(db, runtime).await;
+    (actors, agent)
 }
 
 async fn build_retry_agent(
     db: &crate::support::TestDb,
-    test_name: &str,
     endpoint: &str,
-    max_concurrent: i64,
+    max_concurrent: usize,
     deadline_duration_secs: u64,
-) -> Gents {
-    build_retry_agent_with_liveness(
-        db,
-        test_name,
-        endpoint,
-        max_concurrent,
-        deadline_duration_secs,
-        None,
-    )
-    .await
+) -> (RequestActors, Gents) {
+    build_retry_agent_with_liveness(db, endpoint, max_concurrent, deadline_duration_secs, None)
+        .await
 }
 
 async fn build_retry_agent_with_liveness(
     db: &crate::support::TestDb,
-    test_name: &str,
     endpoint: &str,
-    max_concurrent: i64,
+    max_concurrent: usize,
     deadline_duration_secs: u64,
     stream_liveness_timeout_secs: Option<u64>,
-) -> Gents {
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(test_name));
-    upsert_retry_backend(&db.node, identity.did(), endpoint, max_concurrent).await;
-    let mut behavior = Gents::builder()
-        .node(db.node.clone())
-        .identity(identity)
-        .default_agent_did(RETRY_AGENT_DID)
-        .tool_ceiling(ToolCeiling::meta_only())
-        .agent(RETRY_AGENT_DID)
-        .backend_id(RETRY_BACKEND_ID)
-        .model_name(RETRY_MODEL)
-        .stream_batch_ms(0)
-        .deadline_duration_secs(deadline_duration_secs);
+) -> (RequestActors, Gents) {
+    let actors = builder_actors(db, RETRY_BACKEND_ID, endpoint, RETRY_MODEL, max_concurrent).await;
+    let mut behavior = fixture_agent(
+        runtime_builder(db, &actors).tool_ceiling(ToolCeiling::meta_only()),
+        &actors,
+        "retry-tape",
+    )
+    .backend_id(RETRY_BACKEND_ID)
+    .model_name(RETRY_MODEL)
+    .stream_batch_ms(0)
+    .deadline_duration_secs(deadline_duration_secs);
     if let Some(secs) = stream_liveness_timeout_secs {
         behavior = behavior.stream_liveness_timeout_secs(secs);
     }
-    behavior
+    let runtime = behavior
         .done()
         .build()
         .await
-        .expect("build completion retry tape agent")
+        .expect("build completion retry tape agent");
+    (actors, runtime)
 }
 
-async fn spawn_agent(node: &EmbeddedNode, agent: Gents, node_did: String) -> BootedAgent {
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(node, &node_did).await;
-    BootedAgent::new(shutdown_tx, handle, node_did)
-}
-
-async fn upsert_retry_backend(
-    node: &Arc<EmbeddedNode>,
-    owner: &str,
-    endpoint: &str,
-    max_concurrent: i64,
-) {
-    use gents::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    gents::ensure_node(node, owner).await.unwrap();
-    let value = serde_json::json!({"node_did":owner,"backend_id":RETRY_BACKEND_ID,"name":RETRY_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":max_concurrent,"max_queue_depth":100});
-    let profile_id = format!("{RETRY_AGENT_DID}:inference");
-    let profile = serde_json::json!({"node_did":owner,"profile_id":profile_id,"backend_id":RETRY_BACKEND_ID,"model_name":RETRY_MODEL});
-    let behavior = serde_json::json!({"node_did":owner,"agent_did":RETRY_AGENT_DID,"inference_profile_id":profile_id});
-    let plan = DesiredStateApplyPlan::new(
-        [
-            (gents::Collection::InferenceBackend, value),
-            (gents::Collection::InferenceProfile, profile),
-            (gents::Collection::Agent, behavior),
-        ]
-        .into_iter()
-        .map(|(collection, value)| DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        })
-        .collect(),
-    )
-    .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.install_provider_backend", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
-    gents::inference::backends::registry::set_backend_probe_status(
-        node,
-        owner,
-        RETRY_BACKEND_ID,
-        "healthy",
-    )
-    .await
-    .unwrap();
-}
-
-async fn fetch_timeline_request(node: &EmbeddedNode, request_id: &str) -> TimelineRequestRow {
+async fn fetch_timeline_request(actors: &RequestActors, request_id: &str) -> TimelineRequestRow {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -856,7 +730,7 @@ async fn fetch_timeline_request(node: &EmbeddedNode, request_id: &str) -> Timeli
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let response = actors.query(&query).await;
     assert!(
         !response.has_errors(),
         "fetch timeline request failed: {:?}",
@@ -872,7 +746,7 @@ struct TerminalRequest {
     terminal_output: TerminalOutput,
 }
 
-async fn fetch_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> TerminalRequest {
+async fn fetch_terminal_request(actors: &RequestActors, request_doc_id: &str) -> TerminalRequest {
     let request_doc_id = escape_graphql_string(request_doc_id);
     let query = format!(
         r#"{{
@@ -883,7 +757,7 @@ async fn fetch_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> Te
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let response = actors.query(&query).await;
     assert!(
         !response.has_errors(),
         "fetch terminal request failed: {:?}",
@@ -893,7 +767,7 @@ async fn fetch_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> Te
 }
 
 async fn fetch_inference_calls(
-    node: &EmbeddedNode,
+    actors: &RequestActors,
     request_id: &str,
 ) -> Vec<TimelineInferenceCallRow> {
     let request_id = escape_graphql_string(request_id);
@@ -921,7 +795,7 @@ async fn fetch_inference_calls(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let response = actors.query(&query).await;
     assert!(
         !response.has_errors(),
         "fetch inference calls failed: {:?}",
@@ -939,7 +813,7 @@ async fn fetch_inference_calls(
         .collect()
 }
 
-async fn fetch_call_diagnostics(node: &EmbeddedNode, request_id: &str) -> Vec<Value> {
+async fn fetch_call_diagnostics(actors: &RequestActors, request_id: &str) -> Vec<Value> {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -961,7 +835,7 @@ async fn fetch_call_diagnostics(node: &EmbeddedNode, request_id: &str) -> Vec<Va
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let response = actors.query(&query).await;
     assert!(
         !response.has_errors(),
         "fetch call diagnostics failed: {:?}",
@@ -976,9 +850,9 @@ async fn fetch_call_diagnostics(node: &EmbeddedNode, request_id: &str) -> Vec<Va
         .unwrap_or_default()
 }
 
-async fn build_timeline(node: &EmbeddedNode, request_id: &str) -> RunTimeline {
-    let request = fetch_timeline_request(node, request_id).await;
-    let inference_calls = fetch_inference_calls(node, request_id).await;
+async fn build_timeline(actors: &RequestActors, request_id: &str) -> RunTimeline {
+    let request = fetch_timeline_request(actors, request_id).await;
+    let inference_calls = fetch_inference_calls(actors, request_id).await;
     build_run_timeline(RunTimelineRows {
         request,
         inference_calls,
@@ -987,13 +861,13 @@ async fn build_timeline(node: &EmbeddedNode, request_id: &str) -> RunTimeline {
 }
 
 async fn count_requests_not_in_state(
-    node: &EmbeddedNode,
+    actors: &RequestActors,
     request_ids: &[&str],
     expected_state: RequestLifecycleState,
 ) -> usize {
     let mut count = 0;
     for request_id in request_ids {
-        let row = fetch_timeline_request(node, request_id).await;
+        let row = fetch_timeline_request(actors, request_id).await;
         if row.lifecycle_state != Some(expected_state) {
             count += 1;
         }
