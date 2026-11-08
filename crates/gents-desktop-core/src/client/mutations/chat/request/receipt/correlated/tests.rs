@@ -618,7 +618,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                 )
                 .await?;
             }
-            let mut reply = delivery::reconcile(&node, Some(&access), retained).await;
+            let mut reply = delivery::reconcile(&node, Ok(&access), retained).await;
             if expected == Outcome::Accepted && !stale {
                 assert!(matches!(
                     reply.unwrap_err(),
@@ -631,7 +631,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                     facts.records_json(std::slice::from_ref(&unknown))?,
                     trace[0]["after"]
                 );
-                reply = delivery::reconcile(&node, Some(&access), unknown).await;
+                reply = delivery::reconcile(&node, Ok(&access), unknown).await;
             }
             if expected == Outcome::Accepted {
                 assert_eq!(reply?, proposal.reference.request);
@@ -657,7 +657,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                 .await
                 .context("recorded transport")?
                 .len();
-            let replay = delivery::reconcile(&node, Some(&access), retained).await;
+            let replay = delivery::reconcile(&node, Ok(&access), retained).await;
             if expected == Outcome::Accepted {
                 assert_eq!(replay?, proposal.reference.request);
             } else {

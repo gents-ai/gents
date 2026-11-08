@@ -5,7 +5,7 @@
 //! A restart still permits exact replay. Older sends with no retained payload
 //! remain unresolved when the owner cannot prove delivery.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use super::super::super::mutations::{
     reconcile_unretained_submission, resolve_unresolved_submission, SubmissionAttemptError,
@@ -78,29 +78,39 @@ impl ClientCore {
         let Some(record) = submission_journal::caller::recover(&self.node, intent).await? else {
             return Ok(None);
         };
+        // Replay needs owner access, granted by the same send-time fence; a
+        // refusal keeps the submission unknown and carries the fence's cause.
         let access = if record.needs_reconciliation() {
-            let now = chrono::Utc::now();
-            let peer = self.peer_record_for_chat_write(&intent.node_did, now).await;
-            match peer {
-                Ok(Some(peer))
-                    if super::ensure_peer_chat_ready_at(&intent.node_did, Some(&peer), now)
-                        .is_ok() =>
-                {
-                    let capability =
-                        gents::store::config_client::ClientSigningCapability::from_ed25519_key(
-                            self.node_identity.private_key_bytes(),
-                        )
-                        .map_err(anyhow::Error::from)?;
-                    crate::local_runtime::operator_endpoint(&peer, &capability).map(gents::store::config_client::ConfigAccess::Graphql)
-                }
-                _ => None,
-            }
+            self.reconciliation_access(&intent.node_did).await
         } else {
-            None
+            Err(anyhow::anyhow!(
+                "caller submission needs no owner reconciliation"
+            ))
         };
-        let receipt = submission_delivery::reconcile(&self.node, access.as_ref(), record).await?;
+        let receipt = match access {
+            Ok(access) => submission_delivery::reconcile(&self.node, Ok(&access), record).await?,
+            Err(cause) => submission_delivery::reconcile(&self.node, Err(cause), record).await?,
+        };
         self.store.request_resync(Some(&receipt.node_did));
         Ok(Some(receipt))
+    }
+
+    async fn reconciliation_access(
+        &self,
+        node_did: &str,
+    ) -> Result<gents::store::config_client::ConfigAccess> {
+        let now = chrono::Utc::now();
+        let peer = self.peer_record_for_chat_write(node_did, now).await?;
+        if let Some(refusal) = super::chat_route_refusal_at(node_did, peer.as_ref(), now) {
+            return Err(refusal.into());
+        }
+        let peer = peer.context("chat target has no current owned peer route")?;
+        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            self.node_identity.private_key_bytes(),
+        )?;
+        crate::local_runtime::operator_endpoint(&peer, &capability)
+            .map(gents::store::config_client::ConfigAccess::Graphql)
+            .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))
     }
 
     pub async fn caller_submission_reference(

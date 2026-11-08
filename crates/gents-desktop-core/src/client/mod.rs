@@ -15,7 +15,7 @@ pub(crate) use query::load_inference_configuration;
 
 pub use collection_resolver::CollectionResolver;
 pub use core::{
-    ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
+    ChatRouteRefusal, ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
     ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
     EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
     InferenceTarget, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
@@ -36,7 +36,9 @@ pub use observe::{
 };
 pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
 pub(crate) use peer_directory::PeerDirectory;
-pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
+pub use peer_directory::{
+    initialize_local_standard_peer, load_peer_records, ChatRouteCause, PeerRecord,
+};
 pub use principal_identity::PrincipalIdentity;
 pub(crate) use query::load_request_documents_on;
 pub use query::{

@@ -34,6 +34,7 @@ fn ux_data_requires_the_installing_local_runtime() {
 async fn expired_enrollment_cannot_admit_a_request_without_waiting_for_the_sweep() {
     let mut peer = peer_record(Some("enrollment"));
     peer.pairing_ready = true;
+    peer.graphql = Some("http://127.0.0.1:1234/api/v0/graphql".into());
     peer.enrollment_authorization_expires_at = Some("2026-08-30T12:00:01Z".into());
     let before = "2026-08-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
     let expired = "2026-08-30T12:00:01Z".parse::<DateTime<Utc>>().unwrap();
@@ -43,6 +44,45 @@ async fn expired_enrollment_cannot_admit_a_request_without_waiting_for_the_sweep
     assert!(
         peer_record_owning_node_at(std::slice::from_ref(&peer), &peer.node_did, expired,).is_none()
     );
+}
+
+#[test]
+fn chat_write_fence_matches_lean() {
+    let cases = crate::client::peer_directory::tests::chat_readiness_cases();
+    assert!(cases.iter().any(|(record, _, _)| record.is_none()));
+    for (record, now, refusal) in cases {
+        let node_did = record
+            .as_ref()
+            .map_or("did:key:runtime", |record| record.node_did.as_str())
+            .to_owned();
+        let observed = chat_route_refusal_at(&node_did, record.as_ref(), now);
+        assert_eq!(
+            observed
+                .as_ref()
+                .map(|refusal| refusal.cause().token().to_owned()),
+            refusal,
+            "{record:?}"
+        );
+        let ensured = ensure_peer_chat_ready_at(&node_did, record.as_ref(), now);
+        match &refusal {
+            None => assert!(ensured.is_ok(), "{record:?}"),
+            Some(token) => {
+                let error = ensured.unwrap_err();
+                assert!(
+                    error.to_string().contains(token.as_str()),
+                    "the refusal must name its cause: {error}"
+                );
+                assert_eq!(
+                    error
+                        .downcast_ref::<ChatRouteRefusal>()
+                        .map(|refusal| refusal.cause().token()),
+                    Some(token.as_str())
+                );
+            }
+        }
+        let owning = peer_record_owning_node_at(record.as_slice(), &node_did, now);
+        assert_eq!(owning.is_some(), refusal.is_none(), "{record:?}");
+    }
 }
 
 #[test]

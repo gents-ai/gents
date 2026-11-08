@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
@@ -9,7 +9,7 @@ use gents_protocol::row::AgentRequestRow;
 
 use super::super::mutations::SubmittedRequest;
 use super::super::observe::ObservedStore;
-use super::super::peer_directory::PeerRecord;
+use super::super::peer_directory::{ChatRouteCause, PeerRecord};
 use super::ClientCore;
 #[cfg(test)]
 use super::ClientPeerStatus;
@@ -81,17 +81,51 @@ fn agent_did_for_write(requested_agent_did: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// A chat write refused before any request was saved. The cause is the Lean
+/// `ClientChatReadiness.Cause` the fence observed at send time.
+#[derive(Debug, thiserror::Error)]
+pub enum ChatRouteRefusal {
+    #[error("no saved deployment route owns node {node_did}; no request was saved ({cause})")]
+    NoRoute {
+        node_did: String,
+        cause: ChatRouteCause,
+    },
+    #[error("the selected deployment route is not ready; no request was saved ({cause})")]
+    NotReady { cause: ChatRouteCause },
+}
+
+impl ChatRouteRefusal {
+    pub fn cause(&self) -> ChatRouteCause {
+        match self {
+            Self::NoRoute { cause, .. } | Self::NotReady { cause } => *cause,
+        }
+    }
+}
+
+pub(super) fn chat_route_refusal_at(
+    node_did: &str,
+    peer_record: Option<&PeerRecord>,
+    now: DateTime<Utc>,
+) -> Option<ChatRouteRefusal> {
+    match peer_record {
+        Some(record) => record
+            .chat_refusal_at(now)
+            .map(|cause| ChatRouteRefusal::NotReady { cause }),
+        None => Some(ChatRouteRefusal::NoRoute {
+            node_did: node_did.to_owned(),
+            cause: ChatRouteCause::NoRoute,
+        }),
+    }
+}
+
 pub(super) fn ensure_peer_chat_ready_at(
     node_did: &str,
     peer_record: Option<&PeerRecord>,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    match peer_record {
-        Some(record) if record.is_chat_ready_at(now) => Ok(()),
-        Some(_) => bail!(
-            "the selected deployment route is not ready; no request was saved (wait for pairing repair or inspect pairing status)"
-        ),
-        None => bail!("no saved deployment route owns node {node_did}; no request was saved"),
+    match chat_route_refusal_at(node_did, peer_record, now) {
+        Some(refusal) => Err(refusal.into()),
+        None => Ok(()),
     }
 }
 
@@ -157,7 +191,7 @@ impl ClientCore {
             .find(|record| record.node_did == node_did.trim())
             .cloned();
         if let Some(stale) = stale {
-            if stale.is_enrollment() && stale.pairing_ready {
+            if stale.is_enrollment() && stale.pairing_ready && !stale.is_enrollment_ready_at(now) {
                 self.sync_state
                     .set_pairing_ready(&stale, false)
                     .await

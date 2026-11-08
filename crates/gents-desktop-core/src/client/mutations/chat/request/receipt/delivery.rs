@@ -13,7 +13,7 @@ use super::{
 /// persisted before returning them through the outer caller transport.
 pub(crate) async fn reconcile(
     node: &Arc<EmbeddedNode>,
-    access: Option<&ConfigAccess>,
+    access: std::result::Result<&ConfigAccess, anyhow::Error>,
     record: Record,
 ) -> std::result::Result<SubmittedRequest, SubmissionError> {
     match record.result() {
@@ -32,8 +32,9 @@ pub(crate) async fn reconcile(
         .pending
         .as_ref()
         .context("unresolved caller receipt omitted its signed preparation")?;
-    let Some(access) = access else {
-        return Err(pending.unknown(None).into());
+    let access = match access {
+        Ok(access) => access,
+        Err(cause) => return Err(pending.unknown(Some(cause)).into()),
     };
     let delivered = resolve_unresolved_submission(access, pending).await;
     let (outcome, rejection) = match delivered {

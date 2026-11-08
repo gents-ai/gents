@@ -1401,59 +1401,13 @@ async fn bootstrap_connect_waits_for_the_peer_connection_event() {
     .expect("peer connected");
 }
 
+/// A hosted enrollment route commits chat to its owner over the User's signed
+/// HTTP endpoint with client admission and keeps nothing in a local replica;
+/// clearing its pairing readiness closes submit and resend
+/// (`ClientChatReadiness.enrollmentFenceRequired`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> anyhow::Result<()> {
-    use gents::NodeIdentity;
-    use wiremock::{
-        matchers::{body_string_contains, method, path},
-        Mock, MockServer, ResponseTemplate,
-    };
     let temp = tempfile::tempdir()?;
-    let home = temp.path().join("runtime");
-    std::fs::create_dir(&home)?;
-    let key = home.join("node.key");
-    let owner = gents::store::identity::KeyIdentity::load_or_create(&key, None)?;
-    let server = MockServer::start().await;
-    let graphql = format!("{}/api/v0/graphql", server.uri());
-    std::fs::write(
-        home.join("init.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "node_name":"owner", "node_did":owner.did(), "key_path":key,
-        }))?,
-    )?;
-    std::fs::write(
-        home.join("runtime.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "node_name":"owner", "node_did":owner.did(), "graphql":graphql,
-            "p2p_transport":"iroh", "p2p_peer_id":"owner-peer",
-        }))?,
-    )?;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/graphql"))
-        .and(body_string_contains("create_AgentRequest"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "data":{"create_AgentRequest":[{"_docID":"owner-request"}]}
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/tx"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":17})))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/tx/17"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/graphql"))
-        .and(body_string_contains("AgentSession"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "data":{"AgentSession":[]}
-        })))
-        .mount(&server)
-        .await;
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(temp.path().join("client")),
@@ -1461,174 +1415,103 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         )
         .await?,
     );
-    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
-        .await?;
+    let runtime = crate::test_fixtures::ServedRuntimeHome::start_unpublished_for(Arc::new(
+        core.node_identity().clone(),
+    ))
+    .await;
+    runtime.publish_node(serde_json::json!({})).await;
+    let agent = runtime.publish_chat_agent().await;
+    let owner = runtime.node_did().to_owned();
+    core.add_managed_enrollment_peer_for_test(
+        &owner,
+        runtime.graphql(),
+        &runtime.home_path().display().to_string(),
+        1,
+    )
+    .await?;
+    let owner_request = |request_id: String| {
+        let access = runtime.user_access();
+        async move {
+            let response = access
+                .execute(&format!(
+                    "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ request_id requester_did admission_kind admission_signer_did }} }}",
+                    gents::store::graphql::escape_graphql_string(&request_id),
+                ))
+                .await?;
+            anyhow::Ok(
+                response["data"]["AgentRequest"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        }
+    };
+
     let submitted = core
-        .submit_request("session", owner.did(), "send directly", Some("agent"))
+        .submit_request("session", &owner, "send directly", Some(&agent.agent_did))
         .await?;
     assert_eq!(
         core.store().focused_request_id(),
         Some(submitted.request_id.clone())
     );
-    let response = gents::ConfigAccess::local(core.node_arc())
-        .execute(&format!(
-            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id}} }}",
-            gents::store::graphql::escape_graphql_string(&submitted.request_id),
-        ))
-        .await?;
+    let rows = owner_request(submitted.request_id.clone()).await?;
     assert_eq!(
-        response["data"]["AgentRequest"],
-        serde_json::json!([]),
-        "a successful owner write must not also create a replica request"
+        rows.len(),
+        1,
+        "the owner holds the committed request: {rows:?}"
     );
-    let requests = server.received_requests().await.unwrap();
-    let mutation: serde_json::Value = serde_json::from_slice(
-        &requests
-            .iter()
-            .find(|request| String::from_utf8_lossy(&request.body).contains("create_AgentRequest"))
-            .unwrap()
-            .body,
-    )?;
-    let query = mutation["query"].as_str().unwrap();
-    assert!(
-        query.contains(core.node_identity().did()),
-        "retain the enrolled desktop signer/requester"
+    assert_eq!(
+        rows[0]["requester_did"].as_str(),
+        Some(core.node_identity().did()),
+        "retain the desktop signer as requester"
     );
-    assert!(
-        query.contains("enrollment"),
-        "retain signed enrollment admission"
+    assert_eq!(rows[0]["admission_kind"].as_str(), Some("client"));
+    assert_eq!(
+        rows[0]["admission_signer_did"].as_str(),
+        Some(core.node_identity().did())
     );
-    let local = gents::ConfigAccess::local(core.node_arc());
-    let escaped_owner = gents::store::graphql::escape_graphql_string(owner.did());
-    let escaped_requester =
-        gents::store::graphql::escape_graphql_string(core.node_identity().did());
-    let created_at = gents::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let stale = local
-        .write(
-            "seed_stale_request",
-            &format!(
-                r#"mutation {{ create_AgentRequest(input: {{
-                    request_id: "stale-seed", session_id: "stale-session",
-                    node_did: "{escaped_owner}", requester_did: "{escaped_requester}",
-                    agent_did: "agent", content: "resend directly", purpose: "normal",
-                    lifecycle_state: "dead", failure_reason: "Stale", created_at: "{created_at}"
-                }}) {{ _docID }} }}"#
-            ),
-        )
-        .await?;
-    let session = gents_protocol::session::AgentSession {
-        session_id: "stale-session".into(),
-        node_did: owner.did().into(),
-        requester_did: Some(core.node_identity().did().into()),
-        agent_did: "agent".into(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        provenance: None,
-        tags: Vec::new(),
-        observation: Some(gents_protocol::session::SessionObservation {
-            reply_preview: None,
-            last_activity_at: chrono::Utc::now().to_rfc3339(),
-            preview: None,
-            latest_request: Some(gents_protocol::session::SessionRequestObservation {
-                request_doc_id: gents::store::graphql::created_doc_id(&stale, "AgentRequest")?,
-                request_id: "stale-seed".into(),
-                lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Dead,
-            }),
-        }),
-    };
-    let input = serde_json::to_value(session)?;
-    local
-        .transact_write("seed_stale_session", |txn| {
-            let variables = serde_json::json!({ "input": input.clone() });
-            Box::pin(async move {
-                txn.execute_with_variables(
-                    "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
-                    &variables,
-                )
-                .await
-            })
-        })
-        .await?;
-    core.refresh_store().await?;
-    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
-        .await?;
-    let resent = core
-        .resend_request_in_scope("stale-seed", Some(owner.did()))
-        .await?;
-    let response = local
-        .execute(&format!(
-            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id}} }}",
-            gents::store::graphql::escape_graphql_string(&resent.request_id),
-        ))
-        .await?;
-    assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
-    let requests = server.received_requests().await.unwrap();
-    let mutation: serde_json::Value = serde_json::from_slice(
-        &requests
-            .iter()
-            .rev()
-            .find(|request| String::from_utf8_lossy(&request.body).contains("create_AgentRequest"))
-            .unwrap()
-            .body,
-    )?;
-    let query = mutation["query"].as_str().unwrap();
-    assert!(query.contains("stale-seed"), "preserve resend lineage");
-    assert!(query.contains(core.node_identity().did()));
-    assert!(query.contains("enrollment"));
+
     let record = core
         .sync_state
         .records()
         .into_iter()
-        .find(|record| record.node_did == owner.did())
+        .find(|record| record.node_did == owner)
         .unwrap();
     core.sync_state.set_pairing_ready(&record, false).await?;
     let denied = core
         .submit_request(
             "denied-session",
-            owner.did(),
+            &owner,
             "must not fall back",
-            Some("agent"),
+            Some(&agent.agent_did),
         )
         .await;
+    let denied = denied.expect_err("a closed route must refuse the direct owner write");
     assert!(
         denied
-            .as_ref()
-            .is_err_and(|error| error.to_string().contains("route is not ready")),
-        "the direct owner route must not bypass the existing write fence: {denied:?}"
+            .to_string()
+            .contains(crate::client::peer_directory::ChatRouteCause::PairingPending.token()),
+        "the direct owner route must not bypass the write fence: {denied:#}"
     );
     let denied_resend = core
-        .resend_request_in_scope("stale-seed", Some(owner.did()))
-        .await;
+        .resend_request_in_scope(&submitted.request_id, Some(&owner))
+        .await
+        .expect_err("resend must preserve the write fence");
     assert!(
-        denied_resend
-            .as_ref()
-            .is_err_and(|error| error.to_string().contains("route is not ready")),
-        "resend must preserve the write fence: {denied_resend:?}"
+        denied_resend.to_string().contains("pairing_pending"),
+        "{denied_resend:#}"
     );
-    assert_eq!(
-        server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .filter(|request| {
-                String::from_utf8_lossy(&request.body).contains("create_AgentRequest")
-            })
-            .count(),
-        2
-    );
-    let response = gents::ConfigAccess::local(core.node_arc())
+    let all = runtime
+        .user_access()
         .execute("{ AgentRequest { request_id } }")
         .await?;
     assert_eq!(
-        response["data"]["AgentRequest"],
-        serde_json::json!([{ "request_id": "stale-seed" }])
+        all["data"]["AgentRequest"].as_array().map(Vec::len),
+        Some(1),
+        "no refused write reached the owner: {all}"
     );
     core.shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 
@@ -1806,4 +1689,100 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         }
     }
     std::sync::Arc::new(core).shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().to_path_buf()),
+            ClientCoreOptions::local_simulated_route(),
+        )
+        .await?,
+    );
+    let cases = crate::client::peer_directory::tests::chat_readiness_cases();
+    assert!(cases.len() > 50);
+    for (index, (record, now, refusal)) in cases.into_iter().enumerate() {
+        let node_did = format!("did:key:runtime-{index}");
+        if let Some(mut record) = record.clone() {
+            record.node_did = node_did.clone();
+            core.sync_state.upsert_for_test(record).await?;
+        }
+        let selected = core.peer_record_for_chat_write(&node_did, now).await;
+        let gated = selected.and_then(|peer| {
+            super::writes::ensure_peer_chat_ready_at(&node_did, peer.as_ref(), now).map(|()| peer)
+        });
+        match refusal {
+            None => assert!(gated?.is_some_and(|peer| peer.node_did == node_did)),
+            Some(token) => {
+                let error = gated.expect_err("refused route must not select a write target");
+                assert_eq!(
+                    error
+                        .downcast_ref::<super::writes::ChatRouteRefusal>()
+                        .map(|refusal| refusal.cause().token()),
+                    Some(token.as_str()),
+                    "{record:?}: {error:#}"
+                );
+            }
+        }
+    }
+    core.shutdown().await?;
+    Ok(())
+}
+
+/// `ClientChatReadiness.restart_closes_writes`: a managed runtime restart
+/// closes writes although the record keeps its operator endpoint.
+#[tokio::test]
+async fn managed_runtime_restart_closes_chat_writes_until_pairing_repair() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().to_path_buf()),
+            ClientCoreOptions::local_simulated_route(),
+        )
+        .await?,
+    );
+    let node_did = "did:key:managed-runtime";
+    let home = temp.path().join("runtime");
+    core.add_managed_enrollment_peer_for_test(
+        node_did,
+        "http://127.0.0.1:9191/api/v0/graphql",
+        home.to_str().unwrap(),
+        1,
+    )
+    .await?;
+    let now = chrono::Utc::now();
+    let ready = core.peer_record_for_chat_write(node_did, now).await?;
+    assert!(ready
+        .as_ref()
+        .is_some_and(|peer| peer.operator_graphql().is_some()));
+
+    core.mark_managed_runtime_restarting(node_did).await?;
+    let refused = core
+        .peer_record_for_chat_write(node_did, now)
+        .await
+        .expect_err("a restarting runtime must not accept chat writes");
+    assert_eq!(
+        refused
+            .downcast_ref::<super::writes::ChatRouteRefusal>()
+            .map(super::writes::ChatRouteRefusal::cause),
+        Some(crate::client::peer_directory::ChatRouteCause::PairingPending),
+        "{refused:#}"
+    );
+    assert!(refused.to_string().contains("pairing_pending"));
+    let record = core
+        .sync_state
+        .records()
+        .into_iter()
+        .find(|record| record.node_did == node_did)
+        .unwrap();
+    assert!(record.operator_graphql().is_some());
+    core.sync_state.set_pairing_ready(&record, true).await?;
+    assert!(core
+        .peer_record_for_chat_write(node_did, now)
+        .await?
+        .is_some());
+    core.shutdown().await?;
+    Ok(())
 }
