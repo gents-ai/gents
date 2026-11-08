@@ -109,15 +109,6 @@ def desiredPublisherCasesJson : String := (toJson
         ("local", toJson localNode), ("target", toJson targetNode), ("held", toJson held),
         ("allowed", toJson (desiredRoutePublisher actor localNode targetNode held))])).compress
 
-def routeWitnessCasesJson : String := (toJson
-  ([("valid", "node", "node", true, true), ("forged-desired", "other", "node", true, true),
-    ("forged-applied", "node", "other", true, true), ("hidden", "node", "node", false, true)].map
-    fun (name, desired, applied, desiredVisible, appliedVisible) =>
-      Json.mkObj [("name", toJson name), ("desired_owner", toJson desired),
-        ("applied_owner", toJson applied), ("desired_visible", toJson desiredVisible),
-        ("applied_visible", toJson appliedVisible),
-        ("allowed", toJson (runtimeRouteWitnesses "node" desired applied desiredVisible appliedVisible))])).compress
-
 def receiverGrantCasesJson : String := (toJson
   ([(false, false), (true, false), (true, true)].map fun (senderGranted, delivered) =>
     Json.mkObj [("sender_granted", toJson senderGranted), ("delivered", toJson delivered),

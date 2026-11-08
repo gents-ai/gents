@@ -16,7 +16,6 @@ pub mod intervals;
 pub mod policy;
 pub mod profiles;
 pub mod registry;
-mod session_command_authority;
 pub mod session_commands;
 pub mod session_goal_control;
 pub mod session_hydration;

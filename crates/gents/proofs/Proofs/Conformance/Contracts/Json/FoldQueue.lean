@@ -177,7 +177,6 @@ def editStateJson (s : SessionQueue.InputEdit.State) : String :=
 def editCommandJson (command : SessionQueue.InputEdit.Command) : String :=
   "{\"id\":" ++ toString command.id ++
   ",\"digest\":" ++ toString command.digest ++ ",\"caller\":" ++ jsonOptionalNat command.caller ++
-  ",\"has_peer\":" ++ jsonOptionalBool (some command.hasPeer) ++
   ",\"issued_at\":" ++ toString command.issuedAt ++ ",\"expires_at\":" ++ toString command.expiresAt ++
   ",\"expected\":" ++ jsonArray (command.expected.map toString) ++
   ",\"offset\":" ++ toString command.offset ++ ",\"count\":" ++ toString command.count ++
@@ -190,8 +189,6 @@ def editAuthorityJson (a : SessionQueue.InputEdit.Authority) : String :=
   ",\"editor\":" ++ jsonString (match a.editor with
     | .requester => "requester" | .workingAgent => "working_agent"
     | .admin => "admin" | .other => "other") ++
-  ",\"enrollment_fresh\":" ++ jsonOptionalBool (some a.enrollmentFresh) ++
-  ",\"route_applied\":" ++ jsonOptionalBool (some a.routeApplied) ++
   ",\"command_identity_unique\":" ++ jsonOptionalBool (some a.commandIdentityUnique) ++ "}"
 
 def editStepJson : SessionQueue.InputEditCases.Step → String

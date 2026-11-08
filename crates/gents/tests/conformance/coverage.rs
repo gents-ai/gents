@@ -1727,9 +1727,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     if !snapshot.session_input_edit_cases.is_empty() {
-        for domain in ["SessionInputEditCases", "SessionInputEditRemoteCases"] {
-            emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
-        }
+        emitted.insert((
+            "session_input_edit_cases".to_string(),
+            "SessionInputEditCases".to_string(),
+        ));
     }
     if !snapshot
         .session_input_edit_native_discovery_cases

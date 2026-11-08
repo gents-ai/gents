@@ -1450,17 +1450,12 @@ def caseCoverage : List CoverageEntry :=
       "session_input_edit_cases"
       "SessionInputEditCases"
       "runtime::agent::p2p_reconcile::session_input_edit::tests::generated_commands_bind_to_atomic_queue_owner"
-      "The model composes existing authority observations with the queue replacement owner and atomic terminal receipt. Signature validity, current enrollment and applied route are supplied by their existing native owners; the command introduces no new authority kind. Native binding must exercise these facts, exact replay and identity collision through the real reconciler. Distinct physical commands sharing an ID are an observed fail-closed barrier, including before application and after a receipt on another session; existing effects and receipts remain intact.")
+      "The model composes existing authority observations with the queue replacement owner and atomic terminal receipt. Signature validity and session ownership are supplied by their existing native owners; edits are direct client-signed commands, and the command introduces no new authority kind. Native binding must exercise these facts, exact replay and identity collision through the real reconciler. Distinct physical commands sharing an ID are an observed fail-closed barrier, including before application and after a receipt on another session; existing effects and receipts remain intact.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_input_edit_cases"
       "SessionInputEditCases"
       "e2e_runtime::session_input_edit::generated_client_edits_publish_concurrently_with_signed_effect_and_receipt")
-      "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "session_input_edit_cases"
-      "SessionInputEditRemoteCases"
-      "The has_peer cases (remote_applied, revoked_enrollment_rejected, missing_route_rejected) model edit commands delivered by peer replication, gated on current enrollment and an applied route. P2P carries only discovery and enrollment, so no edit command arrives by peer delivery and no native test can bind these cases. The deletion pass removes them with CommandAuthority's peer branch and the runtime's requester_peer_id authority path.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_input_edit_client_observation_cases"

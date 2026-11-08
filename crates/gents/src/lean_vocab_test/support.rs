@@ -319,7 +319,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) identity_deferred_operation_cases: Vec<serde_json::Value>,
     pub(crate) identity_pairing_partition_cases: Vec<serde_json::Value>,
     pub(crate) identity_desired_publisher_cases: Vec<serde_json::Value>,
-    pub(crate) identity_route_witness_cases: Vec<serde_json::Value>,
     pub(crate) identity_receiver_grant_cases: Vec<serde_json::Value>,
     pub(crate) identity_pairing_reader_cases: Vec<serde_json::Value>,
     pub(crate) identity_pairing_reader_policy_cases: Vec<serde_json::Value>,
@@ -4827,7 +4826,6 @@ pub(crate) struct LeanSessionInputEditCommand {
     pub(crate) id: u64,
     pub(crate) digest: u64,
     pub(crate) caller: Option<u64>,
-    pub(crate) has_peer: bool,
     pub(crate) issued_at: u64,
     pub(crate) expires_at: u64,
     pub(crate) expected: Vec<u64>,
@@ -4843,8 +4841,6 @@ pub(crate) struct LeanSessionInputEditAuthority {
     pub(crate) command_identity_unique: bool,
     pub(crate) session_owned: bool,
     pub(crate) editor: LeanSessionInputEditor,
-    pub(crate) enrollment_fresh: bool,
-    pub(crate) route_applied: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]

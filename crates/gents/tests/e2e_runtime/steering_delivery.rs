@@ -225,7 +225,6 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         &access,
         &fixture.user,
         AgentRequestAdmissionRecord::client(user_did),
-        None,
         did,
         name,
         PendingQueueEdit {
@@ -247,7 +246,6 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         &access,
         &fixture.user,
         AgentRequestAdmissionRecord::client(user_did),
-        None,
         did,
         name,
         PendingQueueEdit {
@@ -290,7 +288,6 @@ async fn steering_case(hold_tool: bool, promote: bool) {
             &access,
             &fixture.user,
             AgentRequestAdmissionRecord::client(user_did),
-            None,
             did,
             name,
             edit,

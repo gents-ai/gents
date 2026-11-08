@@ -10,10 +10,14 @@ to actual peer delivery; direct document operations do not require a Node key. -
 structure Facts where
   signatureValid : Bool
   sessionOwned : Bool
-  requesterIsNode : Bool
   enrollmentFresh : Bool
   routeApplied : Bool
   deriving DecidableEq, Repr
+
+/-- A direct command's facts: no peer delivered it, so enrollment and route
+evidence are not consulted. -/
+def Facts.direct (signatureValid sessionOwned : Bool) : Facts :=
+  ⟨signatureValid, sessionOwned, false, false⟩
 
 def authorized (facts : Facts) (hasPeer : Bool) (now expiresAt : Nat) : Bool :=
   facts.signatureValid && facts.sessionOwned && decide (now < expiresAt) &&
@@ -26,10 +30,5 @@ theorem invalid_signature_is_denied (facts : Facts) (peer : Bool) (now expires :
 theorem remote_requires_current_enrollment (facts : Facts) (now expires : Nat)
     (h : facts.enrollmentFresh = false) : authorized facts true now expires = false := by
   simp [authorized, h]
-
-theorem direct_command_independent_of_node_key (facts : Facts) (now expires : Nat) :
-    authorized { facts with requesterIsNode := false } false now expires =
-      authorized { facts with requesterIsNode := true } false now expires := by
-  simp [authorized]
 
 end AgentSession.CommandAuthority

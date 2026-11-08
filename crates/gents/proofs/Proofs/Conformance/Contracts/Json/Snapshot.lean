@@ -700,8 +700,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OperationsConformance.pairingPartitionCasesJson ++ ","
     ++ "\"identity_desired_publisher_cases\":"
       ++ Identity.OperationsConformance.desiredPublisherCasesJson ++ ","
-    ++ "\"identity_route_witness_cases\":"
-      ++ Identity.OperationsConformance.routeWitnessCasesJson ++ ","
     ++ "\"identity_receiver_grant_cases\":"
       ++ Identity.OperationsConformance.receiverGrantCasesJson ++ ","
     ++ "\"identity_pairing_reader_cases\":"
