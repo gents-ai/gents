@@ -328,8 +328,9 @@ inductive Step : State → State → Prop where
   | select (s : State) (n : Nat) (drop : Bool) (h : n ≠ s.selected) :
       Step s { s with selected := n, queued := true, timer := false, budget := rereadBudget,
                       shown := if drop then none else s.shown }
-  /-- a store or health notice, or a foreground refresh -/
-  | notice (s : State) : Step s { s with queued := true }
+  /-- a store or health notice, or a foreground refresh. Any read the
+  re-read timer did not start begins a new re-read streak. -/
+  | notice (s : State) : Step s { s with queued := true, budget := rereadBudget }
   | begin (s : State) (h : s.queued = true) : Step s (start s)
   | complete (s : State) (t : Nat) (o : Outcome) (h : s.reading = some t) :
       Step s (finish s t o)

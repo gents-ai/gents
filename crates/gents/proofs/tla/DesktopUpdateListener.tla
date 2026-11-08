@@ -157,12 +157,14 @@ Relistens ==
   /\ UNCHANGED <<rust, registered, failures, inbox, queued, reading, view, arrived,
                  selected, load, phase, timer, budget, mismatches, selections>>
 
+\* A read the re-read timer did not start begins a new re-read streak.
 Handle ==
   /\ inbox
   /\ inbox' = FALSE
   /\ queued' = TRUE
+  /\ budget' = RereadBudget
   /\ UNCHANGED <<rust, registered, listener, failures, reading, view, arrived,
-                 selected, load, phase, timer, budget, mismatches, selections>>
+                 selected, load, phase, timer, mismatches, selections>>
 
 StartRead ==
   /\ queued /\ reading = NoRead
