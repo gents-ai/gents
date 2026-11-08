@@ -89,6 +89,10 @@ def codexShimProjectionCases : List CodexShimProjectionCase :=
       .claimed false
   , codexShimProjectionCase "codex_shim.projection.processing"
       .processing false
+  , codexShimProjectionCase "codex_shim.projection.waiting_for_backend"
+      .waitingForBackend false
+  , codexShimProjectionCase "codex_shim.projection.resuming_backend"
+      .resumingBackend false
   , codexShimProjectionCase "codex_shim.projection.completed_request"
       .completed false
   , codexShimProjectionCase "codex_shim.projection.failed_request"

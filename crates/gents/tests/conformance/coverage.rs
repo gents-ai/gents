@@ -83,6 +83,8 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
             "pending",
             "claimed",
             "processing",
+            "waitingForBackend",
+            "resumingBackend",
             "completed",
             "failed",
             "superseded",
