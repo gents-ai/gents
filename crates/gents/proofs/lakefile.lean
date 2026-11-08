@@ -26,6 +26,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.EditorUndo,
   `Proofs.Conformance.EditorUndoCheckpoint,
   `Proofs.Conformance.ClientDataPublication,
+  `Proofs.Conformance.ObserverResync,
   `Proofs.Conformance.ClientRequestCacheIdentity,
   `Proofs.Conformance.ClientRequestClosure,
   `Proofs.Conformance.SessionQueueOrder,
