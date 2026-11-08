@@ -417,6 +417,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
     pub(crate) enrollment_pending_request_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_absent_peer_cases: Vec<serde_json::Value>,
+    pub(crate) client_chat_readiness_cases: Vec<serde_json::Value>,
+    pub(crate) client_chat_readiness_causes: Vec<serde_json::Value>,
     pub(crate) enrollment_route_readiness_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_startup_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,

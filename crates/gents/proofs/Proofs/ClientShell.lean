@@ -2,6 +2,7 @@ import Proofs.ClientShell.Types
 import Proofs.ClientShell.SessionTurn
 import Proofs.ClientShell.Submission
 import Proofs.ClientShell.SubmissionReceipt
+import Proofs.ClientShell.ChatReadiness
 import Proofs.ClientShell.Transition
 import Proofs.ClientShell.Projection
 import Proofs.ClientShell.PresentationAgreement
