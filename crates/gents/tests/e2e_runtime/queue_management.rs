@@ -734,10 +734,8 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
         ("replaces_request_doc_id", changed_predecessor),
     ] {
         let error = gents::verify_request_receipt_signature(&tampered).expect_err(field);
-        assert!(
-            format!("{error:#}").contains("signature"),
-            "{field}: {error:#}"
-        );
+        let chain = gents_protocol::error_chain::ErrorChain(&error).to_string();
+        assert!(chain.contains("signature"), "{field}: {chain}");
     }
     gents::verify_request_receipt_signature(signed)
         .expect("tampering clones must not change the persisted signed replacement");
