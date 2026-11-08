@@ -67,7 +67,7 @@ export function PromoteWorkflowDialog({
   const collapsed = !showAll && lines.length > SCRIPT_LINES;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose(promoted ?? undefined)}>
-      <DialogContent aria-modal="true" className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Promote {run?.view.handle ?? "workflow"}</DialogTitle>
           <DialogDescription>Installs this run's script as a tool.</DialogDescription>

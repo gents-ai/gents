@@ -796,7 +796,7 @@ export function AgentEditor({
       />
 
       <AlertDialog open={confirmShared} onOpenChange={setConfirmShared}>
-        <AlertDialogContent aria-modal="true" className="sm:max-w-lg">
+        <AlertDialogContent className="sm:max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>This also changes {sharedWith}</AlertDialogTitle>
             <AlertDialogDescription>

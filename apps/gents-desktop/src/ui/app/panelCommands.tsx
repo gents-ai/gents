@@ -184,7 +184,6 @@ export function PanelPicker({ route }: { route: Route }) {
         ref={dialog.popupRef}
         initialFocus={input}
         showCloseButton={false}
-        aria-modal="true"
         className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-sm"
         style={{
           top: "calc(var(--viewport-top) + var(--viewport-height) * 0.12)",

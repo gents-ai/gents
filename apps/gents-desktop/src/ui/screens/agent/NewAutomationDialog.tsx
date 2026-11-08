@@ -774,7 +774,7 @@ export function NewAutomationDialog({
   };
   return (
     <Dialog open={open} onOpenChange={change}>
-      <DialogContent aria-modal="true" className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
             {forTask ? "New task" : task ? "When it runs" : "New automation"}

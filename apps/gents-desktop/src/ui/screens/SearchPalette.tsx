@@ -137,7 +137,6 @@ export function SearchPalette() {
         ref={palette.popupRef}
         initialFocus={searchInput}
         showCloseButton={false}
-        aria-modal="true"
         className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
         style={{
           top: "calc(var(--viewport-top) + var(--viewport-height) * 0.12)",

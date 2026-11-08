@@ -158,7 +158,7 @@ export function AccountDialogs({
         open={acting?.action === "disconnect"}
         onOpenChange={(open) => !open && !busy && onClose()}
       >
-        <DialogContent aria-modal="true">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Disconnect {account?.label}?</DialogTitle>
             <DialogDescription>

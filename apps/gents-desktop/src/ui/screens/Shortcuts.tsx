@@ -241,11 +241,7 @@ export function Shortcuts() {
   const commands = useCommands();
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent
-        aria-modal="true"
-        className="sm:max-w-md"
-        data-testid="shortcuts-help"
-      >
+      <DialogContent className="sm:max-w-md" data-testid="shortcuts-help">
         <DialogHeader>
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription>
