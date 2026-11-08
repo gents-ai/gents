@@ -305,7 +305,6 @@ mod tests {
         let skew = gents_protocol::peer_schema::ReplicatedSchemaSkew {
             collections: vec!["AgentSession".to_string()],
             advertised: true,
-            ..Default::default()
         };
         let health = project_sync_health(&ClientSyncStateSnapshot {
             transport: transport(P2PHealthStatus::Wedged),
