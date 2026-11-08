@@ -2,10 +2,75 @@ use super::*;
 use anyhow::Context;
 
 use crate::session::message::{AgentMessageArgs, AgentNewArgs};
+use crate::tools::native::AGENT_SESSION_LIST_TOOL_NAME;
 use crate::store::config_client::TransactionFailure;
 
 fn unavailable_agent_payload(tool_name: &str) -> String {
     service_unavailable_payload(tool_name, "/agent", "selected agent is unavailable", false)
+}
+
+/// An agent_message refusal for a session_id this caller cannot reach. Models
+/// often pass an agent name or Agent DID there; the refusal then names the exact
+/// agent_new call that starts that agent with the same body.
+fn unreachable_session_payload(
+    tool_name: &str,
+    requested: &str,
+    args: &AgentMessageArgs,
+    tools: &crate::tools::surface::AgentToolConfig,
+) -> String {
+    let named = tools.targets.iter().find(|target| {
+        target.name.eq_ignore_ascii_case(requested) || target.agent_did == requested
+    });
+    let only = match tools.targets.as_slice() {
+        [target] => Some(target),
+        _ => None,
+    };
+    let start = |target: &crate::documents::AgentTargetDocument| {
+        let mut arguments = json!({"agent": target.name});
+        match (&args.message, &args.task) {
+            (_, Some(task)) => {
+                arguments["task"] = json!({"task_id": task.task_id, "input": task.input})
+            }
+            (Some(message), None) => arguments["prompt"] = json!(message),
+            (None, None) => arguments["prompt"] = json!("<PROMPT>"),
+        }
+        json!({"tool": AGENT_NEW_TOOL_NAME, "arguments": arguments})
+    };
+    let (message, next_call) = match (named, tools.agent_new_enabled()) {
+        (Some(target), true) => (
+            format!(
+                "'{requested}' names the agent '{}', not a session. Start it with agent_new as next_call shows; continue that conversation later with agent_message and the session_id agent_new returns.",
+                target.name
+            ),
+            start(target),
+        ),
+        (None, true) => (
+            format!(
+                "no session '{requested}' is reachable. To start a new conversation, call agent_new with one of allowed_agents; to continue one, copy its session_id from agent_session_list."
+            ),
+            only.map(start).unwrap_or_else(
+                || json!({"tool": AGENT_SESSION_LIST_TOOL_NAME, "arguments": {}}),
+            ),
+        ),
+        (_, false) => (
+            format!(
+                "no session '{requested}' is reachable, and this agent has no agent targets, so agent_new is unavailable. Copy a session_id from agent_session_list, or add an AgentTarget and select it in Tools.agents.target_ids (config help agent-target)."
+            ),
+            json!({"tool": AGENT_SESSION_LIST_TOOL_NAME, "arguments": {}}),
+        ),
+    };
+    json_string(json!({
+        "ok": false,
+        "failure_class": "tool_not_allowed",
+        "path": "/session_id",
+        "message": message,
+        "next_call": next_call,
+        "retryable": false,
+        "service_id": "session",
+        "tool_name": tool_name,
+        "requested_tool_name": requested,
+        "allowed_agents": tools.target_names()
+    }))
 }
 
 fn native_permission_denied<E>(error: &E) -> bool
@@ -170,13 +235,7 @@ impl DefraSessionHook {
             else {
                 refuse!(
                     FailureClass::ArgumentInvalid,
-                    tool_not_allowed_payload(
-                        tool_name,
-                        "/session_id",
-                        &target_session,
-                        "session is neither this agent's own nor one it started on an allowed agent",
-                        tools.target_names(),
-                    )
+                    unreachable_session_payload(tool_name, &target_session, &parsed, &tools)
                 );
             };
             let delivery = match parsed.delivery() {
@@ -687,4 +746,70 @@ fn hop_exceeded_payload(tool_name: &str, hop: u32, max_request_hop: u32) -> Stri
         "hop": hop,
         "max_request_hop": max_request_hop
     }))
+}
+
+#[cfg(test)]
+mod unreachable_session_tests {
+    use super::*;
+
+    fn tools(names: &[&str]) -> crate::tools::surface::AgentToolConfig {
+        crate::tools::surface::AgentToolConfig {
+            enabled: true,
+            targets: names
+                .iter()
+                .map(|name| crate::documents::AgentTargetDocument {
+                    target_id: format!("{name}-target"),
+                    node_did: "did:key:node".to_owned(),
+                    target_node_did: "did:key:node".to_owned(),
+                    agent_did: format!("did:key:{name}"),
+                    name: (*name).to_owned(),
+                    description: None,
+                    tags: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    fn refusal(session_id: &str, tools: &crate::tools::surface::AgentToolConfig) -> serde_json::Value {
+        let args: AgentMessageArgs = serde_json::from_value(
+            json!({"session_id": session_id, "message": "Reply with exactly TRAIN-111"}),
+        )
+        .unwrap();
+        serde_json::from_str(&unreachable_session_payload(
+            "agent_message",
+            session_id,
+            &args,
+            tools,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_agent_name_as_session_id_names_the_agent_new_call() {
+        let tools = tools(&["research-helper", "reviewer"]);
+        for requested in ["research-helper", "Research-Helper", "did:key:research-helper"] {
+            let refusal = refusal(requested, &tools);
+            assert_eq!(
+                refusal["next_call"],
+                json!({"tool": "agent_new", "arguments": {"agent": "research-helper", "prompt": "Reply with exactly TRAIN-111"}}),
+                "{requested}"
+            );
+            assert!(refusal["message"].as_str().unwrap().contains("not a session"));
+        }
+    }
+
+    #[test]
+    fn an_unknown_session_points_to_the_only_target_or_the_session_list() {
+        assert_eq!(
+            refusal("missing", &tools(&["helper"]))["next_call"]["arguments"]["agent"],
+            "helper"
+        );
+        assert_eq!(
+            refusal("missing", &tools(&["a", "b"]))["next_call"],
+            json!({"tool": "agent_session_list", "arguments": {}})
+        );
+        let none = refusal("missing", &tools(&[]));
+        assert_eq!(none["next_call"]["tool"], "agent_session_list");
+        assert!(none["message"].as_str().unwrap().contains("agent_new is unavailable"));
+    }
 }
