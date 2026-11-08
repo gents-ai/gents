@@ -25,22 +25,14 @@ impl ClientCore {
         if input.goal_assignment.is_some() {
             return Ok(input);
         }
-        let requester_did = gents::session::client_requester_scope(
-            &self.session_queue_access(node_did)?,
-            node_did,
-            session_id,
-            self.node_identity.did(),
-        )
-        .await?;
-        gents::goal::prepare_goal_input(
+        let state = gents::goal::load_client_session_goal_observation_state(
             &self.session_queue_access(node_did)?,
             &self.node_identity,
             node_did,
             session_id,
-            Some(&requester_did),
-            input,
         )
-        .await
+        .await?;
+        gents::goal::bind_goal_input(input, state)
     }
 
     pub async fn session_goal_observation(
@@ -48,21 +40,22 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
     ) -> Result<Option<SessionGoalObservation>> {
-        let requester_did = gents::session::client_requester_scope(
-            &self.session_queue_access(node_did)?,
-            node_did,
-            session_id,
-            self.node_identity.did(),
+        Ok(
+            match gents::goal::load_client_session_goal_observation_state(
+                &self.session_queue_access(node_did)?,
+                &self.node_identity,
+                node_did,
+                session_id,
+            )
+            .await?
+            {
+                gents::goal::SessionGoalObservationState::Observed(observation) => {
+                    Some(*observation)
+                }
+                gents::goal::SessionGoalObservationState::NoReadableSession
+                | gents::goal::SessionGoalObservationState::Unknown => None,
+            },
         )
-        .await?;
-        gents::goal::load_session_goal_observation(
-            &self.session_queue_access(node_did)?,
-            &self.node_identity,
-            node_did,
-            session_id,
-            Some(&requester_did),
-        )
-        .await
     }
 
     #[allow(clippy::too_many_arguments)]

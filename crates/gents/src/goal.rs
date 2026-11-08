@@ -56,9 +56,9 @@ pub(crate) use history::{
     load_assignment_versions_for_session, load_goal_versions_for_session, GoalAssignmentVersion,
 };
 pub use observation::{
-    bind_goal_input, load_session_goal_observation, load_session_goal_observation_state,
-    load_session_goal_observation_state_in_txn, prepare_goal_input, prepare_goal_input_in_txn,
-    SessionGoalObservationState,
+    bind_goal_input, load_client_session_goal_observation_state, load_session_goal_observation,
+    load_session_goal_observation_state, load_session_goal_observation_state_in_txn,
+    prepare_goal_input, prepare_goal_input_in_txn, SessionGoalObservationState,
 };
 pub(crate) use observation::{
     reconcile_goal_observations_with_identities, SOURCES as GOAL_OBSERVATION_SOURCES,
