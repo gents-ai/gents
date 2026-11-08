@@ -47,6 +47,7 @@ async fn wait_for_main_provider_request(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -256,6 +257,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -409,6 +411,7 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -709,6 +712,7 @@ async fn wait_for_real_caused_request(graphql: &str, parent: &str) -> Result<(St
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

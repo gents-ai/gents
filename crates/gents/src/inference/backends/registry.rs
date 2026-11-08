@@ -821,8 +821,12 @@ pub async fn record_discovered_catalog_on(
         observed_at: chrono::Utc::now().to_rfc3339(),
         models,
     };
+    // The catalog write re-reads the backend's metadata and observation rows
+    // in its transaction and has no other effect, so a confirmed conflict with
+    // the runtime's own probe of the same backend is rebuilt from fresh reads
+    // and signed again rather than surfaced.
     access
-        .transact_write("backend_registry.record_operator_catalog", |txn| {
+        .transact_signed_conflict_rebuild("backend_registry.record_operator_catalog", |txn| {
             let catalog = catalog.clone();
             Box::pin(async move { record_model_catalog_in_txn(txn, backend, catalog).await })
         })

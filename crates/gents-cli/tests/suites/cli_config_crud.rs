@@ -66,8 +66,6 @@ async fn agent_set_rejects_missing_context() -> Result<()> {
             &graphql,
             "--node-did",
             &owner,
-            "--agent-did",
-            "broken",
             "--context-id",
             "missing-context",
             "--inference-profile-id",
@@ -75,8 +73,21 @@ async fn agent_set_rejects_missing_context() -> Result<()> {
         ],
     )?;
     assert!(
-        error.contains("field context_id references missing AgentContext \"missing-context\""),
+        error.contains("selected AgentContext is unavailable"),
         "{error}"
+    );
+    let agents = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Agent(filter: {{context_id: {{_eq: "missing-context"}}, node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            escape_graphql_string(&owner)
+        ),
+    )
+    .await?;
+    assert_eq!(
+        agents["data"]["Agent"],
+        json!([]),
+        "a refused Agent publication leaves no Agent behind"
     );
     drop(server);
     Ok(())

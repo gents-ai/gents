@@ -958,8 +958,14 @@ async fn serve_foreground(
             return Err(gents::store::local::storage_backend::classify_store_error(error, &data_dir).into());
         }
         if !matches!(effective_tool_ceiling, ToolCeilingArg::MetaOnly) {
-            if let Some(root) = effective_tool_root.as_deref() {
-                gents::tools::surface::ensure_configured_root_published(&node, root)
+            // A root that does not resolve builds no host tools and is
+            // reported by the runtime contract; only a resolvable root must
+            // be covered by a published WorkspaceRoot before serving.
+            if let Some(Ok(root)) = effective_tool_root
+                .as_deref()
+                .map(gents::tools::surface::resolve_configured_tool_root)
+            {
+                gents::tools::surface::ensure_configured_root_published(&node, &root)
                     .await
                     .context("checking the configured host tool root against published WorkspaceRoot documents")?;
             }

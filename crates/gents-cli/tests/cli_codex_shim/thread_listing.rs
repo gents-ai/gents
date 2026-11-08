@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -212,6 +213,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

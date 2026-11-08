@@ -75,12 +75,14 @@ pub async fn create_authored_document(
     if !fields.as_object().is_some_and(|fields| !fields.is_empty()) || contains_empty_list(fields) {
         return Err(AuthoredDocumentCreateError::InvalidFields);
     }
-    let (held_signer, http) = match access {
-        ConfigAccess::Graphql(endpoint) => (
+    // Offline access publishes through its owned node's signed loopback
+    // endpoint, so the signing route, not the read transport, decides.
+    let (held_signer, http) = match access.write_route() {
+        super::WriteRoute::Http(endpoint) => (
             endpoint.pack_replay.is_none() && endpoint.held_client_signing_capability().is_ok(),
             true,
         ),
-        ConfigAccess::Local(_) => (false, false),
+        super::WriteRoute::Local(_) => (false, false),
     };
     if !held_signer || !http {
         return Err(AuthoredDocumentCreateError::ClientSignerRequired);
@@ -123,6 +125,57 @@ mod tests {
     use super::*;
     use crate::NodeIdentity;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn offline_access_publishes_through_its_signed_loopback_endpoint() -> anyhow::Result<()> {
+        const SDL: &str = "type OfflineAuthoredFixture { name: String }";
+        let directory = tempfile::tempdir()?;
+        let root = crate::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
+        let user = crate::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(root.did())
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .build()
+                .await?,
+        );
+        node.add_collection(SDL).await?;
+        let offline = || ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        assert!(matches!(
+            create_authored_document(
+                &offline(),
+                "OfflineAuthoredFixture",
+                &json!({"name": "unrouted"}),
+                DocumentSchemaSource::UserAuthored,
+                SDL,
+            )
+            .await,
+            Err(AuthoredDocumentCreateError::ClientSignerRequired)
+        ));
+        let routed = offline().with_client_signed_writes_through(
+            super::super::GraphqlEndpoint::as_principal(&url, user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?,
+        )?;
+        let doc = create_authored_document(
+            &routed,
+            "OfflineAuthoredFixture",
+            &json!({"name": "offline"}),
+            DocumentSchemaSource::UserAuthored,
+            SDL,
+        )
+        .await?;
+        let read = routed
+            .execute(&format!(
+                r#"{{ OfflineAuthoredFixture(docID: "{}") {{ name }} }}"#,
+                crate::store::graphql::escape_graphql_string(&doc)
+            ))
+            .await?;
+        assert_eq!(read["data"]["OfflineAuthoredFixture"][0]["name"], "offline");
+        node.shutdown().await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn authored_application_document_is_signed_by_the_held_user() -> anyhow::Result<()> {

@@ -8,7 +8,10 @@ use axum::body::Bytes;
 use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::any;
+use axum::extract::ws::{Message as ProxyMessage, WebSocket, WebSocketUpgrade};
+use axum::routing::{any, get};
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as UpstreamMessage};
 use axum::Router;
 use serde_json::Value;
 use tokio::sync::Semaphore;
@@ -199,6 +202,15 @@ async fn start_stalling_transaction_proxy(
         mutation_staged: mutation_staged.clone(),
     };
     let app = Router::new()
+        .route(
+            &format!(
+                "{}/client-sign",
+                url::Url::parse(graphql)
+                    .context("parsing GraphQL endpoint path")?
+                    .path()
+            ),
+            get(relay_and_stall_client_signed_mutation),
+        )
         .fallback(any(forward_and_stall_transactional_mutation))
         .with_state(state);
     // The runtime only serves its bound port, and DefraDB binds the bearer
@@ -271,6 +283,104 @@ async fn forward_and_stall_transactional_mutation(
         std::future::pending::<()>().await;
     }
     (status, bytes).into_response()
+}
+
+/// Client-signed mutations travel over the signing WebSocket. The relay
+/// forwards the conversation unchanged and withholds the successful response
+/// of a mutation bound to an open transaction, so the CLI is still inside that
+/// transaction when the test kills it.
+async fn relay_and_stall_client_signed_mutation(
+    State(state): State<StallingProxyState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let target = format!(
+        "{}{}",
+        state.target_origin.replacen("http", "ws", 1),
+        uri
+    );
+    let mut request = match target.into_client_request() {
+        Ok(request) => request,
+        Err(error) => {
+            return (StatusCode::BAD_GATEWAY, format!("signing relay: {error}")).into_response()
+        }
+    };
+    for name in [axum::http::header::AUTHORIZATION, axum::http::header::HOST] {
+        if let Some(value) = headers.get(&name) {
+            request.headers_mut().insert(name, value.clone());
+        }
+    }
+    upgrade.on_upgrade(move |client| relay_signing_conversation(client, request, state))
+}
+
+async fn relay_signing_conversation(
+    client: WebSocket,
+    request: axum::http::Request<()>,
+    state: StallingProxyState,
+) {
+    let Ok((upstream, _)) = tokio_tungstenite::connect_async(request).await else {
+        return;
+    };
+    let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    let (mut client_tx, mut client_rx) = client.split();
+    let transactional = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let start = transactional.clone();
+    let outbound = async move {
+        let mut first = true;
+        while let Some(Ok(message)) = client_rx.next().await {
+            let forwarded = match message {
+                ProxyMessage::Text(text) => {
+                    if std::mem::take(&mut first) {
+                        let opening = serde_json::from_str::<Value>(text.as_str()).ok();
+                        let in_txn = opening.as_ref().is_some_and(|value| {
+                            !value["txn_id"].is_null()
+                                && value["query"]
+                                    .as_str()
+                                    .is_some_and(|query| query.trim_start().starts_with("mutation"))
+                        });
+                        start.store(in_txn, std::sync::atomic::Ordering::Release);
+                    }
+                    UpstreamMessage::Text(text.as_str().into())
+                }
+                ProxyMessage::Binary(bytes) => UpstreamMessage::Binary(bytes),
+                ProxyMessage::Close(_) => break,
+                ProxyMessage::Ping(_) | ProxyMessage::Pong(_) => continue,
+            };
+            if upstream_tx.send(forwarded).await.is_err() {
+                break;
+            }
+        }
+    };
+    let inbound = async move {
+        while let Some(Ok(message)) = upstream_rx.next().await {
+            let forwarded = match message {
+                UpstreamMessage::Text(text) => {
+                    let staged_in_txn = transactional.load(std::sync::atomic::Ordering::Acquire)
+                        && serde_json::from_str::<Value>(text.as_str()).is_ok_and(|value| {
+                            value.get("response").is_some_and(|response| {
+                                response["errors"].as_array().is_none_or(Vec::is_empty)
+                            })
+                        });
+                    if staged_in_txn {
+                        state.mutation_staged.add_permits(1);
+                        std::future::pending::<()>().await;
+                    }
+                    ProxyMessage::Text(text.as_str().into())
+                }
+                UpstreamMessage::Binary(bytes) => ProxyMessage::Binary(bytes),
+                UpstreamMessage::Close(_) => break,
+                _ => continue,
+            };
+            if client_tx.send(forwarded).await.is_err() {
+                break;
+            }
+        }
+    };
+    tokio::select! {
+        () = outbound => {}
+        () = inbound => {}
+    }
 }
 
 async fn count_collection_rows(graphql: &str, collection: &str) -> Result<usize> {

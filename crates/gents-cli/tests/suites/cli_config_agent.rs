@@ -35,6 +35,12 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         .and_then(Value::as_str)
         .context("init output missing inference_profile_id")?
         .to_string();
+    // Host-tool presets run only under the WorkspaceRoot init published.
+    let tool_root = init
+        .get("tool_root")
+        .and_then(Value::as_str)
+        .context("init output missing tool_root")?
+        .to_string();
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -56,6 +62,8 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             "Research the requested topic and write a concise evidence-backed report.",
             "--preset",
             "write",
+            "--root",
+            &tool_root,
             "--profile-id",
             &profile_id,
         ],
@@ -69,7 +77,10 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         .and_then(Value::as_str)
         .context("create output missing agent_did")?
         .to_string();
-    assert_eq!(agent_did, format!("{node_did}:research-assistant"));
+    assert!(
+        agent_did.starts_with("did:key:") && agent_did != node_did,
+        "agent create mints the Agent its own DID: {agent_did}"
+    );
 
     let cloned = run_cli_json(
         &home_dir,
@@ -92,7 +103,10 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         .and_then(Value::as_str)
         .context("clone output missing agent_did")?
         .to_string();
-    assert_eq!(cloned_id, format!("{node_did}:cloned-assistant"));
+    assert!(
+        cloned_id.starts_with("did:key:") && cloned_id != agent_did && cloned_id != node_did,
+        "agent clone mints the clone its own DID: {cloned_id}"
+    );
 
     let disabled = run_cli_json(
         &home_dir,
@@ -159,6 +173,8 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             "Inspect the requested files and report findings without modifying them.",
             "--preset",
             "readonly",
+            "--root",
+            &tool_root,
             "--profile-id",
             &profile_id,
         ],

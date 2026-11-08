@@ -124,3 +124,135 @@ pub fn identity_from_init(init: &serde_json::Value) -> anyhow::Result<gents::Key
         .context("init output missing key_path")?;
     gents::KeyIdentity::load_or_create(key_path, None).context("loading initialized node identity")
 }
+
+/// A GraphQL response from [`UserSeededHome`], shaped like the embedded
+/// node's so fixtures read `data` and `errors` the same way.
+pub struct SeedResponse {
+    pub data: Option<serde_json::Value>,
+    pub errors: Vec<String>,
+}
+
+impl SeedResponse {
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    fn from_result(result: anyhow::Result<serde_json::Value>) -> Self {
+        match result {
+            Ok(mut value) => Self {
+                errors: value
+                    .get("errors")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|errors| errors.iter().map(ToString::to_string).collect())
+                    .unwrap_or_default(),
+                data: value.get_mut("data").map(serde_json::Value::take),
+            },
+            Err(error) => Self {
+                data: None,
+                errors: vec![format!("{error:#}")],
+            },
+        }
+    }
+}
+
+/// An identity-only home whose protected store is open with a loopback
+/// endpoint, so fixture rows are written and read as the CLI's User — the
+/// actor every later offline CLI command in that `HOME` acts as.
+pub struct UserSeededHome {
+    node: std::sync::Arc<gents::defra_node::Node>,
+    access: gents::ConfigAccess,
+    _claim: gents::store::local::home::StoreLock,
+    _runtime: gents::KeyIdentity,
+}
+
+impl UserSeededHome {
+    pub async fn open(
+        cwd: &std::path::Path,
+        node_home: &std::path::Path,
+        node_name: &str,
+    ) -> anyhow::Result<Self> {
+        use anyhow::Context as _;
+        let home = node_home.to_str().context("node home utf8")?;
+        let init = run_init_json(
+            cwd,
+            &["--identity-only", "--node-name", node_name, "--home", home],
+        )?;
+        let node_did = node_did_from_init(&init)?;
+        let runtime = gents::KeyIdentity::load_existing(
+            init["key_path"]
+                .as_str()
+                .context("identity-only init output missing key_path")?,
+            None,
+        )
+        .context("loading the home's Node key")?;
+        let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
+            &graphql::cli_client_paths(cwd, &[]),
+        )
+        .context("loading the CLI User key")?;
+        let data = gents::store::local::home::default_data_dir(node_home);
+        let claim = gents::store::local::home::lock_store(node_home, &data)?;
+        let key = gents::store::local::store_key::open_home_store_key(node_home, &data).await?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+        let node = std::sync::Arc::new(
+            gents::store::local::store_key::persistent_builder(&data, &key)?
+                .with_node_identity_did(node_did)
+                .with_node_acp_enabled()
+                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
+                .build()
+                .await
+                .context("opening the identity-only home")?,
+        );
+        let access = gents::ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(&url, client.did())
+                .with_client_signing_capability(
+                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                        client.private_key_bytes(),
+                    )?,
+                )?,
+        );
+        Ok(Self {
+            node,
+            access,
+            _claim: claim,
+            _runtime: runtime,
+        })
+    }
+
+    pub fn node(&self) -> &std::sync::Arc<gents::defra_node::Node> {
+        &self.node
+    }
+
+    pub async fn execute(&self, query: &str) -> SeedResponse {
+        let result = if query.trim_start().starts_with("mutation") {
+            self.access.write("test.seed", query).await
+        } else {
+            self.access.execute(query).await
+        };
+        SeedResponse::from_result(result.map_err(Into::into))
+    }
+
+    pub async fn execute_with_variables(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> SeedResponse {
+        SeedResponse::from_result(
+            graphql::graphql_mutation_with_variables(&self.access, query, &variables).await,
+        )
+    }
+
+    pub async fn shutdown(self) -> anyhow::Result<()> {
+        self.node.shutdown().await?;
+        Ok(())
+    }
+}
+
+/// Seeds a mutation as the home's User, failing on any GraphQL error.
+pub async fn user_exec(home: &UserSeededHome, query: &str) -> anyhow::Result<()> {
+    let response = home.execute(query).await;
+    if response.has_errors() {
+        anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
+    }
+    Ok(())
+}

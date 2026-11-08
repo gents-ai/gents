@@ -247,9 +247,19 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
     run_cli_json(&home, &["schema", "apply", schemas.to_str().unwrap()])?;
     let original = format!("{}😀", "é".repeat(1500));
     let input = json!({"body":original,"category":"keep"}).to_string();
+    let record_schema = schemas.join("record.graphql");
+    let record_schema = record_schema.to_str().context("schema path utf8")?;
     run_cli_json(
         &home,
-        &["document", "create", "ExportRecord", "--json", &input],
+        &[
+            "document",
+            "create",
+            "ExportRecord",
+            "--schema",
+            record_schema,
+            "--json",
+            &input,
+        ],
     )?;
     run_cli_json(
         &home,
@@ -257,6 +267,8 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
             "document",
             "create",
             "ExportRecord",
+            "--schema",
+            record_schema,
             "--json",
             r#"{"body":"skip","category":"other"}"#,
         ],

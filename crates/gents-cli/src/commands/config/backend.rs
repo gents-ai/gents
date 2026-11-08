@@ -225,7 +225,7 @@ async fn resolve_backend_discovery_target(
         let (access, _) =
             crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
         let backend = access
-            .transact_write("cli.backend.discovery_target", |txn| {
+            .transact_readonly("cli.backend.discovery_target", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
                     let (_, value) = read_desired_state_record_in_txn(

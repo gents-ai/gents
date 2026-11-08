@@ -237,7 +237,12 @@ pub(crate) async fn stage_fire_receipt(
     {
         return Ok(false);
     }
-    txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }", &serde_json::json!({"input":fire})).await?;
+    txn.execute_client_signed_create(
+        "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
+        &serde_json::json!({"input":fire}),
+        gents_protocol::schemas::TRIGGER_FIRE,
+    )
+    .await?;
     Ok(true)
 }
 
