@@ -100,13 +100,18 @@ export function useMorphCard(): Morph {
       /* the browser skips a transition when another starts or the page
          hides, rejecting `ready` though the update still applied */
       transition?.ready?.catch(() => undefined);
-      void Promise.resolve(transition?.finished).finally(() =>
-        each((element) => {
-          if (namedBy.get(element) !== token) return;
-          element.style.removeProperty("view-transition-name");
-          namedBy.delete(element);
-        }),
-      );
+      void Promise.resolve(transition?.finished)
+        .finally(() =>
+          each((element) => {
+            if (namedBy.get(element) !== token) return;
+            element.style.removeProperty("view-transition-name");
+            namedBy.delete(element);
+          }),
+        )
+        .catch((error: unknown) => {
+          if (!(error instanceof DOMException && error.name === "AbortError"))
+            throw error;
+        });
     },
     [scope],
   );
