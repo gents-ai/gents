@@ -261,3 +261,163 @@ async fn refresh_accepts_null_requester_and_rejects_changed_session_scope() {
         }),
     ).await.unwrap();
 }
+
+async fn tie_head(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+) -> anyhow::Result<Option<gents_protocol::session::SessionRequestObservation>> {
+    let owner = load_agent_session_row_in_txn(txn, "did:test:tie", "tie-session", None)
+        .await?
+        .context("tie session missing")?;
+    Ok(owner.session.observation.and_then(|o| o.latest_request))
+}
+
+async fn tie_fact(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    request_id: &str,
+) -> anyhow::Result<SessionRequestFact> {
+    let owner = load_agent_session_row_in_txn(txn, "did:test:tie", "tie-session", None)
+        .await?
+        .context("tie session missing")?;
+    load_scoped_request_facts_in_txn(txn, &owner.session, false)
+        .await?
+        .into_iter()
+        .find(|fact| fact.observed.request_id == request_id)
+        .context("request fact missing")
+}
+
+/// #3604: a request claimed in the same second its predecessor finished, whose
+/// random `request_id` sorts below the predecessor's, must still become the
+/// session's observed head and keep it after it completes. Under the
+/// `request_id`-only tie the claim was refused, the observation kept naming the
+/// predecessor, and a reopened client never projected the completed reply.
+#[tokio::test]
+async fn same_second_claim_after_completion_becomes_the_observed_head() {
+    let temp = tempfile::tempdir().unwrap();
+    let node = std::sync::Arc::new(
+        crate::test_support::node_builder()
+            .data_path(temp.path())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    ConfigAccess::transact_local_idempotent(
+        &node, None, IdempotentTransactionRetry::Standard, "test.session.same_second_head",
+        |txn| Box::pin(async move {
+            let (node_did, session_id, agent) = ("did:test:tie", "tie-session", "tie-agent");
+            let second = "2030-01-01T00:00:00Z";
+            let create = |request_id: &'static str| serde_json::json!({"input": {
+                "request_id": request_id, "purpose": "normal", "node_did": node_did,
+                "session_id": session_id, "agent_did": agent, "content": request_id,
+                "created_at": second, "lifecycle_state": "claimed"}});
+            let finish = |doc_id: &str, at: &str| format!(r#"mutation {{
+                update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }},
+                    input: {{ lifecycle_state: "completed", terminalized_at: "{at}" }}) {{ _docID }}
+            }}"#, escape_graphql_string(doc_id));
+            txn.execute_with_variables(
+                "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                &create("f-predecessor"),
+            ).await?;
+            crate::session::ensure_session_in_txn(
+                txn, session_id, node_did, agent, None, None, None, second,
+            ).await?;
+            let predecessor = tie_fact(txn, "f-predecessor").await?;
+            assert!(advance_session_request_observation_in_txn(txn, &predecessor, "first", second).await?);
+            txn.execute_local_response(&finish(&predecessor.observed.request_doc_id, "2030-01-01T00:00:00.400Z")).await?;
+            assert!(refresh_session_request_observation_in_txn(
+                txn, node_did, None, session_id,
+                SessionRequestRefresh { request_doc_id: &predecessor.observed.request_doc_id, request_id: "f-predecessor", reply_preview: Some(Some("first reply")) },
+                "2030-01-01T00:00:00.400Z",
+            ).await?);
+
+            txn.execute_with_variables(
+                "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                &create("a-successor"),
+            ).await?;
+            let successor = tie_fact(txn, "a-successor").await?;
+            assert!(
+                advance_session_request_observation_in_txn(txn, &successor, "second", "2030-01-01T00:00:00.900Z").await?,
+                "the same-second claim must advance the observation past its finished predecessor"
+            );
+            assert_eq!(tie_head(txn).await?.unwrap().request_id, "a-successor");
+
+            txn.execute_local_response(&finish(&successor.observed.request_doc_id, "2030-01-01T00:00:01.300Z")).await?;
+            assert!(refresh_session_request_observation_in_txn(
+                txn, node_did, None, session_id,
+                SessionRequestRefresh { request_doc_id: &successor.observed.request_doc_id, request_id: "a-successor", reply_preview: Some(Some("second reply")) },
+                "2030-01-01T00:00:01.300Z",
+            ).await?);
+            let observed = tie_head(txn).await?.unwrap();
+            assert_eq!((observed.request_id.as_str(), observed.lifecycle_state), ("a-successor", RequestLifecycleState::Completed));
+            let latest = load_latest_request_in_txn(txn, node_did, session_id, Some(None)).await?.unwrap();
+            assert_eq!(latest.observed.request_id, "a-successor", "terminal ties follow terminalization");
+            Ok::<_, anyhow::Error>(())
+        }),
+    ).await.unwrap();
+}
+
+/// Lean `AgentSession.latest` selection cases, run through the native fact
+/// query and head selection over DefraDB.
+#[tokio::test]
+async fn generated_selection_cases_drive_the_native_request_head() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+        .session_document_cases
+        .selection;
+    assert!(cases.len() >= 13);
+    let base = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z").unwrap();
+    let seconds = |value: &serde_json::Value| {
+        (base + chrono::Duration::seconds(value.as_i64().unwrap())).to_rfc3339()
+    };
+    let millis = |value: &serde_json::Value| {
+        value
+            .as_i64()
+            .map(|ms| (base + chrono::Duration::milliseconds(ms)).to_rfc3339())
+    };
+    let did = |kind: &str, value: &serde_json::Value| {
+        value.as_u64().map(|n| format!("did:test:{kind}-{n}"))
+    };
+    let request_id = |value: &serde_json::Value| format!("{:08}", value.as_u64().unwrap());
+    for (index, case) in cases.iter().enumerate() {
+        let temp = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            crate::test_support::node_builder()
+                .data_path(temp.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let case = case.clone();
+        let expected = case["selected"].get("request_id").map(&request_id);
+        let selected = ConfigAccess::transact_local_idempotent(
+            &node, None, IdempotentTransactionRetry::Standard, "test.session.generated_selection",
+            |txn| {
+                let case = case.clone();
+                Box::pin(async move {
+                    for row in case["requests"].as_array().unwrap() {
+                        txn.execute_with_variables(
+                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                            &serde_json::json!({"input": {
+                                "request_id": request_id(&row["request_id"]),
+                                "purpose": row["purpose"], "node_did": did("node", &row["scope"]["node"]),
+                                "session_id": format!("session-{}", row["scope"]["session"]),
+                                "requester_did": did("requester", &row["scope"]["requester"]),
+                                "agent_did": format!("agent-{}", row["agent"]), "content": "prompt",
+                                "created_at": seconds(&row["created_at"]),
+                                "terminalized_at": millis(&row["terminalized_at"]),
+                                "lifecycle_state": row["state"]}}),
+                        ).await?;
+                    }
+                    let scope = case["requester_scoped"].as_bool().unwrap()
+                        .then(|| did("requester", &case["requester"]));
+                    let latest = load_latest_request_in_txn(
+                        txn, &did("node", &case["node"]).unwrap(),
+                        &format!("session-{}", case["session"]), scope.as_ref().map(Option::as_deref),
+                    ).await?;
+                    Ok::<_, anyhow::Error>(latest.map(|fact| fact.observed.request_id))
+                })
+            },
+        ).await.unwrap();
+        assert_eq!(selected, expected, "case {index}: {}", case["name"]);
+    }
+}

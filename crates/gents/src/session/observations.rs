@@ -16,10 +16,17 @@ pub struct SessionRequestFact {
     pub requester_did: Option<String>,
     pub agent_did: String,
     pub created_at: String,
+    /// Runtime-written terminal time (sub-second); `None` while live.
+    pub terminalized_at: Option<String>,
     pub hop: u32,
     pub observed: gents_protocol::session::SessionRequestObservation,
 }
 
+/// Lean `AgentSession.newer`: `created_at` (whole seconds), then a live
+/// request over a terminal one, then the later runtime terminalization, then
+/// `request_id`. Same-second requests have no admission order of their own and
+/// `request_id` is random, so without the middle keys a request claimed in the
+/// second its predecessor finished could lose to it and never be observed.
 fn request_fact_newer(a: &SessionRequestFact, b: &SessionRequestFact) -> bool {
     let (a_created, b_created) = match (
         chrono::DateTime::parse_from_rfc3339(&a.created_at),
@@ -28,8 +35,18 @@ fn request_fact_newer(a: &SessionRequestFact, b: &SessionRequestFact) -> bool {
         (Ok(a), Ok(b)) => (a, b),
         _ => return false,
     };
-    a_created > b_created
-        || (a_created == b_created && a.observed.request_id > b.observed.request_id)
+    let live = |fact: &SessionRequestFact| !fact.observed.lifecycle_state.is_terminal();
+    let terminalized = |fact: &SessionRequestFact| {
+        fact.terminalized_at
+            .as_deref()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+    };
+    a_created
+        .cmp(&b_created)
+        .then_with(|| live(a).cmp(&live(b)))
+        .then_with(|| terminalized(a).cmp(&terminalized(b)))
+        .then_with(|| a.observed.request_id.cmp(&b.observed.request_id))
+        .is_gt()
 }
 
 fn incoming_is_canonical_latest(
@@ -136,7 +153,7 @@ fn request_fact_query(filter: &str) -> String {
         r#"{{
             AgentRequest({filter}) {{
                 _docID request_id node_did session_id requester_did agent_did created_at lifecycle_state
-                request_hop
+                terminalized_at request_hop
             }}
         }}"#
     )
@@ -182,6 +199,11 @@ fn decode_request_facts(response: &serde_json::Value) -> Result<Vec<SessionReque
                     .and_then(serde_json::Value::as_str)
                     .context("request row omitted created_at")?
                     .to_string(),
+                terminalized_at: row
+                    .get("terminalized_at")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|at| !at.is_empty())
+                    .map(str::to_string),
                 hop: row
                     .get("request_hop")
                     .and_then(serde_json::Value::as_u64)
