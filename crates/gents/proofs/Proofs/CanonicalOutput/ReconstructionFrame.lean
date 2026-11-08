@@ -279,6 +279,7 @@ private theorem validateExactProviderPositions_frame (message : MessageEnvelope)
   cases closing.coordinate.source <;> try exact preserves_refl _
   exact preserves_bind (preserves_mapError _ (hp _)) (fun _ => preserves_refl _)
 
+include he in
 private theorem validateRecoveryPositions_frame (message : MessageEnvelope) :
     Preserves (validateRecoveryPositions before denied message)
       (validateRecoveryPositions after denied message) := by
@@ -287,10 +288,16 @@ private theorem validateRecoveryPositions_frame (message : MessageEnvelope) :
   intro _
   apply preserves_forM
   intro ref
-  apply preserves_bind (preserves_mapError _ (hc _))
-  intro closing
+  apply preserves_bind_of (preserves_mapError _ (hc _))
+  intro closing hclose
+  have hresolved : resolveClose before denied ref = .ok closing := by
+    cases h : resolveClose before denied ref with
+    | error e => simp [h, Except.mapError] at hclose
+    | ok c => simpa [h, Except.mapError] using hclose
   cases closing.coordinate.source <;> try exact preserves_refl _
-  exact preserves_bind (preserves_mapError _ (hp _)) (fun _ => preserves_refl _)
+  apply preserves_bind (preserves_mapError _ (hp _))
+  intro _
+  exact preserves_bind (preserves_mapError _ (he ref closing hresolved)) (fun _ => preserves_refl _)
 
 include he in
 private theorem validateMessageStructure_frame (message : MessageEnvelope) :
@@ -307,7 +314,7 @@ private theorem validateMessageStructure_frame (message : MessageEnvelope) :
     intro _
     cases message.header.publication with
     | requestExecution => exact validateExactProviderPositions_frame before after denied hc hp message
-    | requestRecovery => exact validateRecoveryPositions_frame before after denied hc hp message
+    | requestRecovery => exact validateRecoveryPositions_frame before after denied hc hp he message
     | toolDelivery | fork => exact validateProviderOrder_frame before after denied hc hp message
 
 omit hc in
