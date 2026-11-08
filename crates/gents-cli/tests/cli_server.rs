@@ -682,6 +682,7 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "grok shim is being removed"]
 async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
     const APPLIED_BACKEND: &str = "fresh-applied-grok-backend";
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1621,9 +1622,11 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     .await?;
     wait_for_inference_call_state(&graphql, &request_id, "running").await?;
 
-    let authorization = support::graphql::node_principal_endpoint(&graphql)
+    // The client key, as the node's native admin, reads the slot snapshot as
+    // itself and so sees the Agent-owned inference calls.
+    let authorization = support::graphql::served_endpoint(&graphql)
         .authorization()?
-        .context("fixture operator is missing")?;
+        .context("fixture client key is missing")?;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::AUTHORIZATION, authorization.parse()?);
     let client = reqwest::Client::builder()

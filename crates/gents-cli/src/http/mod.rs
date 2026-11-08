@@ -16,6 +16,7 @@ pub(crate) mod metrics_scrape;
 pub(crate) mod pack_install;
 pub(crate) mod pack_install_client;
 mod pack_watch;
+pub(crate) mod private_reader;
 pub(crate) mod prometheus;
 pub(crate) mod router;
 pub(crate) mod runtime_control;
