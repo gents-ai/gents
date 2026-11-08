@@ -245,4 +245,272 @@ theorem acknowledged_outcome_never_replays (intent : Intent) (prepared : Prepare
     result ⟨intent, prepared, outcome, false, true⟩ = .settled prepared outcome := by
   cases outcome <;> simp_all [result, bound]
 
+/-! ### One journal per client key
+
+A desktop's journal is its embedded local store, whose node identity is the
+client key (`require_client_signer`): only that key's records are written to
+it. The User key is shared by the desktop and the CLI, but they do not share a
+journal, and two keys never do. A family of journals is represented by one
+list partitioned by `caller.requester`; `scope journal key` is the journal of
+`key`. The caller key space is `(requester, request)`: the same request number
+under a different signer is a distinct caller whose record lives in that
+signer's own journal.
+
+External premise: request identity is not unique across signers at the owner
+either. `AgentRequest.request_id` carries no unique index; the owner receipt a
+caller reconciles is scoped by node, session and requester and must carry the
+retained admission signature (`reconcile_client_request`), so one signer can
+never settle another signer's request. -/
+
+def scope (journal : Journal) (key : Nat) : Journal :=
+  journal.filter fun record => record.intent.caller.requester == key
+
+/-- The journal of client `key` decides a preparation; a proposal signed by
+another key is refused before any write. A reservation appends to that key's
+journal only, so the family stays partitioned. -/
+def prepareAt (key : Nat) (journal : Journal) (intent : Intent) (proposal : Prepared)
+    (durable : Bool) : Journal × Result :=
+  if intent.caller.requester != key then (journal, .refused) else
+    let mine := scope journal key
+    let (next, output) := prepare mine intent proposal durable
+    (journal ++ next.drop mine.length, output)
+
+/-- Observations and acknowledgements reach only the journal of the caller's
+own key. -/
+def observeAt (key : Nat) (journal : Journal) (caller : Caller) (prepared : Prepared)
+    (outcome : Outcome) : Journal :=
+  if caller.requester != key then journal else observe journal caller prepared outcome
+
+def acknowledgeAt (key : Nat) (journal : Journal) (caller : Caller) (prepared : Prepared) :
+    Journal :=
+  if caller.requester != key then journal else acknowledge journal caller prepared
+
+theorem prepare_shape (journal : Journal) (intent : Intent) (proposal : Prepared)
+    (durable : Bool) :
+    (prepare journal intent proposal durable).1 = journal ∨
+      (prepare journal intent proposal durable).1 =
+        journal ++ [⟨intent, proposal, .unresolved, true, false⟩] := by
+  unfold prepare
+  split
+  · exact Or.inl rfl
+  · split
+    · split <;> exact Or.inl rfl
+    · split
+      · exact Or.inr rfl
+      · exact Or.inl rfl
+
+theorem foreign_signer_cannot_write_a_client_journal (key : Nat) (journal : Journal)
+    (intent : Intent) (proposal : Prepared) (durable : Bool)
+    (foreign : intent.caller.requester ≠ key) :
+    prepareAt key journal intent proposal durable = (journal, .refused) := by
+  simp [prepareAt, foreign]
+
+/-- A reservation writes only its own key's journal. -/
+theorem prepareAt_writes_only_its_signer (key : Nat) (journal : Journal) (intent : Intent)
+    (proposal : Prepared) (durable : Bool) (record : Record)
+    (written : record ∈ (prepareAt key journal intent proposal durable).1) :
+    record ∈ journal ∨ record.intent.caller.requester = key := by
+  unfold prepareAt at written
+  by_cases own : intent.caller.requester = key
+  · simp only [own, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte] at written
+    rcases prepare_shape (scope journal key) intent proposal durable with same | grown
+    · rw [same] at written
+      simp at written
+      exact Or.inl written
+    · rw [grown] at written
+      simp only [List.drop_left, List.mem_append, List.mem_singleton] at written
+      rcases written with old | fresh
+      · exact Or.inl old
+      · exact Or.inr (by rw [fresh]; exact own)
+  · simp only [bne_iff_ne, ne_eq, own, not_false_eq_true, ↓reduceIte] at written
+    exact Or.inl written
+
+/-- A different signer is a distinct caller: records of other keys never
+decide its preparation, so it reserves in its own journal. -/
+theorem different_signer_is_distinct (journal : Journal) (intent : Intent)
+    (proposal : Prepared)
+    (others : ∀ record ∈ journal, record.intent.caller.requester ≠ intent.caller.requester)
+    (identity : proposal.request = intent.caller.request) :
+    prepareAt intent.caller.requester journal intent proposal true =
+      (journal ++ [⟨intent, proposal, .unresolved, true, false⟩], .reconcile proposal) := by
+  have empty : scope journal intent.caller.requester = [] := by
+    unfold scope
+    rw [List.filter_eq_nil_iff]
+    intro record mem
+    simpa using others record mem
+  simp [prepareAt, empty, prepare, lookup, result, bound, identity]
+
+theorem prepare_keeps_reserved_request (journal : Journal) (intent : Intent)
+    (proposal : Prepared) (durable : Bool)
+    (reserved : journal.any (fun record => record.prepared.request == proposal.request) = true) :
+    (prepare journal intent proposal durable).1 = journal := by
+  unfold prepare
+  split
+  · rfl
+  · split
+    · split <;> rfl
+    · rw [if_neg]
+      simp [reserved]
+
+/-- Within one client journal a request identity binds one caller operation:
+no other runtime, envelope or proposal can reserve it again. -/
+theorem request_identity_is_unique_within_a_client_journal (key : Nat) (journal : Journal)
+    (intent : Intent) (proposal : Prepared) (durable : Bool)
+    (reserved : (scope journal key).any
+      (fun record => record.prepared.request == proposal.request) = true) :
+    (prepareAt key journal intent proposal durable).1 = journal := by
+  unfold prepareAt
+  split
+  · rfl
+  · simp only [prepare_keeps_reserved_request _ _ _ _ reserved, List.drop_length,
+      List.append_nil]
+
+/-! ### Unretained unresolved records
+
+A record this journal wrote keeps its signed bytes while its outcome is
+unresolved: `prepare` reserves with bytes, `observe` only settles, and
+`acknowledge` retires bytes only after a settled outcome. The `.refused`
+branch of `result` for an unresolved record without bytes is therefore never
+reached by a journal history; it covers only rows the journal did not write
+(an older uncorrelated send, or a lost or reset journal), which the native
+caller reconciles through the owner's visible request alone. -/
+
+def retainsUnresolved (journal : Journal) : Prop :=
+  ∀ record ∈ journal, record.outcome = .unresolved → record.retainedBytes = true
+
+theorem prepare_retains_unresolved (journal : Journal) (intent : Intent)
+    (proposal : Prepared) (durable : Bool) (inv : retainsUnresolved journal) :
+    retainsUnresolved (prepare journal intent proposal durable).1 := by
+  rcases prepare_shape journal intent proposal durable with same | grown
+  · rw [same]; exact inv
+  · rw [grown]
+    intro record mem
+    simp only [List.mem_append, List.mem_singleton] at mem
+    rcases mem with old | fresh
+    · exact inv record old
+    · intro _; rw [fresh]
+
+theorem observe_retains_unresolved (journal : Journal) (caller : Caller)
+    (prepared : Prepared) (outcome : Outcome) (inv : retainsUnresolved journal) :
+    retainsUnresolved (observe journal caller prepared outcome) := by
+  unfold observe
+  split
+  · exact inv
+  · intro record mem
+    simp only [List.mem_map] at mem
+    obtain ⟨original, member, mapped⟩ := mem
+    subst mapped
+    split
+    · rename_i changed
+      intro settled
+      simp only [Bool.and_eq_true, bne_iff_ne, ne_eq] at changed
+      exact absurd settled changed.2
+    · exact inv original member
+
+theorem acknowledge_retains_unresolved (journal : Journal) (caller : Caller)
+    (prepared : Prepared) (inv : retainsUnresolved journal) :
+    retainsUnresolved (acknowledge journal caller prepared) := by
+  unfold acknowledge
+  split
+  · exact inv
+  · intro record mem
+    simp only [List.mem_map] at mem
+    obtain ⟨original, member, mapped⟩ := mem
+    subst mapped
+    split
+    · rename_i retired
+      intro unresolved
+      simp only [Bool.and_eq_true, bne_iff_ne, ne_eq] at retired
+      exact absurd unresolved retired.2
+    · exact inv original member
+
+theorem prepareAt_retains_unresolved (key : Nat) (journal : Journal) (intent : Intent)
+    (proposal : Prepared) (durable : Bool) (inv : retainsUnresolved journal) :
+    retainsUnresolved (prepareAt key journal intent proposal durable).1 := by
+  unfold prepareAt
+  split
+  · exact inv
+  · intro record mem
+    simp only [List.mem_append] at mem
+    rcases mem with old | fresh
+    · exact inv record old
+    · have mine : retainsUnresolved (scope journal key) := fun r m =>
+        inv r (List.mem_filter.mp m).1
+      exact prepare_retains_unresolved _ _ _ _ mine record (List.mem_of_mem_drop fresh)
+
+/-! ### What the person is shown
+
+`DeliveryView` is the per-submission state a client shows for a caller
+record; it never claims more than the journal and the owner receipt prove.
+Each view names its cause and the next action: `sending` replays the retained
+identical bytes, `delivered` and `notDelivered` are settled, and `unconfirmed`
+can only be checked again.
+
+Decision pending (reported, not taken): an unresolved send without retained
+bytes, where the owner shows no request, has no proof either way. Policy
+`wait` (the native caller today, `DeliveryUnconfirmed`) never authorizes a new
+identity, so a send that landed late is never duplicated, but a send that
+never lands leaves the person checking forever. Policy `refuse` (the `.refused`
+branch of `result`) reports it not delivered and lets the person resend a new
+identity, which duplicates the turn if the original commit landed. The
+conservative `wait` stays in force until that decision is made; TLA
+`ClientSubmissionContention` (`Unretained` configurations) traces both. -/
+
+inductive DeliveryView where
+  | sending
+  | delivered
+  | notDelivered
+  | unconfirmed
+  deriving DecidableEq, Repr
+
+inductive UnretainedPolicy where
+  | wait
+  | refuse
+  deriving DecidableEq, Repr
+
+/-- `ownerShows` is the owner's visible request with a completed publication
+marker; its absence alone proves nothing. -/
+def deliveryView (policy : UnretainedPolicy) (record : Record) (ownerShows : Bool) :
+    DeliveryView :=
+  match record.outcome with
+  | .accepted => .delivered
+  | .notDelivered => .notDelivered
+  | .unresolved =>
+    if ownerShows then .delivered
+    else if record.retainedBytes then .sending
+    else match policy with
+      | .wait => .unconfirmed
+      | .refuse => .notDelivered
+
+/-- Whether the person may author a replacement send under a new identity. -/
+def mayResendNewIdentity : DeliveryView → Bool
+  | .notDelivered => true
+  | _ => false
+
+theorem wait_never_authorizes_a_new_identity_for_an_unproven_send (record : Record)
+    (unresolved : record.outcome = .unresolved) (ownerShows : Bool) :
+    mayResendNewIdentity (deliveryView .wait record ownerShows) = false := by
+  unfold deliveryView
+  rw [unresolved]
+  cases ownerShows <;> cases record.retainedBytes <;> rfl
+
+theorem refuse_authorizes_a_resend_without_proof (record : Record)
+    (unresolved : record.outcome = .unresolved) (unretained : record.retainedBytes = false) :
+    mayResendNewIdentity (deliveryView .refuse record false) = true := by
+  simp [deliveryView, unresolved, unretained, mayResendNewIdentity]
+
+/-- Under either policy a journal-written record reaches the unproven
+unretained view only through a row the journal did not write. -/
+theorem journal_records_never_show_unconfirmed (policy : UnretainedPolicy)
+    (journal : Journal) (inv : retainsUnresolved journal) (record : Record)
+    (member : record ∈ journal) (ownerShows : Bool) :
+    deliveryView policy record ownerShows ≠ .unconfirmed := by
+  unfold deliveryView
+  split
+  · simp
+  · simp
+  · rename_i unresolved
+    rw [inv record member unresolved]
+    cases ownerShows <;> simp
+
 end ClientSubmissionReceipt

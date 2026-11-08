@@ -637,6 +637,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Callback.lean` | Callback invocation lifecycle, action-journal prefix, and claim uniqueness |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
+| `Proofs/ClientShell/SubmissionReceipt.lean` | Caller-bound signed chat submission receipts: durable preparation, owner-receipt observation, acknowledgement and cleanup. One journal per client key (`prepareAt`: a foreign signer is refused, a different signer is a distinct caller, a request identity binds once within a key's journal); journal-written unresolved records always retain their bytes; `deliveryView` is the per-submission state shown, with the unretained-unknown policy (`wait`/`refuse`) left as a reported decision (TLA `ClientSubmissionContention` `Unretained*`). Generated cases: `Conformance/ClientSubmissionReceipt`. |
 | `Proofs/ClientShell/ObservationScope.lean` | Shared client observation focus while external frontend attachments are present; the last detachment restores current shell intent. |
 | `Proofs/ClientShell/Voice.lean` | Explicit dictation and live conversation epochs; stop, disconnection, view disposal and scope changes reject late completions. |
 | `Proofs/ClientShell/Settings.lean` | Physical document and composite revision guards, canonical editable fields, and post-save editor baseline adoption. |
@@ -712,7 +713,7 @@ Semantic submodules:
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |
 | `Proofs.StorageFailure` | typed storage-full classification, retained signed submissions and retry suppression |
-| `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
+| `Proofs.ClientShell` | `Types`, `Submission`, `SubmissionReceipt`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed`, `Ownership` |
