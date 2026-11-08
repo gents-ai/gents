@@ -9,6 +9,7 @@ mod root_admission;
 mod root_publication;
 mod runtime_context;
 mod selection;
+mod source_policy;
 pub mod starter_recipes;
 mod timeouts;
 

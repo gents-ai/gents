@@ -7,6 +7,7 @@ use serde::Deserialize;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
+use crate::tools::background::agent_identity_watch::AgentIdentityWatch;
 
 pub mod send;
 
@@ -629,7 +630,7 @@ pub(crate) async fn run(
     node: Arc<EmbeddedNode>,
     node_did: String,
     executions: crate::tools::call::hook::BackgroundExecutionRegistry,
-    mut agents: tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
+    mut agents: Box<dyn AgentIdentityWatch>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let mut changes = crate::subscribe_collections(&node, ["AgentToolControl"])?;
@@ -638,17 +639,7 @@ pub(crate) async fn run(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut failed = rapidhash::RapidHashSet::default();
     loop {
-        let (identities, active) = {
-            let snapshot = agents.borrow();
-            (
-                snapshot.watcher_identities()?,
-                snapshot
-                    .agents
-                    .keys()
-                    .cloned()
-                    .collect::<rapidhash::RapidHashSet<_>>(),
-            )
-        };
+        let (identities, active) = agents.watched_and_active_agents()?;
         for selected in identities {
             let agent = identity::Did::new(selected.did())?;
             let access = match ConfigAccess::local_managed_agent(

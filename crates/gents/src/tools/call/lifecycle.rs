@@ -126,6 +126,7 @@ pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
 mod recovery;
 pub(crate) mod runtime;
+mod session_message_call;
 mod transition;
 
 pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};

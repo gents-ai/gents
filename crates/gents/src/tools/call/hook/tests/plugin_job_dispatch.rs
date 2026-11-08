@@ -356,7 +356,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
             agent_executor_queue_capacities: Default::default(),
         });
         let (_sender, receiver) = tokio::sync::watch::channel(snapshot);
-        runtime.bind_snapshot(receiver).unwrap();
+        runtime.bind_snapshot(Box::new(receiver)).unwrap();
         let admission = crate::runtime::service::RuntimeServiceAdmission::default();
         if !options.kicks {
             admission
