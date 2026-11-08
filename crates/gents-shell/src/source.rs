@@ -21,6 +21,26 @@ pub enum Intent {
         agent: String,
         text: String,
     },
+    /// The slash list opened: answered with `Update::Skills` for `agent`.
+    ReadSkills {
+        agent: String,
+    },
+    /// As `Send`, with the skill's input before the text. `text` may be empty.
+    SendSkill {
+        tab: u64,
+        session: Option<String>,
+        agent: String,
+        skill: String,
+        text: String,
+    },
+    /// Starts a goal whose objective is the session's next message. `Started` and
+    /// `StartFailed` answer it as they answer `Send`.
+    SetGoal {
+        tab: u64,
+        session: Option<String>,
+        agent: String,
+        objective: String,
+    },
     Interrupt {
         session: String,
         agent: String,
@@ -116,7 +136,14 @@ impl fmt::Debug for FormValues {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Update {
     Connection(Connection),
+    /// The working directory's git branch, told once after `Ready`.
+    Branch(String),
     Agents(Vec<Agent>),
+    /// The skills `agent` may run, replaced whole.
+    Skills {
+        agent: String,
+        skills: Vec<Skill>,
+    },
     Sessions(Vec<Session>),
     SessionState {
         session: String,
@@ -640,6 +667,13 @@ pub struct Agent {
     /// The agent's row in the picker.
     pub text: String,
     pub tone: Tone,
+}
+
+/// A skill the tab's agent may run, as `/` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skill {
+    pub id: String,
+    pub about: String,
 }
 
 /// An API key. Its `Debug` never shows it.

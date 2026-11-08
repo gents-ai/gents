@@ -197,7 +197,7 @@ mod tests {
     use crate::sample::Tone;
     use crate::source::{Intent, Update};
     use crate::testing::{
-        find, press, screen, session_row, type_text, with_right_pane, with_sample_session,
+        find, press, screen, sent, session_row, type_text, with_right_pane, with_sample_session,
     };
 
     fn texts(rows: &[SidebarRow]) -> Vec<(String, Tone, bool)> {
@@ -423,8 +423,8 @@ mod tests {
         };
         let refreshes = |intended: &Receiver<Intent>| {
             let bar = Intent::ReadMenu(sample::MenuId::Workflows);
-            let intents: Vec<_> = intended
-                .try_iter()
+            let intents: Vec<_> = sent(intended)
+                .into_iter()
                 .filter(|intent| *intent != bar)
                 .collect();
             assert!(

@@ -492,6 +492,15 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
         }
         Intent::Send {
             tab, session, text, ..
+        }
+        | Intent::SendSkill {
+            tab, session, text, ..
+        }
+        | Intent::SetGoal {
+            tab,
+            session,
+            objective: text,
+            ..
         } => {
             let mut updates = Vec::new();
             let session = match session {
@@ -615,9 +624,11 @@ pub fn answer(intent: &Intent) -> Vec<Update> {
             text: NOT_WIRED.to_string(),
             tone: Tone::Warn,
         }],
-        Intent::Interrupt { .. } | Intent::Refresh | Intent::CancelSignIn | Intent::SaveKeys(_) => {
-            Vec::new()
-        }
+        Intent::ReadSkills { .. }
+        | Intent::Interrupt { .. }
+        | Intent::Refresh
+        | Intent::CancelSignIn
+        | Intent::SaveKeys(_) => Vec::new(),
     }
 }
 

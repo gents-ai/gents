@@ -44,9 +44,7 @@ pub(in crate::commands::codex_shim) async fn git_diff_to_remote(
     })
 }
 
-pub(in crate::commands::codex_shim) async fn thread_git_info(
-    cwd: &Path,
-) -> Option<serde_json::Value> {
+pub(crate) async fn thread_git_info(cwd: &Path) -> Option<serde_json::Value> {
     let sha = run_git(cwd, &["rev-parse", "HEAD"]).await.ok()?;
     let sha = sha.trim();
     if sha.is_empty() {

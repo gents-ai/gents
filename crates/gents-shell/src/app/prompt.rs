@@ -172,7 +172,7 @@ mod tests {
     use crate::keys::KeySet::{self, Emacs, Vim};
     use crate::sample::Tone;
     use crate::source::{Answer, Intent, Prompt, PromptKind, Update};
-    use crate::testing::{find, numbered, press, screen, type_text};
+    use crate::testing::{find, numbered, press, screen, sent, type_text};
 
     const MUST_ANSWER: &str = "this question needs an answer; it cannot be dismissed";
 
@@ -221,10 +221,6 @@ mod tests {
             session: "s1".to_string(),
             item: item.to_string(),
         }
-    }
-
-    fn sent(intended: &Receiver<Intent>) -> Vec<Intent> {
-        intended.try_iter().collect()
     }
 
     fn prompt_rows(app: &App) -> Vec<(String, Tone)> {

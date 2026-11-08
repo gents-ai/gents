@@ -1,3 +1,5 @@
+use std::sync::mpsc::Receiver;
+
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{
@@ -10,6 +12,7 @@ use crate::app::session_rows;
 use crate::app::{App, ChatLine};
 use crate::draw;
 use crate::sample::{self, Tone};
+use crate::source::Intent;
 
 /// One token of the `press` grammar. SHIFT follows uppercase as crossterm reports it
 /// (`crossterm-0.29.0/src/event/sys/unix/parse.rs:129-135`).
@@ -72,6 +75,12 @@ pub fn type_text(app: &mut App, text: &str) {
         };
         app.handle(Event::Key(KeyEvent::new(KeyCode::Char(c), shift)));
     }
+}
+
+/// What the app sent, beside the skills it reads as the slash list opens.
+pub fn sent(intents: &Receiver<Intent>) -> Vec<Intent> {
+    let read = |intent: &Intent| matches!(intent, Intent::ReadSkills { .. });
+    intents.try_iter().filter(|intent| !read(intent)).collect()
 }
 
 pub fn buffer(app: &App) -> Buffer {

@@ -7,7 +7,6 @@ use ratatui::widgets::{Block, BorderType, Clear, Widget};
 use super::layers::list_start;
 use super::{draw_footer, draw_no_matches, draw_row, logo, pane_box, theme};
 use crate::app::{App, Mode, Pane, Tab};
-use crate::commands::COMMANDS;
 use crate::keys::KeySet;
 use crate::layout::running_area;
 use crate::sample::{Opens, RunState, Running, Tone, SUBAGENT_MARK};
@@ -330,7 +329,7 @@ fn slash_list(app: &App, selected: usize, pane: Rect, buf: &mut Buffer) {
     let rect = slash_area(pane);
     Clear.render(rect, buf);
     buf.set_style(rect, Style::new().fg(theme::FG).bg(theme::BG));
-    pane_box(buf, rect, "Commands", false);
+    pane_box(buf, rect, "Commands and skills", false);
 
     let area = rect.inner(Margin::new(1, 1));
     draw_footer(app, area, area.bottom() - 2, SLASH_FOOTER, buf);
@@ -345,9 +344,8 @@ fn slash_list(app: &App, selected: usize, pane: Rect, buf: &mut Buffer) {
     }
     let first = list_start(selected, usize::from(list.height));
     for (row, y) in (first..matches.len()).zip(list.top()..list.bottom()) {
-        let command = &COMMANDS[matches[row]];
-        let name = command.slash.unwrap_or_default();
-        let text = format!(" /{name:<10}{}", command.about);
+        let shown = &matches[row];
+        let text = format!(" /{:<10}{}", shown.name, shown.about);
         draw_row(buf, list, y, &text, Tone::Plain, row == selected);
     }
 }

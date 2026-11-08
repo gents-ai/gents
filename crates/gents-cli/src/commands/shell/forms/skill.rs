@@ -132,6 +132,28 @@ pub(super) async fn users(
     Ok(users.collect())
 }
 
+/// The skill ids `agent`'s context allows, as the desktop's `effectiveContextSkills`
+/// reads them (`slashSkills.ts:11-23`): none for an agent with no context.
+pub(in crate::commands::shell) async fn allowed(
+    access: &ConfigAccess,
+    node_did: &str,
+    agent: &str,
+) -> anyhow::Result<Vec<String>> {
+    let contexts = query_collection_sorted(access, CONTEXT_SPEC, node_did).await?;
+    let agents = load_inference_setup_state(access, node_did).await?.agents;
+    let using = agents.iter().find(|shown| shown.agent_id == agent);
+    let Some(using) = using.and_then(|agent| agent.context_id.as_deref()) else {
+        return Ok(Vec::new());
+    };
+    let context = contexts
+        .iter()
+        .find(|context| context["context_id"] == using);
+    let allowed = context
+        .into_iter()
+        .flat_map(|context| items(&context["skill_ids"]));
+    Ok(allowed.map(str::to_string).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use gents_shell::source::{FieldKind, FormAct, FormAction, FormRef};

@@ -18,7 +18,7 @@ use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
 use gents_shell::source::{
     Answer as PromptAnswer, BackgroundCall, Change, ChangeKind, Connection, Doc, EditedChoice,
     FormError, FormRef, FormValues, Input, Intent, Job, JobEnd, MenuAct, MenuRow, PackAct, Prompt,
-    PromptKind, Session, Update,
+    PromptKind, Session, Skill, Update,
 };
 use rapidhash::RapidHashMap;
 use ratatui::buffer::Buffer;
@@ -651,6 +651,18 @@ fn open_shell_on(
     work: Result<Work, String>,
     home: std::path::PathBuf,
 ) -> Shell {
+    open_shell_in(fake, agent, prompt, answer_wait, work, home, None)
+}
+
+fn open_shell_in(
+    fake: &FakeRuntime,
+    agent: Option<&str>,
+    prompt: Option<&str>,
+    answer_wait: Duration,
+    work: Result<Work, String>,
+    home: std::path::PathBuf,
+    cwd: Option<std::path::PathBuf>,
+) -> Shell {
     let runtime = test_runtime_handle();
     let (intents, intended) = mpsc::unbounded_channel();
     let (sender, updates) = std::sync::mpsc::channel();
@@ -660,6 +672,7 @@ fn open_shell_on(
         prompt: prompt.map(str::to_string),
         work,
         home,
+        cwd,
     };
     runtime.spawn(source::run(
         opening,
@@ -1754,6 +1767,410 @@ async fn a_refused_send_becomes_a_notice_in_the_runtimes_words() {
     assert_eq!(turns, 1, "a failed start sends no turn");
 }
 
+/// What `skills/list` answers: `commit` and `review` enabled and `old` disabled, at the paths
+/// the endpoint lists a skill at.
+fn skills_answer() -> Answer {
+    let skill = |id: &str, description: &str, enabled: bool| {
+        let path = format!("/gents/skills/{id}");
+        json!({ "name": id, "description": description, "path": path, "scope": "system", "enabled": enabled })
+    };
+    let skills = [
+        skill("commit", "Writes commits", true),
+        skill("review", "", true),
+        skill("old", "Retired", false),
+    ];
+    Some(Ok(
+        json!({ "data": [{ "cwd": "/srv/root", "skills": skills, "errors": [] }] }),
+    ))
+}
+
+fn shown_skill(id: &str, about: &str) -> Skill {
+    Skill {
+        id: id.to_string(),
+        about: about.to_string(),
+    }
+}
+
+fn is_skills(update: &Update) -> bool {
+    matches!(update, Update::Skills { .. })
+}
+
+/// `node_settings_of(did)` with agent `a` on context `main`, which lists `commit`, and agent `b`
+/// on no context.
+fn skill_settings(did: &str) -> Value {
+    let mut config = node_settings_of(did);
+    config["contexts"] = json!([
+        { "node_did": did, "context_id": "main", "skill_ids": ["commit"] },
+    ]);
+    let commit = json!({ "node_did": did, "skill_id": "commit", "name": "commit" });
+    config["skills"].as_array_mut().unwrap().push(commit);
+    let agent = |id: &str| json!({ "node_did": did, "agent_id": id, "display_name": id, "inference_profile_id": "profile" });
+    let mut a = agent("a");
+    a["context_id"] = json!("main");
+    config["agents"]
+        .as_array_mut()
+        .unwrap()
+        .extend([a, agent("b")]);
+    config
+}
+
+/// The shell on a fake runtime for agents `a` and `b`, whose work is a node served with
+/// `skill_settings` and signed by an initialized home's key, as on a home `gents init` set up.
+struct OnNode {
+    shell: Shell,
+    node: Arc<defra_node::EmbeddedNode>,
+    work: Work,
+    did: String,
+    _dirs: [tempfile::TempDir; 2],
+}
+
+async fn on_node<F>(script: F) -> OnNode
+where
+    F: Fn(&str, &str, &Value) -> Answer + Send + Sync + 'static,
+{
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("node.key");
+    let signer = gents::store::identity::KeyIdentity::load_or_create(&key, None).unwrap();
+    let did = gents::store::identity::NodeIdentity::did(&signer).to_string();
+    let (node, graphql) = crate::shared::test_support::served_config(skill_settings(&did)).await;
+    let (home, _) = home_serving(&graphql, Some(&key));
+    let work = Work {
+        endpoint: GraphqlEndpoint::anonymous(graphql),
+        home: home.path().into(),
+    };
+    let mut runtime = identity(Some(&["a", "b"]));
+    runtime.node_did = did.clone();
+    let fake = FakeRuntime::start(Some(runtime), script).await;
+    let shell = open_shell_on(
+        &fake,
+        None,
+        None,
+        ANSWER_WAIT,
+        Ok(work.clone()),
+        home.path().into(),
+    );
+    shell.opened().await;
+    OnNode {
+        shell,
+        node,
+        work,
+        did,
+        _dirs: [keys, home],
+    }
+}
+
+fn read_skills(agent: &str) -> Intent {
+    Intent::ReadSkills {
+        agent: agent.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn skills_list_only_what_the_agents_context_allows() {
+    let on = on_node(|_, method, _| match method {
+        "skills/list" => skills_answer(),
+        _ => quiet(method),
+    })
+    .await;
+
+    on.shell.intend(read_skills("a"));
+    let told = on.shell.until(is_skills).await;
+
+    let allowed = Update::Skills {
+        agent: "a".to_string(),
+        skills: vec![shown_skill("commit", "Writes commits")],
+    };
+    assert_eq!(told.last(), Some(&allowed));
+    on.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_agent_with_no_context_offers_no_skills() {
+    let on = on_node(|_, method, _| match method {
+        "skills/list" => skills_answer(),
+        _ => quiet(method),
+    })
+    .await;
+
+    on.shell.intend(read_skills("b"));
+    let told = on.shell.until(is_skills).await;
+
+    let none = Update::Skills {
+        agent: "b".to_string(),
+        skills: Vec::new(),
+    };
+    assert_eq!(told.last(), Some(&none));
+    on.node.shutdown().await;
+}
+
+/// With work off the context cannot be read, so every enabled skill is listed and admission
+/// refuses one outside the context.
+#[tokio::test]
+async fn a_skill_turn_sends_the_listed_skill_input() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
+        "skills/list" => skills_answer(),
+        "turn/start" => turn_answer("t1"),
+        _ => quiet(method),
+    })
+    .await;
+    let off = "jobs and the mailbox are off: no runtime".to_string();
+    let home = tempfile::tempdir().unwrap();
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Err(off), home.path().into());
+    shell.opened().await;
+    let send = |skill: &str, text: &str| Intent::SendSkill {
+        tab: 7,
+        session: Some("s1".to_string()),
+        agent: "a".to_string(),
+        skill: skill.to_string(),
+        text: text.to_string(),
+    };
+    let is_turn = |update: &Update| matches!(update, Update::Turn { .. });
+
+    shell.intend(read_skills("a"));
+    let listed = shell.until(is_skills).await;
+    shell.intend(send("commit", "fix it"));
+    shell.until(is_turn).await;
+    shell.intend(send("commit", ""));
+    shell.until(is_turn).await;
+    shell.intend(send("nope", "fix it"));
+    let missed = shell
+        .until(|update| matches!(update, Update::StartFailed { .. }))
+        .await;
+
+    let enabled = Update::Skills {
+        agent: "a".to_string(),
+        skills: vec![
+            shown_skill("commit", "Writes commits"),
+            shown_skill("review", "review"),
+        ],
+    };
+    assert_eq!(listed.last(), Some(&enabled));
+    let unknown = Update::StartFailed {
+        tab: 7,
+        message: "unknown skill /nope".to_string(),
+    };
+    assert_eq!(missed.last(), Some(&unknown));
+    let inputs: Vec<_> = fake
+        .calls()
+        .into_iter()
+        .filter(|call| call.method == "turn/start")
+        .map(|call| call.params["input"].clone())
+        .collect();
+    let commit = json!({ "type": "skill", "name": "commit", "path": "/gents/skills/commit" });
+    let fix = json!({ "type": "text", "text": "fix it", "text_elements": [] });
+    assert_eq!(inputs, [json!([commit, fix]), json!([commit])]);
+}
+
+#[tokio::test]
+async fn a_failed_skills_read_leaves_no_rows_to_show_or_send() {
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let read = reads.clone();
+    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
+        "skills/list" if read.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 => {
+            skills_answer()
+        }
+        "skills/list" => Some(Err((-32603, "the skills are unreadable".to_string()))),
+        _ => quiet(method),
+    })
+    .await;
+    let off = "jobs and the mailbox are off: no runtime".to_string();
+    let home = tempfile::tempdir().unwrap();
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Err(off), home.path().into());
+    shell.opened().await;
+
+    shell.intend(read_skills("a"));
+    shell.until(is_skills).await;
+    shell.intend(read_skills("a"));
+    let told = shell.until(is_skills).await;
+    shell.intend(Intent::SendSkill {
+        tab: 7,
+        session: Some("s1".to_string()),
+        agent: "a".to_string(),
+        skill: "commit".to_string(),
+        text: String::new(),
+    });
+    let missed = shell
+        .until(|update| matches!(update, Update::StartFailed { .. }))
+        .await;
+
+    let notice = Update::Notice("skills/list: the skills are unreadable".to_string());
+    assert!(told.contains(&notice), "{told:?}");
+    let cleared = Update::Skills {
+        agent: "a".to_string(),
+        skills: Vec::new(),
+    };
+    assert_eq!(told.last(), Some(&cleared));
+    let unknown = Update::StartFailed {
+        tab: 7,
+        message: "unknown skill /commit".to_string(),
+    };
+    assert_eq!(missed.last(), Some(&unknown));
+}
+
+fn set_goal(session: Option<&str>, objective: &str) -> Intent {
+    Intent::SetGoal {
+        tab: 7,
+        session: session.map(str::to_string),
+        agent: "a".to_string(),
+        objective: objective.to_string(),
+    }
+}
+
+fn is_goal_answer(update: &Update) -> bool {
+    match update {
+        Update::Notice(notice) => notice == source::GOAL_SET,
+        Update::StartFailed { .. } => true,
+        _ => false,
+    }
+}
+
+fn is_opened(update: &Update, at: &str) -> bool {
+    matches!(update, Update::Opened { session, .. } if session == at)
+}
+
+#[tokio::test]
+async fn a_goal_starts_with_its_objective_as_the_sessions_next_message() {
+    let on = on_node(|_, method, params| match method {
+        "thread/resume" => resumed(params, &[]),
+        _ => quiet(method),
+    })
+    .await;
+
+    on.shell.intend(set_goal(Some("s1"), "ship it"));
+    let told = on.shell.until(is_goal_answer).await;
+
+    let opened = told.iter().position(|update| is_opened(update, "s1"));
+    assert!(opened.is_some(), "{told:?}");
+    let set = Update::Notice(source::GOAL_SET.to_string());
+    assert_eq!(told.last(), Some(&set));
+    let access = on.work.access();
+    let goals = access
+        .execute(r#"{ Goal(filter: { session_id: { _eq: "s1" } }) { objective assignment_root_request_doc_id } }"#)
+        .await
+        .unwrap();
+    let goals = goals["data"]["Goal"].as_array().unwrap();
+    assert_eq!(goals.len(), 1, "{goals:?}");
+    assert_eq!(goals[0]["objective"], "ship it");
+    let root = goals[0]["assignment_root_request_doc_id"].as_str().unwrap();
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ content session_id }} }}"#,
+        gents::store::graphql::escape_graphql_string(root)
+    );
+    let requests = access.execute(&query).await.unwrap();
+    let request = &requests["data"]["AgentRequest"][0];
+    assert_eq!(
+        (&request["content"], &request["session_id"]),
+        (&json!("ship it"), &json!("s1")),
+        "{requests}"
+    );
+    on.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_goal_with_no_session_starts_one_first() {
+    let on = on_node(|agent, method, params| match method {
+        "thread/start" => Some(Ok(thread_answer(thread("s-new", 100)))),
+        "thread/resume" => resumed(params, &[]),
+        "thread/list" if agent == "a" && !is_child_list(method, params) => {
+            page(&[thread("s-new", 100)], None)
+        }
+        _ => quiet(method),
+    })
+    .await;
+
+    on.shell.intend(set_goal(None, "ship it"));
+    let told = on.shell.until(is_goal_answer).await;
+
+    let started = Update::Started {
+        tab: 7,
+        session: "s-new".to_string(),
+    };
+    let started = told.iter().position(|update| *update == started);
+    let opened = told.iter().position(|update| is_opened(update, "s-new"));
+    assert!(
+        started
+            .zip(opened)
+            .is_some_and(|(started, opened)| started < opened),
+        "{told:?}"
+    );
+    let lists_new = |update: &Update| match update {
+        Update::Sessions(sessions) => sessions.iter().any(|session| session.id == "s-new"),
+        _ => false,
+    };
+    let listed = told.iter().position(lists_new);
+    assert!(
+        opened
+            .zip(listed)
+            .is_some_and(|(opened, listed)| opened < listed),
+        "the new session joins the list: {told:?}"
+    );
+    let set = Update::Notice(source::GOAL_SET.to_string());
+    assert_eq!(told.last(), Some(&set));
+    on.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_refused_goal_shows_the_owners_reason() {
+    let on = on_node(|_, method, params| match method {
+        "thread/resume" => resumed(params, &[]),
+        _ => quiet(method),
+    })
+    .await;
+    on.shell.intend(set_goal(Some("s1"), "ship it"));
+    let first = on.shell.until(is_goal_answer).await;
+    let set = Update::Notice(source::GOAL_SET.to_string());
+    assert_eq!(first.last(), Some(&set), "the first goal is set");
+
+    on.shell.intend(set_goal(Some("s1"), "ship more"));
+    let told = on.shell.until(is_goal_answer).await;
+
+    let Some(Update::StartFailed { tab: 7, message }) = told.last() else {
+        panic!("{told:?}");
+    };
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let options = crate::RequestSubmitOptions {
+        retry_key: Some(format!("goal-request:{request_id}")),
+        ..Default::default()
+    };
+    let (did, work) = (&on.did, &on.work);
+    let prepared = crate::prepare_agent_request_with_input(
+        &work.endpoint,
+        did,
+        "ship more",
+        Some("s1"),
+        Some("a"),
+        Some(request_id),
+        options,
+    );
+    let create = prepared.await.unwrap().create;
+    let access = work.access();
+    let owner =
+        gents::goal::submit_goal_backed_request(&access, did, "s1", "ship more", None, &create);
+    let owner = owner.await.unwrap_err();
+    assert_eq!(*message, format!("Couldn’t set the goal: {owner:#}"));
+    on.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn goal_is_off_without_work() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let off = "jobs and the mailbox are off: no runtime".to_string();
+    let home = tempfile::tempdir().unwrap();
+    let work = Err(off.clone());
+    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, work, home.path().into());
+    shell.opened().await;
+
+    shell.intend(set_goal(None, "ship it"));
+    let told = shell.until(is_goal_answer).await;
+
+    let refused = Update::StartFailed {
+        tab: 7,
+        message: off,
+    };
+    assert_eq!(told.last(), Some(&refused));
+    assert!(!fake.methods().contains(&"thread/start".to_string()));
+}
+
 #[tokio::test]
 async fn a_lost_connection_names_the_next_step() {
     let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
@@ -1821,6 +2238,47 @@ async fn an_unreadable_runtime_is_lost_before_anything_connects() {
         Update::Connection(Connection::Lost(lost))
     );
     assert!(fake.calls().is_empty(), "{:?}", fake.methods());
+}
+
+#[tokio::test]
+async fn the_branch_comes_from_git_in_the_working_directory() {
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(["-c", "core.hooksPath=/dev/null"])
+            .args(args)
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    git(&["init", "-b", "trunk"]);
+    git(&["commit", "--allow-empty", "-m", "start"]);
+    let fake = FakeRuntime::start(Some(identity(None)), |_, method, _| quiet(method)).await;
+    let endpoint = GraphqlEndpoint::with_delegated_authorization(fake.graphql(), "Bearer shell")
+        .expect("a bearer");
+    let home = std::path::PathBuf::new();
+    let work = Work {
+        endpoint,
+        home: home.clone(),
+    };
+    let shell = open_shell_in(
+        &fake,
+        None,
+        None,
+        ANSWER_WAIT,
+        Ok(work),
+        home,
+        Some(repo.path().into()),
+    );
+
+    assert!(matches!(shell.next().await, Update::Agents(_)));
+    assert_eq!(shell.next().await, Update::Connection(Connection::Ready));
+    let branch = Update::Branch("trunk".to_string());
+    // `next` panics when nothing more arrives within its wait.
+    while shell.next().await != branch {}
 }
 
 #[tokio::test]

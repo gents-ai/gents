@@ -10,12 +10,15 @@ use crate::keys::KeySet;
 use crate::sample::Tone;
 use crate::source::Connection;
 
-fn right(connection: &Connection) -> &'static str {
-    match connection {
-        Connection::Sample => "sample data ",
-        Connection::Connecting => "connecting ",
-        Connection::Ready => "runtime ready ",
-        Connection::Lost(_) => "runtime lost ",
+fn right(connection: &Connection, branch: Option<&str>, width: u16) -> String {
+    match (connection, branch) {
+        (Connection::Sample, _) => "sample data ".to_string(),
+        (Connection::Connecting, _) => "connecting ".to_string(),
+        (Connection::Ready, Some(branch)) if width >= 80 => {
+            format!("runtime ready · {branch} ")
+        }
+        (Connection::Ready, _) => "runtime ready ".to_string(),
+        (Connection::Lost(_), _) => "runtime lost ".to_string(),
     }
 }
 
@@ -92,8 +95,10 @@ pub fn draw(app: &App, area: Rect, buf: &mut Buffer) {
     let chip_style = Style::new().fg(theme::CHIP_FG).bg(theme::ACCENT);
     buf.set_string(area.x, area.y, &chip, chip_style);
 
-    let right = right(&app.connection);
-    let right_x = area.right().saturating_sub(right.len() as u16);
+    let right = right(&app.connection, app.branch.as_deref(), area.width);
+    let right_x = area
+        .right()
+        .saturating_sub(Span::raw(&right).width() as u16);
     let hints_x = area.x + chip.len() as u16 + 1;
     let room = right_x.saturating_sub(hints_x + 1) as usize;
     let lost = match &app.connection {
@@ -111,7 +116,7 @@ pub fn draw(app: &App, area: Rect, buf: &mut Buffer) {
     buf.set_stringn(hints_x, area.y, text, room, theme::tone(Tone::Label));
 
     if !wide {
-        buf.set_string(right_x, area.y, right, theme::tone(Tone::Accent));
+        buf.set_string(right_x, area.y, &right, theme::tone(Tone::Accent));
     }
 }
 
@@ -150,5 +155,33 @@ mod tests {
             app.apply(Update::Notice("a notice".to_string()));
             assert!(find(&screen(&app), "a notice").is_some(), "{width}");
         }
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_branch_from_80_columns() {
+        let ready = |width, height| {
+            let (intents, _receiver) = std::sync::mpsc::channel();
+            let mut app = App::connected(Vim, width, height, intents);
+            app.apply(Update::Connection(Connection::Ready));
+            app.apply(Update::Branch("main".to_string()));
+            app
+        };
+        let text = "runtime ready · main";
+        let s = screen(&ready(132, 36));
+        assert_eq!(
+            find(&s, text),
+            Some((35, 132 - text.chars().count() as u16 - 1))
+        );
+        let s = screen(&ready(79, 24));
+        assert!(find(&s, "runtime ready").is_some());
+        assert!(find(&s, "· main").is_none());
+
+        let mut app = ready(132, 36);
+        app.apply(Update::Connection(Connection::Lost("gone".to_string())));
+        let s = screen(&app);
+        assert!(find(&s, "runtime lost").is_some());
+        assert!(find(&s, "· main").is_none());
+
+        assert!(find(&screen(&App::new(Vim, 132, 36)), "· main").is_none());
     }
 }

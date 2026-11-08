@@ -3,7 +3,7 @@ mod folder;
 mod node;
 mod remote_tool;
 mod schedule;
-mod skill;
+pub(super) mod skill;
 #[cfg(test)]
 mod testing;
 mod trigger;

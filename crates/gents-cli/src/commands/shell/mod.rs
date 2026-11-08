@@ -55,6 +55,7 @@ pub(crate) async fn open(
         prompt,
         work,
         home,
+        cwd: std::env::current_dir().ok(),
     };
     let source = runtime.spawn(source::run(
         opening,

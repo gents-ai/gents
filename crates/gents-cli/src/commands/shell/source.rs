@@ -17,7 +17,7 @@ use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
 use gents_shell::source::{
     BackgroundCall, Change, Connection, Doc, FormRef, FormValues, Input, Intent, Job, MenuAct,
-    PackAct, Prompt, SavedAccount, Session, Update,
+    PackAct, Prompt, SavedAccount, Session, Skill, Update,
 };
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::Value;
@@ -33,7 +33,7 @@ use super::{forms, items, menus, packs, prefs, setup};
 use crate::commands::accounts::account_rows;
 use crate::commands::codex::relay::agent_route_target;
 use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
-use crate::commands::codex_shim::RuntimeIdentity;
+use crate::commands::codex_shim::{thread_git_info, RuntimeIdentity};
 use crate::commands::mailbox;
 
 /// What the shell opens with. `work` is why jobs and the mailbox are off when it is `Err`.
@@ -43,6 +43,7 @@ pub(super) struct Opening {
     pub(super) prompt: Option<String>,
     pub(super) work: Result<Work, String>,
     pub(super) home: PathBuf,
+    pub(super) cwd: Option<PathBuf>,
 }
 
 /// Feeds the shell from the runtime at `remote`, over one connection per agent, waiting
@@ -64,6 +65,7 @@ pub(super) async fn run(
         prompt,
         work,
         home,
+        cwd,
     } = opening;
     let off = work.as_ref().err().cloned();
     let (watching, mut watched) = mpsc::unbounded_channel();
@@ -111,6 +113,20 @@ pub(super) async fn run(
         source.tell(Update::Begin { agent, prompt });
     }
     source.tell(Update::Connection(Connection::Ready));
+    // Read beside startup, never ahead of it: git may hang for its timeout. Once only, so a
+    // checkout during the session shows at the next start.
+    if let Some(cwd) = cwd {
+        let updates = source.updates.clone();
+        tokio::spawn(async move {
+            let branch = thread_git_info(&cwd).await.and_then(|info| {
+                info.get("branch")
+                    .and_then(|branch| branch.as_str().map(str::to_string))
+            });
+            if let Some(branch) = branch {
+                let _ = updates.send(Input::Runtime(Update::Branch(branch)));
+            }
+        });
+    }
     source.tell(Update::Sessions(source.sessions().await));
     match off {
         Some(off) => {
@@ -289,6 +305,9 @@ fn prompts_not_live(error: Option<&str>) -> String {
 
 const PICK_AGAIN: &str = "pick this session again to see the answer to your reply";
 
+/// The goal's first request is written to the node, not started as this connection's turn.
+pub(super) const GOAL_SET: &str = "pick this session again to follow the goal";
+
 /// A pack change asked for while another runs.
 const BUSY: &str = "A pack change is still running";
 
@@ -357,6 +376,8 @@ struct Source {
     pack_page: u32,
     /// Held through each pack change, so another is refused while it runs.
     pack_changes: Arc<tokio::sync::Mutex<()>>,
+    /// Each agent's last listed skills, whose entry a skill turn sends.
+    skills: RapidHashMap<String, Vec<codex::SkillMetadata>>,
 }
 
 impl Source {
@@ -396,6 +417,7 @@ impl Source {
             pack_query: String::new(),
             pack_page: 1,
             pack_changes: Arc::default(),
+            skills: RapidHashMap::new(),
         }
     }
 
@@ -425,7 +447,44 @@ impl Source {
                 session,
                 agent,
                 text,
-            } => self.send(tab, session, &agent, text).await,
+            } => {
+                let text = codex::UserInput::Text {
+                    text,
+                    text_elements: Vec::new(),
+                };
+                self.send(tab, session, &agent, vec![text]).await
+            }
+            Intent::ReadSkills { agent } => self.read_skills(agent).await,
+            Intent::SendSkill {
+                tab,
+                session,
+                agent,
+                skill,
+                text,
+            } => {
+                let mut listed = self.skills.get(&agent).into_iter().flatten();
+                let Some(listed) = listed.find(|listed| skill_id(listed) == skill) else {
+                    let message = format!("unknown skill /{skill}");
+                    return self.tell(Update::StartFailed { tab, message });
+                };
+                let mut input = vec![codex::UserInput::Skill {
+                    name: listed.name.clone(),
+                    path: listed.path.to_path_buf(),
+                }];
+                if !text.is_empty() {
+                    input.push(codex::UserInput::Text {
+                        text,
+                        text_elements: Vec::new(),
+                    });
+                }
+                self.send(tab, session, &agent, input).await
+            }
+            Intent::SetGoal {
+                tab,
+                session,
+                agent,
+                objective,
+            } => self.goal(tab, session, &agent, objective).await,
             Intent::Interrupt {
                 session,
                 agent,
@@ -1311,41 +1370,109 @@ impl Source {
         }
     }
 
+    /// The endpoint lists every node skill; the context read narrows them to the agent's, as
+    /// admission does. With work off it cannot, and admission refuses one outside the context.
+    async fn read_skills(&mut self, agent: String) {
+        let Some(client) = self.client(&agent) else {
+            return self.tell(Update::Notice(not_connected(&agent)));
+        };
+        let params = codex::SkillsListParams::default();
+        let listed = match client
+            .request::<_, codex::SkillsListResponse>("skills/list", &params)
+            .await
+        {
+            Ok(listed) => listed.data,
+            Err(error) => return self.skills_unread(agent, format!("{error:#}")),
+        };
+        if let Some(error) = listed.iter().flat_map(|entry| &entry.errors).next() {
+            let message = error.message.clone();
+            return self.skills_unread(agent, message);
+        }
+        let mut skills: Vec<_> = listed.into_iter().flat_map(|entry| entry.skills).collect();
+        skills.retain(|skill| skill.enabled);
+        if let Ok(work) = &self.work {
+            match forms::skill::allowed(&work.access(), &self.principal, &agent).await {
+                Ok(allowed) => {
+                    skills.retain(|skill| allowed.iter().any(|id| id == skill_id(skill)))
+                }
+                Err(error) => return self.skills_unread(agent, format!("{error:#}")),
+            }
+        }
+        let rows = skills.iter().map(|skill| Skill {
+            id: skill_id(skill).to_string(),
+            about: match skill.description.as_str() {
+                "" => skill.name.clone(),
+                description => description.to_string(),
+            },
+        });
+        let rows = rows.collect();
+        self.skills.insert(agent.clone(), skills);
+        self.tell(Update::Skills {
+            agent,
+            skills: rows,
+        });
+    }
+
+    /// An earlier read's rows are dropped, so a stale skill is neither shown nor sent.
+    fn skills_unread(&mut self, agent: String, message: String) {
+        self.skills.remove(&agent);
+        self.tell(Update::Notice(message));
+        self.tell(Update::Skills {
+            agent,
+            skills: Vec::new(),
+        });
+    }
+
+    /// The session to start on: `session`, or a new one told as `Started`. `None` once a failed
+    /// start is told as `StartFailed`.
+    async fn session_for(
+        &self,
+        tab: u64,
+        session: Option<String>,
+        client: &Client,
+    ) -> Option<String> {
+        if session.is_some() {
+            return session;
+        }
+        let params = codex::ThreadStartParams::default();
+        match client
+            .request::<_, codex::ThreadStartResponse>("thread/start", &params)
+            .await
+        {
+            Ok(started) => {
+                let session = started.thread.id;
+                self.tell(Update::Started {
+                    tab,
+                    session: session.clone(),
+                });
+                Some(session)
+            }
+            Err(error) => {
+                let message = error.to_string();
+                self.tell(Update::StartFailed { tab, message });
+                None
+            }
+        }
+    }
+
     /// A tab with no session gets one first, and `Started` or `StartFailed` either way.
-    async fn send(&mut self, tab: u64, session: Option<String>, agent: &str, text: String) {
+    async fn send(
+        &mut self,
+        tab: u64,
+        session: Option<String>,
+        agent: &str,
+        input: Vec<codex::UserInput>,
+    ) {
         let Some(client) = self.client(agent) else {
             let message = not_connected(agent);
             return self.tell(Update::StartFailed { tab, message });
         };
-        let session = match session {
-            Some(session) => session,
-            None => {
-                let params = codex::ThreadStartParams::default();
-                match client
-                    .request::<_, codex::ThreadStartResponse>("thread/start", &params)
-                    .await
-                {
-                    Ok(started) => {
-                        let session = started.thread.id;
-                        self.tell(Update::Started {
-                            tab,
-                            session: session.clone(),
-                        });
-                        session
-                    }
-                    Err(error) => {
-                        let message = error.to_string();
-                        return self.tell(Update::StartFailed { tab, message });
-                    }
-                }
-            }
+        let Some(session) = self.session_for(tab, session, client).await else {
+            return;
         };
         let params = codex::TurnStartParams {
             thread_id: session.clone(),
-            input: vec![codex::UserInput::Text {
-                text,
-                text_elements: Vec::new(),
-            }],
+            input,
             ..Default::default()
         };
         let started = client
@@ -1362,6 +1489,59 @@ impl Source {
             Err(error) => self.tell(Update::StartFailed {
                 tab,
                 message: error.to_string(),
+            }),
+        }
+    }
+
+    /// The goal and its first request, whose content is the objective, commit together through
+    /// the goal owner, which refuses replacing a live goal.
+    async fn goal(&mut self, tab: u64, session: Option<String>, agent: &str, objective: String) {
+        let work = match self.work.clone() {
+            Ok(work) => work,
+            Err(message) => return self.tell(Update::StartFailed { tab, message }),
+        };
+        let Some(client) = self.client(agent) else {
+            let message = not_connected(agent);
+            return self.tell(Update::StartFailed { tab, message });
+        };
+        let Some(session) = self.session_for(tab, session, client).await else {
+            return;
+        };
+        let principal = &self.principal;
+        let submitted = async {
+            crate::request_helpers::ensure_local_request_signer(Some(&work.home), principal)?;
+            // The owner requires a retry key, by which it recognises a retried submission.
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let options = crate::RequestSubmitOptions {
+                retry_key: Some(format!("goal-request:{request_id}")),
+                ..Default::default()
+            };
+            let prepared = crate::prepare_agent_request_with_input(
+                &work.endpoint,
+                principal,
+                &objective,
+                Some(&session),
+                Some(agent),
+                Some(request_id),
+                options,
+            )
+            .await?;
+            let access = work.access();
+            let create = &prepared.create;
+            gents::goal::submit_goal_backed_request(
+                &access, principal, &session, &objective, None, create,
+            )
+            .await
+        };
+        match submitted.await {
+            Ok(_) => {
+                self.open(session, agent).await;
+                self.tell(Update::Sessions(self.sessions().await));
+                self.tell(Update::Notice(GOAL_SET.to_string()));
+            }
+            Err(error) => self.tell(Update::StartFailed {
+                tab,
+                message: format!("Couldn’t set the goal: {error:#}"),
             }),
         }
     }
@@ -1406,6 +1586,12 @@ impl Source {
 
 fn not_connected(agent: &str) -> String {
     format!("agent {agent} is not connected to this shell")
+}
+
+/// The endpoint lists a skill at a path named for its id, which a skill input is read back by.
+fn skill_id(skill: &codex::SkillMetadata) -> &str {
+    let name = skill.path.file_name().and_then(|name| name.to_str());
+    name.unwrap_or_default()
 }
 
 /// The shell puts a blank after each new item's line; an opened transcript matches it.

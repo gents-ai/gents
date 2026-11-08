@@ -6,7 +6,8 @@ pub(super) use fuzzy::{
     fuzzy_file_search, fuzzy_file_search_session_start, fuzzy_file_search_session_stop,
     fuzzy_file_search_session_update,
 };
-pub(super) use git::{git_diff_to_remote, thread_git_info};
+pub(super) use git::git_diff_to_remote;
+pub(crate) use git::thread_git_info;
 
 #[derive(Debug)]
 pub(super) struct HostRuntimeError {

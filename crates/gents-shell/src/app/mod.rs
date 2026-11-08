@@ -19,7 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
-use crate::commands::{Command, Effect, COMMANDS};
+use crate::commands::{Effect, COMMANDS};
 use crate::filter::subsequence;
 use crate::keys::{in_line, Action, Dir, KeyCtx, KeySet, Keymap};
 use crate::layout::{
@@ -32,7 +32,7 @@ use crate::sample::{
 };
 use crate::source::{
     Agent, BackgroundCall, Change, Connection, Day, Intent, Job, MenuRow, Prompt, Session,
-    SessionState, Update,
+    SessionState, Skill, Update,
 };
 use fields::Field;
 use form::FormState;
@@ -60,6 +60,27 @@ pub enum Pane {
 pub enum Mode {
     Normal,
     Input,
+}
+
+/// What a row of the slash list runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlashRun {
+    Effect(Effect),
+    Skill(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashRow {
+    pub name: String,
+    pub about: String,
+    pub run: SlashRun,
+}
+
+/// What `send_as` sends the box's text as.
+enum Sending {
+    Text,
+    Skill(String),
+    Goal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -377,6 +398,8 @@ pub struct App {
     pub search: Option<Search>,
     pub sessions: Vec<Session>,
     pub agents: Vec<Agent>,
+    /// The agent they are for, and its skills.
+    pub skills: (String, Vec<Skill>),
     pub jobs: Vec<Job>,
     pub jobs_as_of: String,
     /// The address of the job whose detail the Workflows view shows.
@@ -404,10 +427,18 @@ pub struct App {
     /// Without a source, the sample answers each intent at once.
     intents: Option<Sender<Intent>>,
     pub connection: Connection,
+    pub branch: Option<String>,
     /// Text the terminal copies after this input.
     clipboard: Option<String>,
     next_tab: u64,
     quit: bool,
+}
+
+/// The box's first word after `/`, and the rest trimmed.
+fn slash_words(text: &str) -> (&str, &str) {
+    let text = text.strip_prefix('/').unwrap_or(text);
+    let (name, rest) = text.split_once(' ').unwrap_or((text, ""));
+    (name, rest.trim())
 }
 
 fn first_selectable(rows: &[SidebarRow]) -> usize {
@@ -456,6 +487,7 @@ impl App {
             search: None,
             sessions: crate::sample::sessions(),
             agents: crate::sample::agents(),
+            skills: (String::new(), Vec::new()),
             jobs: crate::sample::jobs(),
             jobs_as_of: String::new(),
             job_open: None,
@@ -472,6 +504,7 @@ impl App {
             saving: Vec::new(),
             intents: None,
             connection: Connection::Sample,
+            branch: None,
             clipboard: None,
             next_tab: 0,
             quit: false,
@@ -584,11 +617,13 @@ impl App {
             }
             Update::Sessions(sessions) => self.set_sessions(sessions),
             Update::Agents(agents) => self.set_agents(agents),
+            Update::Skills { agent, skills } => self.skills = (agent, skills),
             Update::Connection(connection) => {
                 self.connection = connection;
                 self.setup_says_lost();
                 self.form_says_lost();
             }
+            Update::Branch(branch) => self.branch = Some(branch),
             Update::Notice(notice) => self.notice = Some(notice),
             Update::Prompts { session, prompts } => {
                 if let Some(tab) = self.showing(&session) {
@@ -990,8 +1025,11 @@ impl App {
                     self.act(Action::EnterInput);
                 }
                 self.focus = Pane::Agent;
-                self.slash = None;
-                self.tabs[self.active].input.paste(text);
+                let input = &mut self.tabs[self.active].input;
+                input.paste(text);
+                if !input.text().starts_with('/') {
+                    self.slash = None;
+                }
             }
         }
     }
@@ -1100,10 +1138,15 @@ impl App {
     }
 
     fn edit_message(&mut self, action: Action) {
-        let input = &mut self.tabs[self.active].input;
-        input.edit(action);
+        let tab = &mut self.tabs[self.active];
+        tab.input.edit(action);
+        let input = &tab.input;
         if matches!(action, Action::Insert(_)) && input.text() == "/" {
             self.slash = Some(0);
+            let agent = tab.agent_id.clone();
+            if !matches!(self.connection, Connection::Lost(_)) {
+                self.emit(Intent::ReadSkills { agent });
+            }
         } else if !input.text().starts_with('/') {
             self.slash = None;
         } else if matches!(
@@ -1118,32 +1161,56 @@ impl App {
         }
     }
 
-    pub fn slash_matches(&self) -> Vec<usize> {
-        let text = self.tabs[self.active].input.text();
-        let query = text.strip_prefix('/').unwrap_or(text);
-        (0..COMMANDS.len())
-            .filter(|&index| {
-                COMMANDS[index]
-                    .slash
-                    .is_some_and(|name| subsequence(query, name))
+    /// The commands, then the tab agent's skills, that match the box's first word.
+    pub fn slash_matches(&self) -> Vec<SlashRow> {
+        let tab = &self.tabs[self.active];
+        let (query, _) = slash_words(tab.input.text());
+        let commands = COMMANDS.iter().filter_map(|command| {
+            Some(SlashRow {
+                name: command.slash?.to_string(),
+                about: command.about.to_string(),
+                run: SlashRun::Effect(command.effect),
             })
+        });
+        let (agent, skills) = &self.skills;
+        let skills = skills
+            .iter()
+            .filter(|_| *agent == tab.agent_id)
+            .map(|skill| SlashRow {
+                name: skill.id.clone(),
+                about: skill.about.clone(),
+                run: SlashRun::Skill(skill.id.clone()),
+            });
+        commands
+            .chain(skills)
+            .filter(|row| subsequence(query, &row.name))
             .collect()
     }
 
-    fn selected_slash(&self) -> Option<&'static Command> {
-        let index = *self.slash_matches().get(self.slash?)?;
-        Some(&COMMANDS[index])
+    fn selected_slash(&self) -> Option<SlashRow> {
+        self.slash_matches().into_iter().nth(self.slash?)
     }
 
+    /// A command ignores the text after its name.
     fn run_slash(&mut self) {
-        let Some(command) = self.selected_slash() else {
-            let text = self.tabs[self.active].input.text();
+        let text = self.tabs[self.active].input.text().to_string();
+        let Some(row) = self.selected_slash() else {
             self.notice = Some(format!("unknown command: {text}"));
             return;
         };
-        self.tabs[self.active].input.clear();
-        self.slash = None;
-        self.run_effect(command.effect);
+        let sent = self.tabs[self.active].input.sent();
+        let argument = slash_words(&sent).1.to_string();
+        match row.run {
+            SlashRun::Skill(skill) => self.send_as(Sending::Skill(skill), argument),
+            SlashRun::Effect(Effect::Goal) if !argument.is_empty() => {
+                self.send_as(Sending::Goal, argument)
+            }
+            SlashRun::Effect(effect) => {
+                self.tabs[self.active].input.clear();
+                self.slash = None;
+                self.run_effect(effect);
+            }
+        }
     }
 
     fn step_slash(&mut self, forward: bool) {
@@ -1152,8 +1219,8 @@ impl App {
     }
 
     fn complete_slash(&mut self) {
-        if let Some(name) = self.selected_slash().and_then(|command| command.slash) {
-            self.tabs[self.active].input.set(&format!("/{name}"));
+        if let Some(row) = self.selected_slash() {
+            self.tabs[self.active].input.set(&format!("/{}", row.name));
             self.slash = Some(0);
         }
     }
@@ -1166,10 +1233,22 @@ impl App {
             Effect::OpenPicker => self.push_layer(LayerKind::Picker),
             Effect::OpenKeys => self.push_layer(LayerKind::Keys),
             Effect::ClearTab => {
-                let tab = &mut self.tabs[self.active];
-                tab.lines.clear();
-                tab.scroll = 0;
-                self.activate_tab(self.active);
+                let tab = &self.tabs[self.active];
+                if tab.parent.is_some() {
+                    self.notice = Some(READ_ONLY.to_string());
+                } else if tab.starting {
+                    self.notice = Some(STARTING.to_string());
+                } else {
+                    self.tabs[self.active] = Tab {
+                        id: tab.id,
+                        agent: tab.agent.clone(),
+                        agent_id: tab.agent_id.clone(),
+                        agent_picked: tab.agent_picked,
+                        sidebar: tab.sidebar,
+                        ..Tab::new_session()
+                    };
+                    self.activate_tab(self.active);
+                }
             }
             Effect::CloseTab => {
                 self.close_tab();
@@ -1182,6 +1261,11 @@ impl App {
             Effect::ShowDiff(scope) => {
                 self.set_scope(scope);
                 self.open_sidebar();
+            }
+            // The next enter on the list sends what follows as the objective.
+            Effect::Goal => {
+                self.tabs[self.active].input.set("/goal ");
+                self.slash = Some(0);
             }
             Effect::NotWired => self.not_wired(),
             Effect::DismissPrompt => self.dismiss(),
@@ -1239,11 +1323,17 @@ impl App {
         }
     }
 
-    /// The runtime refuses a turn on a subagent's thread.
     fn send(&mut self) {
+        let text = self.tabs[self.active].input.sent();
+        self.send_as(Sending::Text, text);
+    }
+
+    /// The runtime refuses a turn on a subagent's thread. A refusal leaves the box as typed.
+    fn send_as(&mut self, sending: Sending, text: String) {
+        let message = matches!(sending, Sending::Text);
         let typed = !self.tabs[self.active].input.text().trim().is_empty();
         // A reply to a prompt is a mailbox request, not a turn, so a subagent's tab takes it.
-        if let Some(reply) = self.prompt_reply().filter(|_| typed) {
+        if let Some(reply) = self.prompt_reply().filter(|_| message && typed) {
             if self.says_lost() {
                 return;
             }
@@ -1256,7 +1346,7 @@ impl App {
             self.notice = Some(READ_ONLY.to_string());
             return;
         }
-        if !typed || self.says_lost() {
+        if (message && !typed) || self.says_lost() {
             return;
         }
         if self.agents.is_empty() {
@@ -1268,16 +1358,34 @@ impl App {
             self.notice = Some(STARTING.to_string());
             return;
         }
-        let intent = Intent::Send {
-            tab: tab.id,
-            session: tab.session.clone(),
-            agent: tab.agent_id.clone(),
-            text: tab.input.sent(),
+        let (id, session, agent) = (tab.id, tab.session.clone(), tab.agent_id.clone());
+        // A goal's first request is the runtime's, not a turn this connection started.
+        tab.following = !matches!(sending, Sending::Goal);
+        let intent = match sending {
+            Sending::Text => Intent::Send {
+                tab: id,
+                session,
+                agent,
+                text,
+            },
+            Sending::Skill(skill) => Intent::SendSkill {
+                tab: id,
+                session,
+                agent,
+                skill,
+                text,
+            },
+            Sending::Goal => Intent::SetGoal {
+                tab: id,
+                session,
+                agent,
+                objective: text,
+            },
         };
         tab.starting = tab.session.is_none();
-        tab.following = true;
         tab.input.clear();
         tab.scroll = 0;
+        self.slash = None;
         self.emit(intent);
     }
 
@@ -1698,7 +1806,7 @@ mod tests {
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::RunState;
     use crate::testing::{
-        buffer, find, keys, numbered, press, screen, session_row, type_text, with_right_pane,
+        buffer, find, keys, numbered, press, screen, sent, session_row, type_text, with_right_pane,
         with_sample_session,
     };
     use ratatui::backend::TestBackend;
@@ -2738,12 +2846,14 @@ mod tests {
     }
 
     #[test]
-    fn clear_inside_a_subagent_keeps_the_parent() {
+    fn clear_in_a_subagent_says_it_takes_input_from_its_parent() {
         let mut app = session_app();
         let lines = app.tabs[0].lines.clone();
         press(&mut app, "j enter");
+        let stepped = app.tabs[0].lines.clone();
         app.run_effect(Effect::ClearTab);
-        assert!(app.tabs[0].lines.is_empty());
+        assert_eq!(app.tabs[0].lines, stepped);
+        assert_eq!(app.notice.as_deref(), Some(READ_ONLY));
         press(&mut app, "esc esc");
         assert_eq!(app.tabs[0].agent, "Engineer");
         assert_eq!(app.tabs[0].lines, lines);
@@ -3054,16 +3164,71 @@ mod tests {
     }
 
     #[test]
-    fn clear_on_a_session_tab_leaves_the_rows_clean() {
+    fn clear_on_a_session_tab_shows_a_fresh_tab() {
         for (width, height) in [(132, 36), (60, 16)] {
             let mut app = App::new(Vim, width, height);
             app.open_session(session_row("pack registry"));
             app.run_effect(Effect::ClearTab);
             let s = screen(&app);
-            assert_eq!(find(&s, "start typing"), None, "{width}");
-            let (row, _) = find(&s, "◆ Reviewer · auth").expect("the row");
-            assert!(!s[row as usize].contains("Pick"), "{}", s[row as usize]);
+            assert!(find(&s, "start typing").is_some(), "{width}");
+            assert_eq!(find(&s, "◆ Reviewer · auth"), None, "{width}");
         }
+    }
+
+    fn cleared() -> (App, std::sync::mpsc::Receiver<Intent>) {
+        let (mut app, intents) = connected();
+        let tab = &mut app.tabs[0];
+        tab.session = Some("s1".to_string());
+        tab.name = "fix login".to_string();
+        tab.agent_id = "local:reviewer".to_string();
+        tab.lines = numbered(3);
+        tab.turn = Some("t1".to_string());
+        tab.following = true;
+        tab.prompts = vec![crate::sample::approval("Engineer")];
+        app.apply(running("s1", vec![subagent("a", RunState::Working, "c1")]));
+        (app, intents)
+    }
+
+    #[test]
+    fn clear_starts_a_fresh_session_with_the_same_agent() {
+        let (mut app, intents) = cleared();
+        let tabs = app.tabs.len();
+        type_text(&mut app, "/clear");
+        press(&mut app, "enter");
+        let tab = &app.tabs[0];
+        assert_eq!(tab.session, None);
+        assert_eq!(tab.name, "new session");
+        assert!(tab.lines.is_empty() && tab.running.is_empty() && tab.prompts.is_empty());
+        assert!(tab.turn.is_none() && !tab.following);
+        assert_eq!(tab.agent_id, "local:reviewer");
+        assert_eq!(app.tabs.len(), tabs);
+        type_text(&mut app, "hi");
+        press(&mut app, "enter");
+        let sent = sent(&intents);
+        assert!(
+            matches!(&sent[..], [Intent::Send { session: None, agent, .. }] if agent == "local:reviewer"),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn a_late_update_for_the_old_session_stays_out() {
+        let (mut app, _intents) = cleared();
+        type_text(&mut app, "/clear");
+        press(&mut app, "enter");
+        app.apply(item("s1", said("late", Tone::Reply, "r9")));
+        app.apply(ended("t1"));
+        assert!(app.tabs[0].lines.is_empty());
+    }
+
+    #[test]
+    fn clear_waits_for_a_starting_session() {
+        let (mut app, _intents) = cleared();
+        app.tabs[0].starting = true;
+        type_text(&mut app, "/clear");
+        press(&mut app, "enter");
+        assert_eq!(app.notice.as_deref(), Some(STARTING));
+        assert_eq!(app.tabs[0].lines.len(), 3);
     }
 
     #[test]
@@ -3608,6 +3773,13 @@ mod tests {
 
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "/c");
+        press(&mut app, "home");
+        app.handle(Event::Paste("a".to_string()));
+        assert_eq!(app.tabs[0].input.text(), "a/c");
+        assert_eq!(app.slash, None);
+
+        let mut app = App::new(Vim, 132, 36);
+        type_text(&mut app, "/c");
         press(&mut app, "ctrl-c");
         assert!(app.tabs[0].input.is_empty());
         assert_eq!(app.slash, None);
@@ -3660,11 +3832,12 @@ mod tests {
         assert_eq!(top(&jobs), Some(LayerKind::Sidebar));
 
         assert_eq!(top(&run(132, 36, "/help")), Some(LayerKind::Keys));
-        assert_eq!(
-            run(132, 36, "/goal").notice.as_deref(),
-            Some("not wired yet")
-        );
         assert!(run(132, 36, "/quit").should_quit());
+
+        let mut goal = App::new(Vim, 132, 36);
+        type_text(&mut goal, "/goal");
+        press(&mut goal, "enter");
+        assert_eq!(goal.tabs[0].input.text(), "/goal ");
     }
 
     #[test]
@@ -4581,5 +4754,197 @@ mod tests {
         app.view = View::Agents;
         press(&mut app, "esc ctrl-w l ctrl-w l enter");
         assert_eq!(app.notice.as_deref(), Some("not wired yet"));
+    }
+
+    fn commit_skill(agent: &str) -> Update {
+        Update::Skills {
+            agent: agent.to_string(),
+            skills: vec![Skill {
+                id: "commit".to_string(),
+                about: "Commit staged changes".to_string(),
+            }],
+        }
+    }
+
+    /// Types `text`, with the tab agent's skills told once the list opens.
+    fn type_slash(app: &mut App, text: &str) {
+        type_text(app, "/");
+        app.apply(commit_skill(&app.tabs[app.active].agent_id.clone()));
+        type_text(app, &text[1..]);
+    }
+
+    #[test]
+    fn opening_the_list_reads_the_agents_skills() {
+        let (mut app, intents) = connected();
+        type_text(&mut app, "/go");
+        let read = Intent::ReadSkills {
+            agent: app.tabs[0].agent_id.clone(),
+        };
+        assert_eq!(intents.try_iter().collect::<Vec<_>>(), [read]);
+    }
+
+    #[test]
+    fn skills_list_after_the_commands() {
+        let (mut app, _intents) = connected();
+        type_slash(&mut app, "/");
+        for _ in 0..10 {
+            press(&mut app, "ctrl-n");
+        }
+        let s = screen(&app);
+        let (quit, _) = find(&s, " /quit").expect("the last command shown");
+        let (skill, _) = find(&s, " /commit    Commit staged changes").expect("the skill");
+        assert!(skill > quit, "{skill} > {quit}");
+        assert!(find(&s, " Commands and skills ").is_some());
+    }
+
+    #[test]
+    fn skills_for_another_agent_are_not_listed() {
+        let (mut app, _intents) = connected();
+        type_text(&mut app, "/");
+        app.apply(commit_skill("other"));
+        let rows = app.slash_matches();
+        assert_eq!(rows.len(), 10);
+        assert!(rows.iter().all(|row| row.name != "commit"));
+    }
+
+    #[test]
+    fn a_skill_runs_with_the_text_after_it() {
+        let (mut app, intents) = connected();
+        let (tab, agent) = (app.tabs[0].id, app.tabs[0].agent_id.clone());
+        type_slash(&mut app, "/commit fix the bug");
+        press(&mut app, "enter");
+        let skill = |session: Option<&str>, text: &str| Intent::SendSkill {
+            tab,
+            session: session.map(str::to_string),
+            agent: agent.clone(),
+            skill: "commit".to_string(),
+            text: text.to_string(),
+        };
+        assert_eq!(sent(&intents), [skill(None, "fix the bug")]);
+        assert!(app.tabs[0].input.is_empty());
+        assert_eq!(app.slash, None);
+        assert!(app.tabs[0].following);
+
+        app.apply(Update::Started {
+            tab,
+            session: "s1".to_string(),
+        });
+        type_slash(&mut app, "/commit");
+        press(&mut app, "enter");
+        assert_eq!(sent(&intents), [skill(Some("s1"), "")]);
+    }
+
+    #[test]
+    fn the_list_filters_on_the_first_word() {
+        let (mut app, _intents) = connected();
+        type_text(&mut app, "/goal ship it");
+        let names: Vec<_> = app
+            .slash_matches()
+            .into_iter()
+            .map(|row| row.name)
+            .collect();
+        assert_eq!(names, ["goal"]);
+
+        let (mut app, _intents) = connected();
+        type_text(&mut app, "/zzz now");
+        press(&mut app, "enter");
+        assert_eq!(app.notice.as_deref(), Some("unknown command: /zzz now"));
+        assert_eq!(app.tabs[0].input.text(), "/zzz now");
+    }
+
+    #[test]
+    fn goal_alone_waits_for_its_objective() {
+        let (mut app, intents) = connected();
+        type_text(&mut app, "/goal");
+        press(&mut app, "enter");
+        assert!(sent(&intents).is_empty());
+        assert_eq!(app.tabs[0].input.text(), "/goal ");
+        assert_eq!(app.slash, Some(0));
+
+        type_text(&mut app, "ship it");
+        press(&mut app, "enter");
+        let goal = Intent::SetGoal {
+            tab: app.tabs[0].id,
+            session: None,
+            agent: app.tabs[0].agent_id.clone(),
+            objective: "ship it".to_string(),
+        };
+        assert_eq!(sent(&intents), [goal]);
+        assert!(app.tabs[0].starting);
+        assert!(!app.tabs[0].following);
+        assert!(app.tabs[0].input.is_empty());
+        assert_eq!(app.slash, None);
+    }
+
+    #[test]
+    fn a_paste_into_an_open_command_is_its_argument() {
+        let (mut app, intents) = connected();
+        let (tab, agent) = (app.tabs[0].id, app.tabs[0].agent_id.clone());
+        type_text(&mut app, "/goal");
+        press(&mut app, "enter");
+        app.handle(Event::Paste("ship\nit".to_string()));
+        press(&mut app, "enter");
+        let goal = Intent::SetGoal {
+            tab,
+            session: None,
+            agent: agent.clone(),
+            objective: "ship\nit".to_string(),
+        };
+        assert_eq!(sent(&intents), [goal]);
+
+        let (mut app, intents) = connected();
+        type_slash(&mut app, "/commit ");
+        app.handle(Event::Paste("fix\nthe bug".to_string()));
+        press(&mut app, "enter");
+        let skill = Intent::SendSkill {
+            tab,
+            session: None,
+            agent: agent.clone(),
+            skill: "commit".to_string(),
+            text: "fix\nthe bug".to_string(),
+        };
+        assert_eq!(sent(&intents), [skill]);
+
+        let (mut app, intents) = connected();
+        app.handle(Event::Paste("/goal ship it".to_string()));
+        assert_eq!(app.slash, None);
+        press(&mut app, "enter");
+        let text = Intent::Send {
+            tab,
+            session: None,
+            agent,
+            text: "/goal ship it".to_string(),
+        };
+        assert_eq!(sent(&intents), [text], "a closed list is plain text");
+    }
+
+    #[test]
+    fn a_refused_goal_or_skill_keeps_its_text() {
+        for text in ["/goal ship it", "/commit fix it"] {
+            let (mut app, intents) = with_subagents();
+            press(&mut app, "up up enter");
+            intents.try_recv().expect("the subagent's open");
+            type_slash(&mut app, text);
+            press(&mut app, "enter");
+            assert_eq!(app.notice.as_deref(), Some(READ_ONLY), "{text}");
+            assert_eq!(app.tabs[0].input.text(), text);
+            assert!(sent(&intents).is_empty(), "{text}");
+
+            let (mut app, intents) = connected();
+            app.tabs[0].starting = true;
+            type_slash(&mut app, text);
+            press(&mut app, "enter");
+            assert_eq!(app.notice.as_deref(), Some(STARTING), "{text}");
+            assert_eq!(app.tabs[0].input.text(), text);
+            assert!(sent(&intents).is_empty(), "{text}");
+
+            let (mut app, intents) = connected();
+            app.apply(Update::Connection(Connection::Lost("gone".to_string())));
+            type_slash(&mut app, text);
+            press(&mut app, "enter");
+            assert_eq!(app.notice.as_deref(), Some("gone"), "{text}");
+            assert_eq!(app.tabs[0].input.text(), text);
+            assert!(intents.try_recv().is_err(), "a lost source reads no skills");
+        }
     }
 }
