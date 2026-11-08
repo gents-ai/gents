@@ -145,7 +145,7 @@ export function PluginAccessPrompt() {
       open={question !== null}
       onOpenChange={(open) => !open && void answer("deny")}
     >
-      <DialogContent aria-modal="true">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>{question?.prompt}</DialogTitle>
           <DialogDescription>

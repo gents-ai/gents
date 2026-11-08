@@ -106,7 +106,7 @@ export function NodeNavigationGuard() {
         if (!open) dismiss();
       }}
     >
-      <AlertDialogContent aria-modal="true">
+      <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Switch active node?</AlertDialogTitle>
           <AlertDialogDescription>

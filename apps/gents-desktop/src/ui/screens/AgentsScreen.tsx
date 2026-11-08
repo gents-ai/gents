@@ -263,7 +263,7 @@ export function AgentsScreen() {
         open={hiding !== null}
         onOpenChange={(open) => !open && setHiding(null)}
       >
-        <AlertDialogContent aria-modal="true">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Hide {hiding?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -289,7 +289,7 @@ export function AgentsScreen() {
         open={removing !== null}
         onOpenChange={(open) => !open && !removingBusy && setRemoving(null)}
       >
-        <AlertDialogContent aria-modal="true">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.label}?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -354,7 +354,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
   };
   return (
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
-      <DialogContent aria-modal="true">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Add node</DialogTitle>
           <DialogDescription>
@@ -435,7 +435,7 @@ export function RenameDialog({
   };
   return (
     <Dialog open={value !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent aria-modal="true">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

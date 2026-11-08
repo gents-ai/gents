@@ -178,7 +178,7 @@ export function StorageFullRecovery({
         </p>
       )}
       <AlertDialog open={reviewOpen} onOpenChange={setReviewOpen}>
-        <AlertDialogContent aria-modal="true">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Restart the affected runtime?</AlertDialogTitle>
             <AlertDialogDescription>

@@ -284,7 +284,6 @@ export function ItemDialog({
     <Dialog open={openId !== null} onOpenChange={(open) => !open && onClose()}>
       {item && (
         <DialogContent
-          aria-modal="true"
           ref={content}
           showCloseButton={false}
           className="grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-visible bg-transparent p-0 shadow-none ring-0 sm:max-w-xl dark:ring-0"
