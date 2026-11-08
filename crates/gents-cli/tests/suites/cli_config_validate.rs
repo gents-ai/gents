@@ -15,6 +15,7 @@ fn canonical_config(node_did: &str) -> Value {
         },
         "agents": [{
             "agent_did": "default",
+            "creation_nonce": "nonce",
             "context_id": "default-context",
             "inference_profile_id": "default-profile",
             "enabled": true

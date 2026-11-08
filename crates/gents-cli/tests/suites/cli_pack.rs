@@ -684,8 +684,14 @@ fn diagnose_status_degrades_on_a_plugin_jobs_failure() -> Result<()> {
         after["checks"]["plugin_jobs"]["ok"] == false && after["status"] == "degraded",
         "a plugin_jobs failure did not degrade status: {after}"
     );
+    let wired = after["checks"]["plugin_jobs"]["agents"]
+        .as_array()
+        .context("plugin_jobs lists no agents")?
+        .iter()
+        .find(|row| row["agent_did"] == fixture.agent.as_str())
+        .with_context(|| format!("plugin_jobs omits the wired agent: {after}"))?;
     anyhow::ensure!(
-        after["checks"]["plugin_jobs"]["agents"][0]["checks"][0]["check"] == "job_block_missing",
+        wired["checks"][0]["check"] == "job_block_missing",
         "unexpected plugin_jobs row: {after}"
     );
     Ok(())
@@ -936,10 +942,40 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
+/// `wire_sources` resolves the CLI client key from the process environment,
+/// so it runs in a child of this test binary whose `HOME` is the fixture's.
+#[test]
+fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
     let fixture = wire_fixture(true)?;
-    let sources = gents_server::packs::wire_sources(fixture.home.clone()).await?;
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "cli_pack::wire_sources_in_fixture_home",
+            "--exact",
+            "--include-ignored",
+            "--nocapture",
+        ])
+        .env("HOME", fixture.tempdir.path())
+        .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
+        .env(WIRE_SOURCES_HOME_ENV, &fixture.home)
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "wire_sources child failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+const WIRE_SOURCES_HOME_ENV: &str = "GENTS_TEST_WIRE_SOURCES_HOME";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "run by wire_sources_lists_job_plugins_and_target_packs in the fixture's HOME"]
+async fn wire_sources_in_fixture_home() -> Result<()> {
+    let home = std::path::PathBuf::from(
+        std::env::var_os(WIRE_SOURCES_HOME_ENV).context("fixture home is not set")?,
+    );
+    let sources = gents_server::packs::wire_sources(home).await?;
     let plugins = sources["plugins"]
         .as_array()
         .context("wire_sources printed no plugins")?;
