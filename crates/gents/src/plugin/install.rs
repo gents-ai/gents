@@ -188,10 +188,8 @@ fn install_pack_plugins_locked<'a>(
                 .as_deref()
                 .map(|path| crate::pack::tool_instructions(&plugin.name, asset(path)?))
                 .transpose()?;
-            let (data_unique_keys, data_collection_fields) =
+            let (data_unique_keys, data_collection_fields, data_collection_schemas) =
                 crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;
-            let data_collection_schemas =
-                crate::pack::plugin_data_schemas(manifest, plugin, &asset)?;
             install_from_pack_locked(
                 lock,
                 home,

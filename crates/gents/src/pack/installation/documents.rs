@@ -95,6 +95,8 @@ fn sdl_types(sdl: &str) -> Result<BTreeMap<String, SdlType>> {
 pub type UniqueKeySets = BTreeMap<String, Vec<Vec<String>>>;
 /// Field names per declared collection.
 pub type CollectionFields = BTreeMap<String, Vec<String>>;
+/// Each data collection a pack schema file declares alone, with that file's SDL.
+pub type CollectionSchemas = BTreeMap<String, String>;
 
 /// Checks `plugin`'s `data` against the pack that ships it
 /// and returns each declared collection's unique key field sets and field
@@ -103,14 +105,24 @@ pub fn plugin_data_unique_keys<'a>(
     manifest: &super::super::PackManifest,
     plugin: &super::super::PackPlugin,
     asset: &dyn Fn(&str) -> Result<&'a [u8]>,
-) -> Result<(UniqueKeySets, CollectionFields)> {
+) -> Result<(UniqueKeySets, CollectionFields, CollectionSchemas)> {
     let name = &plugin.name;
     let Some(data) = &plugin.data else {
-        return Ok((BTreeMap::new(), BTreeMap::new()));
+        return Ok((BTreeMap::new(), BTreeMap::new(), BTreeMap::new()));
     };
     let mut types = BTreeMap::new();
+    // A data collection one schema file declares alone keeps that file's
+    // exact SDL: the trusted schema a client-signed write signs against.
+    let mut schemas = BTreeMap::new();
     for path in sdl_paths(manifest) {
-        types.extend(sdl_types(std::str::from_utf8(asset(path)?)?)?);
+        let sdl = std::str::from_utf8(asset(path)?)?;
+        let declared = sdl_types(sdl)?;
+        if let [collection] = declared.keys().collect::<Vec<_>>().as_slice() {
+            if data.collections.contains(collection) {
+                schemas.insert((*collection).clone(), sdl.to_owned());
+            }
+        }
+        types.extend(declared);
     }
     let mut keys = BTreeMap::new();
     let mut fields = BTreeMap::new();
@@ -136,30 +148,7 @@ pub fn plugin_data_unique_keys<'a>(
              data.collections; stamp a field the pack's SDL declares"
         );
     }
-    Ok((keys, fields))
-}
-
-/// Each data collection of `plugin` that one of the pack's schema files
-/// declares alone, with that file's exact SDL: the trusted schema a
-/// client-signed write signs against.
-pub fn plugin_data_schemas<'a>(
-    manifest: &super::super::PackManifest,
-    plugin: &super::super::PackPlugin,
-    asset: &dyn Fn(&str) -> Result<&'a [u8]>,
-) -> Result<BTreeMap<String, String>> {
-    let Some(data) = &plugin.data else {
-        return Ok(BTreeMap::new());
-    };
-    let mut schemas = BTreeMap::new();
-    for path in sdl_paths(manifest) {
-        let sdl = std::str::from_utf8(asset(path)?)?;
-        if let [collection] = query::parse_sdl(sdl)?.as_slice() {
-            if data.collections.contains(&collection.name) {
-                schemas.insert(collection.name.clone(), sdl.to_owned());
-            }
-        }
-    }
-    Ok(schemas)
+    Ok((keys, fields, schemas))
 }
 
 /// A dependency prepared for the install of its dependent, installed like
