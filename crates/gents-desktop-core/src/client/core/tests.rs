@@ -1066,7 +1066,7 @@ async fn selected_node_did_channel_updates_subscribers() {
 }
 
 #[tokio::test]
-async fn refresh_store_succeeds_with_selection_set() {
+async fn scoped_refresh_of_an_unrouted_node_fails_without_a_local_replica() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -1077,9 +1077,20 @@ async fn refresh_store_succeeds_with_selection_set() {
         .expect("client core");
 
     core.refresh_store().await.expect("refresh full");
+    let before = core.store().projection_revision().store_version;
 
+    // Node configuration is read from its runtime's authenticated endpoint;
+    // there is no replica to fall back to.
     core.set_selected_node_did(Some("did:any".to_string()));
-    core.refresh_store().await.expect("refresh scoped");
+    let error = core
+        .refresh_store()
+        .await
+        .expect_err("a selected node without a route has no readable store");
+    assert!(
+        format!("{error:#}").contains("has no authenticated database endpoint"),
+        "{error:#}"
+    );
+    assert_eq!(core.store().projection_revision().store_version, before);
 
     Arc::new(core).shutdown().await.expect("shutdown");
 }
@@ -1210,10 +1221,12 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         gents::runtime::agent::p2p_reconcile::CLIENT_COLLECTIONS.len(),
         "the desktop node registers every client route collection"
     );
+    // The client route carries only discovery: PeerRegistry is its one collection.
+    let route_collection = gents_protocol::schemas::PEER_REGISTRY_NAME;
     let mut next_release = local.clone();
     next_release
-        .get_mut("AgentSession")
-        .expect("client route replicates AgentSession")
+        .get_mut(route_collection)
+        .expect("client route replicates PeerRegistry")
         .version_id = "bafy-next-release".to_string();
 
     let offer = encode_offer(&EnrollmentOfferRecord {
@@ -1232,19 +1245,14 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         admin_sig: vec![0; 64],
     })
     .expect("encode offer");
-    let mut changed_request = local.clone();
-    changed_request
-        .get_mut("AgentRequest")
-        .expect("client route replicates AgentRequest")
-        .version_id = "bafy-other-request-schema".to_string();
-    assert_eq!(
-        changed_request.get("AgentOutputSegment"),
-        local.get("AgentOutputSegment")
-    );
+    let mut missing_route = local.clone();
+    missing_route
+        .remove(route_collection)
+        .expect("client route replicates PeerRegistry");
     let request_skew = serde_json::json!({
         "node_did": runtime_did,
         "enrollment": { "token": &offer },
-        STATUS_REPLICATED_SCHEMA_FIELD: changed_request,
+        STATUS_REPLICATED_SCHEMA_FIELD: missing_route,
     });
     let error = format!(
         "{:#}",
@@ -1254,7 +1262,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
     );
     assert!(
         error.contains("refusing to enroll with an incompatible runtime")
-            && error.contains("AgentRequest"),
+            && error.contains(route_collection),
         "{error}"
     );
     let skewed = serde_json::json!({
@@ -1268,7 +1276,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
     );
     assert!(
         error.contains("update the app and the runtime to the same version")
-            && error.contains("AgentSession"),
+            && error.contains(route_collection),
         "{error}"
     );
     assert!(
@@ -1290,7 +1298,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
     assert!(health
         .last_error
         .as_deref()
-        .is_some_and(|error| error.contains("AgentSession")));
+        .is_some_and(|error| error.contains(route_collection)));
 
     let matching = serde_json::json!({
         "node_did": runtime_did,
