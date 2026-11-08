@@ -36,6 +36,7 @@ pub fn install_from_pack(
         instructions,
         data_unique_keys,
         data_collection_fields,
+        BTreeMap::new(),
         consent,
     )
 }
@@ -53,6 +54,7 @@ fn install_from_pack_locked(
     instructions: Option<String>,
     data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
     data_collection_fields: BTreeMap<String, Vec<String>>,
+    data_collection_schemas: BTreeMap<String, String>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
     // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
@@ -100,6 +102,7 @@ fn install_from_pack_locked(
         model_binding,
         data_unique_keys,
         data_collection_fields,
+        data_collection_schemas,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -187,6 +190,8 @@ fn install_pack_plugins_locked<'a>(
                 .transpose()?;
             let (data_unique_keys, data_collection_fields) =
                 crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;
+            let data_collection_schemas =
+                crate::pack::plugin_data_schemas(manifest, plugin, &asset)?;
             install_from_pack_locked(
                 lock,
                 home,
@@ -199,6 +204,7 @@ fn install_pack_plugins_locked<'a>(
                 instructions,
                 data_unique_keys,
                 data_collection_fields,
+                data_collection_schemas,
                 consent,
             )
         })

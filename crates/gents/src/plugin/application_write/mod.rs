@@ -9,7 +9,7 @@ use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
 
 mod plugin_writes;
-pub use plugin_writes::apply_plugin_writes_in_txn;
+pub use plugin_writes::{apply_plugin_writes_in_txn, apply_signed_plugin_writes_in_txn};
 
 pub const WRITE_TOOL_NAME: &str = "write";
 

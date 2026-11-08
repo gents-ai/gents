@@ -139,6 +139,29 @@ pub fn plugin_data_unique_keys<'a>(
     Ok((keys, fields))
 }
 
+/// Each data collection of `plugin` that one of the pack's schema files
+/// declares alone, with that file's exact SDL: the trusted schema a
+/// client-signed write signs against.
+pub fn plugin_data_schemas<'a>(
+    manifest: &super::super::PackManifest,
+    plugin: &super::super::PackPlugin,
+    asset: &dyn Fn(&str) -> Result<&'a [u8]>,
+) -> Result<BTreeMap<String, String>> {
+    let Some(data) = &plugin.data else {
+        return Ok(BTreeMap::new());
+    };
+    let mut schemas = BTreeMap::new();
+    for path in sdl_paths(manifest) {
+        let sdl = std::str::from_utf8(asset(path)?)?;
+        if let [collection] = query::parse_sdl(sdl)?.as_slice() {
+            if data.collections.contains(&collection.name) {
+                schemas.insert(collection.name.clone(), sdl.to_owned());
+            }
+        }
+    }
+    Ok(schemas)
+}
+
 /// A dependency prepared for the install of its dependent, installed like
 /// the root but flagged non-explicit. `manifest`, `digest` and `assets` hold
 /// what its install reads: the manifest, the pack digest, and the schema and

@@ -110,11 +110,13 @@ impl ConfigApplyTxn<'_> {
         .await
     }
 
-    async fn delete_document_with_schema(
+    /// Delete one document, signing it on a client-signed transaction against
+    /// the caller's trusted `schema` for `collection`.
+    pub(crate) async fn delete_document_with_schema(
         &self,
         collection: &str,
         doc_id: &str,
-        schema: &'static str,
+        schema: &str,
     ) -> Result<()> {
         let mutation = format!(
             r#"mutation {{ delete_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,

@@ -1,7 +1,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use gents_protocol::job::{DataOp, DataWrite};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::plugin::data::{
     admit_write, insert_note, AdmittedWrite, InsertOutcome, OnConflict, PluginData, StampContext,
@@ -21,6 +21,22 @@ pub async fn apply_plugin_writes_in_txn(
     stamps: &StampContext,
     writes: Vec<DataWrite>,
 ) -> Result<Vec<Value>> {
+    apply_signed_plugin_writes_in_txn(txn, actor, grant, stamps, writes, &BTreeMap::new()).await
+}
+
+/// As [`apply_plugin_writes_in_txn`], for a transaction whose actor must sign
+/// its own document graphs (a User's client-signed HTTP transaction): each
+/// create, update and delete of a collection in `schemas` is signed against
+/// the pack's own trusted SDL for it. On an embedded transaction the same
+/// calls execute natively.
+pub async fn apply_signed_plugin_writes_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    actor: &identity::Did,
+    grant: &PluginData,
+    stamps: &StampContext,
+    writes: Vec<DataWrite>,
+    schemas: &BTreeMap<String, String>,
+) -> Result<Vec<Value>> {
     txn.validate_effect_actor(actor)?;
     ensure!(
         stamps.value(crate::plugin::data::Stamp::CallerDid) == Some(actor.as_str()),
@@ -29,7 +45,8 @@ pub async fn apply_plugin_writes_in_txn(
     let admitted = admit_write(grant, stamps, writes)?;
     let mut receipts = Vec::with_capacity(admitted.len());
     for AdmittedWrite { write } in admitted {
-        receipts.push(apply_one(txn, grant, write).await?);
+        let schema = schemas.get(&write.collection).map(String::as_str);
+        receipts.push(apply_one(txn, grant, write, schema).await?);
     }
     Ok(receipts)
 }
@@ -38,11 +55,15 @@ async fn apply_one(
     txn: &ConfigApplyTxn<'_>,
     grant: &PluginData,
     write: DataWrite,
+    schema: Option<&str>,
 ) -> Result<Value> {
     if let Some(on_conflict) = write.on_conflict {
         if let Some(receipt) = resolve_conflict(txn, grant, &write, on_conflict).await? {
             return Ok(receipt);
         }
+    }
+    if let Some(schema) = schema {
+        return apply_signed(txn, &write, schema).await;
     }
     let collection = write.collection.as_str();
     // Admission requires a doc_id for update and delete.
@@ -83,6 +104,70 @@ async fn apply_one(
         rows.len()
     );
     Ok(rows[0].clone())
+}
+
+/// One write signed against the pack's trusted `schema`. Fields are checked
+/// exactly as the native path checks them, then passed as variables.
+async fn apply_signed(txn: &ConfigApplyTxn<'_>, write: &DataWrite, schema: &str) -> Result<Value> {
+    let collection = write.collection.as_str();
+    crate::store::graphql::validate_graphql_name(collection)?;
+    let variables = || -> Result<Value> {
+        let input: Map<String, Value> = write.fields.clone().into_iter().collect();
+        Ok(json!({ "input": Value::Object(input) }))
+    };
+    let doc_id = || -> Result<String> {
+        write
+            .doc_id
+            .clone()
+            .context("an update or delete needs the doc_id of its document")
+    };
+    match write.op {
+        DataOp::Insert => {
+            input(txn, write).await?;
+            let response = txn
+                .execute_client_signed_create(
+                    &format!(
+                        "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}"
+                    ),
+                    &variables()?,
+                    schema,
+                )
+                .await?;
+            Ok(json!({ "_docID": crate::store::graphql::created_doc_id(&response, collection)? }))
+        }
+        DataOp::Update => {
+            input(txn, write).await?;
+            let doc = doc_id()?;
+            let name = format!("update_{collection}");
+            let response = txn
+                .execute_client_signed_update(
+                    &format!(
+                        "mutation($input: {collection}MutationInputArg!) {{ {name}(docID: \"{}\", input: $input) {{ _docID }} }}",
+                        crate::store::graphql::escape_graphql_string(&doc)
+                    ),
+                    &variables()?,
+                    schema,
+                )
+                .await?;
+            let rows = match &response["data"][&name] {
+                Value::Array(rows) => rows.clone(),
+                row if row.is_object() => vec![row.clone()],
+                _ => Vec::new(),
+            };
+            ensure!(
+                rows.len() == 1 && rows[0]["_docID"] == doc.as_str(),
+                "{name} affected {} documents, expected 1; check the doc_id",
+                rows.len()
+            );
+            Ok(rows[0].clone())
+        }
+        DataOp::Delete => {
+            let doc = doc_id()?;
+            txn.delete_document_with_schema(collection, &doc, schema)
+                .await?;
+            Ok(json!({ "_docID": doc }))
+        }
+    }
 }
 
 async fn input(txn: &ConfigApplyTxn<'_>, write: &DataWrite) -> Result<String> {

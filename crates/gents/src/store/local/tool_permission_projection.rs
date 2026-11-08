@@ -1861,6 +1861,7 @@ mod tests {
             model_binding: None,
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
         };
         let integration = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "plugins": [{"plugin":"team/worker", "digest": digest}]
