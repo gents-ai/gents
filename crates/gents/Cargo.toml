@@ -127,6 +127,9 @@ afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", 
 afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
     "afb-run",
 ] }
+# The workerless runtime a plugin's WASI host calls run on (src/plugin/wasi_runtime.rs);
+# afterburner's WASI host drives its futures on nuclei.
+nuclei = { version = "0.5.6", default-features = false }
 # `wasmtime::Caller` for the host imports a declaring plugin may call (`plugin/host_imports.rs`);
 # the version follows the one afterburner pins so the lockfile holds a single wasmtime.
 wasmtime = { version = "49", default-features = false, features = ["runtime"] }

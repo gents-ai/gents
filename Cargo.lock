@@ -4199,6 +4199,7 @@ dependencies = [
  "libc",
  "memmap2",
  "minijinja",
+ "nuclei",
  "opentelemetry",
  "oxc_allocator",
  "oxc_ast",
