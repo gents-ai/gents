@@ -336,20 +336,34 @@ export function runtimeConnectionBlocksAdmission(connection: string | null | und
   return connection !== "connected";
 }
 
-function projectRuntimeConnectionStatus(connection: string | null | undefined): OperationalStatus {
-  if (connection === "connected") {
-    return status({ kind: "ready", layer: "runtime", reason: "connected",
-      label: "Runtime is connected", shortLabel: "Connected",
-      detail: "The authenticated runtime connection is ready." });
+/** `RuntimeConnectionObservation.presentation`: each status names its own
+    reason, so an outage never reads as a connection attempt. A null status
+    is a peer the observer has not reconciled yet. */
+export function projectRuntimeConnectionStatus(
+  connection: string | null | undefined,
+): OperationalStatus {
+  switch (connection) {
+    case "connected":
+      return status({ kind: "ready", layer: "runtime", reason: "connected",
+        label: "Runtime is connected", shortLabel: "Connected",
+        detail: "The authenticated runtime connection is ready." });
+    case "denied":
+      return status({ kind: "blocked", layer: "runtime", reason: "permission_denied",
+        label: "Runtime access denied", shortLabel: "Access denied",
+        detail: "The runtime rejected this client's access." });
+    case "noEndpoint":
+      return status({ kind: "blocked", layer: "runtime", reason: "no_endpoint",
+        label: "Runtime has no address", shortLabel: "No address",
+        detail: "This node has no runtime endpoint this app can connect to." });
+    case "disconnected":
+      return status({ kind: "waiting", layer: "runtime", reason: "disconnected",
+        label: "Runtime unreachable", shortLabel: "Reconnecting",
+        detail: "The runtime connection was lost; reconnecting." });
+    default:
+      return status({ kind: "waiting", layer: "runtime", reason: "connecting",
+        label: "Connecting to runtime", shortLabel: "Connecting",
+        detail: "Waiting for the authenticated runtime connection." });
   }
-  if (connection === "denied") {
-    return status({ kind: "blocked", layer: "runtime", reason: "permission_denied",
-      label: "Runtime access denied", shortLabel: "Access denied",
-      detail: "The runtime rejected this client's access." });
-  }
-  return status({ kind: "waiting", layer: "runtime", reason: connection === "disconnected" ? "disconnected" : "connecting",
-    label: "Connecting to runtime", shortLabel: "Connecting",
-    detail: "Waiting for the authenticated runtime connection." });
 }
 
 export function projectDeploymentOperationalState(

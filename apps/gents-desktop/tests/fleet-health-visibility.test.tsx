@@ -51,7 +51,7 @@ describe("fleet health visibility", () => {
     ).toBe("Online");
     expect(
       deploymentStatus({ ...deployment, runtimeConnection: "disconnected" }).label,
-    ).toBe("Connecting");
+    ).toBe("Reconnecting");
     expect(
       deploymentStatus({
         ...deployment,

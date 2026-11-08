@@ -97,6 +97,13 @@ describe("the composer's reason box", () => {
     inputOutOfReach();
   });
 
+  it("says a node has no address instead of waiting on it", () => {
+    show({ source: "enrollment", graphql: null, runtimeConnection: "noEndpoint" });
+    expect(box()).toHaveTextContent(/has no address this app can reach/);
+    expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
+    inputOutOfReach();
+  });
+
   it("gives the reason a session takes no messages from here", () => {
     const reason = "Read-only. Message the session that started it.";
     show(
