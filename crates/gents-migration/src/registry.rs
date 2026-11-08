@@ -205,11 +205,6 @@ macro_rules! baseline_entry {
 }
 
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
-    baseline_entry!(
-        gents_protocol::schemas::PROVIDER_REDUCTION_DISPLAY_NAME,
-        gents_protocol::schemas::PROVIDER_REDUCTION_DISPLAY,
-        "bafyreib6vwrjzoxrsmm4i6ccjzy6pqvfeawka45jb4nws6p3oir747f6hq"
-    ),
     // `InferenceBackend` and `Node` changed after v1.0.0-rc0, so their baseline is the rc0 root
     // (`upgrades::CANONICAL_ROOTS`): a fresh store registers it and takes the same patches an
     // upgraded rc0 store takes, so every store converges on one version.
@@ -467,6 +462,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION_NAME,
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION,
         "bafyreifxbsldqfvxupmg54bimohgnurlnkw4iwghm7jpqarunmiw4dgvdi"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::PROVIDER_REDUCTION_DISPLAY_NAME,
+        gents_protocol::schemas::PROVIDER_REDUCTION_DISPLAY,
+        "bafyreib6vwrjzoxrsmm4i6ccjzy6pqvfeawka45jb4nws6p3oir747f6hq"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROJECTION_ACP_BINDING_NAME,
