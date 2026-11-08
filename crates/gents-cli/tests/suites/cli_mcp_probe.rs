@@ -432,6 +432,9 @@ impl McpFixture {
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         let value = serde_json::json!({"node_did":self.node_did,"service_id":service_id,"display_name":"Fixture MCP","description":"MCP probe fixture","hostname":hostname,"tailscale_ip":tailscale_ip,"lan_ip":lan_ip,"mcp_port":mcp_port,"mcp_path":"/mcp","enabled":enabled});
+        if mcp_port == 0 || [hostname, tailscale_ip, lan_ip].iter().all(|address| address.is_empty()) {
+            return self.seed_unvalidated(&value).await;
+        }
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: gents::Collection::ToolServiceRegistry,
             add: value.clone(),
@@ -443,6 +446,30 @@ impl McpFixture {
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await })
             })
             .await?;
+        Ok(())
+    }
+
+    /// Desired-state writes refuse a registry entry without a port or an
+    /// address, but the probe must still report one that reached the store
+    /// another way, so these rows are created directly as the User.
+    async fn seed_unvalidated(&self, value: &Value) -> Result<()> {
+        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            self._client.private_key_bytes(),
+        )?;
+        let access = gents::ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(
+                &self.graphql,
+                self._client.did(),
+            )
+            .with_client_signing_capability(capability)?,
+        );
+        let response = crate::support::graphql::graphql_mutation_with_variables(
+            &access,
+            "mutation($input: ToolServiceRegistryMutationInputArg!) { create_ToolServiceRegistry(input: $input) { _docID } }",
+            &serde_json::json!({"input": value}),
+        )
+        .await?;
+        gents::store::graphql::created_doc_id(&response, "ToolServiceRegistry")?;
         Ok(())
     }
 }

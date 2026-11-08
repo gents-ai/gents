@@ -10,7 +10,6 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
 use gents::inference::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;
@@ -57,9 +56,9 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
 
     {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
-        ensure_runtime_schemas(&node).await?;
+        ensure_runtime_schemas(node.node()).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await.expect("node shutdown");
+        node.shutdown().await?;
     }
 
     let output = run_cli_text(
@@ -400,9 +399,9 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
 
     {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
-        ensure_runtime_schemas(&node).await?;
+        ensure_runtime_schemas(node.node()).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await.expect("node shutdown");
+        node.shutdown().await?;
     }
 
     let output = run_cli_text(
@@ -486,7 +485,7 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     Ok(())
 }
 
-async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
+async fn seed_rendered_request_rows(node: &UserSeededHome) -> Result<()> {
     let request_doc_id = exec_doc_id(
         node,
         r#"mutation {
@@ -598,7 +597,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
-async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
+async fn seed_v2_rendered_request_rows(node: &UserSeededHome) -> Result<()> {
     let mut first_capture_key = String::new();
     for turn in 0..2usize {
         let capture_scope = "inference.1".to_string();
@@ -773,7 +772,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
     Ok(())
 }
 
-async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<()> {
+async fn seed_manifest_rendered_request_row(node: &UserSeededHome) -> Result<()> {
     let capture_scope = "inference.1".to_string();
     let assembly_trace = gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
         gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
@@ -785,7 +784,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         "native_tool_output": {"ok": true, "exit_code": 3},
         "padding": "q".repeat(6 * 1024)
     }]);
-    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node.node()));
     sink.capture(RenderedCompletionRequest {
         capture_key: gents::inference::rendered_request::capture_key(
             "did:test:amy",
@@ -838,11 +837,11 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
 
     {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
-        ensure_runtime_schemas(&node).await?;
+        ensure_runtime_schemas(node.node()).await?;
         seed_rendered_request_rows(&node).await?;
         seed_v2_rendered_request_rows(&node).await?;
         seed_manifest_rendered_request_row(&node).await?;
-        node.shutdown().await.expect("node shutdown");
+        node.shutdown().await?;
     }
     let home = agent_home.to_str().context("agent home utf8")?;
 
@@ -1056,9 +1055,9 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
 
     {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
-        ensure_runtime_schemas(&node).await?;
+        ensure_runtime_schemas(node.node()).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await.expect("node shutdown");
+        node.shutdown().await?;
     }
 
     let home = agent_home.to_str().context("agent home utf8")?;
@@ -1549,42 +1548,15 @@ fn trace_project_eval_jsonl_lines(
 async fn initialized_trace_node(
     cwd: &std::path::Path,
     agent_home: &std::path::Path,
-) -> Result<Arc<EmbeddedNode>> {
-    let home = agent_home.to_str().context("agent home utf8")?;
-    let init = run_init_json(
-        cwd,
-        &[
-            "--identity-only",
-            "--node-name",
-            "trace-test",
-            "--home",
-            home,
-        ],
-    )?;
-    let node_did = node_did_from_init(&init)?;
-    let key_path = init
-        .get("key_path")
-        .and_then(Value::as_str)
-        .context("identity-only init output missing key_path")?;
-    let _identity = gents::KeyIdentity::load_or_create(key_path, None)
-        .context("loading initialized trace identity")?;
-
-    let data = agent_home.join("data");
-    gents::store::local::store_key::open_home_store_key(agent_home, &data)
-        .await?
-        .encrypt(
-            EmbeddedNode::builder()
-                .data_path(&data)
-                .with_storage_backend(StorageBackend::Regolith),
-        )
-        .with_node_identity_did(node_did)
-        .build()
-        .await
-        .context("opening initialized embedded node")
-        .map(Arc::new)
+) -> Result<UserSeededHome> {
+    UserSeededHome::open(cwd, agent_home, "trace-test").await
 }
 
-async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Result<String> {
+async fn exec(node: &UserSeededHome, query: &str) -> Result<()> {
+    user_exec(node, query).await
+}
+
+async fn exec_doc_id(node: &UserSeededHome, query: &str, collection: &str) -> Result<String> {
     let response = node.execute(query).await;
     if response.has_errors() {
         anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
@@ -1611,23 +1583,25 @@ async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Resu
 }
 
 async fn exec_variables_doc_id(
-    node: &EmbeddedNode,
+    node: &UserSeededHome,
     query: &str,
     variables: Value,
     collection: &str,
 ) -> Result<String> {
     let response = node
-        .execute_request(gents::defra_node::QueryRequest::new(query).with_variables(variables))
+        .execute_with_variables(query, variables)
         .await;
     anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
-    gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))?
-        .and_then(|row| row["_docID"].as_str().map(ToOwned::to_owned))
-        .with_context(|| format!("{collection} mutation omitted document"))
+    gents::store::graphql::created_doc_id(
+        &json!({"data": response.data}),
+        collection,
+    )
+    .with_context(|| format!("{collection} mutation omitted document"))
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn seed_canonical_trace_tool(
-    node: &EmbeddedNode,
+    node: &UserSeededHome,
     request_doc_id: &str,
     request_id: &str,
     session_id: &str,
@@ -1819,7 +1793,7 @@ async fn seed_canonical_trace_tool(
 }
 
 async fn seed_canonical_terminal_text(
-    node: &EmbeddedNode,
+    node: &UserSeededHome,
     request_doc_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1905,12 +1879,12 @@ async fn seed_canonical_terminal_text(
     )
     .await?;
     let terminal = serde_json::to_value(TerminalOutput::Message { message_doc_id })?;
-    let response = node.execute_request(gents::defra_node::QueryRequest::new(r#"mutation($id: String!, $terminal: JSON!) { update_AgentRequest(filter: {_docID: {_eq: $id}}, input: {terminal_output: $terminal}) {_docID} }"#).with_variables(json!({"id": request_doc_id, "terminal": terminal}))).await;
+    let response = node.execute_with_variables(r#"mutation($id: String!, $terminal: JSON!) { update_AgentRequest(filter: {_docID: {_eq: $id}}, input: {terminal_output: $terminal}) {_docID} }"#, json!({"id": request_doc_id, "terminal": terminal})).await;
     anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
     Ok(())
 }
 
-async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
+async fn seed_trace_export_rows(node: &UserSeededHome) -> Result<()> {
     exec(
         node,
         r#"mutation {
