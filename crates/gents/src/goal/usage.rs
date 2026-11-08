@@ -44,18 +44,6 @@ pub(crate) async fn session_token_usage_breakdown_in_txn(
         .context("summing goal inference usage")
 }
 
-pub async fn refresh_goal_usage(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: &identity::Did,
-    goal: &GoalDocument,
-) -> Result<i64> {
-    refresh_goal_usage_from_access(
-        &crate::ConfigAccess::local_as(node.clone(), actor.clone()),
-        goal,
-    )
-    .await
-}
-
 pub async fn refresh_goal_usage_from_access(
     access: &crate::ConfigAccess,
     goal: &GoalDocument,

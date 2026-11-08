@@ -115,8 +115,6 @@ async fn terminal_source(fixture: &ScopeFixture, row: &AgentRequestRow) {
     assert!(admission.is_some());
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         fixture.db.node.clone(),
-        fixture.agent.did(),
-        fixture.db.node_identity.did(),
         request,
         60,
         ExecutionOrigin::Interactive,
@@ -400,8 +398,6 @@ async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestL
     assert!(admission.is_none());
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         fixture.db.node.clone(),
-        fixture.agent.did(),
-        fixture.db.node_identity.did(),
         request,
         60,
         ExecutionOrigin::Scheduled,
@@ -815,8 +811,6 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     assert!(admission.is_none(), "runtime wake is not a client claim");
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        agent.did(),
-        &fixture.node_did,
         request,
         60,
         ExecutionOrigin::Scheduled,

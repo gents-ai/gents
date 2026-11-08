@@ -1222,7 +1222,6 @@ pub(super) mod tests {
                             crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
                                 node,
                                 request_id,
-                                did,
                                 "successor native output",
                                 signer,
                                 runtime.clone(),

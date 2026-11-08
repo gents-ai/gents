@@ -896,8 +896,6 @@ async fn owned_test_hook_with_identity_policy(
     }
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        &agent_did,
-        node_did,
         row.try_into().unwrap(),
         60,
     );

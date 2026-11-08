@@ -438,24 +438,9 @@ pub(super) async fn stage_goal_and_claim(
     Ok(staged)
 }
 
+/// Create through the authenticated actor and signer bound to this access.
 /// Ownership is deliberately not accepted as model input: both values come
 /// from the authenticated session hook.
-pub async fn create_goal_for_session(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor_did: &str,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
-) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
-    let actor = identity::Did::new(actor_did)
-        .map_err(|error| CreateGoalForSessionError::Storage(error.into()))?;
-    let access = crate::ConfigAccess::local_as(node.clone(), actor);
-    create_goal_for_session_from_access(&access, node_did, session_id, objective, token_budget)
-        .await
-}
-
-/// Create through the authenticated actor and signer bound to this access.
 pub async fn create_goal_for_session_from_access(
     access: &crate::ConfigAccess,
     node_did: &str,

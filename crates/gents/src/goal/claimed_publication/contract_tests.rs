@@ -36,8 +36,6 @@ async fn verified_client_lifecycle(
     );
     let mut lifecycle = crate::RequestLifecycle::new_with_node_did(
         fixture.node.clone(),
-        fixture.agent.did(),
-        fixture.identity.did(),
         request,
         60,
     );

@@ -2146,8 +2146,6 @@ async fn claimed_trigger_request(
         serde_json::from_value(result["data"]["AgentRequest"][0].clone()).unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        agent.agent_did.as_str(),
-        node_did,
         row.try_into().unwrap(),
         60,
     );
@@ -2576,8 +2574,6 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
                 let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    &held_agent,
-                    &owner,
                     request,
                     60,
                     crate::request::lifecycle::ExecutionOrigin::Scheduled,

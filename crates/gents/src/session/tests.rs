@@ -2374,8 +2374,6 @@ async fn signed_claimed_authored_request_with_retry(
     );
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        agent.did(),
-        db.node_identity.did(),
         request,
         60,
     );

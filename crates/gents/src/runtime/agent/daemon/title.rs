@@ -255,8 +255,6 @@ where
         .context("admitted auxiliary request is missing execution origin")?;
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             Arc::clone(&self.node),
-            &self.agent_config.agent_did,
-            self.agent_config.node_did(),
             request.clone(),
             self.agent_config.deadline_duration.as_secs(),
             origin,

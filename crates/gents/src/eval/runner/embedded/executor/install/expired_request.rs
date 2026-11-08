@@ -96,7 +96,7 @@ pub(super) async fn install(
     crate::verify_request_receipt_signature(&row)?;
     let request = gents_protocol::row::AgentRequest::try_from(row)?;
     let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node, &fixture.agent_did, trial_did, request, 60);
+        RequestLifecycle::new_with_node_did(node, request, 60);
     lifecycle.bind_managed_agent(agent_identity)?;
     anyhow::ensure!(
         matches!(lifecycle.claim().await?, ClaimOutcome::Expired),

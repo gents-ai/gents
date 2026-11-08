@@ -100,8 +100,6 @@ pub(super) async fn setup_private_hook_for_agent(
         serde_json::from_value(row.clone()).expect("canonical R4C request row");
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        agent_did,
-        node_did,
         row.try_into().expect("canonical R4C request"),
         60,
     );

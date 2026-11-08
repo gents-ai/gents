@@ -886,17 +886,6 @@ pub(crate) async fn touch_session_in_txn(
     .await
 }
 
-pub async fn close_session(
-    node: &std::sync::Arc<EmbeddedNode>,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<()> {
-    let actor = crate::session::load_session_agent_did(node, node_did, session_id).await?;
-    let access = crate::ConfigAccess::local_as(node.clone(), actor);
-    close_session_with_access(&access, node_did, session_id, requester_did).await
-}
-
 pub(crate) async fn close_session_with_access(
     access: &crate::ConfigAccess,
     node_did: &str,

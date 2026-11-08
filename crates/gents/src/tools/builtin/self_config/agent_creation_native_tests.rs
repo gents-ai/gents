@@ -67,8 +67,6 @@ async fn claimed_client_tool_context(
     let (request, admission) = verifier.verify_fresh_for_claim(&request, agent.did()).await?;
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        agent.did(),
-        runtime.did(),
         request,
         60,
         ExecutionOrigin::Interactive,

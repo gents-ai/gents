@@ -18,7 +18,7 @@ use gents_protocol::row::MAILBOX_COLLECTION;
 
 mod dismiss;
 mod domain;
-pub use dismiss::{dismiss_mailbox_item, dismiss_mailbox_item_on};
+pub use dismiss::dismiss_mailbox_item_on;
 #[cfg(test)]
 mod native_policy_conformance;
 mod notification;

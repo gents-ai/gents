@@ -372,8 +372,6 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         .unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         home.node.clone(),
-        &agent_did,
-        home.did(),
         request,
         60,
     );

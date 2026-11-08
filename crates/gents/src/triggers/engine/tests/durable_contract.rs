@@ -529,8 +529,6 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                     let request = gents_protocol::row::AgentRequest::try_from(row.clone()).unwrap();
                     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                         node.clone(),
-                        agent.did(),
-                        &identity.owner_did,
                         request,
                         60,
                         crate::request::lifecycle::ExecutionOrigin::Interactive,

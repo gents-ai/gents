@@ -260,8 +260,6 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     .unwrap();
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        &agent_did,
-        &owner,
         verified.clone(),
         60,
         crate::request::lifecycle::ExecutionOrigin::Scheduled,

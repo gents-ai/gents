@@ -69,7 +69,6 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
     complete_child_managed_verified(
         node,
         &message.caused_request_id,
-        &did,
         "late caused result",
         &signer,
         message.admission.runtime.clone(),
@@ -232,7 +231,6 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     complete_child_managed_verified(
         &node,
         &message.caused_request_id,
-        &did,
         "result at the bound",
         &signer,
         message.admission.runtime.clone(),
@@ -338,7 +336,6 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     complete_child_managed_verified(
         &node,
         &message.caused_request_id,
-        &did,
         "gatekeeper answer",
         &signer,
         message.admission.runtime.clone(),
@@ -413,8 +410,6 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     .expect("the returned result is admitted into the client's session");
     let mut lifecycle = crate::RequestLifecycle::new_with_node_did(
         node.clone(),
-        &wake.agent_did,
-        &did,
         verified.clone(),
         60,
     );

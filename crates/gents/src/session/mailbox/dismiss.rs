@@ -1,16 +1,6 @@
 use super::*;
 use gents_protocol::mailbox_question::question_requires_reply_receipt;
 
-pub async fn dismiss_mailbox_item(
-    node: &Arc<EmbeddedNode>,
-    doc_id: &str,
-    principal_did: &str,
-) -> Result<MailboxItem> {
-    let access =
-        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(principal_did.to_owned())?);
-    dismiss_mailbox_item_on(&access, doc_id).await
-}
-
 /// Dismiss through the authenticated access owner, preserving the caller's
 /// document actor for both embedded and remote transactions.
 pub async fn dismiss_mailbox_item_on(

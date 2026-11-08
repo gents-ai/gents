@@ -2121,8 +2121,11 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             .as_deref()
             .expect("b has a reference")
     );
-    crate::inference::backends::registry::set_backend_probe_status(
-        &node, &did, &b_backend, "healthy",
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        &crate::ConfigAccess::local(node.clone()),
+        &did,
+        &b_backend,
+        "healthy",
     )
     .await
     .unwrap();

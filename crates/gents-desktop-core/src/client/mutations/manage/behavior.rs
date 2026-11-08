@@ -49,24 +49,6 @@ pub(crate) async fn upsert_agent_with_publication_on(
 }
 
 #[cfg(test)]
-pub async fn upsert_agent(node: &Arc<EmbeddedNode>, document: &AgentDocument) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Agent,
-        add: value.clone(),
-        update: value,
-    }])?;
-    ConfigAccess::transact_local_write(node, None, "desktop.agent.save", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(())
-        })
-    })
-    .await
-}
-
-#[cfg(test)]
 pub async fn delete_agent(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
@@ -172,16 +154,16 @@ mod tests {
             let profile = serde_json::from_value(json!({
                 "node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"
             }))?;
-            super::super::profile::upsert_inference_profile(&node, &profile).await?;
+            super::super::profile::upsert_inference_profile_on(&access, &profile).await?;
             let agent = serde_json::from_value(json!({
                 "node_did":owner,"agent_did":"review","inference_profile_id":"profile"
             }))?;
-            upsert_agent(&node, &agent).await?;
+            upsert_agent_on(&access, &agent).await?;
         }
         let invalid = serde_json::from_value(json!({
             "node_did":"did:test:alpha","agent_did":"review","inference_profile_id":"profile","context_id":"missing"
         }))?;
-        assert!(upsert_agent(&node, &invalid).await.is_err());
+        assert!(upsert_agent_on(&access, &invalid).await.is_err());
         assert!(super::super::profile::delete_inference_profile(
             &node,
             "did:test:alpha",
@@ -235,11 +217,11 @@ mod tests {
         let fallback_profile = serde_json::from_value(json!({
             "node_did":"did:test:alpha","profile_id":"fallback","backend_id":"backend","model_name":"model"
         }))?;
-        super::super::profile::upsert_inference_profile(&node, &fallback_profile).await?;
+        super::super::profile::upsert_inference_profile_on(&access, &fallback_profile).await?;
         let fallback = serde_json::from_value(json!({
             "node_did":"did:test:alpha","agent_did":"fallback","inference_profile_id":"fallback"
         }))?;
-        upsert_agent(&node, &fallback).await?;
+        upsert_agent_on(&access, &fallback).await?;
         for default in ["review", "fallback"] {
             access
                 .transact_write("test.node.default", |txn| {

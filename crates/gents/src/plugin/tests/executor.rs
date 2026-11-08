@@ -1417,6 +1417,7 @@ mod data_calls {
     use crate::store::config_client::ConfigAccess;
 
     const NODE: &str = "did:key:z6Mknode";
+    const AGENT: &str = "did:key:z6Mkagent";
 
     async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::Node> {
         let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
@@ -1470,7 +1471,7 @@ mod data_calls {
             .call_with_data(
                 &record,
                 json!({}),
-                DataCaller::new(node.clone(), NODE).unwrap(),
+                DataCaller::for_agent(node.clone(), NODE, AGENT).unwrap(),
             )
             .await
             .unwrap()
@@ -1507,8 +1508,8 @@ mod data_calls {
     }
 
     #[tokio::test]
-    async fn data_calls_query_substitutes_caller_node_did() {
-        let node = node_with(&[(NODE, "mine"), ("did:key:z6Mkother", "theirs")]).await;
+    async fn data_calls_query_substitutes_caller_did() {
+        let node = node_with(&[(AGENT, "mine"), ("did:key:z6Mkother", "theirs")]).await;
         let call = ask(
             Some(declaration(&["query"])),
             &node,
@@ -2232,7 +2233,6 @@ mod job_calls {
         complete_child_managed_verified(
             &admission.node,
             &request_id,
-            &admission.node_did,
             text,
             agent.as_ref(),
             admission.runtime.clone(),

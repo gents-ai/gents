@@ -763,8 +763,6 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             .unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            &agent.agent_did,
-            agent.node_did(),
             parent,
             120,
             crate::request::lifecycle::ExecutionOrigin::Interactive,

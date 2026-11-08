@@ -23,7 +23,6 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
                 complete_child_managed_verified(
                     &message.admission.node,
                     &message.caused_request_id,
-                    &message.admission.node_did,
                     "finished before the kill",
                     &message
                         .admission

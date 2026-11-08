@@ -150,8 +150,6 @@ async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
     );
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        agent.did(),
-        db.node_identity.did(),
         request,
         60,
     );

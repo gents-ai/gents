@@ -139,8 +139,6 @@ async fn claim_request_fixture(
     );
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
-        identity_owner(hook),
         row.try_into().unwrap(),
         60,
     );
@@ -421,9 +419,11 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     .unwrap(),
                     "{name}: controller crossed physical root"
                 );
-                crate::goal::refresh_goal_usage(
-                    &node,
-                    &identity::Did::new(identity.did()).unwrap(),
+                crate::goal::refresh_goal_usage_from_access(
+                    &crate::ConfigAccess::local_as(
+                        node.clone(),
+                        identity::Did::new(identity.did()).unwrap(),
+                    ),
                     &observed,
                 )
                 .await

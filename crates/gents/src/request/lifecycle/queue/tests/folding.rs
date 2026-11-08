@@ -239,8 +239,6 @@ async fn claim_request(
     let (request, client_claim) = verify_claim_admission(db, request).await;
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        db.agent_did(),
-        db.node_did(),
         request,
         60,
     );

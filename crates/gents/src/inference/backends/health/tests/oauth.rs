@@ -642,7 +642,7 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
         refresh_request.contains("refresh-TEST"),
         "the refresh must present the stored refresh token: {refresh_request}"
     );
-    let stored = crate::inference::auth::credential::lookup_oauth_credential_by_id(
+    let stored = crate::inference::auth::credential::test_support::lookup_oauth_credential_by_id(
         &node,
         &crate::inference::auth::credential::oauth_credential_id(did, provider),
     )

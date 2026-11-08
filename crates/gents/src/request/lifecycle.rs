@@ -68,7 +68,6 @@ pub use manual::{
     ManualRequestTarget,
 };
 pub use materialize::{
-    activate_workspace_bound_request,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     build_signed_request, task_fire_key, write_task_delivery, write_task_delivery_local,
     ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink, TaskDeliveryAdmission,

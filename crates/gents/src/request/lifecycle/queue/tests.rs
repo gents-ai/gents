@@ -461,8 +461,6 @@ async fn canonical_background_fixture_with_input(
     );
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        db.agent_did(),
-        db.node_did(),
         request,
         60,
     );

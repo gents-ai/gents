@@ -711,8 +711,6 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        agent.did(),
-        db.node_identity.did(),
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,

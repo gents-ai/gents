@@ -681,8 +681,6 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
     let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        &did,
-        &did,
         request,
         300,
     );
@@ -1164,8 +1162,6 @@ async fn artifact_alternate_owner(
     let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
     let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         fx.node.clone(),
-        did,
-        did,
         request,
         300,
     );

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::test_support::{
     one_shot_token_server, seed_credential, seed_credential_with_refresh_token, TOKEN_URL_ENV,
 };
+use super::test_support::lookup_oauth_credential_by_id;
 use super::*;
 
 #[tokio::test]

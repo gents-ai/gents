@@ -270,18 +270,16 @@ pub(crate) async fn grant_runtime_projection_readers(
 pub(crate) async fn complete_child_managed_verified(
     node: &Arc<EmbeddedNode>,
     child_id: &str,
-    node_did: &str,
     text: &str,
     identity: &dyn NodeIdentity,
     runtime: Arc<dyn NodeIdentity>,
 ) {
-    complete_child_managed_inner(node, child_id, node_did, text, identity, runtime).await;
+    complete_child_managed_inner(node, child_id, text, identity, runtime).await;
 }
 
 async fn complete_child_managed_inner(
     node: &Arc<EmbeddedNode>,
     child_id: &str,
-    node_did: &str,
     text: &str,
     identity: &dyn NodeIdentity,
     runtime: Arc<dyn NodeIdentity>,
@@ -299,10 +297,6 @@ async fn complete_child_managed_inner(
     )).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let selected_agent = row
-        .agent_did
-        .clone()
-        .expect("fixture request selects an agent");
     let request = row.try_into().unwrap();
     // A caused request is client-admitted by its calling Agent, so its claim
     // carries the verified native claim admission.
@@ -317,7 +311,7 @@ async fn complete_child_managed_inner(
         .await
         .expect("verify the child request and its native claim admission");
     let mut request =
-        RequestLifecycle::new_with_node_did(node.clone(), &selected_agent, node_did, request, 60);
+        RequestLifecycle::new_with_node_did(node.clone(), request, 60);
     request.bind_managed_agent(identity).unwrap();
     request.set_client_claim_admission(admission);
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
@@ -551,14 +545,8 @@ pub(crate) async fn claimed_signed_request_create_as_agent(
             .unwrap()
             .unwrap()
     };
-    let selected_agent = row
-        .agent_did
-        .clone()
-        .expect("fixture request selects an agent");
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        &selected_agent,
-        identity.did(),
         row.try_into().unwrap(),
         60,
     );
@@ -688,7 +676,7 @@ pub async fn published_admission_with_owner(
         "fixture client request lacks native claim admission"
     );
     let mut request =
-        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), &node_did, request, 60);
+        RequestLifecycle::new_with_node_did(node.clone(), request, 60);
     request.bind_managed_agent(agent.as_ref())?;
     request.set_client_claim_admission(admission);
     anyhow::ensure!(
@@ -848,7 +836,7 @@ pub(crate) async fn pending_client_fixture_request(
         "fixture client request lacks native claim admission"
     );
     let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), runtime.did(), request, 60);
+        RequestLifecycle::new_with_node_did(node.clone(), request, 60);
     lifecycle.bind_managed_agent(agent)?;
     lifecycle.set_client_claim_admission(admission);
     Ok(lifecycle)

@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, SourceClose, TranscriptMessage,
 };
@@ -142,21 +141,6 @@ fn fork_error(error: anyhow::Error) -> ForkError {
 
 fn may_reuse_source_fragments(source_agent: &str, target_agent: &str) -> bool {
     source_agent == target_agent
-}
-
-pub async fn fork(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: &identity::Did,
-    params: ForkParams<'_>,
-) -> Result<ForkOutcome, ForkError> {
-    fork_on(&ConfigAccess::local_as(node.clone(), actor.clone()), params).await
-}
-
-pub async fn fork_via_http(
-    endpoint: &crate::store::config_client::GraphqlEndpoint,
-    params: ForkParams<'_>,
-) -> Result<ForkOutcome, ForkError> {
-    fork_on(&ConfigAccess::Graphql(endpoint.clone()), params).await
 }
 
 pub async fn fork_on(

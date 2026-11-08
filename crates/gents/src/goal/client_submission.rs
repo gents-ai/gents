@@ -12,17 +12,6 @@ pub use provenance::{
     load_applied_opening_goal_provenance, OpeningGoalProvenance,
 };
 
-/// Publishes one author-signed intent. The selected agent's receipt confirms
-/// the transaction; observing its Goal is a separate read.
-pub async fn submit_session_goal_control(
-    access: &ConfigAccess,
-    signer: &dyn NodeIdentity,
-    command: SessionGoalControl,
-) -> Result<SessionGoalControlReceipt> {
-    let command = prepare_session_goal_control(access, signer, command).await?;
-    submit_prepared_session_goal_control(access, signer, &command).await
-}
-
 /// Preparation has no database effect. A caller retaining this command must
 /// commit it to its existing encrypted journal before publication is allowed.
 pub async fn prepare_session_goal_control(

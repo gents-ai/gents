@@ -405,8 +405,6 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             let mut lifecycle =
                 crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    agent.did(),
-                    root.did(),
                     request,
                     60,
                     crate::request::lifecycle::ExecutionOrigin::Interactive,

@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 use super::test_support::unsigned_jwt;
+use super::test_support::lookup_oauth_credential_by_id;
 use super::*;
 use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
 

@@ -213,6 +213,7 @@ pub(crate) async fn load_session_agent_selection(
     .map(|row| row.session.agent_did))
 }
 
+#[cfg(test)]
 pub(crate) async fn load_session_agent_did(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,

@@ -755,7 +755,6 @@ mod turn_assignment_tests {
         crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &head_id,
-            did,
             "head answer",
             &admission
                 .tool
@@ -846,7 +845,6 @@ mod turn_assignment_tests {
         crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
-            &admission.node_did,
             "ECHO-2468",
             &access.managed_agent_signer().unwrap(),
             runtime,
@@ -934,7 +932,6 @@ mod turn_assignment_tests {
         crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
-            did,
             "child done",
             &admission
                 .tool
@@ -1020,7 +1017,6 @@ mod turn_assignment_tests {
         crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
-            did,
             "child done",
             &admission
                 .tool
@@ -1106,7 +1102,6 @@ mod turn_assignment_tests {
         crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
-            did,
             "child done",
             &admission
                 .tool
@@ -1198,7 +1193,6 @@ mod turn_assignment_tests {
         crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
-            did,
             "child done",
             &admission
                 .tool

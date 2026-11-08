@@ -394,7 +394,6 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 complete_child_managed_verified(
                     &admission.node,
                     &message.caused_request_id,
-                    &admission.node_did,
                     "done",
                     &admission
                         .tool

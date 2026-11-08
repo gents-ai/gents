@@ -68,8 +68,6 @@ where
         .expect("fresh request admission requires a canonical execution_origin");
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.agent_config.agent_did,
-            self.agent_config.node_did(),
             request.clone(),
             self.agent_config.deadline_duration.as_secs(),
             execution_origin,

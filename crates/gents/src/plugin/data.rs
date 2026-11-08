@@ -431,13 +431,6 @@ impl DataCaller {
         })
     }
 
-    pub fn new(node: Arc<crate::defra_node::Node>, node_did: &str) -> Result<Self> {
-        Ok(Self {
-            access: DataAccess::Node(node, ::identity::Did::new(node_did.to_owned())?),
-            caller_did: node_did.to_owned(),
-        })
-    }
-
     pub fn operator(
         access: crate::store::config_client::ConfigAccess,
         node_did: &str,

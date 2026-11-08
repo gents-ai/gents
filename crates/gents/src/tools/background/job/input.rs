@@ -1349,8 +1349,6 @@ pub(crate) mod tests {
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            agent_did(),
-            node_did,
             row.try_into().unwrap(),
             60,
         );
@@ -1830,8 +1828,6 @@ pub(crate) mod tests {
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
         let mut request = RequestLifecycle::new_with_node_did(
             node.clone(),
-            agent_did(),
-            node_did(),
             row.try_into().unwrap(),
             60,
         );

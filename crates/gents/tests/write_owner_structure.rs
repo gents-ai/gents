@@ -820,7 +820,6 @@ const OAUTH_ROW_READERS: &[&str] = &[
     "oauth_credentials_for_node_query",
     "oauth_credential_by_id_query",
     "oauth_credential_by_doc_id_query",
-    "lookup_oauth_credential_by_id",
     "lookup_oauth_credential_by_doc_id",
 ];
 

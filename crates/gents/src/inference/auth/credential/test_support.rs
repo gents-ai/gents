@@ -138,3 +138,16 @@ pub(crate) async fn gated_token_server(
     });
     (url, handle)
 }
+
+/// Reads a credential row as the node's runtime identity, the actor the
+/// credential owner writes it under.
+pub(crate) async fn lookup_oauth_credential_by_id(
+    node: &Arc<EmbeddedNode>,
+    credential_id: &str,
+) -> anyhow::Result<Option<super::OAuthCredential>> {
+    let node_did = node
+        .node_identity_did()
+        .expect("credential lookup requires a runtime identity");
+    let access = super::runtime_credential_access(node, node_did)?;
+    super::lookup_oauth_credential_by_id_on(&access, credential_id).await
+}
