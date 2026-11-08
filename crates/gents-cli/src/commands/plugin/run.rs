@@ -264,11 +264,15 @@ mod tests {
 
     #[tokio::test]
     async fn ux_plugin_writes_are_scoped_and_atomic() {
-        let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
-        node.add_collection("type UxNote { body: String }")
+        // The operator is the home's enrolled User, writing as itself.
+        let client = crate::shared::test_support::ClientHome::new().await;
+        client
+            .node()
+            .add_collection("type UxNote { body: String }")
             .await
             .unwrap();
-        let access = gents::ConfigAccess::local(node);
+        let access = client.access.clone();
+        let node_did = client.node_did().to_owned();
         let bytes = build_echo_plugin();
         let mut record = sample_record(&bytes);
         record.declaration.data = Some(gents_protocol::job::PluginDataDeclaration {
@@ -287,7 +291,7 @@ mod tests {
         )
         .unwrap();
         store::write_record(home.path(), &record).unwrap();
-        let caller = || Some((access.clone(), "did:key:z6Mknode".to_owned()));
+        let caller = || Some((access.clone(), node_did.clone()));
         let result = call_installed_for_operator(home.path(), "gents", "echo", serde_json::json!({
             "response": "ok", "writes": [{"op": "insert", "collection": "UxNote", "fields": {"body": "one"}}]
         }), caller()).await.unwrap();
