@@ -484,68 +484,155 @@ pub async fn resolve_unresolved_submission(
     }
 }
 
-/// Endpoint helper kept private to the tests: a GraphQL access at `url`.
+/// Endpoint helper kept private to the tests: the client key's signed GraphQL
+/// access at `url`, in the shape `ClientCore::operator_access` builds.
 #[cfg(test)]
-fn test_access(url: &str) -> ConfigAccess {
-    ConfigAccess::Graphql(gents::store::config_client::GraphqlEndpoint::anonymous(url))
+fn test_access(url: &str, signer: &dyn gents::store::identity::NodeIdentity) -> ConfigAccess {
+    ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(url, signer.did())
+            .with_client_signing_capability(signer.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use defra_node::Node as EmbeddedNode;
+    use gents::NodeIdentity as _;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    const SIGNER_DID: &str = "did:key:z6MkownerReceiptTest";
     const REQUEST_ID: &str = "request-receipt-1";
     const SESSION_ID: &str = "session-receipt-1";
     const AGENT_DID: &str = "agent-receipt-1";
 
-    fn test_create() -> AgentRequestCreate {
-        let mut create = AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            REQUEST_ID,
-            SIGNER_DID,
-            SIGNER_DID,
-            AGENT_DID,
-            SESSION_ID,
-            "receipt reconciliation",
-            "interactive",
-            "2026-01-01T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(SIGNER_DID),
-        );
-        create.admission.signature = vec![7u8; 64];
-        create
+    /// A client key and the Client-admitted request it signed, for decisions
+    /// that need no owner: the physical targets are fixed document identities.
+    struct Signed {
+        _home: tempfile::TempDir,
+        user: gents::KeyIdentity,
+        pending: UnresolvedSubmission,
     }
 
-    fn test_mutation(create: &AgentRequestCreate) -> String {
-        create
-            .graphql_client_publication_mutation()
-            .expect("test create renders a canonical mutation")
-    }
+    impl Signed {
+        async fn new() -> Self {
+            Self::with(|_| {}).await
+        }
 
-    fn test_result() -> SubmittedRequest {
-        SubmittedRequest {
-            request_id: REQUEST_ID.to_string(),
-            session_id: SESSION_ID.to_string(),
-            node_did: SIGNER_DID.to_string(),
-            agent_did: Some(AGENT_DID.to_string()),
+        async fn with(edit: impl FnOnce(&mut AgentRequestCreate)) -> Self {
+            let home = tempfile::tempdir().unwrap();
+            let user =
+                gents::KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
+            let mut create = AgentRequestCreate::base(
+                RequestPurpose::Normal,
+                REQUEST_ID,
+                user.did(),
+                user.did(),
+                AGENT_DID,
+                SESSION_ID,
+                "receipt reconciliation",
+                "interactive",
+                "2026-01-01T00:00:00Z",
+                AgentRequestAdmissionRecord::client(user.did()),
+            );
+            create.session_doc_id = Some("session-document".into());
+            create.agent_doc_id = Some("agent-document".into());
+            edit(&mut create);
+            gents::sign_agent_request_create(&user, &mut create)
+                .await
+                .unwrap();
+            let result = SubmittedRequest {
+                request_id: create.request_id.clone(),
+                session_id: create.session_id.clone(),
+                node_did: create.node_did.clone(),
+                agent_did: Some(AGENT_DID.to_string()),
+            };
+            let pending = UnresolvedSubmission::new(create, result).unwrap();
+            Self {
+                _home: home,
+                user,
+                pending,
+            }
+        }
+
+        fn access(&self, server: &MockServer) -> ConfigAccess {
+            test_access(&format!("{}/api/v0/graphql", server.uri()), &self.user)
         }
     }
 
-    fn test_pending() -> UnresolvedSubmission {
-        let create = test_create();
-        let mutation = test_mutation(&create);
-        UnresolvedSubmission {
-            request_id: create.request_id.clone(),
-            session_id: create.session_id.clone(),
-            node_did: create.node_did.clone(),
-            create,
-            mutation,
-            result: test_result(),
+    /// A served runtime whose User prepared a Client-admitted request for a
+    /// provisioned Agent through the production preparation owner.
+    struct Served {
+        home: crate::test_fixtures::ServedRuntimeHome,
+        pending: UnresolvedSubmission,
+    }
+
+    impl Served {
+        async fn start() -> Self {
+            let home = crate::test_fixtures::ServedRuntimeHome::start().await;
+            let agent = home.provision_published_agent().await;
+            let user = home.user().clone();
+            let (result, create) = super::super::prepare::prepare_request_submission(
+                &home.user_access(),
+                &crate::client::store::ClientStore::default(),
+                &uuid::Uuid::new_v4().to_string(),
+                home.node_did(),
+                user.did(),
+                user.as_ref(),
+                AgentRequestAdmissionRecord::client(user.did()),
+                "receipt reconciliation",
+                Some(&agent.agent_did),
+                super::super::SubmitRequestOptions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+            let pending = UnresolvedSubmission::new(create, result).unwrap();
+            Self { home, pending }
+        }
+
+        fn access(&self) -> ConfigAccess {
+            self.home.user_access()
+        }
+
+        /// The owner commits the prepared request before the caller learns it.
+        async fn commit(&self) {
+            gents::request::lifecycle::submit_client_request(&self.access(), &self.pending.create)
+                .await
+                .unwrap();
+        }
+
+        /// Admission signatures of the owner's rows with this request identity.
+        async fn owner_signatures(&self) -> Vec<String> {
+            let response = self
+                .access()
+                .execute(&format!(
+                    "{{AgentRequest(filter:{{request_id:{{_eq:\"{}\"}}}}){{admission_signature relationships_pending}}}}",
+                    escape_graphql_string(&self.pending.request_id)
+                ))
+                .await
+                .unwrap();
+            response["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    assert_eq!(row["relationships_pending"], false);
+                    row["admission_signature"].as_str().unwrap().to_owned()
+                })
+                .collect()
+        }
+
+        fn signature(&self) -> String {
+            bs58::encode(&self.pending.create.admission.signature).into_string()
+        }
+
+        async fn shutdown(self) {
+            self.home.shutdown().await;
         }
     }
 
@@ -562,7 +649,7 @@ mod tests {
             .unwrap()
         {
             let request = case["prepared"]["request"].as_u64().unwrap().to_string();
-            let mut pending = test_pending();
+            let mut pending = Signed::new().await.pending;
             pending.request_id = request.clone();
             pending.create.request_id = request.clone();
             pending.result.request_id = request.clone();
@@ -631,7 +718,7 @@ mod tests {
             if case["outcome"] != "notDelivered" {
                 continue;
             }
-            let mut pending = test_pending();
+            let mut pending = Signed::new().await.pending;
             pending.result.request_id = case["request"].as_u64().unwrap().to_string();
             let native_error = case["native_error"].as_u64();
             let error = if let Some(token) = native_error {
@@ -680,7 +767,7 @@ mod tests {
             .as_array()
             .unwrap()
         {
-            let mut pending = test_pending();
+            let mut pending = Signed::new().await.pending;
             pending.request_id = case["request"].as_u64().unwrap().to_string();
             let cause = case["access_error"]
                 .as_u64()
@@ -710,12 +797,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn slash_skill_reconciliation_matches_the_original_prepared_request() {
-        let mut create = test_create();
-        create.content = "check foo".into();
-        create.input.selected_skill_ids = vec!["review".into()];
-        let pending = UnresolvedSubmission::new(create, test_result()).unwrap();
+    #[tokio::test]
+    async fn slash_skill_reconciliation_matches_the_original_prepared_request() {
+        let pending = Signed::with(|create| {
+            create.content = "check foo".into();
+            create.input.selected_skill_ids = vec!["review".into()];
+        })
+        .await
+        .pending;
         assert!(pending.accepts_composer_content("/skill review check foo"));
         assert!(!pending.accepts_composer_content("/skill other check foo"));
         assert!(!pending.accepts_composer_content("/skill review check something else"));
@@ -807,7 +896,7 @@ mod tests {
         };
         let node = open().await;
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let pending = test_pending();
+        let pending = Signed::new().await.pending;
         journal::save(&node, client.did(), &pending).await.unwrap();
         node.shutdown().await.unwrap();
         drop(node);
@@ -834,77 +923,49 @@ mod tests {
 
     #[tokio::test]
     async fn retained_submission_survives_reopen_and_replays_exact_bytes() {
-        let home = tempfile::tempdir().unwrap();
-        use gents::NodeIdentity as _;
-        let client =
-            gents::KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
-        let node = std::sync::Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(client.did())
-                .data_path(home.path())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        let pending = test_pending();
-        journal::save(&node, client.did(), &pending).await.unwrap();
+        let served = Served::start().await;
+        let client = served.home.user().did().to_owned();
+        let journal_home = tempfile::tempdir().unwrap();
+        let open = || async {
+            std::sync::Arc::new(
+                EmbeddedNode::builder()
+                    .with_node_identity_did(&client)
+                    .data_path(journal_home.path())
+                    .build()
+                    .await
+                    .unwrap(),
+            )
+        };
+        let node = open().await;
+        node.add_collection(&crate::test_support::unbound_journal_schema())
+            .await
+            .unwrap();
+        let pending = &served.pending;
+        journal::save(&node, &client, pending).await.unwrap();
         node.shutdown().await.unwrap();
         drop(node);
 
-        let reopened = std::sync::Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(client.did())
-                .data_path(home.path())
-                .build()
-                .await
-                .unwrap(),
-        );
-        let restored = journal::load(&reopened, client.did(), REQUEST_ID)
+        let reopened = open().await;
+        let restored = journal::load(&reopened, &client, &pending.request_id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(restored.mutation, pending.mutation);
         assert_eq!(restored.create, pending.create);
-        let server = MockServer::start().await;
-        mount_receipt(&server, Vec::new()).await;
-        mount_create(
-            &server,
-            ResponseTemplate::new(200).set_body_json(json!({
-                "data": {"create_AgentRequest": [{"request_id": REQUEST_ID}]}
-            })),
-        )
-        .await;
-        let result = resolve_unresolved_submission(
-            &test_access(&format!("{}/api/v0/graphql", server.uri())),
-            &restored,
-        )
-        .await
-        .unwrap();
-        assert_eq!(result, pending.result);
-        let requests = create_requests(&server).await;
-        assert_eq!(requests.len(), 1);
-        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-        assert_eq!(body["query"], pending.mutation);
-        journal::forget(&reopened, client.did(), REQUEST_ID)
+        let result = resolve_unresolved_submission(&served.access(), &restored)
             .await
             .unwrap();
-        assert!(journal::load(&reopened, client.did(), REQUEST_ID)
+        assert_eq!(result, pending.result);
+        assert_eq!(served.owner_signatures().await, vec![served.signature()]);
+        journal::forget(&reopened, &client, &pending.request_id)
+            .await
+            .unwrap();
+        assert!(journal::load(&reopened, &client, &pending.request_id)
             .await
             .unwrap()
             .is_none());
         reopened.shutdown().await.unwrap();
-    }
-
-    fn receipt_row(create: &AgentRequestCreate) -> Value {
-        json!({
-            "request_id": create.request_id.as_str(),
-            "node_did": create.node_did.as_str(),
-            "session_id": create.session_id.as_str(),
-            "requester_did": create.requester_did.as_str(),
-            "admission_signer_did": create.admission.signer_did.as_str(),
-            "admission_signature": bs58::encode(&create.admission.signature).into_string(),
-        })
+        served.shutdown().await;
     }
 
     async fn mount_receipt(server: &MockServer, rows: Vec<Value>) {
@@ -918,73 +979,45 @@ mod tests {
             .await;
     }
 
-    async fn mount_create(server: &MockServer, response: ResponseTemplate) {
-        Mock::given(method("POST"))
-            .and(path("/api/v0/graphql"))
-            .and(body_string_contains("create_AgentRequest"))
-            .respond_with(response)
-            .mount(server)
-            .await;
-    }
-
-    async fn create_requests(server: &MockServer) -> Vec<wiremock::Request> {
-        server
-            .received_requests()
-            .await
-            .expect("wiremock records requests")
-            .into_iter()
-            .filter(|request| {
-                String::from_utf8_lossy(&request.body).contains("create_AgentRequest")
-            })
-            .collect()
-    }
-
     #[tokio::test]
     async fn accepted_then_response_lost_returns_original_identity() {
-        let server = MockServer::start().await;
-        let create = test_create();
-        // The owner committed, then the response body was lost in transit.
-        mount_create(
-            &server,
-            ResponseTemplate::new(200).set_body_string("truncated response body"),
-        )
-        .await;
-        mount_receipt(&server, vec![receipt_row(&create)]).await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+        let served = Served::start().await;
+        // The owner committed, then the commit response was lost in transit.
+        served.commit().await;
+        let lost = ClientSubmissionError::Unconfirmed(anyhow::anyhow!("commit response lost"));
 
-        let submitted = commit_signed_submission(&access, test_pending())
+        let submitted = reconcile_commit_failure(&served.access(), served.pending.clone(), lost)
             .await
             .expect("a confirmed receipt recovers the ambiguous commit");
 
-        assert_eq!(submitted, test_result());
+        assert_eq!(submitted, served.pending.result);
         assert_eq!(
-            create_requests(&server).await.len(),
-            1,
+            served.owner_signatures().await,
+            vec![served.signature()],
             "a confirmed receipt must not repost the create"
         );
-        let pending = test_pending();
-        let resolved = resolve_unresolved_submission(&access, &pending)
+        let resolved = resolve_unresolved_submission(&served.access(), &served.pending)
             .await
             .expect("resolving against a matching receipt succeeds");
-        assert_eq!(resolved, test_result());
-        assert_eq!(create_requests(&server).await.len(), 1);
+        assert_eq!(resolved, served.pending.result);
+        assert_eq!(served.owner_signatures().await, vec![served.signature()]);
+        served.shutdown().await;
     }
 
     #[tokio::test]
     async fn unresolved_outcome_carries_identity_without_payload() {
         let server = MockServer::start().await;
-        mount_create(
-            &server,
-            ResponseTemplate::new(200).set_body_string("truncated response body"),
-        )
-        .await;
         mount_receipt(&server, Vec::new()).await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
-        let pending = test_pending();
+        let signed = Signed::new().await;
+        let pending = &signed.pending;
 
-        let error = resolve_unresolved_submission(&access, &pending)
-            .await
-            .expect_err("an absent receipt for every attempt is an unknown outcome");
+        let error = reconcile_commit_failure(
+            &signed.access(&server),
+            pending.clone(),
+            ClientSubmissionError::Unconfirmed(anyhow::anyhow!("truncated response body")),
+        )
+        .await
+        .expect_err("an absent receipt after an unconfirmed commit is an unknown outcome");
         let SubmissionAttemptError::Unknown(unknown) = &error else {
             panic!("unknown outcome is a typed error: {error:#}");
         };
@@ -1008,72 +1041,62 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_after_accept_sends_no_create() {
-        let server = MockServer::start().await;
-        let create = test_create();
-        mount_receipt(&server, vec![receipt_row(&create)]).await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
-        let pending = test_pending();
+        let served = Served::start().await;
+        served.commit().await;
 
-        let resolved = resolve_unresolved_submission(&access, &pending)
+        let resolved = resolve_unresolved_submission(&served.access(), &served.pending)
             .await
             .expect("a matching receipt resolves the submission");
 
-        assert_eq!(resolved.request_id, pending.result.request_id);
-        assert_eq!(resolved, pending.result);
-        assert!(
-            create_requests(&server).await.is_empty(),
+        assert_eq!(resolved, served.pending.result);
+        assert_eq!(
+            served.owner_signatures().await,
+            vec![served.signature()],
             "a resolved submission must never repost the create"
         );
+        served.shutdown().await;
     }
 
     #[tokio::test]
     async fn resolve_replays_identical_signed_mutation() {
-        let server = MockServer::start().await;
-        mount_receipt(&server, Vec::new()).await;
-        mount_create(
-            &server,
-            ResponseTemplate::new(200).set_body_json(json!({
-                "data": {"create_AgentRequest": [{"_docID": "doc-receipt-1"}]}
-            })),
-        )
-        .await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
-        let pending = test_pending();
+        let served = Served::start().await;
+        assert!(served.owner_signatures().await.is_empty());
 
-        let resolved = resolve_unresolved_submission(&access, &pending)
+        let resolved = resolve_unresolved_submission(&served.access(), &served.pending)
             .await
             .expect("a proven-absent receipt allows one identical replay");
 
-        assert_eq!(resolved, pending.result);
-        let creates = create_requests(&server).await;
-        assert_eq!(creates.len(), 1, "exactly one replay");
-        let body: Value =
-            serde_json::from_slice(&creates[0].body).expect("create body is a JSON envelope");
+        assert_eq!(resolved, served.pending.result);
         assert_eq!(
-            body.get("query").and_then(Value::as_str),
-            Some(pending.mutation.as_str()),
-            "the replay must be the retained signed mutation byte-for-byte"
+            served.owner_signatures().await,
+            vec![served.signature()],
+            "exactly one replay, carrying the retained signed request"
         );
+        served.shutdown().await;
     }
 
+    /// The submission owner reports the native GraphQL errors body as a
+    /// rejected attempt; the modeled storage codes decide whether its delivery
+    /// stays unknown without probing the owner again.
     #[tokio::test]
     async fn generated_storage_failures_retain_signed_submissions_without_replay() {
         let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
         for case in contract["storage_failure_cases"].as_array().unwrap() {
             let server = MockServer::start().await;
-            mount_create(
-                &server,
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "errors": [{"message": case["message"], "extensions": {"code": case["code"]}}]
-                })),
-            )
-            .await;
             mount_receipt(&server, Vec::new()).await;
-            let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
-            let pending = test_pending();
-            let error = commit_signed_submission(&access, pending.clone())
-                .await
-                .unwrap_err();
+            let signed = Signed::new().await;
+            let pending = signed.pending.clone();
+            let failure = gents_protocol::database_error::GraphqlFailure::new(
+                "request.client.submit",
+                json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+            );
+            let error = reconcile_commit_failure(
+                &signed.access(&server),
+                pending.clone(),
+                ClientSubmissionError::Rejected(failure.into()),
+            )
+            .await
+            .unwrap_err();
             let unknown = match &error {
                 SubmissionAttemptError::Unknown(unknown) => Some(unknown),
                 SubmissionAttemptError::Rejected(_) => None,
@@ -1082,6 +1105,7 @@ mod tests {
                 unknown.is_some(),
                 case["outcome_unknown"].as_bool().unwrap()
             );
+            let probes = server.received_requests().await.unwrap().len();
             if let Some(unknown) = unknown {
                 assert_eq!(unknown.request_id, pending.request_id);
                 assert_eq!(unknown.session_id, pending.session_id);
@@ -1098,30 +1122,27 @@ mod tests {
                         .as_ref()
                 ));
                 assert_eq!(
-                    server.received_requests().await.unwrap().len(),
-                    1,
+                    probes, 0,
                     "storage failure must not trigger another write or receipt probe"
                 );
                 assert!(case["same_request"].as_bool().unwrap());
                 assert!(case["same_bytes"].as_bool().unwrap());
+            } else {
+                assert_eq!(probes, 1, "an ordinary rejection reads the receipt once");
             }
         }
     }
 
     #[tokio::test]
     async fn definite_owner_rejection_stays_an_ordinary_error() {
-        let server = MockServer::start().await;
-        mount_create(
-            &server,
-            ResponseTemplate::new(200).set_body_json(json!({
-                "errors": [{"message": "request admission rejected"}]
-            })),
-        )
-        .await;
-        mount_receipt(&server, Vec::new()).await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+        let mut served = Served::start().await;
+        // A request whose admission signature does not verify is refused
+        // inside the owner's transaction, before anything commits.
+        let mut create = served.pending.create.clone();
+        create.admission.signature[0] ^= 1;
+        served.pending = UnresolvedSubmission::new(create, served.pending.result.clone()).unwrap();
 
-        let error = commit_signed_submission(&access, test_pending())
+        let error = commit_signed_submission(&served.access(), served.pending.clone())
             .await
             .expect_err("a definite rejection with no receipt fails");
 
@@ -1129,85 +1150,57 @@ mod tests {
             matches!(error, SubmissionAttemptError::Rejected(_)),
             "a definite rejection must not be reported as possibly delivered: {error:#}"
         );
-        assert_eq!(create_requests(&server).await.len(), 1);
+        assert!(served.owner_signatures().await.is_empty());
+        served.shutdown().await;
     }
 
     #[tokio::test]
     async fn rejected_repost_after_earlier_commit_recovers_identity() {
-        let server = MockServer::start().await;
-        let create = test_create();
-        mount_create(
-            &server,
-            ResponseTemplate::new(200).set_body_json(json!({
-                "errors": [{"message": "document already exists"}]
-            })),
-        )
-        .await;
-        mount_receipt(&server, vec![receipt_row(&create)]).await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+        let served = Served::start().await;
+        served.commit().await;
 
-        let submitted = commit_signed_submission(&access, test_pending())
+        let submitted = commit_signed_submission(&served.access(), served.pending.clone())
             .await
             .expect("a matching receipt proves the earlier commit");
 
-        assert_eq!(submitted, test_result());
+        assert_eq!(submitted, served.pending.result);
+        assert_eq!(
+            served.owner_signatures().await,
+            vec![served.signature()],
+            "the repost must not create a second request"
+        );
+        served.shutdown().await;
     }
 
     #[tokio::test]
-    async fn local_receipt_confirms_the_exact_committed_signed_request() {
-        let home = tempfile::tempdir().unwrap();
-        let node = std::sync::Arc::new(
-            EmbeddedNode::builder()
-                .data_path(home.path())
-                .build()
-                .await
-                .unwrap(),
-        );
-        node.add_collection(gents_protocol::schemas::AGENT_REQUEST)
-            .await
-            .unwrap();
-        let access = ConfigAccess::local(std::sync::Arc::clone(&node));
-        let pending = test_pending();
+    async fn owner_receipt_confirms_the_exact_committed_signed_request() {
+        let served = Served::start().await;
+        served.commit().await;
 
-        access
-            .write("test.local_submission_receipt", &pending.mutation)
+        let resolved = resolve_unresolved_submission(&served.access(), &served.pending)
             .await
-            .unwrap();
+            .expect("the owner's signed receipt proves the original commit");
+        assert_eq!(resolved, served.pending.result);
+        assert_eq!(served.owner_signatures().await, vec![served.signature()]);
+        assert!(owner_receipt(&served.access(), &served.pending.create)
+            .await
+            .unwrap());
 
-        let resolved = resolve_unresolved_submission(&access, &pending)
-            .await
-            .expect("the embedded signed receipt proves the original commit");
-        assert_eq!(resolved, pending.result);
-        let rows = access
-            .execute(&format!(
-                "{{AgentRequest(filter:{{request_id:{{_eq:\"{}\"}}}}){{request_id}}}}",
-                escape_graphql_string(&pending.request_id)
-            ))
-            .await
-            .unwrap();
-        assert_eq!(rows["data"]["AgentRequest"].as_array().unwrap().len(), 1);
-
-        let mut different_signature = pending.create.clone();
+        let mut different_signature = served.pending.create.clone();
         different_signature.admission.signature[0] ^= 1;
-        assert!(owner_receipt(&access, &different_signature).await.is_err());
-        node.shutdown().await.unwrap();
+        assert!(owner_receipt(&served.access(), &different_signature)
+            .await
+            .is_err());
+        served.shutdown().await;
     }
 
     #[tokio::test]
     async fn local_non_graphql_failure_preserves_unknown_delivery() {
-        let home = tempfile::tempdir().unwrap();
-        let node = std::sync::Arc::new(
-            EmbeddedNode::builder()
-                .data_path(home.path())
-                .build()
-                .await
-                .unwrap(),
-        );
-        let access = ConfigAccess::local(std::sync::Arc::clone(&node));
-        let pending = test_pending();
+        let served = Served::start().await;
+        let pending = served.pending.clone();
 
         let error = reconcile_commit_failure(
-            &access,
+            &served.access(),
             pending.clone(),
             ClientSubmissionError::Unconfirmed(
                 gents::store::config_client::ConfigClientError::StoreClaimHeld.into(),
@@ -1221,44 +1214,44 @@ mod tests {
         };
         assert_eq!(unknown.request_id, pending.request_id);
         assert_eq!(unknown.pending.mutation, pending.mutation);
-        node.shutdown().await.unwrap();
+        served.shutdown().await;
     }
 
     #[tokio::test]
     async fn owner_http_status_failure_after_send_is_unknown_not_rejected() {
         for status in [502, 504] {
             let server = MockServer::start().await;
-            mount_create(&server, ResponseTemplate::new(status)).await;
             mount_receipt(&server, Vec::new()).await;
-            let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+            let signed = Signed::new().await;
 
-            let error = commit_signed_submission(&access, test_pending())
-                .await
-                .expect_err("an unconfirmed post-send failure is not a success");
+            let error = reconcile_commit_failure(
+                &signed.access(&server),
+                signed.pending.clone(),
+                ClientSubmissionError::Unconfirmed(anyhow::anyhow!("owner returned HTTP {status}")),
+            )
+            .await
+            .expect_err("an unconfirmed post-send failure is not a success");
 
             let SubmissionAttemptError::Unknown(unknown) = &error else {
                 panic!("HTTP {status} must be an unknown outcome: {error:#}");
             };
-            assert_eq!(unknown.request_id, test_result().request_id);
+            assert_eq!(unknown.request_id, signed.pending.result.request_id);
         }
     }
 
     #[tokio::test]
     async fn already_exists_rejection_without_visible_receipt_is_unknown() {
         let server = MockServer::start().await;
-        mount_create(
-            &server,
-            ResponseTemplate::new(200).set_body_json(json!({
-                "errors": [{"message": "document already exists"}]
-            })),
-        )
-        .await;
         mount_receipt(&server, Vec::new()).await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+        let signed = Signed::new().await;
 
-        let error = commit_signed_submission(&access, test_pending())
-            .await
-            .expect_err("an unconfirmed duplicate rejection is not a success");
+        let error = reconcile_commit_failure(
+            &signed.access(&server),
+            signed.pending.clone(),
+            ClientSubmissionError::Rejected(anyhow::anyhow!("document already exists")),
+        )
+        .await
+        .expect_err("an unconfirmed duplicate rejection is not a success");
 
         assert!(
             matches!(error, SubmissionAttemptError::Unknown(_)),
@@ -1270,11 +1263,11 @@ mod tests {
     async fn unretained_absent_receipt_stays_unknown_and_sends_nothing() {
         let server = MockServer::start().await;
         mount_receipt(&server, Vec::new()).await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
-        let result = test_result();
+        let signed = Signed::new().await;
+        let result = &signed.pending.result;
 
         let error = reconcile_unretained_submission(
-            &access,
+            &signed.access(&server),
             &result.node_did,
             &result.session_id,
             &result.request_id,
@@ -1288,7 +1281,13 @@ mod tests {
         assert_eq!(unconfirmed.request_id, result.request_id);
         assert_eq!(unconfirmed.session_id, result.session_id);
         assert!(
-            create_requests(&server).await.is_empty(),
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|request| !String::from_utf8_lossy(&request.body)
+                    .contains("create_AgentRequest")),
             "reconciliation must not create a fresh request"
         );
     }
@@ -1296,11 +1295,11 @@ mod tests {
     #[tokio::test]
     async fn unretained_unreadable_receipt_stays_unknown() {
         let server = MockServer::start().await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
-        let result = test_result();
+        let signed = Signed::new().await;
+        let result = &signed.pending.result;
 
         let error = reconcile_unretained_submission(
-            &access,
+            &signed.access(&server),
             &result.node_did,
             &result.session_id,
             &result.request_id,
@@ -1314,16 +1313,16 @@ mod tests {
     #[tokio::test]
     async fn unretained_present_receipt_resolves_to_original_identity() {
         let server = MockServer::start().await;
-        let result = test_result();
+        let signed = Signed::new().await;
+        let result = &signed.pending.result;
         mount_receipt(
             &server,
             vec![json!({"request_id": result.request_id, "relationships_pending": false})],
         )
         .await;
-        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
 
         let resolved = reconcile_unretained_submission(
-            &access,
+            &signed.access(&server),
             &result.node_did,
             &result.session_id,
             &result.request_id,

@@ -139,6 +139,32 @@ impl ServedRuntimeHome {
             .unwrap()
     }
 
+    /// Provisions a managed Agent and publishes it as the User with a
+    /// minimal inference backend and profile, so requests can select it.
+    pub async fn provision_published_agent(&self) -> AgentIdentityBinding {
+        let binding = self.provision_agent().await;
+        let node = self.node_did();
+        let config: gents::documents::PackConfig = serde_json::from_value(serde_json::json!({
+            "node":{"node_did":node},
+            "inference_backends":[{"node_did":node,"backend_id":"backend","name":"Backend",
+                "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
+                "auth":{"kind":"unauthenticated"}}],
+            "inference_profiles":[{"node_did":node,"profile_id":"profile","backend_id":"backend",
+                "model_name":"model"}],
+            "agents":[self.agent_value(&binding, "profile")],
+        }))
+        .unwrap();
+        let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+        self.user_access()
+            .transact_write("test.served_runtime.agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+        binding
+    }
+
     /// The managed Agent's own signed local access, holding the baseline
     /// grants production projects from its Agent document.
     pub async fn agent_access(&self, binding: &AgentIdentityBinding) -> ConfigAccess {
