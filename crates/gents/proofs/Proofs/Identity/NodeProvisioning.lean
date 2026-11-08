@@ -97,4 +97,37 @@ theorem startup_preserves_node_owner_revocation (before : List String) (permissi
     nodeOwnerGrantsAfterStartup (before.filter (· != permission)) =
       before.filter (· != permission) := by rfl
 
+/-- Native NAC status (`acp::nac::NacStatus`). -/
+inductive NacStatus where
+  | notConfigured
+  | enabled
+  | disabledTemporarily
+  deriving DecidableEq, Repr
+
+def NacStatus.name : NacStatus → String
+  | .notConfigured => "not_configured"
+  | .enabled => "enabled"
+  | .disabledTemporarily => "disabled_temporarily"
+
+/-- Runtime invariant: the runtime operates only with node ACP (NAC) enabled.
+Every authorization decision in this model assumes it. Native premise: while
+NAC is not `Enabled`, DefraDB bypasses node-permission checks and reports every
+actor as admin (`NodeACP::is_admin`); disabling NAC is an admin-class native
+operation, so an admin can turn it off at runtime, and native persists
+`DisabledTemporarily` across restarts (only re-enable turns it back on). Every
+node open enables NAC, but that does not exclude a store reopened disabled. A
+node observed without NAC enabled is therefore refused before the runtime
+admits work (fail closed), never treated as "everyone is admin"; the fix is to
+re-enable NAC as its owner or an admin. Destructive admin decisions refuse it
+again as defence in depth (`Configuration.destructiveAdminDecision`). -/
+def runtimeMayStart (status : NacStatus) : Bool := status == .enabled
+
+theorem runtime_refuses_without_enabled_nac (status : NacStatus)
+    (notEnabled : status ≠ .enabled) : runtimeMayStart status = false := by
+  cases status <;> simp_all [runtimeMayStart]
+
+theorem disabled_nac_is_refused_at_startup :
+    runtimeMayStart .disabledTemporarily = false ∧ runtimeMayStart .notConfigured = false ∧
+      runtimeMayStart .enabled = true := by decide
+
 end Identity.NodeProvisioning

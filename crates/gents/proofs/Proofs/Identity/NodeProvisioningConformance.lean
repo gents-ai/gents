@@ -77,4 +77,9 @@ def startupCasesJson : String := (toJson ([
     Json.mkObj [("name", toJson name), ("before", toJson before),
       ("expected_after", toJson (nodeOwnerGrantsAfterStartup before))])).compress
 
+def runtimeNacCasesJson : String := (toJson ([NacStatus.notConfigured, .enabled,
+  .disabledTemporarily].map fun status =>
+    Json.mkObj [("status", toJson status.name),
+      ("may_start", toJson (runtimeMayStart status))])).compress
+
 end Identity.NodeProvisioningConformance

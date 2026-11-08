@@ -2315,10 +2315,16 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(root.did())
+            .with_node_acp_enabled()
             .build()
             .await?,
     );
     let owner = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
+    for executor in [agent.did(), other.did()] {
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&owner, &identity::Did::new(executor)?)
+            .await?;
+    }
     let selected = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(agent.did())?,

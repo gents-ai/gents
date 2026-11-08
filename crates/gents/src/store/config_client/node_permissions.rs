@@ -60,6 +60,40 @@ impl ConfigAccess {
             }))
     }
 
+    /// Whether native node ACP is `Enabled`, as DefraDB reports it to the
+    /// access's actor. Over HTTP the status route requires `NacStatus` while
+    /// NAC is enabled (an admin holds it); its body names the status by the
+    /// native `NacStatus` display text, and only `enabled` is enabled.
+    pub async fn nac_enabled(&self) -> Result<bool, ConfigClientError> {
+        #[derive(serde::Deserialize)]
+        struct Status {
+            #[serde(rename = "Status")]
+            status: String,
+        }
+        match self {
+            Self::Local(local) => {
+                local
+                    .run_owned(move |node| async move {
+                        Ok::<_, ConfigClientError>(node.nac_manager().is_enabled().await)
+                    })
+                    .await
+            }
+            Self::Graphql(endpoint) => {
+                let url = format!("{}/acp/node/status", graphql_api_base(endpoint.url())?);
+                let client = graphql::http_client().await?;
+                let response = endpoint.authorize(client.get(url))?.send().await?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(ConfigClientError::HttpOperationStatus {
+                        operation: "read node ACP status",
+                        status,
+                    });
+                }
+                Ok(response.json::<Status>().await?.status == "enabled")
+            }
+        }
+    }
+
     /// Every way `subject` holds each node permission, as native NAC reports it
     /// to the access's actor. Native allows the subject itself, an admin, or a
     /// caller holding `NacStatus`; any other caller is refused by DefraDB.

@@ -25,6 +25,11 @@ pub enum BackendProtectionError {
     InvalidBinding,
     #[error("backend protection refers to a different native node")]
     WrongNode,
+    #[error(
+        "node access control is {status}; the runtime operates only with NAC enabled, so \
+         re-enable NAC as the node owner or an admin before starting"
+    )]
+    NodeAcpNotEnabled { status: String },
     #[error("backend protection storage operation failed")]
     Io(#[from] std::io::Error),
     #[error("backend protection native operation failed")]
@@ -242,8 +247,23 @@ impl BackendAdmission {
     }
 }
 
+/// `Identity.NodeProvisioning.runtimeMayStart`: every authorization decision
+/// assumes NAC is enabled, and native treats every actor as admin while it is
+/// not, so a node observed without it is refused before it serves or admits
+/// work. This is the one runtime check of that invariant.
+async fn require_node_acp_enabled(node: &defra_node::Node) -> Result<()> {
+    let nac = node.nac_manager();
+    if nac.is_enabled().await {
+        return Ok(());
+    }
+    Err(BackendProtectionError::NodeAcpNotEnabled {
+        status: nac.info().await.status,
+    })
+}
+
 async fn validate_binding(node: &defra_node::Node) -> Result<()> {
     use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
+    require_node_acp_enabled(node).await?;
     let current = node
         .get_collection(INFERENCE_BACKEND_NAME)?
         .ok_or(BackendProtectionError::InvalidBinding)?;
