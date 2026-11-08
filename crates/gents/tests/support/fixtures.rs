@@ -416,23 +416,13 @@ pub async fn canonical_run_timeline_rows(
     access: &gents::ConfigAccess,
     request_id: &str,
 ) -> gents::RunTimelineRows {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        match gents::observe::run_timeline_fetch::load_run_timeline_rows(access, request_id).await {
-            Ok(rows) => return rows,
-            Err(error)
-                if tokio::time::Instant::now() < deadline
-                    && error.chain().any(|cause| {
-                        cause
-                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                            .is_some_and(gents_protocol::output::ReconstructionError::is_incomplete)
-                    }) =>
-            {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            Err(error) => panic!("load canonical run timeline for {request_id}: {error:#}"),
-        }
-    }
+    gents::observe::run_timeline_fetch::load_settled_run_timeline_rows(
+        access,
+        request_id,
+        gents::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
+    )
+    .await
+    .unwrap_or_else(|error| panic!("load canonical run timeline for {request_id}: {error:#}"))
 }
 
 pub async fn bind_managed_agent_backend(

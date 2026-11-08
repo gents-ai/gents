@@ -247,9 +247,13 @@ pub(crate) async fn collect_request_evidence_with_access(
         .get("data")
         .cloned()
         .context("collect request evidence returned no data")?;
-    let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(access, request_id)
-        .await
-        .context("load request run timeline")?;
+    let timeline = crate::observe::run_timeline_fetch::load_settled_run_timeline_rows(
+        access,
+        request_id,
+        crate::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
+    )
+    .await
+    .context("load request run timeline")?;
     Ok(request_evidence_from_sources(&data, &timeline))
 }
 

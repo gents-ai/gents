@@ -11,7 +11,9 @@ use gents::observe::adapter_projection::{
     ProjectionRedactionMode,
 };
 use gents::observe::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
-use gents::observe::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
+use gents::observe::run_timeline_fetch::{
+    load_run_timeline, load_settled_run_timeline_rows, RUN_TIMELINE_SETTLE_BOUND,
+};
 use gents::observe::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
@@ -302,7 +304,8 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
         agent_did: optional_scope_arg("scope-agent-did", args.scope_agent_did)?,
         session_id: optional_scope_arg("scope-session-id", args.scope_session_id)?,
     };
-    let rows = load_run_timeline_rows(&access, &args.request_id).await?;
+    let rows = load_settled_run_timeline_rows(&access, &args.request_id, RUN_TIMELINE_SETTLE_BOUND)
+        .await?;
     let acp_scope = projection_acp::projection_acp_read_scope(
         &access,
         args.acp_policy_id.as_deref(),
@@ -406,7 +409,8 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let mut timelines = RapidHashMap::new();
     let requested = if let Some(request_id) = args.request_id.as_deref() {
-        let rows = load_run_timeline_rows(&access, request_id).await?;
+        let rows =
+            load_settled_run_timeline_rows(&access, request_id, RUN_TIMELINE_SETTLE_BOUND).await?;
         if let Some(session_id) = args.session_id.as_deref() {
             anyhow::ensure!(
                 rows.request.session_id.as_deref() == Some(session_id),
@@ -446,7 +450,12 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
         if !timelines.contains_key(&call.request_id) {
             timelines.insert(
                 call.request_id.clone(),
-                load_run_timeline_rows(&access, &call.request_id).await?,
+                load_settled_run_timeline_rows(
+                    &access,
+                    &call.request_id,
+                    RUN_TIMELINE_SETTLE_BOUND,
+                )
+                .await?,
             );
         }
         let rows = &timelines[&call.request_id];

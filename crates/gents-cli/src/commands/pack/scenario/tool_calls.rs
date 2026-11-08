@@ -12,8 +12,12 @@ pub(super) async fn canonical_stage_tool_rows(
     request_id: &str,
 ) -> Result<Vec<Value>> {
     let access = ConfigAccess::Graphql(graphql.clone());
-    let timeline =
-        gents::observe::run_timeline_fetch::load_run_timeline_rows(&access, request_id).await?;
+    let timeline = gents::observe::run_timeline_fetch::load_settled_run_timeline_rows(
+        &access,
+        request_id,
+        gents::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
+    )
+    .await?;
     let request_doc_id = timeline
         .request
         .doc_id
