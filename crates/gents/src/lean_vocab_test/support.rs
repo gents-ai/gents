@@ -309,6 +309,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) identity_bootstrap_cases: Vec<serde_json::Value>,
     pub(crate) identity_bootstrap_reservation_cases: Vec<serde_json::Value>,
     pub(crate) identity_bootstrap_startup_cases: Vec<serde_json::Value>,
+    pub(crate) identity_runtime_nac_cases: Vec<serde_json::Value>,
     pub(crate) identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub(crate) identity_callback_parent_actor_cases: Vec<serde_json::Value>,
     pub(crate) identity_eval_record_cases: Vec<serde_json::Value>,

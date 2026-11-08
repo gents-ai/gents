@@ -714,8 +714,10 @@ impl ConfigApplyTxn<'_> {
     }
 
     /// Whether this transaction's actor holds `permission` natively, as NAC
-    /// reports it; with NAC disabled no node permission is enforced. An
-    /// observation only: every operation it gates is still checked natively.
+    /// reports it. NAC not enabled violates the runtime invariant
+    /// (`Identity.NodeProvisioning.runtimeMayStart`), so it holds nothing then
+    /// rather than everything. An observation only: every operation it gates
+    /// is still checked natively.
     pub(crate) async fn actor_holds_node_permission(
         &self,
         permission: super::super::NodePermission,
@@ -738,7 +740,7 @@ impl ConfigApplyTxn<'_> {
             async move {
                 let nac = node.nac_manager();
                 if !nac.is_enabled().await {
-                    return Ok(true);
+                    return Ok(false);
                 }
                 nac.check_permission(&actor, permission).await
             },
