@@ -20,8 +20,7 @@ fn live_enabled() -> bool {
 async fn wait_for_connected_peer(node: &EmbeddedNode) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let peers = node
-            .p2p()
+        let peers = gents::store::identity::node_p2p(node)
             .expect("p2p enabled")
             .connected_peers()
             .await
@@ -194,8 +193,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
 
     for db in [topo.peer_a(), topo.peer_b()] {
         assert!(
-            !db.node
-                .p2p()
+            !gents::store::identity::node_p2p(&db.node)
                 .expect("peer p2p")
                 .connected_peers()
                 .await

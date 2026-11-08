@@ -10,7 +10,8 @@ use gents::goal::{set_goal_from_access, GoalStatus};
 use gents::observe::run_timeline_fetch::load_run_timeline_rows;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::native::{
-    AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
+    AGENT_INTERRUPT_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
+    AGENT_SESSION_LIST_TOOL_NAME,
 };
 use gents::{
     AgentTargetDocument, BashMode, Collection, DocumentRuntimeOptions, Gents, NodeIdentity,
@@ -1100,7 +1101,8 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .clone();
     for started in [&alpha, &beta] {
         assert_eq!(started.request_hop, Some(1));
-        assert_eq!(started.admission_kind.as_deref(), Some("local-self"));
+        // agent_new admits the child as a client request of the calling Agent.
+        assert_eq!(started.admission_kind.as_deref(), Some("client"));
         assert_ne!(started.session_id, session_id);
         let row = rows
             .iter()
@@ -1148,7 +1150,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         &orchestrator_agent_did,
         list_request_id,
         session_id,
-        "Call agent_list exactly once now, then reply exactly LISTED and call no other tool.",
+        "Call agent_list exactly once and agent_session_list exactly once now, then reply exactly LISTED and call no other tool.",
     )
     .await;
     let listed = wait_for_json_tool_result(
@@ -1167,7 +1169,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
             .find(|entry| entry["session_id"] == started.session_id.as_str())
             .unwrap_or_else(|| {
                 panic!(
-                    "agent_list omitted started session {}: {listed}",
+                    "agent_session_list omitted started session {}: {listed}",
                     started.session_id
                 )
             });
@@ -1177,7 +1179,15 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         assert_eq!(entry["can_interrupt"], true);
         assert_eq!(entry["status"], "idle");
     }
-    let listed_agents = listed["agents"]
+    let targets = wait_for_json_tool_result(
+        &live,
+        list_request_id,
+        session_id,
+        |value| value.get("agents").is_some(),
+        Duration::from_secs(240),
+    )
+    .await;
+    let listed_agents = targets["agents"]
         .as_array()
         .into_iter()
         .flatten()
@@ -1511,7 +1521,7 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
         &node_did,
         &target,
         &profile_id,
-        "You are a relay in an integration test. For any request: first call agent_list exactly \
+        "You are a relay in an integration test. For any request: first call agent_session_list exactly \
 once. Then call agent_new exactly once with agent \"relay\" and prompt \"relay onward\". Whatever \
 agent_new returns, including an error, then reply exactly RELAY_DONE and call no other tool.",
         Some("Relays work onward."),
@@ -1569,22 +1579,6 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         "completed",
         "the relay must finish its turn after its onward start is refused"
     );
-    let listed = wait_for_json_tool_result(
-        &live,
-        &first.request_id,
-        &first.session_id,
-        |value| value.get("sessions").is_some(),
-        Duration::from_secs(30),
-    )
-    .await;
-    let started_by = listed["sessions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|entry| entry["session_id"] == root_session)
-        .unwrap_or_else(|| panic!("the relay's agent_list omitted its starter: {listed}"));
-    assert_eq!(started_by["relationship"], "started_you");
-    assert_eq!(started_by["can_interrupt"], false);
     let refused = wait_for_json_tool_result(
         &live,
         &first.request_id,
@@ -1629,19 +1623,37 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         !wakes.is_empty(),
         "the notification must attempt a completion wake"
     );
+    // `CausalHop.nextHop .returnEdge own = own`: the wake returning the relay's
+    // result keeps the root's hop, so the bound that refused the relay's
+    // onward start admits it.
     for wake in &wakes {
         assert_eq!(
-            wake.lifecycle_state.as_deref(),
-            Some("failed"),
-            "a completion wake beyond the hop bound must not run: {wake:?}"
+            wake.request_hop,
+            Some(0),
+            "the return wake keeps the root hop: {wake:?}"
         );
-        assert!(
-            wake.failure_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("max_request_hop")),
-            "the over-bound wake must be refused by the hop bound: {wake:?}"
+        assert_eq!(
+            wake.lifecycle_state.as_deref(),
+            Some("completed"),
+            "a return wake within the hop bound runs: {wake:?}"
         );
     }
+    let listed = wait_for_json_tool_result(
+        &live,
+        &first.request_id,
+        &first.session_id,
+        |value| value.get("sessions").is_some(),
+        Duration::from_secs(30),
+    )
+    .await;
+    let started_by = listed["sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["session_id"] == root_session)
+        .unwrap_or_else(|| panic!("the relay's agent_session_list omitted its starter: {listed}"));
+    assert_eq!(started_by["relationship"], "started_you");
+    assert_eq!(started_by["can_interrupt"], false);
     tracing::info!(
         root_session,
         relay_session = %first.session_id,
@@ -1988,10 +2000,11 @@ sentence that repeats, verbatim, every code word reported in the notifications."
         Some(middle.session_id.as_str())
     );
     let wake = wait_for_bound_wake(&fx.live, &middle.session_id, &notification).await;
+    // `CausalHop.nextHop .returnEdge own = own`: a completion wake keeps the
+    // calling session's hop rather than climbing past the leaf's.
     assert_eq!(
-        wake.request_hop,
-        Some(3),
-        "the wake climbs past leaf's hop: max(1, 2 + 1)"
+        wake.request_hop, middle.request_hop,
+        "the return wake keeps the middle session's hop"
     );
     let wake_answer = terminal_assistant_answer(&fx.live, &wake.request_id).await;
     if !wake_answer.contains(&leaf_code) {
@@ -2561,7 +2574,9 @@ async fn soak_coverage(fx: &LiveNode, op_requests: &[String]) -> SoakCoverage {
                     _ if result["ok"] == false => coverage.interrupts_refused += 1,
                     _ => {}
                 },
-                AGENT_LIST_TOOL_NAME if result.get("sessions").is_some() => coverage.lists += 1,
+                AGENT_SESSION_LIST_TOOL_NAME if result.get("sessions").is_some() => {
+                    coverage.lists += 1
+                }
                 _ => {}
             }
         }
@@ -2746,7 +2761,7 @@ async fn live_randomized_soak() -> Result<()> {
                         .await;
                     format!("Call agent_message exactly once now with session_id {:?}, message \"BLOCK_GATE_2\" and interrupt false. After its receipt arrives, reply exactly OP_DONE and call no other tool.", session_of(&started, 1))
                 }
-                _ => "Call agent_list exactly once now, then reply exactly OP_DONE and call no other tool.".to_owned(),
+                _ => "Call agent_session_list exactly once now, then reply exactly OP_DONE and call no other tool.".to_owned(),
             };
             (root, prompt)
         } else if started.is_empty() || roll < 30 {
@@ -2767,7 +2782,7 @@ async fn live_randomized_soak() -> Result<()> {
         } else if roll < 88 {
             (
                 root,
-                "Call agent_list exactly once now, then reply exactly OP_DONE and call no other tool."
+                "Call agent_session_list exactly once now, then reply exactly OP_DONE and call no other tool."
                     .to_owned(),
             )
         } else {
@@ -3917,7 +3932,10 @@ async fn wait_for_json_tool_result(
         }
         if tokio::time::Instant::now() >= deadline {
             dump_session_diagnostics(node, session_id).await;
-            panic!("timed out waiting for a matching tool result of {request_id} in session {session_id}");
+            panic!(
+                "timed out waiting for a matching tool result of {request_id} in session {session_id}; results={:?}",
+                tool_result_texts(&messages)
+            );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
