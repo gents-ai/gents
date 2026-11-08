@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncNoEventQueue ----
+EXTENDS ObserverResync
+
+====

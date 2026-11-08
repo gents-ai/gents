@@ -77,6 +77,23 @@ See `../README.md` for how this fits the broader formal-verification model.
   without the head read) break each remaining guard. A refusal admitted while
   another turn is live deliberately leaves the live turn as the head, so
   neither property claims it.
+- `ObserverResync` — the desktop observer's delivery and resync loop for
+  runtime documents and the direct refresh beside it. A runtime write emits a
+  subscription event only after the stream is armed; the observer queues the
+  node, starts one load that captures the store fence, reads and publishes
+  through the fence; a direct refresh does the same once per user mutation.
+  `NoLostWrite`, `NoStaleCommit`, `NoDuplicateHostedRead`,
+  `EventualPublication` and `Convergence` hold when request events stay off
+  the reload fence, are scoped to their source node, a rejected load requeues
+  without back-off and a rejected refresh hands its node to the observer (Lean
+  `ClientDataPublication.acceptsReloadFor`, `ObserverResync`).
+  `SustainedEvents` is the found livelock: one lease renewal during every
+  load, with `observe_request_event(None)` moving the fence every reload
+  checks, rejects every load forever and the node stays connecting with stale
+  rows. `CrossNode` is the same with another node's events. `ReconnectGap`
+  keeps the code before the fix without renewals as a regression guard for
+  arm-then-snapshot. `NodeScopeOnly`, `NoPublicationFence`, `NoEventQueue`,
+  `SnapshotBeforeArm` and `RefreshFallback` each break one remaining guard.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -178,6 +195,28 @@ in the same second, the client reopens, B completes and never appears);
 ./scripts/run-tlc.sh MCSessionHeadObservationNoHeadSeed
 ```
 
+For ObserverResync — the green model (two nodes, a renewal during every
+load on both, a write, a drop and a direct refresh per node) checks clean,
+and `ReconnectGap` is a passing regression guard:
+```bash
+./scripts/run-tlc.sh MCObserverResync
+./scripts/run-tlc.sh MCObserverResyncReconnectGap
+```
+
+Its seven diagnostics are EXPECTED to report violations: `SustainedEvents`,
+`CrossNode` and `NodeScopeOnly` violate `EventualPublication` and
+`Convergence`; `NoPublicationFence`, `NoEventQueue` and `SnapshotBeforeArm`
+violate `NoLostWrite`; `RefreshFallback` violates `NoDuplicateHostedRead`:
+```bash
+./scripts/run-tlc.sh MCObserverResyncSustainedEvents
+./scripts/run-tlc.sh MCObserverResyncCrossNode
+./scripts/run-tlc.sh MCObserverResyncNodeScopeOnly
+./scripts/run-tlc.sh MCObserverResyncNoPublicationFence
+./scripts/run-tlc.sh MCObserverResyncNoEventQueue
+./scripts/run-tlc.sh MCObserverResyncSnapshotBeforeArm
+./scripts/run-tlc.sh MCObserverResyncRefreshFallback
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -262,6 +301,16 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCSessionHeadObservationNoTerminalizationOrder.cfg` | `Order = "noTerminal"`, `Refusals = TRUE` | `ReplyObserved` intentionally VIOLATED: B refused in A's second loses the random tie | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationNoHeadSeed.cfg` | `Order = "lean"`, `HeadSeed = FALSE` | `ReplyObserved` intentionally VIOLATED: the head is B but the reader reads only nonterminal rows | 572 distinct states; 984 generated | 11 | <1s |
 
+| `MCObserverResync.cfg` | 2 nodes, `MaxWrites = 1`, `K = 1`, `MaxDrops = 1`, `MaxRefreshes = 1`, node-scoped events off the reload fence, immediate requeue, no refresh fallback | Passes `TypeOK`, `NoLostWrite`, `NoDuplicateHostedRead`, `NoStaleCommit`, `EventualPublication`, `Convergence` | 2,835,856 distinct states; 16,250,601 generated | 33 | 6min 22s |
+| `MCObserverResyncSustainedEvents.cfg` | 1 node, renewals during every load, events touch every scope on the reload fence, 250 ms retry | `EventualPublication` and `Convergence` intentionally VIOLATED: Arm, Start, Write, Deliver, Read, Publish (rejected), Timer, then Start, Renew, Deliver, Read, Publish (rejected) forever | 118 distinct states; 229 generated | 17 | <1s |
+| `MCObserverResyncCrossNode.cfg` | 2 nodes, only `b` renews, events touch every scope | `EventualPublication` and `Convergence` intentionally VIOLATED for `a`: each of `b`'s events rejects `a`'s in-flight load | 10,322 distinct states; 33,989 generated | 38 | 1s |
+| `MCObserverResyncReconnectGap.cfg` | 2 nodes, `MaxWrites = 2`, `MaxDrops = 2`, no renewals, the code before the fix | Passes every invariant and property: writes between a drop and its re-arm are read by the post-arm snapshot | 626,865 distinct states; 2,738,115 generated | 33 | 42s |
+| `MCObserverResyncNodeScopeOnly.cfg` | 1 node, node-scoped events still on the reload fence, immediate requeue | `EventualPublication` and `Convergence` intentionally VIOLATED: the node's own renewals reject each load | 112 distinct states; 220 generated | 16 | <1s |
+| `MCObserverResyncNoPublicationFence.cfg` | 1 node, publications do not fence reloads | `NoLostWrite` intentionally VIOLATED: the observer publishes its newer read, then the older direct refresh publishes over it | 114 distinct states before counterexample; 199 generated | 9 | <1s |
+| `MCObserverResyncNoEventQueue.cfg` | 1 node, a delivered event does not queue its node | `NoLostWrite` intentionally VIOLATED: a write after the snapshot read is delivered and never loaded | 21 distinct states before counterexample; 25 generated | 7 | <1s |
+| `MCObserverResyncSnapshotBeforeArm.cfg` | 1 node, the snapshot is queued before the streams arm | `NoLostWrite` intentionally VIOLATED: a write between the read and the arm has no event and no later load | 67 distinct states before counterexample; 109 generated | 7 | <1s |
+| `MCObserverResyncRefreshFallback.cfg` | 1 node, a rejected refresh reads again | `NoDuplicateHostedRead` intentionally VIOLATED: the observer's publication rejects the refresh, which reads its node a second time | 126 distinct states before counterexample; 193 generated | 9 | <1s |
+
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
 `-workers 2`. The green run checked its temporal property over the complete
@@ -271,6 +320,10 @@ count.
 The six SessionHeadObservation rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 liveness rows checked `ReplyObserved` over the complete state space.
+
+The nine ObserverResync rows used TLC2 `2026.11.06.222357` (rev `d8fb231`)
+with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the liveness
+rows checked their temporal properties over the complete state space.
 
 ## PairingTransport derived requirements
 

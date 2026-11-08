@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncNodeScopeOnly ----
+EXTENDS ObserverResync
+
+====

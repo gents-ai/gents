@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncCrossNode ----
+EXTENDS ObserverResync
+
+====
