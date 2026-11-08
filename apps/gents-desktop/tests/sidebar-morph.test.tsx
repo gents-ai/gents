@@ -13,7 +13,11 @@ import {
 
 /* the names each transition saw, as it began */
 let named: string[][] = [];
-type Started = { finished: Promise<unknown>; ready?: Promise<unknown> };
+type Started = {
+  finished: Promise<unknown>;
+  ready?: Promise<unknown>;
+  updateCallbackDone?: Promise<unknown>;
+};
 const start = vi.fn((update: () => void): Started => {
   named.push(
     [...document.querySelectorAll<HTMLElement>("[data-testid]")]
@@ -92,6 +96,32 @@ describe("the sidebar's mode changes", () => {
     act(() => sidebar.setMode("collapsed"));
     await act(async () => {});
     expect(sidebarMode()).toBe("collapsed");
+  });
+
+  it("leave no rejection unhandled when the browser skips a transition before its update", async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", record);
+    try {
+      start.mockImplementationOnce((update: () => void) => {
+        update();
+        const skipped = () =>
+          Promise.reject(new DOMException("Transition was skipped", "AbortError"));
+        return { ready: skipped(), updateCallbackDone: skipped(), finished: skipped() };
+      });
+      render(<Shell />);
+      act(() => sidebar.setMode("collapsed"));
+      await act(async () => {});
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(sidebarMode()).toBe("collapsed");
+      expect(unhandled).toEqual([]);
+      /* the skipped transition's names still come off */
+      expect(
+        screen.getByTestId("sidebar").style.getPropertyValue("view-transition-name"),
+      ).toBe("");
+    } finally {
+      process.off("unhandledRejection", record);
+    }
   });
 
   it("are not morphed while the edge is dragged, nor when it lets go", () => {
