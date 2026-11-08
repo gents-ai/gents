@@ -694,6 +694,8 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Conformance/Boundaries.lean` | Intentional product policies and external assumptions at the Rust/Lean boundary |
 | `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
+| `Proofs/Conformance/RuntimeConnectionObservation.lean` | Desktop runtime connection status (`ClientShell.ObservationOrdering` `RuntimeConnectionObservation`): transitions including planned renewal and missing endpoint, the presentation tone and reason each status shows, stream-end classification and the transport retry delay; replayed by `gents-desktop-core` `client::observe` and the desktop's operational-state projection. TLA `RuntimeConnectionTransport` models the source, observer and reconcile interleavings |
+| `Proofs/Conformance/RuntimeConnectionReprobe.lean` | Denied-source re-probe schedule (`reprobeDelayMs`, `nextDenials`) replayed by `client::observe::remote` |
 | `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up |
 | `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, ClientShell cases, and the coverage ledger |
 | `Proofs/Conformance/ClientShell/Contracts.lean` | Generated finite ClientShell step/projection cases for frontend and desktop shell tests |

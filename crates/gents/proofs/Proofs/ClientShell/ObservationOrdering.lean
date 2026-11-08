@@ -695,24 +695,40 @@ end EnrollmentActivationObservation
 
 namespace RuntimeConnectionObservation
 
+/-- The desktop's observed connection to one runtime it reaches over
+authenticated HTTP as the User. `noEndpoint` is a directory peer with no
+operator GraphQL endpoint (a discovery- or enrollment-only peer): nothing can
+be observed, and the state says so instead of reading as a connection attempt.
+A peer that is absent from the directory has no state. -/
 inductive Status where
-  | connecting | connected | disconnected | denied
+  | connecting | connected | disconnected | denied | noEndpoint
   deriving DecidableEq, Repr
 
+/-- `renewed` is the source re-arming its subscriptions after a planned stream
+end: the pinned DefraDB HTTP server authenticates a subscription only at its
+handshake, so a locally minted bearer's subscription ends at half the bearer
+lifetime and re-authenticates. It is not a transport failure. `endpointMissing`
+is the reconcile of a peer that has no operator endpoint. -/
 inductive Event where
   | sourceStarted | subscriptionsReady | snapshotSucceeded | transportFailed | permissionDenied
+  | renewed | endpointMissing
   deriving DecidableEq, Repr
 
 /-- A direct runtime connection is established only after subscriptions are armed
 and an authenticated snapshot succeeds. A successful empty result is still a
 successful snapshot: ACP may filter every row without returning an error. P2P
-peer or replication observations do not determine this state. -/
+peer or replication observations do not determine this state. A planned
+renewal keeps the state: the source resnapshots after it re-arms (changes in
+the re-arm gap are not delivered), but the runtime stayed reachable and
+authorized, so the user sees no outage. -/
 def observe (status : Status) (event : Event) : Status :=
   match event with
   | .sourceStarted | .subscriptionsReady => .connecting
   | .snapshotSucceeded => .connected
   | .transportFailed => .disconnected
   | .permissionDenied => .denied
+  | .renewed => status
+  | .endpointMissing => .noEndpoint
 
 def blocksAdmission (status : Status) : Bool := decide (status ≠ .connected)
 
@@ -728,6 +744,46 @@ theorem subscription_alone_is_not_a_completed_read (status : Status) :
 
 theorem denial_is_not_an_empty_result (status : Status) :
     observe status .permissionDenied = .denied := by rfl
+
+theorem renewal_keeps_connected : observe .connected .renewed = .connected := by rfl
+
+theorem renewal_is_not_an_outage (status : Status) (h : status ≠ .disconnected) :
+    observe status .renewed ≠ .disconnected := by
+  simpa [observe] using h
+
+/-- Only a completed authenticated snapshot enters `connected`; a renewal can
+only keep it. -/
+theorem only_snapshot_enters_connected (status : Status) (event : Event)
+    (h : status ≠ .connected) (hc : observe status event = .connected) :
+    event = .snapshotSucceeded := by
+  cases event <;> simp_all [observe]
+
+theorem missing_endpoint_is_not_connecting (status : Status) :
+    observe status .endpointMissing = .noEndpoint := by rfl
+
+/-- How a source's subscription stream ended. `renewalDue` is the planned
+re-authentication end; `completed` is the runtime sending `complete`, which is
+not planned by the client and is reported as a transport failure until a
+re-arm proves otherwise. A failure is a denial exactly when the access owner
+classifies it as one (HTTP 401/403 at the handshake, or a `PERMISSION_DENIED`
+GraphQL error envelope on the stream). -/
+inductive StreamEnd where
+  | renewalDue | completed | failed (denied : Bool)
+  deriving DecidableEq, Repr
+
+/-- The event a stream end publishes. A renewal publishes nothing until its
+re-arm: `renewed` when the new subscriptions are ready, or the re-arm's own
+failure. -/
+def streamEndEvent : StreamEnd → Option Event
+  | .renewalDue => none
+  | .completed => some .transportFailed
+  | .failed true => some .permissionDenied
+  | .failed false => some .transportFailed
+
+theorem renewal_publishes_no_failure : streamEndEvent .renewalDue = none := by rfl
+
+theorem classified_denial_is_denied : streamEndEvent (.failed true) = some .permissionDenied := by
+  rfl
 
 /-- A denial is not terminal. A grant restored on the runtime emits nothing a
 denied reader can subscribe to, and a 401 from an expired or rotated bearer is
@@ -748,7 +804,8 @@ def reprobeDelayMs (denials : Nat) : Nat := min (reprobeBaseMs * 2 ^ denials) re
 def nextDenials (denials : Nat) : Event → Nat
   | .permissionDenied => denials + 1
   | .snapshotSucceeded => 0
-  | .sourceStarted | .subscriptionsReady | .transportFailed => denials
+  | .sourceStarted | .subscriptionsReady | .transportFailed | .renewed | .endpointMissing =>
+    denials
 
 theorem denied_source_restarts :
     observe .denied .sourceStarted = .connecting := by rfl
@@ -770,5 +827,71 @@ theorem reprobe_delay_monotone (denials : Nat) :
 
 theorem connected_snapshot_resets_reprobe (denials : Nat) :
     nextDenials denials .snapshotSucceeded = 0 := by rfl
+
+theorem renewal_keeps_reprobe (denials : Nat) : nextDenials denials .renewed = denials := by rfl
+
+/-- A source whose stream failed for a transport reason re-arms after this
+fixed delay, as does a snapshot whose read failed. It is not a backoff: an
+unreachable runtime is re-dialed (every subscription re-armed) at this rate
+until it answers. Whether to back off, which would delay noticing a recovered
+runtime, is an open product decision; the delay is modeled so a change to it is
+a model change. -/
+def transportRetryDelayMs : Nat := 250
+
+theorem transport_retry_positive : 0 < transportRetryDelayMs := by decide
+
+theorem transport_retry_below_first_reprobe : transportRetryDelayMs < reprobeDelayMs 0 := by
+  decide
+
+/-- What the user sees for a runtime connection. `waiting` states progress
+without the user: the source is connecting, or it retries an outage on
+`transportRetryDelayMs`. `blocked` states name a cause the user may need to act
+on: a denial (re-probed on `reprobeDelayMs`, but restored only by a grant on the
+runtime) or a peer with no endpoint, which nothing in the client can connect. -/
+inductive Tone where
+  | ready | waiting | blocked
+  deriving DecidableEq, Repr
+
+inductive Reason where
+  | connected | connecting | disconnected | permissionDenied | noEndpoint
+  deriving DecidableEq, Repr
+
+/-- `none` is a peer the observer has not yet reconciled. -/
+def presentation : Option Status → Tone × Reason
+  | none | some .connecting => (.waiting, .connecting)
+  | some .connected => (.ready, .connected)
+  | some .disconnected => (.waiting, .disconnected)
+  | some .denied => (.blocked, .permissionDenied)
+  | some .noEndpoint => (.blocked, .noEndpoint)
+
+/-- The source moves this status without user action. -/
+def progresses : Status → Bool
+  | .connecting | .disconnected | .denied => true
+  | .connected | .noEndpoint => false
+
+/-- Nothing is silently stuck: every status is ready, progresses by itself, or
+is blocked with its cause named. -/
+theorem every_status_is_ready_progressing_or_blocked (status : Status) :
+    (presentation (some status)).1 = .ready ∨ progresses status = true ∨
+      (presentation (some status)).1 = .blocked := by
+  cases status <;> simp [presentation, progresses]
+
+theorem waiting_status_progresses (status : Status)
+    (h : (presentation (some status)).1 = .waiting) : progresses status = true := by
+  cases status <;> simp_all [presentation, progresses]
+
+/-- Distinct statuses name distinct reasons, so an outage never reads as a
+connection attempt and a missing endpoint never reads as either. -/
+theorem presentation_reason_injective (a b : Status)
+    (h : (presentation (some a)).2 = (presentation (some b)).2) : a = b := by
+  cases a <;> cases b <;> simp_all [presentation]
+
+theorem ready_is_exactly_connected (status : Status) :
+    (presentation (some status)).1 = .ready ↔ status = .connected := by
+  cases status <;> simp [presentation]
+
+theorem admission_blocked_unless_ready (status : Status) :
+    blocksAdmission status = true ↔ (presentation (some status)).1 ≠ .ready := by
+  cases status <;> simp [blocksAdmission, presentation]
 
 end RuntimeConnectionObservation

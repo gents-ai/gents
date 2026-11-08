@@ -77,6 +77,26 @@ See `../README.md` for how this fits the broader formal-verification model.
   without the head read) break each remaining guard. A refusal admitted while
   another turn is live deliberately leaves the live turn as the head, so
   neither property claims it.
+- `RuntimeConnectionTransport` — the desktop observer's authenticated SSE
+  connection to one runtime it reads as the User (`client/observe`). The
+  source task arms `K` subscriptions one at a time and then sends a ready
+  notice; each stream ends at a planned bearer renewal (half the locally
+  minted bearer lifetime), a transport failure or a denial (HTTP 401/403 at
+  the handshake, or a `PERMISSION_DENIED` errors envelope on the stream). The
+  observer applies only notices of the current source generation, runs one
+  snapshot at a time, and re-probes a denied source after the Lean
+  `reprobeDelayMs`; reconcile replaces or drops the source when the peer's
+  endpoint changes or the peer is removed, and an aborted task may still
+  enqueue one notice. `ConnectedAfterArmedSnapshot`, `StaleNoticeInert`,
+  `RemovalClears`, `NoEndpointNamed`, `RenewalNeverDisconnects`,
+  `ReprobeBounded`, `EventuallyConnected`, `DenialObserved` and
+  `NoEndpointEventuallyNamed` hold for both denial surfaces (`Envelope`
+  green: the handshake of a revoked User is accepted). `RenewalFlap` is the
+  found defect (a renewal reported as a transport failure flashes
+  Disconnected every half bearer lifetime); `DeniedEnvelope` (an unclassified
+  envelope denial loops at the transport retry rate and never shows the
+  denial), `NoEndpoint` (a peer without an endpoint has no status, shown as
+  connecting), `StaleGeneration` and `EarlyReady` break one guard each.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -178,6 +198,26 @@ in the same second, the client reopens, B completes and never appears);
 ./scripts/run-tlc.sh MCSessionHeadObservationNoHeadSeed
 ```
 
+For RuntimeConnectionTransport — both green models check clean, including
+the three liveness properties:
+```bash
+./scripts/run-tlc.sh MCRuntimeConnectionTransport
+./scripts/run-tlc.sh MCRuntimeConnectionTransportEnvelope
+```
+
+Its five diagnostics are EXPECTED to report violations. `RenewalFlap`
+violates `RenewalNeverDisconnects`, `DeniedEnvelope` violates
+`DenialObserved`, `NoEndpoint` violates `NoEndpointNamed`,
+`StaleGeneration` violates `StaleNoticeInert` and `EarlyReady` violates
+`ConnectedAfterArmedSnapshot`:
+```bash
+./scripts/run-tlc.sh MCRuntimeConnectionRenewalFlap
+./scripts/run-tlc.sh MCRuntimeConnectionDeniedEnvelope
+./scripts/run-tlc.sh MCRuntimeConnectionNoEndpoint
+./scripts/run-tlc.sh MCRuntimeConnectionStaleGeneration
+./scripts/run-tlc.sh MCRuntimeConnectionEarlyReady
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -261,6 +301,13 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCSessionHeadObservationNoLivePreference.cfg` | `Order = "noLive"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: B's claim ranks below A's same-second terminalization | 620 distinct states; 1,056 generated | 11 | <1s |
 | `MCSessionHeadObservationNoTerminalizationOrder.cfg` | `Order = "noTerminal"`, `Refusals = TRUE` | `ReplyObserved` intentionally VIOLATED: B refused in A's second loses the random tie | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationNoHeadSeed.cfg` | `Order = "lean"`, `HeadSeed = FALSE` | `ReplyObserved` intentionally VIOLATED: the head is B but the reader reads only nonterminal rows | 572 distinct states; 984 generated | 11 | <1s |
+| `MCRuntimeConnectionTransport.cfg` | `K = 2`, `MaxGen = 4`, `Cap = 2`, `MaxEnv = 3`, `MaxChan = 2`, handshake denial, all guards | Passes `TypeOK`, `ConnectedAfterArmedSnapshot`, `RemovalClears`, `NoEndpointNamed`, `RenewalNeverDisconnects`, `ReprobeBounded`, `StaleNoticeInert`, `EventuallyConnected`, `DenialObserved`, `NoEndpointEventuallyNamed` | 64,653 distinct states; 457,242 generated | 40 | 4s |
+| `MCRuntimeConnectionTransportEnvelope.cfg` | as green, `DenyAtHandshake = FALSE` | Passes every invariant and property of the green row | 94,237 distinct states; 646,598 generated | 54 | 9s |
+| `MCRuntimeConnectionRenewalFlap.cfg` | as green, `RenewalAsFailure = TRUE` | `RenewalNeverDisconnects` intentionally VIOLATED: arm, ready, renewal, failure notice, Disconnected with the runtime reachable | 2,631 distinct states before counterexample; 9,526 generated | 8 | <1s |
+| `MCRuntimeConnectionDeniedEnvelope.cfg` | `DenyAtHandshake = FALSE`, `EnvelopeClassified = FALSE` | `DenialObserved` intentionally VIOLATED: revoked grant, the stream's errors envelope is a transport failure, retry, re-arm, ready, repeat | 37,357 distinct states; 228,467 generated | — | 3s |
+| `MCRuntimeConnectionNoEndpoint.cfg` | as green, `NamedNoEndpoint = FALSE` | `NoEndpointNamed` intentionally VIOLATED: the peer loses its endpoint and reconcile leaves no status | 33 distinct states before counterexample; 69 generated | 3 | <1s |
+| `MCRuntimeConnectionStaleGeneration.cfg` | as green, `GenerationCheck = FALSE` | `StaleNoticeInert` intentionally VIOLATED: the replaced source's queued notice moves the new source's status | 202 distinct states before counterexample; 513 generated | 5 | <1s |
+| `MCRuntimeConnectionEarlyReady.cfg` | as green, `ArmBeforeReady = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: ready before any subscription is armed, snapshot, Connected | 1,194 distinct states before counterexample; 3,446 generated | 6 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
@@ -271,6 +318,10 @@ count.
 The six SessionHeadObservation rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 liveness rows checked `ReplyObserved` over the complete state space.
+
+The seven RuntimeConnectionTransport rows used TLC2 2.19 (rev `5a47802`)
+with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the green rows
+checked their temporal properties over the complete state space.
 
 ## PairingTransport derived requirements
 

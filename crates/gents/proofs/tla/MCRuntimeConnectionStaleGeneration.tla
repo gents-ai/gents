@@ -1,0 +1,4 @@
+---- MODULE MCRuntimeConnectionStaleGeneration ----
+EXTENDS RuntimeConnectionTransport
+
+====
