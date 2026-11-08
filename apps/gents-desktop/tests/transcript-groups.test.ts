@@ -261,7 +261,12 @@ describe("background results", () => {
     kind: "automatedInput",
     itemKey: `b${n}`,
     sequence: n,
-    origin: { kind: "backgroundCompletion" },
+    origin: {
+      kind: "backgroundCompletion",
+      notification: !content
+        .trim()
+        .startsWith("Review the new background completion results"),
+    },
     content,
     timestamp: null,
     reconstruction: { state: "ready" },

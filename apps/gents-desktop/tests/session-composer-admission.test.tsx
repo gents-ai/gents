@@ -577,7 +577,7 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: "<agent-notification>done</agent-notification>",
             ...durable("background", 5),
           },
@@ -723,19 +723,19 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: completion("call-test", "completed"),
             ...durable("first", 2),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: completion("call-worker", "completed"),
             ...durable("worker", 3),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: completion("call-elsewhere", "failed"),
             ...durable("second", 4),
           },
@@ -783,7 +783,7 @@ describe("SessionScreen automated inputs", () => {
     const completion = `<tool-completion tool_call_id="call-x" tool_name="bash" status="completed">\n  <result>ok</result>\n</tool-completion>`;
     const background = (key: string, sequence: number, content: string) => ({
       kind: "automatedInput",
-      origin: { kind: "backgroundCompletion" },
+      origin: { kind: "backgroundCompletion", notification: content !== wake },
       content,
       ...durable(key, sequence),
     });
