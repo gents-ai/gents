@@ -638,7 +638,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
 | `Proofs/ClientShell/ObservationScope.lean` | Shared client observation focus while external frontend attachments are present; the last detachment restores current shell intent. |
-| `Proofs/ClientShell/ObservationOrdering.lean` | Client publication fences and the observer load loop: snapshot reloads check publication epochs only, patches also check request-event epochs; request events of any footprint never supersede a reload, a node's observer event rejects only that node's patches, a superseded load requeues without back-off, and every connecting or disconnected node owns a queued or running load or a retry (`ObserverResync`; TLA `ObserverResync`). |
+| `Proofs/ClientShell/ObservationOrdering.lean` | Client publication fences and the observer load loop: snapshot reloads check publication epochs only, patches also check request-event epochs; request events of any footprint never supersede a reload, a node's observer event rejects only that node's patches, a tool-call change rejects every patch but no reload, a reload's footprint is computed from the rows it publishes and widens once per unowned row it takes over while checking only known owners, a superseded load requeues without back-off, a load starts only on an armed source, and every connecting or disconnected node owns a queued or running load or an arming source (`ObserverResync`; TLA `ObserverResync`). |
 | `Proofs/ClientShell/Voice.lean` | Explicit dictation and live conversation epochs; stop, disconnection, view disposal and scope changes reject late completions. |
 | `Proofs/ClientShell/Settings.lean` | Physical document and composite revision guards, canonical editable fields, and post-save editor baseline adoption. |
 | `Proofs/GoalAutomation/ClientControl.lean` | Goal revision checks and client edit, pause, and resume through the existing Goal owners. |
@@ -697,7 +697,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
 | `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up |
 | `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, ClientShell cases, and the coverage ledger |
-| `Proofs/Conformance/ObserverResync.lean` | Executes `ObserverResync` and `ClientDataPublication` on observer traces the desktop's replay test serializes; reports each load's settlement, the patch decision and every node's final slot. |
+| `Proofs/Conformance/ObserverResync.lean` | Executes `ObserverResync` and `ClientDataPublication` on observer traces the desktop's replay test serializes; reports the slot after every step, each load's settlement and patch decision, and the final slots and store rows. |
 | `Proofs/Conformance/ClientShell/Contracts.lean` | Generated finite ClientShell step/projection cases for frontend and desktop shell tests |
 | `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
 
