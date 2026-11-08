@@ -2998,3 +2998,46 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
         node.shutdown().await.expect("node shutdown");
     }
 }
+
+/// ClientSubmissionContention.tla: a client submission that loses its session
+/// read to the working Agent's observation refresh is rebuilt on a fresh
+/// transaction, while an unconfirmed commit is reported and never rebuilt.
+#[tokio::test]
+async fn finality_rebuild_redrives_only_a_confirmed_conflict() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
+    let access = held_fake_access(endpoint).await;
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let captured = attempts.clone();
+    access
+        .transact_signed_conflict_rebuild_with_finality("test.finality_rebuild", move |txn| {
+            lock(&captured).push(transaction_id(txn));
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await
+        .map_err(|failure| failure.error)
+        .unwrap();
+    assert_eq!(&*lock(&attempts), &["0", "1"]);
+    assert_eq!(state.next_id.load(Ordering::SeqCst), 2);
+    server.abort();
+
+    let (endpoint, state, server) =
+        fake_transaction_server(FirstCommit::CanonicalUnconfirmed).await;
+    let access = held_fake_access(endpoint).await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let captured = attempts.clone();
+    let failure = access
+        .transact_signed_conflict_rebuild_with_finality("test.finality_unconfirmed", move |txn| {
+            captured.fetch_add(1, Ordering::SeqCst);
+            txn.client_signed_write_dispatched
+                .store(true, Ordering::Release);
+            Box::pin(async { Ok::<_, TestError>(()) })
+        })
+        .await
+        .unwrap_err();
+    assert!(failure.unconfirmed);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+    server.abort();
+}

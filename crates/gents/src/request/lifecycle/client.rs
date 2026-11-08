@@ -407,8 +407,12 @@ pub async fn submit_client_request(
             "request publication admission is not allowed"
         )));
     }
+    // The working Agent refreshes the session observation as it publishes
+    // each message, so a submission during a turn can lose its session read;
+    // the callback re-reads its targets and is transaction-only, so a
+    // confirmed conflict is rebuilt (ClientSubmissionContention.tla).
     access
-        .transact_write_with_finality("request.client.submit", |txn| {
+        .transact_signed_conflict_rebuild_with_finality("request.client.submit", |txn| {
             let actor = &actor;
             Box::pin(async move {
                 let (session, agent, _created) =

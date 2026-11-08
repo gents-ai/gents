@@ -126,7 +126,21 @@ impl ConfigAccess {
         E: TransactionFailure + From<ConfigClientError> + Send + 'a,
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
-        let mode = match self.write_route() {
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            self.signed_conflict_rebuild_mode(),
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    fn signed_conflict_rebuild_mode(&self) -> TransactionMode {
+        match self.write_route() {
             WriteRoute::Http(endpoint)
                 if endpoint.pack_replay.is_none()
                     && endpoint.held_client_signing_capability().is_ok() =>
@@ -137,18 +151,7 @@ impl ConfigAccess {
                 TransactionMode::SingleAttempt
             }
             WriteRoute::Http(_) | WriteRoute::Local(_) => TransactionMode::ConflictRetry,
-        };
-        transact_owned(
-            operation,
-            backend_for_access(self),
-            mode,
-            move |operation, rollback| {
-                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
-            },
-            callback,
-        )
-        .await
-        .map(expect_committed)
+        }
     }
 
     pub(crate) async fn transact_write_with_finality<'a, T, E, F>(
@@ -166,6 +169,40 @@ impl ConfigAccess {
             operation,
             backend_for_access(self),
             TransactionMode::ConflictRetry,
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
+            callback,
+            Some(unconfirmed.clone()),
+        )
+        .await;
+        result
+            .map(expect_committed)
+            .map_err(|error| TransactionFinalityError {
+                error,
+                unconfirmed: unconfirmed.load(Ordering::Acquire),
+            })
+    }
+
+    /// [`Self::transact_signed_conflict_rebuild`] that also reports whether a
+    /// failed write's commit may have landed. Only a confirmed abort is
+    /// rebuilt (ClientSubmissionContention.tla); an unconfirmed commit never
+    /// signs a second graph.
+    pub(crate) async fn transact_signed_conflict_rebuild_with_finality<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> std::result::Result<T, TransactionFinalityError<E>>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        let unconfirmed = Arc::new(AtomicBool::new(false));
+        let result = transact_owned_with_finality(
+            operation,
+            backend_for_access(self),
+            self.signed_conflict_rebuild_mode(),
             move |operation, rollback| {
                 Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
             },
