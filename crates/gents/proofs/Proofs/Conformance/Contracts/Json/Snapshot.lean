@@ -26,6 +26,7 @@ import Proofs.Identity.DirectoryPublication
 import Proofs.Identity.StartupReadiness
 import Proofs.Identity.NodeProvisioningConformance
 import Proofs.Identity.GrantSetsConformance
+import Proofs.Identity.EnrollmentGrantConformance
 import Proofs.Identity.ClientAgentCreation
 import Proofs.Identity.AgentBlockSigning
 import Proofs.Identity.ClientAgentJournal
@@ -622,6 +623,8 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.GrantSetsConformance.delegationCasesJson ++ ","
     ++ "\"identity_agent_baseline_cases\":"
       ++ Identity.GrantSetsConformance.baselineCasesJson ++ ","
+    ++ "\"identity_enrollment_grant_cases\":"
+      ++ Identity.EnrollmentGrantConformance.casesJson ++ ","
     ++ "\"identity_agent_creation_exposure_cases\":"
       ++ Identity.NodeProvisioningConformance.agentCreationExposureCasesJson ++ ","
     ++ "\"identity_created_agent_access_cases\":"
