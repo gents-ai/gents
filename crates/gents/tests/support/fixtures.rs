@@ -408,6 +408,33 @@ pub async fn held_canonical_message(
     }
 }
 
+/// The request's run timeline as `access` reads it. Like
+/// [`held_canonical_message`], a header published before its segments'
+/// relationships is incomplete, not failed: wait out that window and fail on
+/// any other error.
+pub async fn canonical_run_timeline_rows(
+    access: &gents::ConfigAccess,
+    request_id: &str,
+) -> gents::RunTimelineRows {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match gents::observe::run_timeline_fetch::load_run_timeline_rows(access, request_id).await {
+            Ok(rows) => return rows,
+            Err(error)
+                if tokio::time::Instant::now() < deadline
+                    && error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
+                            .is_some_and(gents_protocol::output::ReconstructionError::is_incomplete)
+                    }) =>
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => panic!("load canonical run timeline for {request_id}: {error:#}"),
+        }
+    }
+}
+
 pub async fn bind_managed_agent_backend(
     db: &super::TestDb,
     fixture: &super::ManagedAgentFixture,

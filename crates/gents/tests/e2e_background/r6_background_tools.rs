@@ -900,12 +900,11 @@ async fn background_tool_execution_survives_parent_request_deadline() {
 
     let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
-    let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = crate::support::fixtures::canonical_run_timeline_rows(
         &turn.fixture.access,
         "r6-background-outlives-deadline-request-2",
     )
-    .await
-    .unwrap();
+    .await;
     assert_eq!(
         timeline
             .tool_calls
@@ -1200,12 +1199,11 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
 
     let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
-    let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = crate::support::fixtures::canonical_run_timeline_rows(
         &turn.fixture.access,
         &turn.request_id,
     )
-    .await
-    .unwrap();
+    .await;
     let full = timeline
         .tool_calls
         .iter()
@@ -2000,12 +1998,11 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
         )
         .await;
     }
-    let timeline = gents::observe::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = crate::support::fixtures::canonical_run_timeline_rows(
         &turn.fixture.access,
         &turn.request_id,
     )
-    .await
-    .unwrap();
+    .await;
     let outputs = handles
         .iter()
         .map(|handle| {
