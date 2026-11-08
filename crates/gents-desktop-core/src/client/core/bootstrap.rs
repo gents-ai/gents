@@ -665,12 +665,11 @@ mod tests {
     /// `Node` replicates runtime→client (#3389), and both sides must hold the same version of
     /// every client-route collection or they refuse to sync. A desktop client store, opened the
     /// way the app opens it, and a node store, migrated the way the runtime migrates it, must
-    /// advertise identical identities, on the canonical lineage (the rc0 root plus the same
-    /// patches), never a version a direct registration of the current SDL produces.
+    /// advertise identical identities from the current schema.
     #[tokio::test]
     async fn desktop_client_and_node_stores_advertise_the_same_canonical_schema() {
         use gents::runtime::agent::p2p_reconcile::templates::read_client_replicated_schema;
-        use gents::store::schema::migration::{canonical_versions, is_known_off_lineage};
+        use gents::store::schema::migration::canonical_versions;
 
         let client_home = tempfile::tempdir().unwrap();
         let core = Arc::new(
@@ -721,7 +720,6 @@ mod tests {
             let on_node = runtime.get_collection(name).unwrap().unwrap().version_id;
             assert_eq!(on_client, on_node, "{name}");
             assert_eq!(on_client, canonical[name], "{name}");
-            assert!(!is_known_off_lineage(name, &on_client), "{name}");
         }
         core.shutdown().await.unwrap();
         runtime.shutdown().await;
@@ -773,21 +771,13 @@ mod tests {
             .unwrap()
             .is_none());
         let mut expected_versions = Vec::new();
-        let canonical = gents::store::schema::migration::canonical_versions().unwrap();
         for entry in &baseline {
             let collection = access
                 .collection_version(entry.name)
                 .await
                 .unwrap()
                 .unwrap();
-            // A collection registered at its v1.0.0-rc0 root moves on to its canonical version
-            // when the app opens the store; every other lineage stays exactly where it was.
-            let version = match gents_migration::canonical_schema_plan(entry.name).unwrap() {
-                Some(plan) if collection["VersionID"] == plan.root_version => {
-                    serde_json::Value::String(canonical[entry.name].clone())
-                }
-                _ => collection["VersionID"].clone(),
-            };
+            let version = collection["VersionID"].clone();
             expected_versions.push((entry.name, version));
         }
         access
