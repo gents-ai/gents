@@ -640,8 +640,7 @@ pub use documents::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
     deserialize_dual_shape, ensure_node, is_reserved_builtin_tool_name, list_agents,
     list_datastore_tool_surfaces, list_inference_profile_records, load_agent,
-    load_inference_profile, load_node, merge_datastore_tool_surfaces, upsert_agent,
-    upsert_inference_profile, Agent as AgentDocument, AgentTargetDocument, ConfigReferences,
+    load_inference_profile, load_node, merge_datastore_tool_surfaces, Agent as AgentDocument, AgentTargetDocument, ConfigReferences,
     DatastoreToolSurfaceDocument, InferenceProfile, MergedSurfaceTools, QueryToolDecl,
     SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField, WriteToolFieldFill,
     WriteToolOutputObligation, WriteToolOutputObligationScope,
@@ -706,8 +705,7 @@ pub use request::lifecycle::{
     build_signed_request, enqueue_local_steering_request, task_session_title,
     write_manual_agent_request, write_manual_agent_request_with_conversation_title,
     BackgroundWakeRedriveReport, ParentLink, RecoveryReport, RequestIdentity, RequestLifecycle,
-    RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport, TerminalRepairReport,
-    TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+    RequestSigner, RequestSpec, RetryLink, TerminalRepairReport,
 };
 pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use gents_protocol::row::AgentRequest;
@@ -736,7 +734,7 @@ pub use documents::automation::{
 pub use documents::{ConcurrencyMode, ScheduleCadence};
 pub use runtime::snapshot::{ActiveRuntimeSnapshot, DispatcherMap};
 pub use session::load_history;
-pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
+pub use session::{ForkError, ForkOutcome, ForkParams};
 pub use store::collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use store::config_client::ConfigAccess;
 pub use store::identity::request_receipt::verify_request_receipt_signature;
@@ -796,7 +794,6 @@ pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 #[doc(hidden)]
 pub mod __test_internals {
-    pub use crate::request::lifecycle::activate_workspace_bound_request;
     pub use crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;

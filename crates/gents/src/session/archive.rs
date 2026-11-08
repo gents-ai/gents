@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::session::{AgentSession, SessionArchiveOutcome, SessionArchiveReceipt};
 use std::sync::Arc;
@@ -43,25 +44,6 @@ fn apply_transition(
 /// scope fields select the row and never confer authority. The revision fences
 /// observations in the same native store; cross-node convergence remains owned
 /// by DefraDB's branchable document merge rather than a global session lease.
-pub async fn set_session_archived(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    session_id: &str,
-    actor: &dyn NodeIdentity,
-    expected_revision: u64,
-    archived: bool,
-) -> Result<SessionArchiveReceipt> {
-    set_session_archived_on(
-        &ConfigAccess::local(Arc::clone(node)),
-        node_did,
-        session_id,
-        actor,
-        expected_revision,
-        archived,
-    )
-    .await
-}
-
 /// HTTP access uses its endpoint's authenticated DID; embedded access retains
 /// the explicitly supplied actor. Scope identifiers confer no authorization.
 pub async fn set_session_archived_on(

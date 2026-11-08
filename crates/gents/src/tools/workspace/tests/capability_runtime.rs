@@ -361,7 +361,7 @@ async fn runtime_seal_case(unowned: bool) {
     .await
     .unwrap();
     let mut owner =
-        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), did, request, 120);
+        RequestLifecycle::new_with_node_did(node.clone(), request, 120);
     owner.bind_managed_agent(agent.as_ref()).unwrap();
     owner.claim().await.unwrap();
     let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(

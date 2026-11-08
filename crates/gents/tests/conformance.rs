@@ -106,12 +106,12 @@ mod plugin_job;
 mod prompt_template;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
-#[path = "conformance/replicated_request_convergence.rs"]
-mod replicated_request_convergence;
 #[path = "conformance/request_input.rs"]
 mod request_input;
 #[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
+#[path = "conformance/request_owner_scope.rs"]
+mod request_owner_scope;
 #[path = "conformance/session_control.rs"]
 mod session_control;
 #[path = "conformance/session_hydration.rs"]
@@ -140,38 +140,27 @@ async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
 
 #[tokio::test]
 async fn single_claimer_watcher_never_claims_foreign_replica() {
-    replicated_request_convergence::single_claimer_watcher_never_claims_foreign_replica().await;
-}
-
-#[tokio::test]
-async fn terminal_convergence_redrive_reasserts_unconverged_terminal() {
-    replicated_request_convergence::terminal_convergence_redrive_reasserts_unconverged_terminal()
-        .await;
-}
-
-#[tokio::test]
-async fn terminal_redrive_window_advances_past_sixty_four_rows() {
-    replicated_request_convergence::terminal_redrive_window_advances_past_sixty_four_rows().await;
+    request_owner_scope::single_claimer_watcher_never_claims_foreign_replica().await;
 }
 
 #[tokio::test]
 async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
-    replicated_request_convergence::canonical_recovery_repairs_expired_request_after_terminal_write_gap().await;
+    request_owner_scope::canonical_recovery_repairs_expired_request_after_terminal_write_gap().await;
 }
 
 #[tokio::test]
 async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
-    replicated_request_convergence::recover_stuck_requests_recovers_claimed_lifecycle_state().await;
+    request_owner_scope::recover_stuck_requests_recovers_claimed_lifecycle_state().await;
 }
 
 #[tokio::test]
 async fn reconcile_coalesce_never_supersedes_foreign_replica() {
-    replicated_request_convergence::reconcile_coalesce_never_supersedes_foreign_replica().await;
+    request_owner_scope::reconcile_coalesce_never_supersedes_foreign_replica().await;
 }
 
 #[tokio::test]
 async fn drain_wakeups_never_interrupts_foreign_replica() {
-    replicated_request_convergence::drain_wakeups_never_interrupts_foreign_replica().await;
+    request_owner_scope::drain_wakeups_never_interrupts_foreign_replica().await;
 }
 
 #[tokio::test]

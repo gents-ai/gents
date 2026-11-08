@@ -614,8 +614,6 @@ mod tests {
             serde_json::from_value(row["data"]["AgentRequest"][0].clone()).unwrap();
         let mut worker = crate::RequestLifecycle::new_with_node_did(
             node.clone(),
-            signer.did(),
-            identity.did(),
             row.try_into().unwrap(),
             60,
         );

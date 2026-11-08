@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use super::test_support::unsigned_jwt;
+use super::test_support::lookup_oauth_credential_by_id;
 use super::*;
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;

@@ -31,17 +31,6 @@ pub(super) async fn lookup_oauth_credential_by_id_on(
         .transpose()
 }
 
-pub async fn lookup_oauth_credential_by_id(
-    node: &std::sync::Arc<EmbeddedNode>,
-    credential_id: &str,
-) -> Result<Option<OAuthCredential>> {
-    let node_did = node
-        .node_identity_did()
-        .context("credential lookup requires a runtime identity")?;
-    let access = runtime_credential_access(node, node_did)?;
-    lookup_oauth_credential_by_id_on(&access, credential_id).await
-}
-
 pub async fn list_oauth_credentials(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,

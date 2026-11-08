@@ -1025,8 +1025,6 @@ mod tests {
 
     fn test_lifecycle(
         node: Arc<EmbeddedNode>,
-        agent_did: &str,
-        node_did: &str,
         request: AgentRequest,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
@@ -1034,8 +1032,6 @@ mod tests {
     ) -> RequestLifecycle {
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node,
-            agent_did,
-            node_did,
             request,
             deadline_duration_secs,
             execution_origin,
@@ -1259,8 +1255,6 @@ mod tests {
         let doc_id = request.doc_id.clone();
         let mut lifecycle = test_lifecycle(
             node.clone(),
-            &test_agent_did(),
-            &test_node_did(),
             request,
             60,
             ExecutionOrigin::Interactive,
@@ -1562,8 +1556,6 @@ mod tests {
         }).await.unwrap();
                 let mut first_lifecycle = test_lifecycle(
                     node.clone(),
-                    &test_agent_did(),
-                    &test_node_did(),
                     first,
                     60,
                     ExecutionOrigin::Interactive,
@@ -1571,8 +1563,6 @@ mod tests {
                 );
                 let mut second_lifecycle = test_lifecycle(
                     node.clone(),
-                    &test_agent_did(),
-                    &test_node_did(),
                     second,
                     60,
                     ExecutionOrigin::Interactive,
@@ -1727,8 +1717,6 @@ mod tests {
         let second_doc_id = second.doc_id.clone();
         let mut first_lifecycle = test_lifecycle(
             node.clone(),
-            &test_agent_did(),
-            &test_node_did(),
             first,
             60,
             ExecutionOrigin::Interactive,
@@ -1736,8 +1724,6 @@ mod tests {
         );
         let mut second_lifecycle = test_lifecycle(
             node.clone(),
-            &test_agent_did(),
-            &test_node_did(),
             second,
             60,
             ExecutionOrigin::Interactive,
@@ -1814,8 +1800,6 @@ mod tests {
 
         let mut first_lifecycle = test_lifecycle(
             node.clone(),
-            &test_agent_did(),
-            &test_node_did(),
             first,
             60,
             ExecutionOrigin::Interactive,
@@ -1823,8 +1807,6 @@ mod tests {
         );
         let mut second_lifecycle = test_lifecycle(
             node.clone(),
-            &test_agent_did(),
-            &test_node_did(),
             second,
             60,
             ExecutionOrigin::Interactive,
@@ -2006,8 +1988,6 @@ mod tests {
         let request_doc_id = request.doc_id.clone();
         let mut lifecycle = test_lifecycle(
             node.clone(),
-            &agent_did,
-            &node_did,
             request,
             60,
             ExecutionOrigin::Scheduled,
@@ -2136,8 +2116,6 @@ mod tests {
         let doc_id = request.doc_id.clone();
         let mut lifecycle = test_lifecycle(
             node.clone(),
-            &agent_did,
-            &node_did,
             request,
             60,
             ExecutionOrigin::Scheduled,
@@ -2195,8 +2173,6 @@ mod tests {
             request.max_total_tokens = Some(999);
             let mut first = test_lifecycle(
                 node.clone(),
-                &test_agent_did(),
-                &test_node_did(),
                 request,
                 3600,
                 ExecutionOrigin::Interactive,
@@ -2233,8 +2209,6 @@ mod tests {
             resumed_request.max_total_tokens = expected;
             let mut resumed = test_lifecycle(
                 node.clone(),
-                &test_agent_did(),
-                &test_node_did(),
                 resumed_request,
                 3600,
                 ExecutionOrigin::Interactive,

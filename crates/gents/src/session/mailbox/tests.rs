@@ -243,7 +243,11 @@ async fn stamping_is_owner_scoped_idempotent_and_never_reopens() {
     .unwrap_err();
     assert!(collision.to_string().contains("collision"));
 
-    assert!(dismiss_mailbox_item(&node, &first.doc_id, "did:test:other")
+    let foreign = crate::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(fixture_recipient("did:test:bob")).unwrap(),
+    );
+    assert!(dismiss_mailbox_item_on(&foreign, &first.doc_id)
         .await
         .is_err());
     dismiss_as_creator(&node, &first.doc_id).await.unwrap();

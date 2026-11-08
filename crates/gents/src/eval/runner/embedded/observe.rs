@@ -86,26 +86,6 @@ pub struct RequestEvidence {
 /// absent deadline waits for the request's own terminal state.
 /// Terminal evidence requires a durable terminal state; interrupt intent and
 /// an expired grace leave `terminal_state` absent.
-pub async fn await_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_id: &str,
-    deadline: Option<Duration>,
-    grace: Duration,
-) -> Result<TerminalObservation> {
-    await_terminal_with(node, request_id, deadline, grace, &NoHook).await
-}
-
-pub async fn await_terminal_with(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_id: &str,
-    deadline: Option<Duration>,
-    grace: Duration,
-    hook: &dyn ObservationHook,
-) -> Result<TerminalObservation> {
-    let access = ConfigAccess::local(node.clone());
-    await_terminal_with_access(node, &access, request_id, deadline, grace, hook).await
-}
-
 pub(crate) async fn await_terminal_with_access(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
@@ -228,13 +208,6 @@ async fn await_terminal_inner(
 
 fn observed_terminal_state(state: Option<&str>) -> Option<RequestLifecycleState> {
     RequestLifecycleState::parse_opt(state).filter(|state| state.is_terminal())
-}
-
-pub async fn collect_request_evidence(
-    node: &Arc<EmbeddedNode>,
-    request_id: &str,
-) -> Result<RequestEvidence> {
-    collect_request_evidence_with_access(&ConfigAccess::local(node.clone()), request_id).await
 }
 
 pub(crate) async fn collect_request_evidence_with_access(
@@ -517,6 +490,16 @@ fn field_u64(row: &Value, key: &str) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::eval::runner::embedded::EmbeddedHome;
+
+    async fn await_terminal(
+        node: &Arc<EmbeddedNode>,
+        request_id: &str,
+        deadline: Option<Duration>,
+        grace: Duration,
+    ) -> Result<TerminalObservation> {
+        let access = ConfigAccess::local(node.clone());
+        await_terminal_with_access(node, &access, request_id, deadline, grace, &NoHook).await
+    }
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     use serde_json::Value;
 
@@ -1164,8 +1147,9 @@ mod tests {
             states: std::sync::atomic::AtomicUsize::new(0),
             interrupts: std::sync::atomic::AtomicUsize::new(0),
         };
-        let observed = await_terminal_with(
+        let observed = await_terminal_with_access(
             &home.node,
+            &ConfigAccess::local(home.node.clone()),
             "req-stuck",
             Some(Duration::from_millis(200)),
             Duration::from_millis(300),

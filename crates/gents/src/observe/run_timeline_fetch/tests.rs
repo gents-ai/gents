@@ -373,7 +373,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
         "client claim must retain its verified admission"
     );
     let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), &node_did, request, 60);
+        RequestLifecycle::new_with_node_did(node.clone(), request, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     lifecycle.set_client_claim_admission(admission);
     assert_eq!(

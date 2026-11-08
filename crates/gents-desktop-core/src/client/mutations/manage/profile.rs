@@ -99,27 +99,6 @@ pub async fn upsert_inference_profile_on(
 }
 
 #[cfg(test)]
-pub async fn upsert_inference_profile(
-    node: &Arc<EmbeddedNode>,
-    document: &InferenceProfile,
-) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::InferenceProfile,
-        add: value.clone(),
-        update: value,
-    }])?;
-    ConfigAccess::transact_local_write(node, None, "desktop.profile.save", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(())
-        })
-    })
-    .await
-}
-
-#[cfg(test)]
 pub async fn delete_inference_profile(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -375,12 +354,13 @@ mod tests {
         let mut profile: InferenceProfile = serde_json::from_value(
             json!({"node_did":"did:test:owner","profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high","max_output_tokens":100}),
         )?;
-        upsert_inference_profile(&node, &profile).await?;
+        let access = ConfigAccess::local(node.clone());
+        upsert_inference_profile_on(&access, &profile).await?;
         profile.max_output_tokens = Some(0);
-        assert!(upsert_inference_profile(&node, &profile).await.is_err());
+        assert!(upsert_inference_profile_on(&access, &profile).await.is_err());
         profile.max_output_tokens = None;
         profile.node_did = "did:test:other".into();
-        assert!(upsert_inference_profile(&node, &profile).await.is_err());
+        assert!(upsert_inference_profile_on(&access, &profile).await.is_err());
         ConfigAccess::transact_local_write(&node, None, "test.profile.read", |txn| {
             Box::pin(async move {
                 let (_, value) = read_desired_state_record_in_txn(

@@ -119,7 +119,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
     .await
     .unwrap();
     let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), identity.did(), title, 60);
+        RequestLifecycle::new_with_node_did(node.clone(), title, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let writer = Arc::new(
@@ -401,8 +401,6 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        &agent_did,
-        &node_did,
         row.try_into().unwrap(),
         60,
     );
@@ -950,13 +948,14 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         let [AssistantContent::Reasoning(reasoning)] = content.as_slice() else {
             panic!("{}: unsupported modeled native content", case.name);
         };
-        let sink = auxiliary::sink(
-            node.clone(),
+        let mut writer =
+            DefraStreamWriter::new(node.clone(), &request.agent_did, Duration::from_millis(1));
+        writer.agent_signer = lifecycle.managed_agent_signer();
+        let sink = auxiliary::sink_with_writer(
+            Arc::new(writer),
             request.clone(),
             generation,
             ProviderInputProfile::OpenAiChatCompletions,
-            Duration::from_millis(1),
-            lifecycle.managed_agent_signer(),
         );
         for event in [
             AuxiliaryOutputEvent::AttemptStarted,

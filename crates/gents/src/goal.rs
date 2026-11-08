@@ -42,8 +42,7 @@ pub(crate) use client_control::{
 pub use client_submission::{
     load_applied_opening_goal_id, load_applied_opening_goal_ids,
     load_applied_opening_goal_provenance, prepare_session_goal_control,
-    recover_session_goal_control, submit_prepared_session_goal_control,
-    submit_session_goal_control, OpeningGoalProvenance,
+    recover_session_goal_control, submit_prepared_session_goal_control, OpeningGoalProvenance,
 };
 #[cfg(test)]
 pub(crate) use edit::edit_active_goal;
@@ -105,14 +104,14 @@ pub(crate) use creation::{
     create_goal_for_request_from_access, load_goal_creation_claim_fingerprint_in_txn,
 };
 pub use creation::{
-    create_goal_for_session, create_goal_for_session_from_access, replacement_goal_identity,
+    create_goal_for_session_from_access, replacement_goal_identity,
     CreateGoalForSessionError, CreateGoalForSessionOutcome, GoalCreationIdentity,
 };
 pub use document::{snapshot, GoalDocument};
 use gents_protocol::goal::{deterministic_goal_creation_key, deterministic_goal_id, GOAL_FIELDS};
 pub(crate) use load::sort_goals_canonical;
 pub use load::{
-    load_canonical_goal, load_canonical_goal_in_txn, load_goal_by_id, load_goals_for_session,
+    load_canonical_goal, load_canonical_goal_in_txn, load_goals_for_session,
 };
 pub use question_wait::awaiting_goal_question_ids;
 pub use state::{
@@ -136,7 +135,7 @@ pub use transition::{
 pub(crate) use usage::session_token_usage_breakdown_in_txn;
 use usage::session_token_usage_in_txn;
 pub use usage::{
-    refresh_goal_usage, refresh_goal_usage_from_access, session_token_usage, SessionTokenUsage,
+    refresh_goal_usage_from_access, session_token_usage, SessionTokenUsage,
 };
 pub(crate) use write::pause_goal_for_interrupt_in_txn;
 use write::set_goal_in_txn;

@@ -399,8 +399,6 @@ impl ModeledQueue {
             let mut lifecycle =
                 crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
                     queue.fixture.node.clone(),
-                    &queue.fixture.agent_did,
-                    &did,
                     request,
                     600,
                     crate::request::lifecycle::ExecutionOrigin::Interactive,

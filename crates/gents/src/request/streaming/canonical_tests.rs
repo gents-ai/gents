@@ -83,8 +83,6 @@ async fn fixture_with_ids(
         .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        agent.did(),
-        db.node_identity.did(),
         request,
         60,
     );
@@ -199,8 +197,6 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
         .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        agent.did(),
-        db.node_identity.did(),
         request,
         60,
     );

@@ -505,21 +505,6 @@ pub async fn lookup_backend_observation_in_txn(
     .transpose()
 }
 
-pub async fn set_backend_probe_status(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    backend_id: &str,
-    probe_status: &str,
-) -> Result<()> {
-    set_backend_probe_status_as(
-        &crate::ConfigAccess::local(node.clone()),
-        node_did,
-        backend_id,
-        probe_status,
-    )
-    .await
-}
-
 /// Store a probe observation using the explicit actor that owns the operation.
 pub async fn set_backend_probe_status_as(
     access: &crate::ConfigAccess,
@@ -537,15 +522,15 @@ pub async fn set_backend_probe_status_as(
     .await
 }
 
-pub async fn set_backend_probe_status_with_last_probe(
-    node: &Arc<EmbeddedNode>,
+pub async fn set_backend_probe_status_with_last_probe_as(
+    access: &crate::ConfigAccess,
     node_did: &str,
     backend_id: &str,
     probe_status: &str,
     last_probe: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     write_probe_observation(
-        &crate::ConfigAccess::local(node.clone()),
+        access,
         node_did,
         backend_id,
         serde_json::json!({"probe_status": probe_status, "last_probe": last_probe.to_rfc3339()}),

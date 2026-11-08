@@ -1,4 +1,4 @@
-use gents::session::{fork_on, fork_via_http, ForkError, ForkOutcome, ForkParams};
+use gents::session::{fork_on, ForkError, ForkOutcome, ForkParams};
 use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
 use gents_protocol::output::rows::{
@@ -191,7 +191,10 @@ async fn fork_via_http_uses_same_header_contract() {
     .with_client_signing_capability(agent.client_signing_capability().unwrap())
     .unwrap()
     .with_client_signed_agent_creates();
-    let outcome = fork_via_http(&endpoint, f.own("parent-http", 1))
+    let outcome = fork_on(
+        &gents::store::config_client::ConfigAccess::Graphql(endpoint),
+        f.own("parent-http", 1),
+    )
         .await
         .unwrap();
     let copied = f.headers(&outcome.session_id).await;

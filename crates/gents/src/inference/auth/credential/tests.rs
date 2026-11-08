@@ -2,6 +2,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::document::oauth_credential_from_value;
+use super::test_support::lookup_oauth_credential_by_id;
 use super::*;
 
 fn sample_credential() -> OAuthCredential {

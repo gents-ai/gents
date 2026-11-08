@@ -127,8 +127,6 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         .await?;
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        agent.did(),
-        runtime.did(),
         request,
         60,
         ExecutionOrigin::Interactive,
@@ -281,8 +279,6 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         .await?;
     let mut reply_lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        agent.did(),
-        runtime.did(),
         reply_request,
         60,
         ExecutionOrigin::Interactive,

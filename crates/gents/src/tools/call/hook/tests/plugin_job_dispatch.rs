@@ -495,8 +495,6 @@ async fn job_chain(
             .unwrap();
         let mut child = crate::RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            agent.did(),
-            db.node_identity.did(),
             request,
             60,
         );
@@ -1003,7 +1001,6 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
         &step.node,
         child["request_id"].as_str().unwrap(),
-        &step.hook.node_did,
         "done",
         step.worker.as_ref(),
         step.db.node_identity.clone(),

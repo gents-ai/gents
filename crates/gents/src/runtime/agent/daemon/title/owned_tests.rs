@@ -1419,8 +1419,6 @@ impl TitleFixture {
         if purpose == RequestPurpose::AccessReview {
             let mut lifecycle = RequestLifecycle::new_with_execution_binding(
                 node.clone(),
-                &agent_config.agent_did,
-                &parent.node_did,
                 parent.clone(),
                 agent_config.deadline_duration.as_secs(),
                 crate::request::lifecycle::ExecutionOrigin::Interactive,
@@ -1516,8 +1514,6 @@ impl TitleFixture {
     async fn interrupt_parent(&self) {
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.agent_config.agent_did,
-            &self.parent.node_did,
             self.parent.clone(),
             self.agent_config.deadline_duration.as_secs(),
             crate::request::lifecycle::ExecutionOrigin::Interactive,

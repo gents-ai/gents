@@ -297,8 +297,6 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
 
         let mut lifecycle = RequestLifecycle::new_with_node_did(
             f.node.clone(),
-            f.agent.did(),
-            f.identity.did(),
             request.clone(),
             60,
         );

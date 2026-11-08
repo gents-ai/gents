@@ -229,8 +229,6 @@ async fn exercise_readiness(same_agent: bool) {
     if same_agent {
         let mut without_admission = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            &binding.agent_did,
-            runtime.did(),
             request.clone(),
             60,
             ExecutionOrigin::Interactive,
@@ -246,8 +244,6 @@ async fn exercise_readiness(same_agent: bool) {
     }
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        &binding.agent_did,
-        runtime.did(),
         request.clone(),
         60,
         ExecutionOrigin::Interactive,

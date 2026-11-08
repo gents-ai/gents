@@ -2007,8 +2007,8 @@ mod tests {
         publish_home_config(&access, &owner, "Agent", &agent_did, true, documents)
             .await
             .unwrap();
-        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
-            &node,
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe_as(
+            &gents::ConfigAccess::local(node.clone()),
             &owner,
             &backend_id,
             gents::HEALTHY_PROBE_STATUS,
@@ -2072,8 +2072,8 @@ mod tests {
         )
         .await
         .expect("a fresh home initializes");
-        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
-            &node,
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe_as(
+            &gents::ConfigAccess::local(node.clone()),
             &owner,
             &summary.backend_id,
             gents::HEALTHY_PROBE_STATUS,
@@ -2162,8 +2162,8 @@ mod tests {
         )
         .await
         .expect("a fresh home initializes");
-        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
-            &node,
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe_as(
+            &gents::ConfigAccess::local(node.clone()),
             &owner,
             &summary.backend_id,
             gents::HEALTHY_PROBE_STATUS,

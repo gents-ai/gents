@@ -791,7 +791,6 @@ pub(crate) async fn selected_background_wake_with_successor(
     complete_child_managed_verified(
         node,
         &message.caused_request_id,
-        did,
         "durable native output",
         &admission
             .tool
@@ -934,11 +933,8 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     } = selected_background_wake().await;
     let node = &admission.node;
     let did = &admission.node_did;
-    let behavior = selected.agent_did.clone();
     let mut continuation = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        &behavior,
-        did,
         selected,
         60,
     );

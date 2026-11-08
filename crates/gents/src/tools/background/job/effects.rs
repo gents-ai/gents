@@ -1057,8 +1057,6 @@ mod tests {
             .unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             harness.node.clone(),
-            &harness.cause.caller_agent_did,
-            &harness.cause.caller_node_did,
             request,
             60,
         );

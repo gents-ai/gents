@@ -8,45 +8,6 @@ See `../README.md` for how this fits the broader formal-verification model.
 
 - `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer below the reconciler. The Lean `PairingReconcile` model assumes the transport carries the install RPC / that `connect` succeeds; it does not model *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
 - `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630, not a multi-wave flood-safety proof. `PairingTransport` proves a single edge can connect/install; this model starts after that. Its one-wave necessity obligations say outbound timeouts release push-worker slots and inbound success acks are backed by modeled pending registration or merge. The pinned DefraDB implementation has since added bounded queue admission before worker execution, per-peer scheduling/coalescing, persisted retry handoff on overflow, and durable push-originated pending-DAG recovery. Those multi-wave and restart properties, plus Bitswap stalls, rate limits, gossip-loop health, multi-slow-peer fill, and peer-vs-CID pending, remain outside this model. Receiver-side pending-DAG slot starvation and acknowledged-DAG TTL loss belong to the defradb.rs receiver dispatch model (`proofs/tla/SyncOwnership.tla`, `MC_SyncOwnership_Dispatch` configs), not here. See `boundary.p2p-backpressure.obligation-model`. Green/red configs (`MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`) are **modeled, not yet TLC-checked**.
-- `ReplicatedRequestConvergence` — owner-only terminal convergence for
-  party-scoped replicated `AgentRequest` documents (#664/#661/#683). Replica
-  holders are authorized request parties, never unrelated fleet pairings. The
-  owner re-drives only while a party peer has not acknowledged its current
-  heads (DefraDB replication acknowledgement), and a persisted per-request
-  `Cap` bounds those writes across owner restarts; each write fans out only to
-  online party replicators. A party peer unavailable through the entire cap
-  converges when pairing recovery reinstalls the configured replicator and
-  performs one full replay of current owner-authored DAG heads; an
-  acknowledged peer skips the replay. Replay authors no request field, so
-  partitions do not create unbounded CRDT history. `AckedImpliesConverged`
-  ties acknowledgement to convergence. `SingleClaimer` fences
-  passive foreign replicas; `TerminalConverges` depends on fair peer recovery
-  and replay. The `Stuck` diagnostic disables replay to prove that recovery is
-  load-bearing; `PeerClaim` arms an illegal foreign claim to prove the safety
-  invariant is falsifiable. Rust bindings cover persistent cap/window behavior,
-  retirement of acknowledged requests, real P2P replay after cap exhaustion,
-  and reconnect-triggered replicator reinstall skipped once acknowledged.
-  With `ModelDelivery`, the request party `Desktop` also writes the request:
-  its client-to-runtime pairing, which may change any number of times,
-  carries it to the owner, which claims only what it holds and creates the
-  canonical `AgentSession` row as it claims; the claim and the row return over
-  the party replicator. Store events (the local write, each returned leg) and
-  pairing-health events are the only things that read the desktop's selected
-  session. A read takes the signals when it starts and publishes
-  `Classify` (the Lean `deriveSessionDelivery`) when it finishes; an event
-  raised meanwhile queues the next read. `ProjectionCurrent` says that once
-  every event is read and no read is in flight the projection equals the
-  classification, with no timer; and `NoTerminalErrorWhileDeliverable` says a
-  written request shows no terminal error before its row arrives.
-  `DesktopEventuallyVisible` holds under `DeliverySpec` (the owner eventually
-  claims, each leg and read eventually runs) for every behavior whose pairing
-  is eventually up for good. `HealthRereads` names the rule for which
-  pairing-health events re-read the session: the shipped `unresolved` (the
-  desktop shows no session yet), the first fix's `awaiting` (only a delivery
-  state already shown) and the old `never`. The `UntypedRead`, `HealthIgnored`
-  and `HealthAwaitingOnly` diagnostics restore the old read failure, the old
-  health handling, and the rule that missed a pairing change during the first
-  read.
 - `BackgroundAdmissionContention` — concurrent writers of one request's
   `AgentRequest` document and session documents during a turn (#3592). Each
   accepted `spawn_process` call runs a dispatch start (reads the request to
@@ -149,33 +110,6 @@ pending-DAG capacity without registering or merging the DAG:
 ./scripts/run-tlc.sh MCP2PBackpressureBadAck
 ```
 
-For ReplicatedRequestConvergence — the green model checks clean (both properties hold):
-```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergence
-```
-
-The `Stuck` config is a diagnostic and is EXPECTED to report a violation: it keeps a one-write cap but disables reconnect replay. A lost write or an offline peer therefore reaches the old stuck trace (owner terminal, peer non-terminal, budget exhausted, no enabled fixing action):
-```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceStuck
-```
-
-The `PeerClaim` config is the safety diagnostic and is EXPECTED to report a violation: with the adversarial peer-claim action armed (`AllowPeerClaim = TRUE`), a peer drives itself into `Claimed`, reachably VIOLATING `INVARIANT SingleClaimer`. This proves `SingleClaimer` clause (1) is falsifiable — its green result in the two configs above is evidence the `node_did` watcher fence holds, not a type artifact:
-```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergencePeerClaim
-```
-
-The desktop delivery extension checks clean with its liveness property and the original ones:
-```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceDesktop
-```
-
-Its three diagnostics are EXPECTED to report violations. `UntypedRead` reads a missing row as an error and violates `NoTerminalErrorWhileDeliverable` right after the first read of the desktop's write. `HealthIgnored` leaves a pairing change unread and violates `ProjectionCurrent` with the session still shown as not connected after the pairing returns. `HealthAwaitingOnly` re-reads on health only once a delivery state is shown, so a pairing change during the first read is lost: the read finishes with `NotConnected` while the pairing is up:
-```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceUntypedRead
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceHealthIgnored
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceHealthAwaitingOnly
-```
-
 For BackgroundAdmissionContention — the green model (the owned loop's
 order, two cadence-spaced lease renewals, re-driven renewal polls) checks
 clean, including `EveryCallSettles`:
@@ -205,7 +139,7 @@ with only running children writing, `RenewalBudget` violates
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
-  -config MCReplicatedRequestConvergenceDesktop.cfg MCReplicatedRequestConvergenceDesktop
+  -config MCBackgroundAdmissionContention.cfg MCBackgroundAdmissionContention
 ```
 Delete any `*_TTrace_*` files a failing diagnostic writes here.
 
@@ -213,23 +147,6 @@ The script runs TLC with parallel workers and writes state-graph artifacts to `s
 
 ## Bounded parameters
 
-Current parameters in `MCReplicatedRequestConvergence.cfg` / `MCReplicatedRequestConvergenceStuck.cfg`:
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `Owner` | `o` | The owning node — the request's `node_did` holder and the only node that drives the lifecycle |
-| `ReplicaHolder` | `{p1}` | The one requesting coordinator authorized to hold the host-owned child request; unrelated fleet peers are excluded |
-| `DeltaId` | `{d1, d2, d3, d4, d5, d6}` | Bounded id pool for terminal re-emissions; `StateBound` caps consumption below the pool size |
-| `MaxDrops` | `1` | One terminal delta may drop before fair re-emission converges (green) / strands a peer (stuck) |
-| `MaxCrashes` | `1` | One total node crash (owner restart or a peer losing volatile inbound) |
-| `TerminalKind` | `{Completed, Failed}` | The peer must converge to the *specific* terminal the owner reached, not merely some terminal |
-| `Cap` | `3` (green) / `1` (stuck) | Persisted per-request budget = shipping `TERMINAL_REDRIVE_CAP`; each emission is one owner write fanned out only to online request-party replicators, and only while one has not acknowledged. The green config also enables reconnect replay, so a party peer offline beyond all three writes still converges. |
-| `ReplayOnRecovery` | `TRUE` (green/peer-claim) / `FALSE` (stuck) | Production recovery reinstalls a configured peer replicator once per reconnect, causing a bounded full replay. The stuck diagnostic removes that action and exposes the exhausted-cap liveness gap. |
-| `StateBound` | `Cardinality(deltaIdsUsed) <= Cap` | `emitCount` is persisted per request and caps same-value owner writes at `Cap`, independent of replica count. |
-| `Desktop` | `p1` | The request party that writes the request and reads its session. |
-| `ModelDelivery` | `FALSE` (the three configs above) / `TRUE` (`Desktop`, `UntypedRead`, `HealthIgnored`, `HealthAwaitingOnly`) | Off, the owner holds the request from the start and the delivery variables stay fixed, so the earlier state spaces are unchanged. |
-| `UntypedRead` | `FALSE` / `TRUE` (`UntypedRead`) | Restores the pre-fix read failure on a missing row. |
-| `HealthRereads` | `"unresolved"` / `"never"` (`HealthIgnored`) / `"awaiting"` (`HealthAwaitingOnly`) | Which pairing-health events re-read the selected session. |
 
 Current parameters in `MCP2PBackpressureGreen.cfg` / diagnostic configs:
 
@@ -275,37 +192,8 @@ The diagnostics are **designed** to reproduce one load-bearing failure each (cla
 - **`MCP2PBackpressureTimeoutStall.cfg`** (`TimeoutReleasesSlot = FALSE`) — intended counterexample: start `slow` first, fill the only worker slot, leave healthy peers queued forever so `HealthyPeersDeliver` fails. This encodes **necessity** of slot release in a one-worker toy: if timeout does not free the semaphore, healthy delivery can fail even under fairness. It is **not** a sufficiency claim that Amy hub saturation is solved when the green BOOLEAN holds (production can still fail via multi-slow-peer fill, re-queue storms, Bitswap stalls, or gossip-loop death after the permit is released).
 - **`MCP2PBackpressureBadAck.cfg`** (`AckWithoutPendingAllowed = TRUE`) — intended counterexample: fill the pending-DAG map and success-ack a second inbound PushLog without merging or registering it so `SuccessAckBacked` fails. Formal counterpart of the production invariant (defradb.rs #1089 / pinned hub admission) that pending-DAG capacity overflow must return the backpressure nack, not success.
 
-Active lines from `MCReplicatedRequestConvergence.cfg` (`Cap = 3`, reconnect replay enabled):
-
-- **`INVARIANT TypeOK`** — `reqState`, the gossip `messages`/`pendingInbound` sets, `deltaIdsUsed`, and the drop/crash counters stay in their declared domains.
-- **`INVARIANT SingleClaimer`** — every non-owner peer only ever holds `Pending` or the owner's terminal (delivered by an owner delta); it never sits in `Claimed`/`Processing`. A peer claiming/processing of its own volition would violate this — it is the model fence for the `node_did` watcher filter.
-- **`INVARIANT DeltaBackedByOwnerTerminal`** — every in-flight terminal delta carries the owner's (absorbing) terminal value; no peer can converge to a value the owner never reached.
-- **`INVARIANT DeltaIdsTracked`** — every in-flight delta's id is recorded in `deltaIdsUsed`; no id reuse.
-- **`INVARIANT AckedImpliesConverged`** — a peer the owner observes as acknowledged holds the owner's terminal, so skipping its re-drive and replay loses nothing.
-- **`INVARIANT ReplayBound`** — a peer recovery schedules at most one full replay in the modeled reconnect cycle.
-- **`PROPERTY TerminalConverges`** (`owner-terminal ~> every request-party peer reflects it`) — online party peers converge through bounded owner writes under bounded loss; a party peer offline beyond the entire cap converges through fair `RecoverPeer` and `ReplayTerminalSnapshot`. Replay consumes no delta id or request-write budget. Unrelated fleet peers are outside `ReplicaHolder` by the #683 scope contract.
-- **`CONSTRAINT StateBound`** — bounds total terminal re-emissions to keep TLC from exploring re-drive churn that is not meaningful with unbounded real delta ids.
-
-`MCReplicatedRequestConvergenceDesktop.cfg` (`SPECIFICATION DeliverySpec`) keeps every line above and adds:
-
-- **`INVARIANT ProjectionCurrent`** — with no event left unread and no read in flight, the desktop's selected-session projection is the classification of its local write, pairing, returned claim or lifecycle, and returned row. Reads happen only on events, so this is the no-poll, no-stale-state claim.
-- **`INVARIANT NoTerminalErrorWhileDeliverable`** — while the desktop's request is written and its row has not arrived, the projection is never the old terminal read error.
-- **`PROPERTY DesktopEventuallyVisible`** (`<>[]pairingUp => (desktopWrote ~> desktopView = "Visible")`) — when the pairing is eventually up for good and the owner eventually claims, the desktop shows the session. The pairing itself is unconstrained, so safety is checked across unlimited reconnects. Without `WF_vars(Claim)` the same model violates the property, so it is not vacuous.
-
-Two diagnostic configs reproduce the pre-fix convergence gap (liveness) and prove the safety property is falsifiable (safety):
-
-- **`MCReplicatedRequestConvergenceStuck.cfg`** (`Cap = 1`, `ReplayOnRecovery = FALSE`) — the invariants still hold while `PROPERTY TerminalConverges` is intentionally VIOLATED. One owner write can be lost or emitted while a peer is offline; `emitCount = Cap` then disables further writes and replay is unavailable, leaving owner-terminal/peer-nonterminal forever. This proves reconnect replay, rather than an unbounded rewrite loop, is the load-bearing repair for partitions beyond the cap.
-- **`MCReplicatedRequestConvergencePeerClaim.cfg`** (`AllowPeerClaim = TRUE`) — arms the `PeerClaimsForeign` action, which drives a peer from `Pending` into `Claimed` of its own volition (the exact thing the `node_did` watcher filter forbids, and what a peer-side write to a foreign replica would do). `INVARIANT SingleClaimer` is intentionally VIOLATED. Without this config, `SingleClaimer` clause (1) (`reqState[n] ∉ {Claimed, Processing}`) would be vacuously true — no other action can put a peer in those states — so its green result would prove nothing. With a config in which the property actually breaks, the green runs above are real evidence the fence holds. Mirrors the `Cap` red/green that makes `TerminalConverges` load-bearing.
-
 ## Fairness annotations
 
-`ReplicatedRequestConvergence` uses weak fairness on the bounded repair workers:
-
-- `EmitTerminalDelta` (one owner write fanned out to online replicators)
-- `DeliverDelta` and `PersistDeltaOnPeer`
-- per-peer `RecoverPeer`, `ReplayTerminalSnapshot`, and `SkipAcknowledgedReplay`
-
-It deliberately has no fairness on the owner lifecycle (`Claim`/`Process`/`Terminalize`), `DropDelta`, `CrashPeer`, or `CrashOwner` — those are voluntary. `DeliverySpec` adds weak fairness on `DeliverRequest`, `Claim`, `ReturnClaim`, `ReturnRow`, `DesktopReadStart` and `DesktopReadFinish` only for the desktop liveness claim; `PairingChange` and `DesktopWrite` stay voluntary, and the pairing's eventual stability is the property's premise, not a fairness assumption. `EmitTerminalDelta` is gated by persisted `emitCount < Cap` and by an unacknowledged party peer; an offline peer never acknowledges, so the cap still bounds writes. Fair reconnect and full replay are therefore the unbounded-partition liveness assumption. The `Stuck` config removes replay while retaining the bounded write budget and reaches the exhausted-cap disagreement.
 
 ## Recorded runs
 
@@ -316,14 +204,6 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCPairingTransportDialable.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = TRUE` | Passes `TypeOK`, `PartialApplyHasProgress`, `ReplicationImpliesReplicator`, `ReplicatorLiveness`, `EndToEndLiveness` | 7 distinct states; 8 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportUndialable.cfg` | `Dialable = FALSE`, `ReplicatorInstallable = TRUE` | **MODE A diagnostic:** invariants hold (`PartialApplyHasProgress` vacuous); `ReplicatorLiveness` intentionally VIOLATED (never-`Connected` trace = connect-fails-first hang) | 3 distinct states; 4 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportReplicatorStuck.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = FALSE` | **MODE B/C diagnostic:** `TypeOK`/`ReplicationImpliesReplicator` hold; `PartialApplyHasProgress` intentionally VIOLATED at `Connected ∧ subscribed ∧ ¬installed` (the partial row); `ReplicatorLiveness`/`EndToEndLiveness` also violated | 5 distinct states; 6 generated | — | <1s (OpenJDK 25) |
-| `MCReplicatedRequestConvergence.cfg` | `Cap = 3`, `ReplayOnRecovery = TRUE`, one request-party replica | Passes `TypeOK`, `SingleClaimer`, delta/acknowledgement/replay invariants, and `TerminalConverges` | 246 distinct states; 548 generated | 12 | <1s |
-| `MCReplicatedRequestConvergenceStuck.cfg` | `Cap = 1`, `ReplayOnRecovery = FALSE` | Invariants hold; `TerminalConverges` intentionally VIOLATED with the requester offline and the persisted budget exhausted | 42 distinct states; 78 generated | 8 | <1s |
-| `MCReplicatedRequestConvergencePeerClaim.cfg` | `AllowPeerClaim = TRUE` | `SingleClaimer` intentionally VIOLATED by `PeerClaimsForeign` | 17 distinct states before counterexample; 18 generated | 4 | <1s |
-| `MCReplicatedRequestConvergence.cfg` (with the desktop constants, `ModelDelivery = FALSE`) | as above | Same result and state space as the row above it | 246 distinct states; 548 generated | 12 | <1s |
-| `MCReplicatedRequestConvergenceDesktop.cfg` | `ModelDelivery = TRUE`, unconstrained pairing, `Cap = 3` | Passes every invariant above plus `ProjectionCurrent` and `NoTerminalErrorWhileDeliverable`; passes `TerminalConverges` and `DesktopEventuallyVisible` | 39,168 distinct states; 193,620 generated | 22 | 4s |
-| `MCReplicatedRequestConvergenceUntypedRead.cfg` | `UntypedRead = TRUE` | `NoTerminalErrorWhileDeliverable` intentionally VIOLATED: write, then a read shows `Error` | 63 distinct states before counterexample; 137 generated | 4 | <1s |
-| `MCReplicatedRequestConvergenceHealthIgnored.cfg` | `HealthRereads = "never"` | `ProjectionCurrent` intentionally VIOLATED: the pairing returns unread and the view stays `NotConnected` | 79 distinct states before counterexample; 180 generated | 5 | <1s |
-| `MCReplicatedRequestConvergenceHealthAwaitingOnly.cfg` | `HealthRereads = "awaiting"` | `ProjectionCurrent` intentionally VIOLATED: the pairing comes up while the first read is in flight, and that read publishes `NotConnected` | 85 distinct states before counterexample; 184 generated | 5 | <1s |
 | `MCBackgroundAdmissionContention.cfg` | `N = 4`, `Max = 2`, `Attempts = 4`, `StartAttempts = RenewAttempts = 4`, `Renewals = 2`, `RenewTicks = 1`, sequential, sequence bump, re-driven polls, cadence-spaced renewals | Passes `TypeOK`, `BudgetBound`, `NoConflictLoss`, `ReceiptOnce`, `LeaseLive`, `EveryCallSettles` | 417,891 distinct states; 918,452 generated | 48 | 13s |
 | `MCBackgroundAdmissionContentionLeaseLapse.cfg` | as green, `Renewals = 1`, `RedriveLostPoll = FALSE` | `LeaseLive` intentionally VIOLATED: the admission bumps of calls 1 to 4 abort all 4 attempts of the one due poll while call 4's receipt is pending | 76,748 distinct states before counterexample; 154,916 generated | 33 | 1s |
 | `MCBackgroundAdmissionContentionConcurrent.cfg` | as green, concurrent admission, `Renewals = 0` | `NoConflictLoss` intentionally VIOLATED: call 1's admission aborts on all 4 attempts while siblings and their children commit | 6,698,408 distinct states before counterexample; 19,430,220 generated | 21 | 38s |
@@ -339,46 +219,6 @@ The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 `-workers 2`. The green run checked its temporal property over the complete
 state space. The counts before each counterexample vary with the worker
 count.
-
-The three ReplicatedRequestConvergence runs used TLC2
-`2026.10.15.145915` (rev `932d35e`) with Homebrew OpenJDK 27 on macOS
-arm64, `-workers auto` using 8 workers. The one-requester green run checked
-one temporal branch; the other two are deliberately failing diagnostics.
-
-The five desktop delivery rows used TLC2 `2026.07.03.221739` (rev `227f61b`,
-the v1.8.0 cache jar) with Homebrew OpenJDK 17.0.20.1 on macOS arm64,
-`-workers 2`. The `Desktop` run checked two temporal branches over 78,336
-distinct states. With two workers, `Stuck` reproduced its recorded row and
-`PeerClaim` reached the same violation after 7 states at depth 2.
-
-## Known limitations and follow-ups
-
-- **ReplicatedRequestConvergence replay abstraction.** The model treats a
-  configured reconnect replay as one atomic application of the owner's current
-  terminal head. Rust binds this to delete+reinstall of the existing filtered
-  replicator; DefraDB transport authorization, filter validity, eventual
-  replay completion, and the accuracy of its replication acknowledgement
-  remain external assumptions. `acked` abstracts the owner's acknowledgement
-  read for the terminal value; the Rust retirement write (the cap, recorded
-  once a request is acknowledged) only removes it from the candidate scan and
-  is not modeled. The connection tracker covers
-  local dial, remote-first reconnect, and daemon startup, but permanent
-  disconnect or permanent reinstall failure is outside the liveness claim.
-- **Desktop delivery abstraction.** A read consumes every event raised
-  before it starts and publishes what it captured; the live-text read that
-  stands in for some reads, read pacing, and the session's other rows are
-  outside the model. One request is modeled, and only `pairingUp` changes
-  raise pairing-health events. That the bridge's native events fire on each
-  local write, replicated document and pairing change is the premise, not a
-  result. Sessions this client reads through the node's operator access hold
-  no local replica and raise no store events; the app reads those at the
-  session read gap, and the model does not cover them.
-- **Connection-event delivery.** `RecoverPeer` assumes every reconnect is
-  observed. Production records each DefraDB `PeerConnection` disconnect until a
-  sweep consumes it and sweeps on each connect, so a peer that drops and
-  reconnects between periodic sweeps still replays. A subscription overflow
-  marks every peer for replay; a closed subscription falls back to sweep-time
-  edge detection, which misses whole-flap partitions between samples.
 
 ## PairingTransport derived requirements
 

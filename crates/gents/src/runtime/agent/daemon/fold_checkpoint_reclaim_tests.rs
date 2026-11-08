@@ -161,8 +161,6 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         assert!(folded_admission.is_some());
         let mut first = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            &agent_config.agent_did,
-            agent_config.node_did(),
             head.clone(),
             30,
         );
@@ -456,8 +454,6 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             admit_client_claim(&node, &agent_config, &parent).await;
         let mut failed = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            &agent_config.agent_did,
-            agent_config.node_did(),
             parent.clone(),
             30,
         );

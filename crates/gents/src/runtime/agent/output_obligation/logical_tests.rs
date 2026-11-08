@@ -121,8 +121,6 @@ async fn claimed(
     }
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        request.agent_did.as_deref().expect("fixture agent DID"),
-        request.node_did.as_deref().expect("fixture node DID"),
         request.clone().try_into().unwrap(),
         60,
     );

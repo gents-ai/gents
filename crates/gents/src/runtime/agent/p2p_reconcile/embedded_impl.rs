@@ -1,4 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,7 +8,7 @@ use tokio::time::timeout;
 
 use crate::defra_node::Node as EmbeddedNode;
 
-use super::templates::{live_filter_string_eq, to_replication_filters, PairingFilters};
+use super::templates::{to_replication_filters, PairingFilters};
 use super::{
     resolve_embedded_collection_id, resolve_embedded_collection_name, RemoteP2pAdmin,
     RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
@@ -78,105 +77,6 @@ impl EmbeddedRemoteP2pAdmin {
             Ok(Err(error)) => Err(map_p2p_error(operation, error)),
             Err(_) => Err(RemoteP2pAdminError::RpcTimeout),
         }
-    }
-
-    /// For each of `doc_ids`, whether replicator `peer_id` acknowledged the
-    /// heads this node currently holds for it.
-    pub async fn documents_acknowledged(
-        &self,
-        peer_id: &str,
-        collection: &str,
-        doc_ids: &[String],
-    ) -> RemoteP2pAdminResult<Vec<bool>> {
-        let p2p = self.p2p()?;
-        self.run(
-            "replication_acknowledged",
-            p2p.replication_acknowledged(peer_id, collection, doc_ids),
-        )
-        .await
-    }
-
-    /// Exact document heads, without requiring unrelated branchable collection heads.
-    pub async fn document_heads_acknowledged(
-        &self,
-        peer_id: &str,
-        collection: &str,
-        doc_ids: &[String],
-    ) -> RemoteP2pAdminResult<Vec<bool>> {
-        let p2p = self.p2p()?;
-        self.run(
-            "document_heads_acknowledged",
-            p2p.document_heads_acknowledged(peer_id, collection, doc_ids),
-        )
-        .await
-    }
-
-    /// The `(doc_id, requester_did)` documents of `collection` whose current
-    /// heads every replicator carrying them acknowledged: those scoped to the
-    /// requester and those carrying the whole collection. A document no
-    /// replicator carries acknowledges nothing.
-    pub async fn requester_acknowledged(
-        &self,
-        collection: &str,
-        documents: &[(String, String)],
-    ) -> RemoteP2pAdminResult<BTreeSet<String>> {
-        let collection_id = self
-            .resolve_collection_id(collection)
-            .await?
-            .ok_or_else(|| {
-                RemoteP2pAdminError::LocalError(format!(
-                    "collection {collection} is not registered"
-                ))
-            })?;
-        let mut peers_by_requester: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let mut collection_peers = BTreeSet::new();
-        for replicator in self.list_replicators().await? {
-            let (Some(peer_id), Some(filters)) = (replicator.id, replicator.filters) else {
-                continue;
-            };
-            match filters.get(&collection_id) {
-                None if replicator.collections.contains(&collection_id) => {
-                    collection_peers.insert(peer_id);
-                }
-                None => {}
-                Some(filter) => {
-                    if let Some(requester) = live_filter_string_eq(filter, "requester_did") {
-                        peers_by_requester
-                            .entry(requester.to_string())
-                            .or_default()
-                            .insert(peer_id);
-                    }
-                }
-            }
-        }
-
-        let mut doc_ids_by_peer: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-        let mut routed = BTreeSet::new();
-        for (doc_id, requester) in documents {
-            for peer_id in peers_by_requester
-                .get(requester)
-                .into_iter()
-                .flatten()
-                .chain(&collection_peers)
-            {
-                doc_ids_by_peer
-                    .entry(peer_id)
-                    .or_default()
-                    .push(doc_id.clone());
-                routed.insert(doc_id.clone());
-            }
-        }
-        for (peer_id, doc_ids) in doc_ids_by_peer {
-            let acknowledged = self
-                .documents_acknowledged(peer_id, collection, &doc_ids)
-                .await?;
-            for (doc_id, acknowledged) in doc_ids.iter().zip(acknowledged) {
-                if !acknowledged {
-                    routed.remove(doc_id);
-                }
-            }
-        }
-        Ok(routed)
     }
 }
 

@@ -33,16 +33,6 @@ pub struct PackInferenceBindingPreview {
     pub automatic: bool,
 }
 
-pub async fn inspect_pack_inference_bindings(
-    access: &ConfigAccess,
-    manifest: &PackManifest,
-    node_did: &str,
-    requested: &PackInferenceBindings,
-) -> Result<PackInferenceBindingPreview> {
-    inspect_pack_inference_bindings_with_node_binding(access, manifest, node_did, requested, None)
-        .await
-}
-
 pub(crate) async fn inspect_pack_inference_bindings_with_node_binding(
     access: &ConfigAccess,
     manifest: &PackManifest,

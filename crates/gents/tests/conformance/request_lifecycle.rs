@@ -65,8 +65,6 @@ async fn ordinary_completion_rejects_claimed_without_execution() {
     request.execution_origin = Some("interactive".into());
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        fixture.agent.did(),
-        db.node_identity.did(),
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -136,8 +134,6 @@ async fn claim_atomically_projects_the_request_owned_session() {
     request.execution_origin = Some("interactive".into());
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        fixture.agent.did(),
-        db.node_identity.did(),
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -736,8 +732,6 @@ fn scoped_matrix_lifecycle(
     request.requester_did = Some(agent.did().to_owned());
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        agent.did(),
-        db.node_identity.did(),
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,

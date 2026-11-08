@@ -567,8 +567,6 @@ pub(super) async fn fail_routed_request(
         };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        agent_did,
-        node_did,
         request.clone(),
         Duration::from_secs(30).as_secs(),
         execution_origin,

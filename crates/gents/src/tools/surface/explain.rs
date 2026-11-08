@@ -39,7 +39,7 @@ pub struct ToolSurfacePolicyTrace {
 }
 
 impl ToolSurfaceExplanation {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_resolved(
         config: &AgentToolSurfaceConfig,
         surface: &ToolSurface,

@@ -68,7 +68,6 @@ pub use manual::{
     ManualRequestTarget,
 };
 pub use materialize::{
-    activate_workspace_bound_request,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     build_signed_request, task_fire_key, write_task_delivery, write_task_delivery_local,
     ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink, TaskDeliveryAdmission,
@@ -254,7 +253,8 @@ pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrig
     RequestOrigin::Person
 }
 
-pub fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
+#[cfg(test)]
+pub(crate) fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
     input.queue.as_ref().is_none_or(|hints| {
         matches!(
             hints.source,
@@ -726,25 +726,6 @@ impl BackgroundWakeRedriveReport {
 impl TerminalRepairReport {
     pub fn is_noop(&self) -> bool {
         self.repaired == 0
-    }
-}
-
-pub const TERMINAL_REDRIVE_CAP: u32 = 3;
-
-pub const TERMINAL_REDRIVE_BATCH_LIMIT: usize = 64;
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct TerminalRedriveReport {
-    pub reasserted: usize,
-    /// Requests retired because every requester replicator acknowledged them.
-    pub acknowledged: usize,
-    pub scanned: usize,
-    pub failed: usize,
-}
-
-impl TerminalRedriveReport {
-    pub fn is_noop(&self) -> bool {
-        self.reasserted == 0 && self.acknowledged == 0
     }
 }
 

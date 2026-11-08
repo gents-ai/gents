@@ -35,45 +35,6 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
 }
 
 #[tokio::test]
-async fn manual_source_run_task_now_yields_intent_with_args_vars() {
-    let snapshot = snapshot_with_active_task(resolved_task_for_test(
-        "greet-user",
-        &spy_test_agent().agent_did,
-        "hello {{ args.name }}",
-    ));
-    let cancel = CancellationToken::new();
-    let (mut source, handle) = ManualSource::new(cancel.clone());
-
-    let pull = tokio::spawn(async move { source.next_fire().await });
-
-    let _result_rx = handle
-        .run_task_now(
-            snapshot.as_ref(),
-            "greet-user",
-            serde_json::json!({"name": "Amy"}),
-        )
-        .await
-        .unwrap();
-
-    let intent = pull.await.unwrap().expect("next_fire returned None");
-    assert_eq!(intent.trigger_kind, TriggerKind::Manual);
-    assert_eq!(intent.trigger_id, None);
-    assert_eq!(intent.concurrency, ConcurrencyMode::Parallel);
-    assert_eq!(
-        intent.args_vars.as_ref().and_then(|v| v["name"].as_str()),
-        Some("Amy"),
-    );
-    assert_eq!(intent.task.task_id, "greet-user");
-    assert_eq!(intent.event_vars["trigger_kind"].as_str(), Some("manual"));
-    assert!(intent.doc_vars.is_none());
-    let invocation_id = intent
-        .durable_fire_key
-        .strip_prefix("6:manual:36:")
-        .expect("length-delimited manual fire key prefix");
-    uuid::Uuid::parse_str(invocation_id).expect("manual invocation key must be a UUID");
-}
-
-#[tokio::test]
 async fn production_materializer_persists_event_source_document_lineage() {
     let (db, _user, client, behavior) =
         signed_materializer_agent("event-source-lineage").await;
@@ -299,8 +260,6 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     .unwrap();
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        &agent_did,
-        &owner,
         verified.clone(),
         60,
         crate::request::lifecycle::ExecutionOrigin::Scheduled,

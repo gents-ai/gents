@@ -15,8 +15,6 @@ use super::submit::{seed_and_await_fire, submit_stage, StageSubmission};
 use super::{Reconciled, POLL};
 use crate::defra_node::Node as EmbeddedNode;
 use crate::eval::runner::embedded::home::{EmbeddedHome, RunningRuntime};
-#[cfg(test)]
-use crate::eval::runner::embedded::observe::collect_request_evidence;
 use crate::eval::runner::embedded::observe::{
     await_submitted_terminal_with_access, await_terminal_with_access,
     collect_request_evidence_with_access, poll_request_with_access, NoHook, RequestEvidence,

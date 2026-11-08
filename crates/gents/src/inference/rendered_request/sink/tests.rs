@@ -1156,7 +1156,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
     .await
     .unwrap();
     let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), root.did(), auxiliary, 60);
+        RequestLifecycle::new_with_node_did(node.clone(), auxiliary, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let auxiliary = lifecycle.request();

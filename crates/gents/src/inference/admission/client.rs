@@ -274,7 +274,7 @@ fn context_for_call(call_kind: CallKind, attempt: i64) -> AdmissionCallContext {
     context
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) async fn scope_call_with_token<T>(
     call_kind: CallKind,
     attempt: i64,

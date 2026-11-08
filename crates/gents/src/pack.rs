@@ -37,7 +37,7 @@ pub use home_install::{
     HomePackInstall, InstalledVia, SkippedHomeInstall,
 };
 pub use inference::{
-    bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
+    bind_pack_install_config, inference_profile_options,
     install_pack_documents, install_pack_documents_with_expectations,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };

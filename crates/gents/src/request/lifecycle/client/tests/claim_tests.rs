@@ -490,8 +490,6 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         }
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            &binding.agent_did,
-            runtime.did(),
             request,
             60,
             if scheduled {
@@ -585,17 +583,6 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             assert_eq!(recovery.scanned, 1);
             assert_eq!(recovery.repaired, 1);
             assert_eq!(recovery.failed, 0);
-
-            let terminal = RequestLifecycle::redrive_terminal_convergence_with_identities(
-                &node,
-                runtime.did(),
-                std::slice::from_ref(&agent_identity),
-            )
-            .await
-            .unwrap();
-            assert_eq!(terminal.scanned, 1);
-            assert_eq!(terminal.reasserted, 1);
-            assert_eq!(terminal.failed, 0);
 
             if scheduled {
                 let wake = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
@@ -764,8 +751,6 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        &binding.agent_did,
-        runtime.did(),
         request,
         60,
         ExecutionOrigin::Interactive,
@@ -1552,8 +1537,6 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     assert!(admission.is_some());
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        agent.did(),
-        runtime.did(),
         request,
         60,
         ExecutionOrigin::Interactive,

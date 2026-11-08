@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use defra_node::Node as EmbeddedNode;
-use tokio::sync::{watch, OnceCell};
+use tokio::sync::watch;
 
 use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use crate::inference::resolved::{
@@ -22,7 +22,6 @@ use crate::tools::mcp::pool::McpPool;
 use crate::tools::surface::{
     AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };
-use crate::triggers::engine::manual_source::ManualTriggerHandle;
 
 mod builder;
 pub mod completion_retry;
@@ -241,7 +240,6 @@ pub struct Gents {
     router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     rendered_request_capture_factory:
         Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
-    pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
     enrollment_authority: Arc<std::sync::RwLock<Option<p2p_reconcile::EnrollmentAuthorityHandle>>>,
     operator_tool_root: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -339,7 +337,6 @@ impl Gents {
             router_dispatch_probe: options.router_dispatch_probe,
             // Provider calls require durable rendered input to be fact records.
             rendered_request_capture_factory: None,
-            manual_trigger_handle: Arc::new(OnceCell::new()),
             enrollment_authority: Arc::default(),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
             plugins,
@@ -510,11 +507,6 @@ impl Gents {
 
     pub(crate) fn operator_tool_root(&self) -> Option<&std::path::Path> {
         self.operator_tool_root.as_deref()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn manual_trigger_handle(&self) -> Option<&ManualTriggerHandle> {
-        self.manual_trigger_handle.get()
     }
 
     /// The HTTP boundary authenticates `actor` before selecting the native reader.

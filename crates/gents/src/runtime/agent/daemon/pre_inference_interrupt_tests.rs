@@ -363,8 +363,6 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     .expect("a created request carries a canonical execution origin");
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        &agent_config.agent_did,
-        agent_config.node_did(),
         request.clone(),
         agent_config.deadline_duration.as_secs(),
         origin,

@@ -11,7 +11,7 @@ use gents::runtime::agent::p2p_reconcile::{
 };
 use gents::store::config_client::{ConfigAccess, NodePermission};
 use gents::store::graphql::escape_graphql_string;
-use gents::{KeyIdentity, NodeIdentity, RequestLifecycle, TERMINAL_REDRIVE_CAP};
+use gents::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -132,7 +132,7 @@ impl DeliveryFixture {
         let state = escape_graphql_string(state);
         let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let response = self.agent.write("test.delivery.set_state", &format!(
-            r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ lifecycle_state: "{state}", terminalized_at: "{terminalized_at}", terminal_redrive_attempts: 0 }}) {{ _docID }} }}"#,
+            r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ lifecycle_state: "{state}", terminalized_at: "{terminalized_at}" }}) {{ _docID }} }}"#,
         )).await.unwrap();
         assert_eq!(
             response["data"]["update_AgentRequest"]
@@ -146,7 +146,7 @@ impl DeliveryFixture {
     async fn read(&self, access: &ConfigAccess, request_id: &str) -> Option<AgentRequestRow> {
         let request_id = escape_graphql_string(request_id);
         let response = access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID request_id node_did requester_did agent_did lifecycle_state terminal_redrive_attempts }} }}"#,
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID request_id node_did requester_did agent_did lifecycle_state }} }}"#,
         )).await.unwrap();
         response["data"]["AgentRequest"]
             .as_array()
@@ -156,16 +156,6 @@ impl DeliveryFixture {
             .map(|row| serde_json::from_value(row).unwrap())
     }
 
-    async fn redrive(&self) -> gents::TerminalRedriveReport {
-        RequestLifecycle::redrive_terminal_convergence_with_identities(
-            &self.node,
-            self.node_identity.did(),
-            std::slice::from_ref(&self.agent_identity),
-        )
-        .await
-        .unwrap()
-    }
-
     async fn shutdown(self) {
         self.owner.node.shutdown().await.unwrap();
         self.peer.node.shutdown().await.unwrap();
@@ -173,7 +163,7 @@ impl DeliveryFixture {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn authenticated_requester_observes_owner_terminal_and_bounded_redrive() {
+async fn authenticated_requester_observes_owner_terminal() {
     let fixture = DeliveryFixture::new("convergence-http-owner").await;
     let request_id = "convergence-http-live";
     let doc = fixture.submit(request_id, "convergence-http-session").await;
@@ -245,61 +235,7 @@ async fn authenticated_requester_observes_owner_terminal_and_bounded_redrive() {
     );
     assert_eq!(terminal.requester_did.as_deref(), Some(fixture.user_did()));
 
-    for attempt in 1..=TERMINAL_REDRIVE_CAP {
-        let report = fixture.redrive().await;
-        assert_eq!(
-            (
-                report.scanned,
-                report.acknowledged,
-                report.reasserted,
-                report.failed
-            ),
-            (1, 0, 1, 0)
-        );
-        let observed = fixture.read(&fixture.requester, request_id).await.unwrap();
-        assert_eq!(
-            observed.lifecycle_state,
-            Some(RequestLifecycleState::Completed)
-        );
-        assert_eq!(observed.terminal_redrive_attempts, Some(attempt.into()));
-    }
-    assert!(fixture.redrive().await.is_noop());
     assert!(fixture.read(&fixture.outsider, request_id).await.is_none());
-    fixture.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn authenticated_requester_observes_each_terminal_in_a_recovery_wave() {
-    const REQUESTS: usize = 13;
-    let fixture = DeliveryFixture::new("convergence-http-wave").await;
-    let mut requests = Vec::new();
-    for index in 0..REQUESTS {
-        let request_id = format!("convergence-http-wave-{index:02}");
-        let doc = fixture
-            .submit(&request_id, &format!("convergence-http-session-{index:02}"))
-            .await;
-        fixture.set_state(&doc, "completed").await;
-        requests.push((request_id, doc));
-    }
-    let report = fixture.redrive().await;
-    assert_eq!(
-        (
-            report.scanned,
-            report.acknowledged,
-            report.reasserted,
-            report.failed
-        ),
-        (REQUESTS, 0, REQUESTS, 0)
-    );
-    for (request_id, doc) in requests {
-        let row = fixture.read(&fixture.requester, &request_id).await.unwrap();
-        assert_eq!(row.doc_id.as_deref(), Some(doc.as_str()));
-        assert_eq!(row.node_did.as_deref(), Some(fixture.node_identity.did()));
-        assert_eq!(row.requester_did.as_deref(), Some(fixture.user_did()));
-        assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Completed));
-        assert_eq!(row.terminal_redrive_attempts, Some(1));
-        assert!(fixture.read(&fixture.outsider, &request_id).await.is_none());
-    }
     fixture.shutdown().await;
 }
 

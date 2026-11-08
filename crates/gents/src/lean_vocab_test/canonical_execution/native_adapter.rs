@@ -266,7 +266,6 @@ async fn create_client_fixture_request(
 )]
 async fn claim_fixture_request(
     node: Arc<EmbeddedNode>,
-    node_did: &str,
     agent: &dyn NodeIdentity,
     request: gents_protocol::row::AgentRequest,
     admission: Option<crate::request::admission::ClientClaimAdmission>,
@@ -278,8 +277,6 @@ async fn claim_fixture_request(
     let request_doc_id = request.doc_id.clone();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
-        agent.did(),
-        node_did,
         request,
         duration,
     );
@@ -1579,7 +1576,6 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 let generation = "native-title-parent";
                 claim_fixture_request(
                     node.clone(),
-                    &node_did,
                     agent.as_ref(),
                     verified,
                     admission,
@@ -1671,7 +1667,6 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 .map_err(anyhow::Error::from)?;
             claim_fixture_request(
                 node.clone(),
-                &node_did,
                 agent.as_ref(),
                 verified,
                 admission,

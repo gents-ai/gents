@@ -991,8 +991,6 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
     assert!(wake_id < continuation_id);
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         fixture.node.clone(),
-        fixture.agent.did(),
-        &fixture.node_did,
         continuation,
         60,
         ExecutionOrigin::Interactive,

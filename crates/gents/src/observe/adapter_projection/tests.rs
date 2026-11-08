@@ -1123,14 +1123,6 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
         );
         assert!(jsonl_schema.pointer("/properties/record_kind").is_some());
     }
-    let schema_index = adapter_projection_schema_index();
-    assert_eq!(
-        schema_index
-            .get("schemas")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(4)
-    );
 
     assert_eq!(codex.projection_id, "openai_codex_run_trace");
     assert_eq!(langgraph.projection_id, "langgraph_state_history");

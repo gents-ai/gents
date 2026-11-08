@@ -145,7 +145,6 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         complete_child_managed_verified(
             &node,
             caused_request_id,
-            node_did,
             &format!("child {} complete", index + 1),
             &agent_signer,
             Arc::new(

@@ -496,9 +496,6 @@ async fn run_agent_owned(
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
-    let (manual_source, manual_trigger_handle) =
-        crate::triggers::engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
-    let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
     let trigger_engine_node_did = agent.node_did().to_string();
     let trigger_engine_runtime_observer = agent.runtime_snapshot_observer.clone();
     let trigger_engine_runtime_status = runtime_status.clone();
@@ -546,14 +543,8 @@ async fn run_agent_owned(
             )
             .with_runtime_status(trigger_engine_runtime_status),
         );
-        let manual_source_box: Box<dyn crate::triggers::engine::TriggerSource> =
-            Box::new(manual_source);
-        let sources: Vec<Box<dyn crate::triggers::engine::TriggerSource>> = vec![
-            schedule_source,
-            event_source,
-            goal_source,
-            manual_source_box,
-        ];
+        let sources: Vec<Box<dyn crate::triggers::engine::TriggerSource>> =
+            vec![schedule_source, event_source, goal_source];
         crate::triggers::engine::run_trigger_engine(
             trigger_engine_node,
             trigger_engine_materializer_snapshot_rx,

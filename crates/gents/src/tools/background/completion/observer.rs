@@ -227,20 +227,6 @@ impl BackgroundCompletionObserver {
                 "redrove failed background-completion wakes"
             );
         }
-        let redrive = crate::RequestLifecycle::redrive_terminal_convergence_with_identities(
-            &self.node,
-            &self.local_did,
-            &identities,
-        )
-        .await?;
-        if !redrive.is_noop() {
-            tracing::debug!(
-                reasserted = redrive.reasserted,
-                acknowledged = redrive.acknowledged,
-                scanned = redrive.scanned,
-                "re-drove terminal request convergence to replicas"
-            );
-        }
         Ok(())
     }
 

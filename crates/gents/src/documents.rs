@@ -63,7 +63,7 @@ pub(crate) use unattended_admission::observe_unattended_agent_in_txn;
 
 #[allow(unused_imports)]
 pub(crate) use behavior::{list_agent_records, load_agent_record};
-pub use behavior::{list_agents, load_agent, upsert_agent, write_agent_document, Agent};
+pub use behavior::{list_agents, load_agent, write_agent_document, Agent};
 
 pub use inference_backend::write_inference_backend_document;
 pub(crate) use inference_backend::{backend_metadata_fields, write_inference_backend_in_txn};
@@ -82,7 +82,7 @@ pub(crate) use inference_profile::load_inference_profile_record;
 pub use inference_profile::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
     list_inference_profile_records, list_inference_profiles_in_txn, load_inference_profile,
-    upsert_inference_profile, write_inference_profile_document, InferenceProfile,
+    write_inference_profile_document, InferenceProfile,
 };
 
 pub use serde_helpers::deserialize_dual_shape;

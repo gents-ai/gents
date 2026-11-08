@@ -148,8 +148,6 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
                 .unwrap();
         let mut lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            db.agent_did(),
-            db.node_did(),
             request,
             60,
         );
@@ -332,8 +330,6 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
                 .expect("parent queue fixture");
         let mut parent_lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            db.agent_did(),
-            db.node_did(),
             parent_row,
             60,
         );
@@ -350,8 +346,6 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
                 .expect("signed queued steering request");
         let mut lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            db.agent_did(),
-            db.node_did(),
             request,
             60,
         );

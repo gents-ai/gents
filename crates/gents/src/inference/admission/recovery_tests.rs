@@ -645,8 +645,6 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     );
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        agent.did(),
-        identity.did(),
         parent,
         120,
         crate::request::lifecycle::ExecutionOrigin::Interactive,

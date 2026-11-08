@@ -187,31 +187,3 @@ pub async fn list_inference_profile_records(
         .collect()
 }
 
-pub async fn upsert_inference_profile(
-    node: &std::sync::Arc<EmbeddedNode>,
-    profile: &InferenceProfile,
-) -> Result<()> {
-    profile.validate()?;
-    let value = serde_json::to_value(profile)?;
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
-            collection: crate::store::collection::Collection::InferenceProfile,
-            add: value.clone(),
-            update: value,
-        },
-    ])?;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "document_config.inference_profile.upsert",
-        |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan)
-                    .await
-                    .map(|_| ())
-            })
-        },
-    )
-    .await
-}

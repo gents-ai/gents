@@ -468,8 +468,6 @@ async fn cancelled_after_child_commit_recovers_relationships_in_the_actor_watche
         .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         fixture.node.clone(),
-        fixture.child.did(),
-        fixture.runtime.did(),
         request,
         60,
         ExecutionOrigin::Interactive,
@@ -554,8 +552,6 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
         assert!(admission.is_some());
         let mut child = RequestLifecycle::new_with_execution_binding(
             fixture.node.clone(),
-            fixture.child.did(),
-            fixture.runtime.did(),
             opening,
             60,
             ExecutionOrigin::Interactive,
@@ -740,8 +736,6 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
         } else {
             let mut later = RequestLifecycle::new_with_execution_binding(
                 fixture.node.clone(),
-                fixture.child.did(),
-                fixture.runtime.did(),
                 request,
                 60,
                 ExecutionOrigin::Interactive,

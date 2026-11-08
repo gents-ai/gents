@@ -149,25 +149,3 @@ pub(crate) async fn list_agent_records(
     Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn upsert_agent(node: &std::sync::Arc<EmbeddedNode>, behavior: &Agent) -> Result<()> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "document_config.agent.upsert",
-        |txn| {
-            Box::pin(async move {
-                let value = serde_json::to_value(behavior)?;
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::store::config_client::DesiredStateApplyDocument {
-                        collection: crate::Collection::Agent,
-                        add: value.clone(),
-                        update: value,
-                    },
-                ])?;
-                crate::documents::apply_desired_state_plan(txn, &plan).await?;
-                Ok(())
-            })
-        },
-    )
-    .await
-}

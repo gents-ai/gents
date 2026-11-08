@@ -377,8 +377,6 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     .await;
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        tests::agent_identity().did(),
-        tests::root_identity().did(),
         producer.clone(),
         60,
         ExecutionOrigin::Interactive,
@@ -481,8 +479,6 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     );
     let mut reply_lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        tests::agent_identity().did(),
-        tests::root_identity().did(),
         reply.clone(),
         60,
         ExecutionOrigin::Interactive,

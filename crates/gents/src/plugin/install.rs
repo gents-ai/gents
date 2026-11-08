@@ -209,7 +209,8 @@ fn install_pack_plugins_locked<'a>(
         .collect()
 }
 
-pub fn bind_plugin_slots(
+#[cfg(test)]
+pub(crate) fn bind_plugin_slots(
     home: &Path,
     manifest: &PackManifest,
     owner: &str,

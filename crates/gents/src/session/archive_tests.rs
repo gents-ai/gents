@@ -178,7 +178,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     create_work(&node, &actor).await;
     let work = work_rows(&node, &actor).await;
     let before = read_as(&node, &actor).await.unwrap();
-    let archived = set_session_archived(&node, "runtime", "archive-session", &actor, 0, true)
+    let archived = set_session_archived_on(&ConfigAccess::local(Arc::clone(&node)), "runtime", "archive-session", &actor, 0, true)
         .await
         .unwrap();
     assert_eq!(archived.outcome, SessionArchiveOutcome::Applied);
@@ -190,7 +190,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     assert_eq!(work_rows(&node, &actor).await, work);
     // A lost receipt may be retried without rewriting its timestamp or revision.
     assert_eq!(
-        set_session_archived(&node, "runtime", "archive-session", &actor, 0, true)
+        set_session_archived_on(&ConfigAccess::local(Arc::clone(&node)), "runtime", "archive-session", &actor, 0, true)
             .await
             .unwrap()
             .outcome,
@@ -212,8 +212,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     assert_eq!(work_rows(&node, &actor).await, work);
     let other_window = Arc::clone(&node);
     assert_eq!(
-        set_session_archived(
-            &other_window,
+        set_session_archived_on(&ConfigAccess::local(Arc::clone(&other_window)),
             "runtime",
             "archive-session",
             &actor,
@@ -225,7 +224,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
         .outcome,
         SessionArchiveOutcome::Conflict
     );
-    let restored = set_session_archived(&node, "runtime", "archive-session", &actor, 1, false)
+    let restored = set_session_archived_on(&ConfigAccess::local(Arc::clone(&node)), "runtime", "archive-session", &actor, 1, false)
         .await
         .unwrap();
     assert_eq!(restored.outcome, SessionArchiveOutcome::Applied);
@@ -234,14 +233,13 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     assert_eq!(read_as(&other_window, &actor).await.unwrap(), expected);
     assert_eq!(work_rows(&other_window, &actor).await, work);
     assert_eq!(
-        set_session_archived(&other_window, "runtime", "archive-session", &actor, 0, true)
+        set_session_archived_on(&ConfigAccess::local(Arc::clone(&other_window)), "runtime", "archive-session", &actor, 0, true)
             .await
             .unwrap()
             .outcome,
         SessionArchiveOutcome::Conflict
     );
-    assert!(set_session_archived(
-        &node,
+    assert!(set_session_archived_on(&ConfigAccess::local(Arc::clone(&node)),
         "different-runtime",
         "archive-session",
         &actor,
@@ -322,18 +320,18 @@ resources:
         .unwrap();
     let before = read_as(&node, &owner).await.unwrap();
     assert!(
-        set_session_archived(&node, "runtime", "archive-session", &*denied, 0, true)
+        set_session_archived_on(&ConfigAccess::local(Arc::clone(&node)), "runtime", "archive-session", &*denied, 0, true)
             .await
             .is_err()
     );
     assert!(read_as(&node, &*denied).await.is_err());
     assert!(
-        set_session_archived(&node, "runtime", "archive-session", &*reader, 0, true)
+        set_session_archived_on(&ConfigAccess::local(Arc::clone(&node)), "runtime", "archive-session", &*reader, 0, true)
             .await
             .is_err()
     );
     assert_eq!(read_as(&node, &owner).await.unwrap(), before);
-    let result = set_session_archived(&node, "runtime", "archive-session", &*writer, 0, true)
+    let result = set_session_archived_on(&ConfigAccess::local(Arc::clone(&node)), "runtime", "archive-session", &*writer, 0, true)
         .await
         .unwrap();
     assert_eq!(result.outcome, SessionArchiveOutcome::Applied);
@@ -366,7 +364,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
     let ready = tokio::sync::Barrier::new(16);
     let calls = (0..16).map(|_| async {
         ready.wait().await;
-        set_session_archived(&node, "runtime", "archive-session", &actor, 0, true)
+        set_session_archived_on(&ConfigAccess::local(Arc::clone(&node)), "runtime", "archive-session", &actor, 0, true)
             .await
             .unwrap()
     });

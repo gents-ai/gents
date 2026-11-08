@@ -231,7 +231,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             .collect()
     }
     let parent = requests(&access, did, agent_did).await.remove(0);
-    let mut owner = RequestLifecycle::new_with_node_did(node.clone(), agent_did, did, parent, 60);
+    let mut owner = RequestLifecycle::new_with_node_did(node.clone(), parent, 60);
     owner.bind_managed_agent(agent.as_ref()).unwrap();
     owner.claim().await.unwrap();
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(

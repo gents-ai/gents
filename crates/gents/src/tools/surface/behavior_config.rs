@@ -412,12 +412,10 @@ impl AgentToolSurfaceConfig {
         &self.required_mcp_service_ids
     }
 
-    #[allow(dead_code)]
     pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
         &self.agent_tools
     }
 
-    #[allow(dead_code)]
     pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
         &self.background_tools
     }
@@ -470,7 +468,7 @@ impl AgentToolSurfaceConfig {
         Ok(surface)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn resolve_with_agent_tools_for_mcp_presence(
         &self,
         mcp_services_online: bool,
@@ -608,7 +606,7 @@ impl AgentToolSurfaceConfig {
             .await
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn resolve_with_available_agent_targets_for_mcp_presence(
         &self,
         mcp_services_online: bool,

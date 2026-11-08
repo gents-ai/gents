@@ -219,8 +219,6 @@ impl Fixture {
     pub(crate) fn lifecycle(&self) -> crate::RequestLifecycle {
         let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.request.agent_did,
-            &self.request.node_did,
             self.request.clone(),
             60,
             crate::request::lifecycle::ExecutionOrigin::Interactive,

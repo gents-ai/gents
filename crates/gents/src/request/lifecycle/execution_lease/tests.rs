@@ -766,8 +766,6 @@ async fn racing_owned_begins_commit_one_processing_transition_without_renewal() 
     let before = request_row(&access, &lifecycle.request.doc_id).await;
     let mut competitor = RequestLifecycle::new_with_node_did(
         node.clone(),
-        &agent.agent_did,
-        identity.did(),
         lifecycle.request().clone(),
         60,
     );

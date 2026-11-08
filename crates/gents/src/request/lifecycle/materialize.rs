@@ -692,14 +692,6 @@ pub(crate) async fn build_session_message_request_with_input(
     build_signed_request(spec, RequestSigner::Identity(signer)).await
 }
 
-pub async fn activate_workspace_bound_request(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_doc_id: &str,
-    actor: identity::Did,
-) -> Result<()> {
-    activate_workspace_bound_request_with_identity(node, request_doc_id, actor, None).await
-}
-
 pub async fn activate_workspace_bound_request_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
@@ -770,15 +762,11 @@ impl RequestLifecycle {
 
     pub fn new_with_node_did(
         node: Arc<EmbeddedNode>,
-        agent_did: &str,
-        node_did: &str,
         request: AgentRequest,
         deadline_duration_secs: u64,
     ) -> Self {
         Self::new_with_execution_binding(
             node,
-            agent_did,
-            node_did,
             request,
             deadline_duration_secs,
             ExecutionOrigin::Interactive,
@@ -788,8 +776,6 @@ impl RequestLifecycle {
 
     pub fn new_with_execution_binding(
         node: Arc<EmbeddedNode>,
-        _agent_did: &str,
-        _node_did: &str,
         request: AgentRequest,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
@@ -960,8 +946,6 @@ impl RequestLifecycle {
         .await?;
         let mut lifecycle = Self::new_with_execution_binding(
             node,
-            &agent_did,
-            &node_did,
             request,
             deadline_duration_secs,
             execution_origin,

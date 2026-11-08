@@ -346,8 +346,6 @@ impl RequestActors {
     ) -> RequestLifecycle {
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            self.agent_did(),
-            &self.node_did,
             request,
             deadline_secs,
             origin,
