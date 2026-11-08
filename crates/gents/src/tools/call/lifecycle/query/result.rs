@@ -1402,7 +1402,6 @@ mod tests {
         let session_id = tool.session_id().to_owned();
         let requester = tool.requester_did().map(str::to_owned);
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
-        let actor = tool.actor().clone();
         let read = tool.access().unwrap().transact_write("tool_result.txn_read", |txn| {
             Box::pin(load_tool_call_read_in_txn(
                 txn,

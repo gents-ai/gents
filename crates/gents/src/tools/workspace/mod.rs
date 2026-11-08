@@ -70,7 +70,7 @@ pub(crate) use overlay::{
 
 #[cfg(test)]
 pub(crate) use overlay::{
-    bind_workspace_overlay, resolve_request_workspace_overlay, IsolatedWorkspaceRecord,
+    bind_workspace_overlay, IsolatedWorkspaceRecord,
     WorkspaceBindInput, WorkspacePlacementRecord,
 };
 

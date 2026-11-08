@@ -12,7 +12,6 @@ use crate::tools::call::lifecycle::admission_fixture::{
 use crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::Result;
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSource, SourceClose,
@@ -538,10 +537,7 @@ async fn configure_bash_output_budget(
     .unwrap();
 }
 
-async fn interrupted_presentation(
-    node: &std::sync::Arc<EmbeddedNode>,
-    tool: &ToolCallLifecycle,
-) -> String {
+async fn interrupted_presentation(tool: &ToolCallLifecycle) -> String {
     crate::tools::call::lifecycle::load_tool_call_presentation(
         &tool.access().unwrap(),
         tool.doc_id().unwrap(),
@@ -616,7 +612,7 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
         .expect("running tool for a later same-state replay");
         replay.inherit_signer(&tool).unwrap();
         assert!(tool.timeout().await.unwrap(), "{name}");
-        let presented = interrupted_presentation(&node, &tool).await;
+        let presented = interrupted_presentation(&tool).await;
         if bounded {
             assert!(
                 presented.starts_with("fghij\n") && !presented.contains("0123456789abcde"),
@@ -636,7 +632,7 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
         if bounded && !reload {
             configure_bash_output_budget(&client, &tool.node_did, &agent_did, 12).await;
             assert!(!replay.timeout().await.unwrap(), "{name}: replay");
-            assert_eq!(interrupted_presentation(&node, &tool).await, presented);
+            assert_eq!(interrupted_presentation(&tool).await, presented);
         }
         node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
