@@ -247,10 +247,28 @@ export function createMailboxActions({
     return result;
   }
 
+  async function setAsideMailboxAnswer(
+    itemId: string,
+    requestId: string,
+    acceptsView: () => boolean = () => true,
+  ) {
+    const clientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const draft = loadChatDrafts().chatDrafts.find(
+      (draft) => draft.clientDid === clientDid && draft.requestId === requestId,
+    );
+    if (draft?.mailbox?.itemId !== itemId)
+      throw new Error("The saved answer belongs to another question or client.");
+    const intent = selection.captureIntent(store);
+    await delivery.setAside(requestId, (result, draft) =>
+      applyAnswer(result, draft, intent, acceptsView),
+    );
+  }
+
   return {
     openMailboxItem,
     dismissMailboxItem,
     answerMailboxQuestion,
     recoverMailboxAnswer,
+    setAsideMailboxAnswer,
   };
 }
