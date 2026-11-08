@@ -74,21 +74,12 @@ pub async fn desktop_session_snapshot(
     node_did: Option<String>,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
-    session_snapshot(
-        &core,
-        session_id,
-        node_did,
-        request_id,
-        timeline_limit,
-        timeline_before_item_key,
-    )
-    .await
+    session_snapshot(&core, session_id, node_did, request_id, timeline_limit).await
 }
 
 pub(crate) use crate::commands::session_snapshot;
@@ -252,18 +243,6 @@ pub async fn desktop_session_fork_before_message(
 }
 
 #[tauri::command]
-pub async fn desktop_session_history(
-    request: crate::types::SessionHistoryRequest,
-    state: State<'_, DesktopAppState>,
-) -> Result<crate::types::SessionHistoryPage, BridgeError> {
-    let core = current_core(&state)
-        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    crate::commands::session_history(&core, request)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
-}
-
-#[tauri::command]
 pub async fn desktop_session_archive(
     request: crate::types::SessionArchiveRequest,
     state: State<'_, DesktopAppState>,
@@ -287,34 +266,6 @@ pub async fn desktop_session_rename(
     rename_session(core.as_ref(), request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
-}
-
-#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestResendResultView {
-    pub request_id: String,
-    pub session_id: String,
-}
-
-#[tauri::command]
-pub async fn desktop_request_resend(
-    request_id: String,
-    node_did: Option<String>,
-    state: State<'_, DesktopAppState>,
-) -> Result<RequestResendResultView, BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-
-    let scope = node_did.or_else(|| core.selected_node_did());
-    let submitted = core
-        .resend_request_in_scope(&request_id, scope.as_deref())
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    Ok(RequestResendResultView {
-        request_id: submitted.request_id,
-        session_id: submitted.session_id,
-    })
 }
 
 #[tauri::command]

@@ -4,7 +4,6 @@ Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)
 
 #### This default permission set includes the following:
 
-- `allow-desktop-bootstrap-summary`
 - `allow-desktop-client-snapshot`
 - `allow-desktop-observer-metrics`
 - `allow-desktop-client-start`
@@ -43,6 +42,32 @@ Enables the desktop_agent_delete command without any pre-configured scope.
 <td>
 
 Denies the desktop_agent_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-agent-identity-provision`
+
+</td>
+<td>
+
+Enables the desktop_agent_identity_provision command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-agent-identity-provision`
+
+</td>
+<td>
+
+Denies the desktop_agent_identity_provision command without any pre-configured scope.
 
 </td>
 </tr>
@@ -329,32 +354,6 @@ Enables the desktop_background_tool command without any pre-configured scope.
 <td>
 
 Denies the desktop_background_tool command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-bootstrap-summary`
-
-</td>
-<td>
-
-Enables the desktop_bootstrap_summary command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-bootstrap-summary`
-
-</td>
-<td>
-
-Denies the desktop_bootstrap_summary command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1246,32 +1245,6 @@ Denies the desktop_mailbox_dismiss command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-mailbox-list`
-
-</td>
-<td>
-
-Enables the desktop_mailbox_list command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-mailbox-list`
-
-</td>
-<td>
-
-Denies the desktop_mailbox_list command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-mailbox-observe`
 
 </td>
@@ -1610,32 +1583,6 @@ Denies the desktop_native_e2e_status command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-network-status`
-
-</td>
-<td>
-
-Enables the desktop_network_status command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-network-status`
-
-</td>
-<td>
-
-Denies the desktop_network_status command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-node-config-save`
 
 </td>
@@ -1759,32 +1706,6 @@ Enables the desktop_operations_snapshot command without any pre-configured scope
 <td>
 
 Denies the desktop_operations_snapshot command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-p2p-repair`
-
-</td>
-<td>
-
-Enables the desktop_p2p_repair command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-p2p-repair`
-
-</td>
-<td>
-
-Denies the desktop_p2p_repair command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2728,32 +2649,6 @@ Denies the desktop_request_attachments command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-request-resend`
-
-</td>
-<td>
-
-Enables the desktop_request_resend command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-request-resend`
-
-</td>
-<td>
-
-Denies the desktop_request_resend command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-request-retry`
 
 </td>
@@ -2981,32 +2876,6 @@ Enables the desktop_session_goal command without any pre-configured scope.
 <td>
 
 Denies the desktop_session_goal command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-session-history`
-
-</td>
-<td>
-
-Enables the desktop_session_history command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-session-history`
-
-</td>
-<td>
-
-Denies the desktop_session_history command without any pre-configured scope.
 
 </td>
 </tr>
@@ -3430,32 +3299,6 @@ Denies the desktop_tool_service_test command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-tool-surface-explain`
-
-</td>
-<td>
-
-Enables the desktop_tool_surface_explain command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-tool-surface-explain`
-
-</td>
-<td>
-
-Denies the desktop_tool_surface_explain command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-tools-delete`
 
 </td>
@@ -3825,7 +3668,7 @@ Denies the desktop_workspace_list command without any pre-configured scope.
 </td>
 <td>
 
-Bootstrap summary, aggregate snapshot, observer metrics
+Aggregate snapshot, observer metrics
 
 </td>
 </tr>
@@ -3885,19 +3728,6 @@ Request timeline read
 <tr>
 <td>
 
-`gents-desktop-bridge:tool-surface-read`
-
-</td>
-<td>
-
-Tool-surface explain (config family)
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:chat-write`
 
 </td>
@@ -3942,7 +3772,7 @@ Start or dismiss owner-scoped mailbox actions
 </td>
 <td>
 
-Request resend / retry
+Request retry
 
 </td>
 </tr>
@@ -3955,7 +3785,7 @@ Request resend / retry
 </td>
 <td>
 
-Peer status (by saved id) and network status
+Peer status (by saved id)
 
 </td>
 </tr>
@@ -4072,7 +3902,7 @@ Allow, change and remove plugin folders, and answer a plugin question
 </td>
 <td>
 
-Authenticated peer enrollment, removal/rename, and P2P repair
+Authenticated peer enrollment, removal and rename
 
 </td>
 </tr>

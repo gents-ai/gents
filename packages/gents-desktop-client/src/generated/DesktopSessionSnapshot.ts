@@ -10,10 +10,4 @@ import type { SessionContextView } from "./SessionContextView.js";
 import type { SessionProjectionRevisionView } from "./SessionProjectionRevisionView.js";
 import type { SessionTimelinePageView } from "./SessionTimelinePageView.js";
 
-export type DesktopSessionSnapshot = { liveCursor?: string | null, sessionId: string, nodeDid: string | null, agentDid: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, inferenceActivity?: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null, queuedTurns: Array<PendingTurnView>, pendingQueue?: Array<PendingQueueEntryView> | null, foldedInputs: Array<FoldedInputView>, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null,
-/**
- * `true` when this client reads the session from the node's runtime and
- * holds no replica of its rows, so no store event reports their changes
- * and the client re-reads the session at the session read gap.
- */
-readThroughOperator?: boolean | null, };
+export type DesktopSessionSnapshot = { liveCursor?: string | null, sessionId: string, nodeDid: string | null, agentDid: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, inferenceActivity?: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null, queuedTurns: Array<PendingTurnView>, pendingQueue?: Array<PendingQueueEntryView> | null, foldedInputs: Array<FoldedInputView>, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };

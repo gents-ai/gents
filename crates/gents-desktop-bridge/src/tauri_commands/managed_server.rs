@@ -15,16 +15,15 @@ use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    HomeResetDisposition, ManagedServerResetRequest, ManagedServerResetResult,
-    ManagedServerRestartRequest, ManagedServerRootValidation, ManagedServerRootValidationRequest,
-    AgentWorkspaceRootSelectRequest, ManagedServerStartRequest, ManagedServerStatus,
+    AgentWorkspaceRootSelectRequest, HomeResetDisposition, ManagedServerResetRequest,
+    ManagedServerResetResult, ManagedServerRestartRequest, ManagedServerRootValidation,
+    ManagedServerRootValidationRequest, ManagedServerStartRequest, ManagedServerStatus,
 };
 use authority::{
     runtime_tool_ceiling, validate_ready_runtime, validate_tool_root, EffectiveManagedAuthority,
 };
-use gents_desktop_core::local_runtime::OperatorIdentityInteraction;
-use gents_desktop_core::workspace_root::{select_agent_workspace_root, AgentWorkspaceRoot};
 use gents_desktop_core::preference::StoredManagedServer;
+use gents_desktop_core::workspace_root::{select_agent_workspace_root, AgentWorkspaceRoot};
 use launch::{fail_managed_start, install_then_launch, LaunchFailure, NativeLaunch};
 use native::{
     ensure_launchable_here, launchable_native_service, native_error, native_service, run_native,
@@ -32,7 +31,7 @@ use native::{
 use pairing::{drain_managed_runtime_pairing, pairing_is_ready, start_running_managed_pairing};
 use port::{
     ensure_default_port_identity, ensure_native_owns_running_endpoint, matching_external_server,
-    observe_port_readiness, PortReadiness,
+    observe_port_readiness, user_status_signer, PortReadiness,
 };
 use preference::{load_bound_preference, refuse_renaming_home, save_confirmed_preference};
 use readiness::ensure_selected_restart_compatible;
@@ -226,7 +225,9 @@ where
         managed.approval_refused = false;
     }
     let port = match state.policy.node_home.as_deref() {
-        Some(node_home) => observe_port_readiness(node_home).await?,
+        Some(node_home) => {
+            observe_port_readiness(node_home, user_status_signer(state).await.as_ref()).await?
+        }
         None => PortReadiness::NotListening,
     };
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
@@ -373,10 +374,13 @@ where
         }
     }
     ensure_launchable_here(&app, &state)?;
-    let port = observe_port_readiness(&node_home).await?;
+    let port =
+        observe_port_readiness(&node_home, user_status_signer(&state).await.as_ref()).await?;
     ensure_selected_restart_compatible(managed_selection, &port)?;
     let previous_did = match &port {
-        PortReadiness::Ready(status) => status.node_did.clone(),
+        PortReadiness::Ready(status) | PortReadiness::StatusUnreadable { public: status, .. } => {
+            status.node_did.clone()
+        }
         PortReadiness::Foreign(_)
         | PortReadiness::Booting
         | PortReadiness::Outdated { .. }
@@ -458,7 +462,7 @@ where
         if managed_selection {
             return Ok(());
         }
-        ensure_default_port_identity(&node_home)
+        ensure_default_port_identity(&node_home, user_status_signer(&state).await.as_ref())
             .await
             .map_err(|mut error| {
                 error.message = format!("Your node was stopped; {}", error.message);
@@ -498,10 +502,11 @@ where
         start_running_managed_pairing(&state, core).await;
     }
     let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
-    let mut status = matching_external_server(&node_home, OperatorIdentityInteraction::Allow)
-        .await?
-        .map(|external| project_external_status(external, &native))
-        .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
+    let mut status =
+        matching_external_server(&node_home, user_status_signer(&state).await.as_ref())
+            .await?
+            .map(|external| project_external_status(external, &native))
+            .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
     status.pairing_ready = pairing_is_ready(&state, status.node_did.as_deref()).await;
     Ok(status)
 }

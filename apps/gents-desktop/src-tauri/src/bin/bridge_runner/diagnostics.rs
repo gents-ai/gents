@@ -116,7 +116,6 @@ pub(crate) async fn build_desktop_session_snapshot(
     session_id: &str,
     request_id: Option<&str>,
     timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
     let resolved_node_did = node_did.map(str::to_owned).or_else(|| {
@@ -137,7 +136,7 @@ pub(crate) async fn build_desktop_session_snapshot(
         session_id,
         node_did,
         requester_scope.as_deref(),
-        timeline_before_item_key,
+        None,
         timeline_limit,
     )
     .await
@@ -152,27 +151,23 @@ pub(crate) async fn build_desktop_session_snapshot(
             return None;
         }
     };
-    let context_store = if timeline_before_item_key.is_none() {
-        match gents_desktop_core::client::load_session_context_store_on(
-            &access,
-            session_id,
-            node_did,
-            requester_scope.as_deref(),
-        )
-        .await
-        {
-            Ok(store) => Some(store),
-            Err(error) => {
-                tracing::warn!(
-                    session_id,
-                    error = %error,
-                    "live bridge session context query failed; using bounded inexact totals"
-                );
-                None
-            }
+    let context_store = match gents_desktop_core::client::load_session_context_store_on(
+        &access,
+        session_id,
+        node_did,
+        requester_scope.as_deref(),
+    )
+    .await
+    {
+        Ok(store) => Some(store),
+        Err(error) => {
+            tracing::warn!(
+                session_id,
+                error = %error,
+                "live bridge session context query failed; using bounded inexact totals"
+            );
+            None
         }
-    } else {
-        None
     };
     let mut snapshot = build_session_snapshot_for_node_with_transcript(
         fixture.desktop_core().as_ref(),
@@ -185,17 +180,14 @@ pub(crate) async fn build_desktop_session_snapshot(
         context_store.as_ref(),
         None,
         context_store.is_some(),
-        timeline_before_item_key.is_none(),
+        true,
         None,
     )
     .await
     .ok()??;
-    if let Err(error) = apply_session_timeline_page_with_query(
-        &mut snapshot,
-        timeline_before_item_key,
-        timeline_limit,
-        Some(&page),
-    ) {
+    if let Err(error) =
+        apply_session_timeline_page_with_query(&mut snapshot, timeline_limit, Some(&page))
+    {
         tracing::warn!(
             session_id,
             error,

@@ -13,24 +13,13 @@ use self::single_flight::{
 };
 use crate::config::BootstrapPolicy;
 use crate::error::{BridgeError, BridgeErrorCode};
-use crate::snapshot::{build_bootstrap_summary_for_policy, build_client_snapshot_with_grants};
+use crate::snapshot::build_client_snapshot_with_grants;
 use crate::state::{current_core, snapshot_grants, DesktopAppState};
-use crate::types::{
-    ClientUpdateEvent, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest,
-};
+use crate::types::{ClientUpdateEvent, DesktopClientSnapshot, DesktopInitRequest};
 
 mod core_start;
 pub(super) mod exclusion;
 pub(crate) mod single_flight;
-
-#[tauri::command]
-pub async fn desktop_bootstrap_summary(
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopBootstrapSummary, BridgeError> {
-    build_bootstrap_summary_for_policy(&state.policy)
-        .await
-        .map_err(BridgeError::untyped)
-}
 
 #[tauri::command]
 pub async fn desktop_init_local_standard(
@@ -120,7 +109,7 @@ where
     if let Some(core) = current_core(&state) {
         super::managed_server::pairing::start_running_managed_pairing(&state, Arc::clone(&core))
             .await;
-        return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
+        return build_client_snapshot_with_grants(Some(&core), &state.policy, grants)
             .await
             .map_err(BridgeError::untyped);
     }
@@ -147,7 +136,7 @@ where
 
     super::managed_server::pairing::start_running_managed_pairing(&state, Arc::clone(&core)).await;
 
-    build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
+    build_client_snapshot_with_grants(Some(&core), &state.policy, grants)
         .await
         .map_err(BridgeError::untyped)
 }
@@ -167,7 +156,7 @@ where
     shutdown_client_under_managed_lifecycle(&app, &state).await?;
 
     let grants = snapshot_grants(&state);
-    build_client_snapshot_with_grants(None, Some(&state.policy), grants)
+    build_client_snapshot_with_grants(None, &state.policy, grants)
         .await
         .map_err(BridgeError::untyped)
 }
@@ -213,7 +202,7 @@ pub async fn desktop_client_snapshot(
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let core = current_core(&state);
     let grants = snapshot_grants(&state);
-    build_client_snapshot_with_grants(core.as_ref(), Some(&state.policy), grants)
+    build_client_snapshot_with_grants(core.as_ref(), &state.policy, grants)
         .await
         .map_err(BridgeError::untyped)
 }

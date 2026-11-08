@@ -2,13 +2,11 @@ use std::time::{Duration, SystemTime};
 
 use gents_desktop_core::client::{
     project_sync_health, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
-    P2pSyncStatusSnapshot, PairingCollectionStatus, SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
+    P2pSyncStatusSnapshot, SyncHealthState,
 };
-use gents_desktop_core::remote_admin::PairingErrorClass;
 use serde_json::json;
 
-use crate::contract::EVENT_REASONS;
-use crate::snapshot::{to_pairing_collection_view, to_sync_health_view};
+use crate::snapshot::to_sync_health_view;
 use crate::types::ClientUpdateEvent;
 
 fn t(secs: u64) -> SystemTime {
@@ -45,31 +43,10 @@ fn sync_health_view_keeps_database_quarantine_failed() {
 }
 
 #[test]
-fn pairing_collection_view_preserves_retry_stuck_and_timestamps() {
-    let stuck_at = t(80);
-    let mut pairing = PairingCollectionStatus::new("AgentSession");
-    for _ in 0..STUCK_THRESHOLD_ATTEMPTS {
-        pairing.record_retry(PairingErrorClass::RpcTimeout);
-    }
-    pairing.update_stuck_indicator(stuck_at);
-    let view = to_pairing_collection_view(&pairing);
-    assert_eq!(view.collection_id, "AgentSession");
-    assert_eq!(view.pairing_retry_count, STUCK_THRESHOLD_ATTEMPTS);
-    assert_eq!(view.last_retry_error_class.as_deref(), Some("RpcTimeout"));
-    assert_eq!(
-        view.stuck_since.as_deref(),
-        crate::snapshot::system_time_rfc3339(Some(stuck_at)).as_deref()
-    );
-    assert!(view.last_retry_at.is_some());
-}
-
-#[test]
 fn client_update_event_serializes_store_reason_for_projection_wakes() {
     let event = ClientUpdateEvent::coarse("store");
     assert_eq!(
         serde_json::to_value(&event).unwrap(),
         json!({ "reason": "store" })
     );
-    assert!(EVENT_REASONS.contains(&"store"));
-    assert!(!EVENT_REASONS.contains(&"hydration"));
 }

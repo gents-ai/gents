@@ -14,7 +14,6 @@ pub mod packs;
 pub mod peers;
 pub(crate) mod service_executable;
 pub mod tasks;
-pub mod tools_explain;
 pub mod ux_plugins;
 
 #[cfg(test)]
@@ -43,7 +42,7 @@ where
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
     );
-    build_client_snapshot_with_grants(Some(core), Some(&state.policy), snapshot_grants(state))
+    build_client_snapshot_with_grants(Some(core), &state.policy, snapshot_grants(state))
         .await
         .map_err(BridgeError::untyped)
 }

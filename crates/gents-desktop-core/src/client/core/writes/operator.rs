@@ -5,7 +5,6 @@ use gents::store::config_client::ConfigAccess;
 use gents::store::identity::NodeIdentity as _;
 
 use super::super::bootstrap::normalize_required;
-use super::super::p2p_ops;
 use super::{ux_local_runtime_record, ClientCore};
 use crate::client::mutations::PeerMutationResult;
 use crate::client::peer_directory::{PeerRecord, RemovalCause};
@@ -44,34 +43,6 @@ impl ClientCore {
                 normalize_required("node_home", node_home)?,
             )
             .await
-    }
-
-    pub async fn network_status(&self) -> NetworkStatus {
-        let local_peer_id = p2p_ops::p2p_local_peer_id(&self.p2p).await;
-        let listen_addresses = p2p_ops::p2p_listen_addresses(&self.p2p).await;
-        let connected_peers = p2p_ops::p2p_connected_peers(&self.p2p).await;
-        let replicators = p2p_ops::p2p_get_replicators(&self.p2p).await;
-        let saved_peers = self.sync_state.records();
-
-        NetworkStatus {
-            local_peer_id: local_peer_id.map_err(|error| error.to_string()),
-            listen_addresses: listen_addresses.map_err(|error| error.to_string()),
-            connected_peers: connected_peers.map_err(|error| error.to_string()),
-            replicators: replicators
-                .map(|rows| {
-                    rows.into_iter()
-                        .map(|info| NetworkReplicator {
-                            peer_id: info.id,
-                            address: info.address,
-                            collections: info.collections,
-                            status: info.status,
-                            last_status_change: info.last_status_change,
-                        })
-                        .collect()
-                })
-                .map_err(|error| error.to_string()),
-            saved_peers,
-        }
     }
 
     pub async fn rename_peer(&self, peer_id: &str, label: &str) -> Result<()> {
@@ -189,9 +160,9 @@ impl ClientCore {
         tokio::task::spawn_blocking(move || {
             crate::local_runtime::operator_endpoint(&record, &capability)
         })
-            .await
-            .ok()
-            .flatten()
+        .await
+        .ok()
+        .flatten()
     }
 
     pub fn operator_signer(
@@ -289,22 +260,4 @@ impl ClientCore {
             .transpose()?
             .context("the local node that installed this app has no operator connection")
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct NetworkStatus {
-    pub local_peer_id: std::result::Result<String, String>,
-    pub listen_addresses: std::result::Result<Vec<String>, String>,
-    pub connected_peers: std::result::Result<Vec<String>, String>,
-    pub replicators: std::result::Result<Vec<NetworkReplicator>, String>,
-    pub saved_peers: Vec<crate::client::peer_directory::PeerRecord>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NetworkReplicator {
-    pub peer_id: Option<String>,
-    pub address: Option<String>,
-    pub collections: Vec<String>,
-    pub status: Option<u8>,
-    pub last_status_change: Option<String>,
 }

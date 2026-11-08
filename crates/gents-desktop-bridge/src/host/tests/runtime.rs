@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::super::{approvals::AttachmentApprovals, protocol, ClientHost};
+use super::super::{protocol, ClientHost};
 
 #[tokio::test]
 async fn runtime_location_rejects_an_unknown_node() {
@@ -15,11 +15,7 @@ async fn runtime_location_rejects_an_unknown_node() {
     .unwrap();
     assert!(command.is_cancellable());
     let error = host
-        .execute(
-            command,
-            &AttachmentApprovals::default(),
-            CancellationToken::new(),
-        )
+        .execute(command, CancellationToken::new())
         .await
         .unwrap_err();
     assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
@@ -51,13 +47,11 @@ async fn runtime_location_accepts_a_paired_runtime_without_operator_access() {
             .unwrap(),
     );
     let host = ClientHost::new(core.clone());
-    let approvals = AttachmentApprovals::default();
     assert_eq!(
         host.execute(
             protocol::ClientCommand::RuntimeIsLocal {
                 node_did: "did:paired".into()
             },
-            &approvals,
             CancellationToken::new(),
         )
         .await
@@ -117,7 +111,6 @@ async fn paired_model_settings_use_the_authenticated_client_endpoint() {
             protocol::ClientCommand::InferenceSetupState {
                 node_did: "did:paired".into(),
             },
-            &AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -172,7 +165,6 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     let result = host
         .execute(
             protocol::ClientCommand::Snapshot {},
-            &AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await

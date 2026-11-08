@@ -16,10 +16,6 @@ export type { MailboxItemView } from "../generated/MailboxItemView.js";
 export type { MailboxQuestion } from "../generated/MailboxQuestion.js";
 export type { MailboxQuestionAnswer } from "../generated/MailboxQuestionAnswer.js";
 export type { MailboxQuestionOption } from "../generated/MailboxQuestionOption.js";
-export type { NetworkReplicatorView } from "../generated/NetworkReplicatorView.js";
-export type { NetworkSavedPeerView } from "../generated/NetworkSavedPeerView.js";
-export type { NetworkStatusView } from "../generated/NetworkStatusView.js";
-export type { PairingCollectionStatusView } from "../generated/PairingCollectionStatusView.js";
 export type { RuntimeView } from "../generated/RuntimeView.js";
 export type { SyncHealthView } from "../generated/SyncHealthView.js";
 export type { Schedule } from "../generated/Schedule.js";
@@ -30,7 +26,6 @@ export type { TaskRecentRunsView } from "../generated/TaskRecentRunsView.js";
 export type { TaskRunSummaryView } from "../generated/TaskRunSummaryView.js";
 export type { TaskView } from "../generated/TaskView.js";
 
-export type { ToolSurfaceExplanationView } from "../generated/ToolSurfaceExplanationView.js";
 
 export type { SessionProvenance } from "../generated/SessionProvenance.js";
 export type { SessionFork } from "../generated/SessionFork.js";

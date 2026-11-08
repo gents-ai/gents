@@ -75,8 +75,6 @@ mod ports;
 mod retained_schema_upgrade;
 #[path = "support/runtime_replacement.rs"]
 mod runtime_replacement;
-#[path = "support/speech.rs"]
-mod speech;
 mod support;
 
 use fake_llm::{ChatAction, FakeLlm};
@@ -1173,72 +1171,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
     }
-    let speech = if matches!(journey, Journey::Conversation) {
+    if matches!(journey, Journey::Conversation) {
         client
             .call(id, "client_enroll_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
-        let service = speech::SpeechService::start().await?;
-        let value = json!({"node_did":node_did,"service_id":"editor-speech","display_name":"Editor speech",
-            "hostname":"127.0.0.1","mcp_port":service.port,"mcp_path":"/mcp","enabled":true,"send_node_did":true});
-        let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
-            gents::store::config_client::DesiredStateApplyDocument {
-                collection: gents::Collection::ToolServiceRegistry,
-                add: value.clone(),
-                update: value,
-            },
-        ])?;
-        let signing_access = gents::ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did())
-                .with_client_signing_capability(identity.client_signing_capability()?)?
-                .with_client_signed_agent_creates(),
-        );
-        signing_access
-            .transact_write("seed_editor_speech_service", |txn| {
-                let plan = &plan;
-                Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
-            })
-            .await?;
-        let services = client
-            .call(id, "client_speech_services", json!({"nodeDid":node_did}))
-            .await;
-        id += 1;
-        ensure!(
-            services.as_array().is_some_and(|services| services
-                .iter()
-                .any(|service| service["serviceId"] == "editor-speech")),
-            "configured speech service was not discovered: {services}"
-        );
-        let tools = client
-            .call(
-                id,
-                "client_speech_tools",
-                json!({"nodeDid":node_did,"serviceId":"editor-speech"}),
-            )
-            .await;
-        id += 1;
-        ensure!(
-            tools.as_array().is_some_and(|tools| tools.len() == 2),
-            "speech adapter tools were not discovered: {tools}"
-        );
-        Some(service)
-    } else {
-        None
-    };
-    let content =
-        if speech.is_some() {
-            let transcript = client.call(id, "client_speech_recognize", json!({"request": {
-            "tool":{"nodeDid":node_did,"serviceId":"editor-speech","toolName":"transcribe"},
-            "clip":{"pcm":"AAAAAA==","sampleRate":48000},"language":"en"
-        }})).await;
-            id += 1;
-            transcript
-                .as_str()
-                .context("configured speech transcript")?
-                .to_owned()
-        } else {
-            "Return the fixture response.".to_owned()
-        };
+    }
+    let content = "Return the fixture response.".to_owned();
     let receipt = if matches!(journey, Journey::Goal) {
         let mut recovery = EditRecoveryHost {
             process: &mut host,
@@ -1822,35 +1761,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 .is_ok_and(|value| value["output"]["kind"] == "loading"),
         "a request's answer escaped its session scope"
     );
-    if let Some(speech) = speech.as_ref() {
-        let clip = client
-            .call(
-                id,
-                "client_speech_synthesize",
-                json!({"request":{
-                    "tool":{"nodeDid":node_did,"serviceId":"editor-speech","toolName":"synthesize"},
-                    "text":"First part and final part.","sampleRate":48000
-                }}),
-            )
-            .await;
-        id += 1;
-        let clip: gents_protocol::client_media::MediaPcmClip = serde_json::from_value(clip)?;
-        ensure!(clip.sample_rate == 48000 && clip.samples()? == [i16::MIN, i16::MAX]);
-        let calls = speech.calls.lock().unwrap();
-        ensure!(
-            calls.len() == 2 && calls.iter().all(|(actor, _)| actor == &client_did),
-            "speech calls must use the actual client actor exactly once per operation"
-        );
-        ensure!(
-            calls[0].1["arguments"]["audio"]
-                == json!({"data":"AAAAAA==","format":"pcm_s16le","sampleRate":48000,"channels":1})
-        );
-        ensure!(calls[1].1["arguments"]["text"] == "First part and final part.");
-        ensure!(
-            calls[1].1["arguments"].get("language").is_none()
-                && calls[1].1["arguments"].get("voice").is_none()
-        );
-    }
     if matches!(journey, Journey::Goal) {
         wait_goal(&mut client, &mut id, node_did, session, "paused").await?;
         let requests = access
@@ -2685,15 +2595,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::Conversation) {
-        configured_actions::exercise(
-            &mut client,
-            &mut id,
-            &access,
-            node_did,
-            agent_did,
-            &client_did,
-        )
-        .await?;
+        configured_actions::exercise(&mut client, &mut id, &access, node_did).await?;
     }
     if matches!(journey, Journey::Conversation | Journey::Editor) {
         client = exercise_message_edit(
@@ -3138,26 +3040,13 @@ async fn read_session(
     node_did: &str,
     session: &str,
 ) -> Result<Value> {
-    read_session_page(client, id, node_did, session, None).await
-}
-
-async fn read_session_page(
-    client: &mut Attachment,
-    id: &mut u32,
-    node_did: &str,
-    session: &str,
-    before: Option<&str>,
-) -> Result<Value> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let result = client
                 .try_call(
                     *id,
                     "desktop_session_snapshot",
-                    json!({
-                        "nodeDid":node_did, "sessionId":session, "timelineLimit":40,
-                        "timelineBeforeItemKey":before,
-                    }),
+                    json!({"nodeDid":node_did, "sessionId":session, "timelineLimit":40}),
                 )
                 .await;
             *id += 1;

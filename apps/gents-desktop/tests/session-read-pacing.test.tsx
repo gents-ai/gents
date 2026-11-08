@@ -324,44 +324,6 @@ describe("a session waiting on its node", () => {
   });
 });
 
-describe("a session read through the node's operator access", () => {
-  it("is read at the session read gap, having no replica here to raise events", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const api = bridgeApi();
-    const session = {
-      ...sessionSnapshot({
-        sessionId: "s-1",
-        nodeDid: NODE_DID,
-        turnState: "running",
-        latestRequestId: "r-1",
-        liveCursor: null,
-        timelineItems: [],
-      }),
-      readThroughOperator: true,
-    };
-    api.fetchSessionSnapshot.mockResolvedValue(session);
-    const app = testApp({ api, snapshot: running, session });
-    expect(app.trackedRequestId()).toBe("r-1");
-    const stop = startClientObservation(
-      app,
-      vi.fn(async () => () => {}),
-    );
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
-      stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
-    } finally {
-      stop();
-    }
-  });
-});
-
 describe("Try again on a session that couldn't be read", () => {
   it("reads the session again, not only the node list", async () => {
     const api = {

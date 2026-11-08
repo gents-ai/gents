@@ -10,7 +10,6 @@ pub async fn session_snapshot(
     node_did: Option<String>,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<String>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let started = std::time::Instant::now();
     let node_did = Some(resolve_session_node(core, &session_id, node_did)?);
@@ -26,7 +25,7 @@ pub async fn session_snapshot(
         &session_id,
         node_did.as_deref(),
         requester_scope.as_deref(),
-        timeline_before_item_key.as_deref(),
+        None,
         timeline_limit,
     );
     let transcript_page = page_read.await.map_err(|error| {
@@ -124,9 +123,6 @@ pub async fn session_snapshot(
             .await
     };
     let context_read = async {
-        if timeline_before_item_key.is_some() {
-            return Ok(None);
-        }
         let request = request_id.as_deref().and_then(|request_id| {
             if let Some(requests) = fresh_requests.as_ref() {
                 gents_desktop_core::client::ClientStore::session_tip_request_from_rows(
@@ -195,13 +191,12 @@ pub async fn session_snapshot(
         context_store.as_ref(),
         prompt_ownership.as_ref(),
         false,
-        timeline_before_item_key.is_none(),
+        true,
         fresh_requests.as_deref(),
     )
     .await
     .map_err(BridgeError::classify_transport_error)?;
     if let Some(snapshot) = snapshot.as_mut() {
-        snapshot.read_through_operator = None;
         if let (Some(node), Some(requests), Some(selected)) = (
             node_did.as_deref(),
             fresh_requests.as_ref(),
@@ -223,13 +218,8 @@ pub async fn session_snapshot(
                 .map_err(BridgeError::classify_transport_error)?;
             }
         }
-        apply_session_timeline_page_with_query(
-            snapshot,
-            timeline_before_item_key.as_deref(),
-            timeline_limit,
-            Some(&transcript_page),
-        )
-        .map_err(BridgeError::untyped)?;
+        apply_session_timeline_page_with_query(snapshot, timeline_limit, Some(&transcript_page))
+            .map_err(BridgeError::untyped)?;
     }
     let projection_ms = projection_started.elapsed().as_millis() as u64;
     let elapsed = started.elapsed();

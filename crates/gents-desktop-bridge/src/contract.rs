@@ -20,11 +20,9 @@ pub const MANAGED_SERVER_TRAY_RESTART_EVENT: &str = "desktop://managed-server-tr
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
 pub const CLAUDE_LOGIN_URL_EVENT: &str = "desktop://claude-login-url";
 pub const PLUGIN_APPROVALS_CHANGED_EVENT: &str = "desktop://plugin-approvals-changed";
-pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config", "approvals"];
 
 pub fn command_inventory() -> Vec<CommandContract> {
     let entries: &[(&str, &str)] = &[
-        ("desktop_bootstrap_summary", "core"),
         ("desktop_client_snapshot", "core"),
         ("desktop_observer_metrics", "core"),
         ("desktop_client_start", "client-lifecycle"),
@@ -80,9 +78,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_session_rows", "session-read"),
         ("desktop_tool_file_changes", "session-read"),
         ("desktop_session_goal", "session-read"),
-        ("desktop_session_reload", "session-read"),
+        ("desktop_session_reload", "session-control"),
         ("desktop_request_timeline", "trace-read"),
-        ("desktop_tool_surface_explain", "tool-surface-read"),
         ("desktop_chat_send", "chat-write"),
         ("desktop_chat_submission_recover", "chat-write"),
         ("desktop_chat_submission_acknowledge", "chat-write"),
@@ -97,20 +94,15 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_session_fork_before_message", "chat-write"),
         ("desktop_session_rename", "chat-write"),
         ("desktop_session_archive", "chat-write"),
-        ("desktop_session_history", "session-read"),
-        ("desktop_mailbox_list", "mailbox-read"),
         ("desktop_mailbox_observe", "mailbox-read"),
         ("desktop_mailbox_start_request", "mailbox-control"),
         ("desktop_mailbox_dismiss", "mailbox-control"),
-        ("desktop_request_resend", "resend-control"),
         ("desktop_request_retry", "resend-control"),
         ("desktop_peer_status_fetch", "fleet-read"),
-        ("desktop_network_status", "fleet-read"),
         ("desktop_workspace_list", "workspace-read"),
         ("desktop_peer_remove", "fleet-admin"),
         ("desktop_peer_rename", "fleet-admin"),
         ("desktop_peer_enroll_status", "fleet-admin"),
-        ("desktop_p2p_repair", "fleet-admin"),
         ("desktop_operations_snapshot", "operations-read"),
         ("desktop_session_provenance", "operations-read"),
         ("desktop_list_backends_with_health", "operations-read"),
@@ -190,7 +182,6 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("session-read", "read"),
         ("session-control", "mutate"),
         ("trace-read", "read"),
-        ("tool-surface-read", "read"),
         ("chat-write", "mutate"),
         ("mailbox-read", "read"),
         ("mailbox-control", "mutate"),
@@ -443,7 +434,6 @@ mod tests {
             }
         }
         const COMMAND_KINDS: &[(&str, &str)] = &[
-            ("desktop_bootstrap_summary", "read"),
             ("desktop_client_snapshot", "read"),
             ("desktop_observer_metrics", "read"),
             ("desktop_client_start", "mutate"),
@@ -503,9 +493,8 @@ mod tests {
             ("desktop_session_rows", "read"),
             ("desktop_tool_file_changes", "read"),
             ("desktop_session_goal", "read"),
-            ("desktop_session_reload", "read"),
+            ("desktop_session_reload", "mutate"),
             ("desktop_request_timeline", "read"),
-            ("desktop_tool_surface_explain", "read"),
             ("desktop_chat_send", "mutate"),
             ("desktop_chat_submission_recover", "mutate"),
             ("desktop_chat_submission_acknowledge", "mutate"),
@@ -518,20 +507,15 @@ mod tests {
             ("desktop_session_fork_before_message", "mutate"),
             ("desktop_session_rename", "mutate"),
             ("desktop_session_archive", "mutate"),
-            ("desktop_session_history", "read"),
-            ("desktop_mailbox_list", "read"),
             ("desktop_mailbox_observe", "read"),
             ("desktop_mailbox_start_request", "mutate"),
             ("desktop_mailbox_dismiss", "mutate"),
-            ("desktop_request_resend", "mutate"),
             ("desktop_request_retry", "mutate"),
             ("desktop_peer_status_fetch", "read"),
-            ("desktop_network_status", "read"),
             ("desktop_workspace_list", "read"),
             ("desktop_peer_remove", "mutate"),
             ("desktop_peer_rename", "mutate"),
             ("desktop_peer_enroll_status", "mutate"),
-            ("desktop_p2p_repair", "mutate"),
             ("desktop_operations_snapshot", "read"),
             ("desktop_session_provenance", "read"),
             ("desktop_list_backends_with_health", "read"),
@@ -648,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn event_names_and_reasons_remain_distinct() {
+    fn event_names_remain_distinct() {
         let mut names = BTreeSet::new();
         for event in [
             CLIENT_UPDATED_EVENT,
@@ -668,10 +652,5 @@ mod tests {
             );
             assert!(names.insert(event), "duplicate desktop event {event}");
         }
-        assert_eq!(
-            EVENT_REASONS.len(),
-            EVENT_REASONS.iter().copied().collect::<BTreeSet<_>>().len(),
-            "client update reasons must be unique",
-        );
     }
 }

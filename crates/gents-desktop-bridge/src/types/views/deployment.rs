@@ -34,16 +34,6 @@ pub struct SyncHealthView {
     pub quarantined_dag_count: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PairingCollectionStatusView {
-    pub collection_id: String,
-    pub pairing_retry_count: u32,
-    pub last_retry_at: Option<String>,
-    pub last_retry_error_class: Option<String>,
-    pub stuck_since: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeView {
@@ -368,25 +358,6 @@ impl From<&MailboxItemRow> for MailboxItemView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ClientRouteStatusView {
-    pub route_id: String,
-    pub direction: String,
-    pub directory_id: String,
-    pub transport_peer_id: Option<String>,
-    pub address: Option<String>,
-    pub template: Option<String>,
-    pub desired: bool,
-    pub applied: bool,
-    pub live_match: bool,
-    pub filter_summary: String,
-    pub last_error: Option<String>,
-    pub retry_count: u32,
-    pub last_retry_at: Option<String>,
-    pub last_retry_error_class: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct DeploymentView {
     pub peer_id: String,
     pub label: String,
@@ -402,9 +373,6 @@ pub struct DeploymentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pairing_ready: Option<bool>,
-    pub routes: Vec<ClientRouteStatusView>,
-    #[serde(default)]
-    pub pairing: Vec<PairingCollectionStatusView>,
     pub last_error: Option<String>,
     pub node: NodeView,
     pub node_config: Option<Node>,
@@ -436,17 +404,9 @@ pub struct DeploymentView {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopRuntimeSnapshot {
     pub client_did: String,
-    pub local_peer_id: String,
-    pub listen_addresses: Vec<String>,
     pub p2p_health: P2PHealthView,
     pub sync_health: Option<SyncHealthView>,
     pub enrollment_requests: Option<Vec<EnrollmentRequestView>>,
-    pub bootstrap_errors: Vec<String>,
-    pub last_mutation_error: Option<String>,
-    pub focused_request_id: Option<String>,
-    pub configured_peer_count: usize,
-    pub dialed_peer_count: usize,
-    pub peer_issue_count: usize,
     pub row_count: usize,
     pub approx_serialized_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -530,38 +490,4 @@ impl PeerRemoveResponse {
             mutation: mutation.into(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkStatusView {
-    pub local_peer_id: Option<String>,
-    pub local_peer_id_error: Option<String>,
-    pub listen_addresses: Vec<String>,
-    pub listen_addresses_error: Option<String>,
-    pub connected_peers: Vec<String>,
-    pub connected_peers_error: Option<String>,
-    pub replicators: Vec<NetworkReplicatorView>,
-    pub replicators_error: Option<String>,
-    pub saved_peers: Vec<NetworkSavedPeerView>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkReplicatorView {
-    pub peer_id: Option<String>,
-    pub address: Option<String>,
-    pub collections: Vec<String>,
-    pub status: Option<u8>,
-    pub last_status_change: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkSavedPeerView {
-    pub peer_id: String,
-    pub label: String,
-    pub addr: String,
-    pub node_did: String,
-    pub source: Option<String>,
 }

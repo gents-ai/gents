@@ -1,4 +1,4 @@
-use super::{fake_llm, read_session, read_session_page, Attachment};
+use super::{fake_llm, read_session, Attachment};
 use anyhow::{ensure, Context, Result};
 use gents::ConfigAccess;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -275,7 +275,7 @@ pub async fn populate(
         snapshot["timelinePage"]["hasOlder"] == true,
         "history did not cross the native transcript page boundary: {snapshot}"
     );
-    let mut page = snapshot.clone();
+    let mut page = read_rows(client, id, node, session, json!({"kind":"tip"})).await?;
     let mut keys = BTreeSet::new();
     let mut kinds = BTreeMap::<String, usize>::new();
     let mut pages = 0;
@@ -294,7 +294,7 @@ pub async fn populate(
             pages <= options.turns + 1,
             "history paging did not terminate"
         );
-        let items = page["timelineItems"]
+        let items = page["rows"]
             .as_array()
             .context("history page has no timeline items")?;
         ensure!(!items.is_empty(), "history page unexpectedly empty");
@@ -349,19 +349,25 @@ pub async fn populate(
                 }));
             }
         }
-        if page["timelinePage"]["hasOlder"] == false {
+        if page["hasOlder"] == false {
             break;
         }
-        let cursor = page["timelinePage"]["oldestItemKey"]
-            .as_str()
-            .context("history page has no older cursor")?
-            .to_owned();
-        page = read_session_page(client, id, node, session, Some(&cursor)).await?;
+        let before = page["coveredFrom"]
+            .as_i64()
+            .context("history rows have no older bound")?;
+        page = read_rows(
+            client,
+            id,
+            node,
+            session,
+            json!({"kind":"before","sequence":before}),
+        )
+        .await?;
         ensure!(
             page["nodeDid"] == node
                 && page["sessionId"] == session
-                && page["timelinePage"]["oldestItemKey"] != cursor,
-            "history page crossed scope or failed to advance"
+                && page["coveredFrom"].as_i64() != Some(before),
+            "history rows crossed scope or failed to advance"
         );
     }
     ensure!(
@@ -631,4 +637,23 @@ fn history_profile_replaces_stale_success_before_seeding_and_preserves_failure()
         "native stall evidence"
     );
     Ok(())
+}
+
+/// Older history comes from the transcript rows read the desktop uses.
+async fn read_rows(
+    client: &mut Attachment,
+    id: &mut u32,
+    node: &str,
+    session: &str,
+    window: Value,
+) -> Result<Value> {
+    let rows = client
+        .call(
+            *id,
+            "desktop_session_rows",
+            json!({"sessionId":session, "nodeDid":node, "window":window, "limit":40}),
+        )
+        .await;
+    *id += 1;
+    Ok(rows)
 }

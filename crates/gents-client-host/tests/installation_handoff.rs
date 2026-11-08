@@ -60,7 +60,6 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
             .await
             .unwrap(),
     );
-    let peer = seed.local_peer_id().to_owned();
     let client_did = seed.node_identity().did().to_owned();
     let did = gents::store::graphql::escape_graphql_string(&client_did);
     gents::store::config_client::ConfigAccess::write_local(
@@ -134,7 +133,6 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
 
     let mut updated = Attachment::start(&paths).await;
     let snapshot = updated.snapshot(1).await;
-    assert_eq!(snapshot["client"]["localPeerId"], peer);
     assert_eq!(snapshot["client"]["clientDid"], client_did);
     updated.close().await;
     let (mut connection, current) = hello(&paths).await;

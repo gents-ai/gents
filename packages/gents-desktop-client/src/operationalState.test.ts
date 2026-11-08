@@ -30,8 +30,6 @@ function deployment(
     runtimeConnection: "connected",
     chatSafe: true,
     pairingReady: true,
-    routes: [],
-    pairing: [],
     lastError: null,
     nodeConfig: null,
     agentConfigs: [],

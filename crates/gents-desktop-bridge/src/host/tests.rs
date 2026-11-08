@@ -53,8 +53,8 @@ async fn two_attachments_share_a_core_and_detaching_does_not_close_it() {
             assert_eq!(response["id"], 1);
             assert!(response["error"].is_null(), "{response}");
             assert_eq!(
-                response["result"]["client"]["localPeerId"],
-                core.local_peer_id()
+                response["result"]["client"]["clientDid"],
+                core.node_identity().did()
             );
             assert_eq!(response["result"]["bootstrap"]["desktopHome"], "");
             break;
@@ -262,7 +262,6 @@ async fn request_retry_reaches_the_existing_parent_owner() {
                 request_id: "missing-parent".into(),
                 node_did: "node".into(),
             },
-            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -316,7 +315,6 @@ async fn provider_usage_read_rejects_an_unconfigured_runtime() {
                     provider: None,
                 },
             },
-            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -352,7 +350,6 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
             protocol::ClientCommand::InferenceSetupState {
                 node_did: "did:unconfigured".into(),
             },
-            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await
@@ -416,7 +413,6 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
             protocol::ClientCommand::InferenceSetupState {
                 node_did: did.clone(),
             },
-            &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
         .await;
@@ -474,13 +470,11 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     .unwrap();
     assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let host = ClientHost::new(core.clone());
-    let approvals = super::approvals::AttachmentApprovals::default();
     assert_eq!(
         host.execute(
             protocol::ClientCommand::RuntimeIsLocal {
                 node_did: did.clone()
             },
-            &approvals,
             CancellationToken::new(),
         )
         .await
@@ -489,22 +483,10 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     );
     host.execute(
         protocol::ClientCommand::Snapshot {},
-        &approvals,
         CancellationToken::new(),
     )
     .await
     .unwrap();
-    let _ = host
-        .execute(
-            protocol::ClientCommand::AccountsList {
-                request: crate::accounts::ProviderAccountsRequest {
-                    node_did: did.clone(),
-                },
-            },
-            &approvals,
-            CancellationToken::new(),
-        )
-        .await;
     let _ = core
         .session_goal_observation(&did, "unavailable-session")
         .await;
@@ -540,7 +522,6 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
             protocol::ClientCommand::InferenceSetupState {
                 node_did: did.clone(),
             },
-            &approvals,
             CancellationToken::new(),
         )
         .await
@@ -562,65 +543,6 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .unwrap()
         .starts_with("Bearer "));
     core.shutdown().await.unwrap();
-}
-
-#[test]
-fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection() {
-    let mut request = json!({
-        "nodeDid": "did:key:runtime", "agentDid": "engineer", "workspacePath": "/project"
-    });
-    let decode = |request: Value| {
-        serde_json::from_value::<protocol::ClientCommand>(json!({
-            "name": "client_workspace_permissions", "args": {"request": request}
-        }))
-    };
-    assert!(decode(request.clone()).unwrap().is_cancellable());
-    for field in ["requesterDid", "mode", "revision", "home", "endpoint"] {
-        request[field] = "untrusted".into();
-        assert!(decode(request.clone()).is_err(), "accepted {field}");
-        request.as_object_mut().unwrap().remove(field);
-    }
-    for field in ["nodeDid", "agentDid", "workspacePath"] {
-        let mut incomplete = request.clone();
-        incomplete.as_object_mut().unwrap().remove(field);
-        assert!(decode(incomplete).is_err(), "missing {field}");
-    }
-}
-
-#[test]
-fn forgetting_commands_is_scoped_and_drains_the_native_write() {
-    let request = json!({
-        "scope":{"nodeDid":"runtime","agentDid":"agent","workspacePath":"/project"},
-        "expectedRevision":"2","expectedWorkspacePath":"/project"
-    });
-    let decode = |request: Value| {
-        serde_json::from_value::<protocol::ClientCommand>(json!({
-            "name":"client_workspace_permissions_forget_commands","args":{"request":request}
-        }))
-    };
-    assert!(!decode(request.clone()).unwrap().is_cancellable());
-    for field in ["requesterDid", "home", "mode", "taskId"] {
-        let mut invalid = request.clone();
-        invalid[field] = "untrusted".into();
-        assert!(decode(invalid).is_err(), "accepted {field}");
-    }
-}
-
-#[test]
-fn workspace_permission_saves_are_strict_and_finish_submitted_mutations() {
-    let request = json!({
-        "scope":{"nodeDid":"runtime","agentDid":"agent","workspacePath":"/project"},
-        "expectedRevision":"0","expectedWorkspacePath":"/project","mode":"autoReview"
-    });
-    let decode = |request: Value| {
-        serde_json::from_value::<protocol::ClientCommand>(json!({
-            "name":"client_workspace_permissions_save","args":{"request":request}
-        }))
-    };
-    assert!(!decode(request.clone()).unwrap().is_cancellable());
-    let mut invalid = request;
-    invalid["taskId"] = "another-task".into();
-    assert!(decode(invalid).is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -739,8 +661,8 @@ async fn retirement_requires_the_current_installation_build_and_never_retires_an
             if response["kind"] == "response" && response["id"] == 2 {
                 assert!(response["error"].is_null(), "{response}");
                 assert_eq!(
-                    response["result"]["client"]["localPeerId"],
-                    core.local_peer_id()
+                    response["result"]["client"]["clientDid"],
+                    core.node_identity().did()
                 );
                 break;
             }

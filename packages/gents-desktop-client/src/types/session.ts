@@ -24,7 +24,6 @@ export type { ToolDiffLineKind } from "../generated/ToolDiffLineKind.js";
 export type { ToolDiffLineView } from "../generated/ToolDiffLineView.js";
 export type { ToolPresentationView } from "../generated/ToolPresentationView.js";
 
-export type { RequestResendResultView as RequestResendResult } from "../generated/RequestResendResultView.js";
 
 export type { RunTimelineEventView } from "../generated/RunTimelineEventView.js";
 export type { RequestTimelineView } from "../generated/RequestTimelineView.js";

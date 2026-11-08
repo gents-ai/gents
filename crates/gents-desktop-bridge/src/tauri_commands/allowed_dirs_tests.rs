@@ -207,3 +207,53 @@ fn a_failed_subscription_does_not_advertise_a_listener() {
     .is_err());
     assert!(!*active.borrow());
 }
+
+#[test]
+fn an_unsubscribed_window_cannot_answer_an_approval() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("node");
+    let config = BridgeConfig {
+        home: HomePolicy::FixedRoot(temp.path().join("desktop")),
+        bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
+            node_home: NodeHomePolicy::Fixed(home),
+        },
+        ..Default::default()
+    };
+    let app = tauri::test::mock_builder()
+        .manage(DesktopAppState::new(resolve_policy(&config, None).unwrap()))
+        .invoke_handler(tauri::generate_handler![
+            desktop_plugin_approval_subscribe,
+            desktop_plugin_approval_decide
+        ])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let other = tauri::WebviewWindowBuilder::new(&app, "other", Default::default())
+        .build()
+        .unwrap();
+    let state = app.state::<DesktopAppState>();
+    state.register_window("main");
+    state.register_window("other");
+    invoke(
+        &main,
+        "desktop_plugin_approval_subscribe",
+        json!({"token": "prompt"}),
+    )
+    .unwrap();
+    let decide = json!({"id": "approval-1", "decision": "deny"});
+
+    let refused = invoke(&other, "desktop_plugin_approval_decide", decide.clone())
+        .expect_err("an unsubscribed window is refused");
+    assert_eq!(refused["code"], "permissionDenied", "{refused}");
+
+    let answered = invoke(&main, "desktop_plugin_approval_decide", decide);
+    assert!(
+        answered
+            .as_ref()
+            .err()
+            .is_none_or(|error| error["code"] != "permissionDenied"),
+        "the subscribed window passes the gate: {answered:?}"
+    );
+}

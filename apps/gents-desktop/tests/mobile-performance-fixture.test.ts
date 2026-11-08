@@ -64,7 +64,7 @@ describe("mobile performance fixture structural budgets", () => {
     expect(serializedBytes(session)).toBeLessThanOrEqual(256 * 1024);
   });
 
-  it("bounds bridge pages and advances the older cursor without overlap", async () => {
+  it("bounds the bridge tip page", async () => {
     const harness = createDesktopUiHarness({ scenario: "mobile-performance" });
     const tip = await harness.adapter.fetchSessionSnapshot(
       "session-large",
@@ -80,24 +80,6 @@ describe("mobile performance fixture structural budgets", () => {
       hasNewer: false,
     });
     expect(serializedBytes(tip)).toBeLessThanOrEqual(16 * 1024);
-
-    const older = await harness.adapter.fetchSessionSnapshot(
-      "session-large",
-      "did:key:z6MkBombadilAgent",
-      null,
-      {
-        limit: MOBILE_PERFORMANCE_FIXTURE.transcriptPageSize,
-        beforeItemKey: tip?.timelinePage?.oldestItemKey,
-      },
-    );
-    expect(older?.timelineItems).toHaveLength(40);
-    expect(older?.timelinePage?.hasNewer).toBe(true);
-    expect(
-      older?.timelineItems.some((olderItem) =>
-        tip?.timelineItems.some((tipItem) => tipItem.itemKey === olderItem.itemKey),
-      ),
-    ).toBe(false);
-    expect(serializedBytes(older)).toBeLessThanOrEqual(16 * 1024);
   });
 
   it("exposes a fixed long-transcript typing workload", () => {

@@ -5,10 +5,7 @@ import {
   applySessionLiveDelta,
   sessionLiveDeltaRequest,
 } from "@source-inc/gents-desktop-client";
-import {
-  mergeOlderSessionTimelinePage,
-  mergeSessionTipSnapshot,
-} from "@source-inc/gents-desktop-client";
+import { mergeSessionTipSnapshot } from "@source-inc/gents-desktop-client";
 
 describe("live session deltas", () => {
   it("applies a verified suffix while preserving historical row identity", () => {
@@ -115,63 +112,6 @@ describe("live session deltas", () => {
     expect(next?.timelineItems[0].itemKey).toBe("k1");
   });
 
-  it("keeps a loaded older page when a live delta arrives", () => {
-    const current = session(["k8"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 1,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k8",
-      newestItemKey: "k8",
-    });
-    current.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
-    current.timelineItems.push({
-      kind: "liveAssistant",
-      itemKey: "live-assistant",
-      content: "hello",
-      reasoning: null,
-    });
-    const older = session(["k1"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 1,
-      hasOlder: false,
-      hasNewer: true,
-      oldestItemKey: "k1",
-      newestItemKey: "k1",
-    });
-    const withOlder = mergeOlderSessionTimelinePage(current, older);
-
-    const next = applySessionLiveDelta(withOlder, {
-      outcome: "delta",
-      liveCursor: "cursor",
-      revision: { storeVersion: 8, provenanceVersion: 1 },
-      requestId: "request-1",
-      turnState: "running",
-      status: null,
-      content: {
-        mode: "append",
-        value: " world",
-        byteLen: 11,
-        hash: "d58b3fa7",
-      },
-      reasoning: {
-        mode: "unchanged",
-        value: "",
-        byteLen: 0,
-        hash: "811c9dc5",
-      },
-    });
-
-    expect(next?.timelineItems.map((item) => item.itemKey)).toEqual([
-      "k1",
-      "k8",
-      "live-assistant",
-    ]);
-    expect(next?.timelineItems.at(-1)).toMatchObject({ content: "hello world" });
-  });
-
   it("rejects a corrupt suffix", () => {
     const current = session([], null);
     current.projectionRevision = { storeVersion: 4, provenanceVersion: 1 };
@@ -258,144 +198,9 @@ function session(
 }
 
 describe("session timeline page merging", () => {
-  it("an older page's folded entry retires a stale pending copy of that input", () => {
-    const current = session(["k8"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 2,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "pending-folded",
-      newestItemKey: "k8",
-    });
-    current.timelineItems.unshift({
-      kind: "pendingUserTurn",
-      itemKey: "pending-folded",
-      requestId: "folded",
-      content: "also this",
-      selectedSkillIds: [],
-      lifecycleState: "superseded",
-      foldedIntoRequestId: "head",
-      origin: null,
-      createdAt: null,
-    });
-    const older = session([], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 1,
-      hasOlder: false,
-      hasNewer: true,
-      oldestItemKey: "authored:doc-head:folded:doc-folded",
-      newestItemKey: "authored:doc-head:folded:doc-folded",
-    });
-    older.timelineItems = [
-      {
-        kind: "userMessage",
-        itemKey: "authored:doc-head:folded:doc-folded",
-        requestId: "doc-head",
-        inputRequestId: "folded",
-        ownsTurn: false,
-        sequence: 3,
-        content: "also this",
-        timestamp: null,
-        reconstruction: { state: "ready" },
-      },
-    ];
-    const merged = mergeOlderSessionTimelinePage(current, older);
-    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
-      "authored:doc-head:folded:doc-folded",
-      "k8",
-    ]);
-  });
-
-  it("keeps distinct requests with identical content across older pages", () => {
-    const page = {
-      totalItems: 2,
-      pageItems: 1,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k2",
-      newestItemKey: "k2",
-    };
-    const current = session(["k2"], page);
-    current.timelineItems = [
-      {
-        kind: "pendingUserTurn",
-        itemKey: "pending-r2",
-        requestId: "r2",
-        content: "repeat",
-        selectedSkillIds: [],
-        lifecycleState: "pending",
-        foldedIntoRequestId: null,
-        origin: null,
-        createdAt: null,
-      },
-    ];
-    const older = session(["k1"], { ...page, hasOlder: false });
-    older.timelineItems = [
-      {
-        kind: "userMessage",
-        itemKey: "authored-r1",
-        requestId: "r1",
-        ownsTurn: true,
-        sequence: 1,
-        content: "repeat",
-        timestamp: null,
-        reconstruction: { state: "ready" },
-      },
-    ];
-    expect(
-      mergeOlderSessionTimelinePage(current, older).timelineItems.map(
-        (item) => item.itemKey,
-      ),
-    ).toEqual(["authored-r1", "pending-r2"]);
-  });
-
-  it("removes the current pending row when its durable owner arrives in older history", () => {
-    const page = {
-      totalItems: 2,
-      pageItems: 1,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k2",
-      newestItemKey: "k2",
-    };
-    const current = session(["k2"], page);
-    current.timelineItems.push({
-      kind: "pendingUserTurn",
-      itemKey: "pending-r",
-      requestId: "r",
-      content: "repeat",
-      selectedSkillIds: [],
-      lifecycleState: "processing",
-      foldedIntoRequestId: null,
-      origin: null,
-      createdAt: null,
-    });
-    const older = session(["k1"], { ...page, hasOlder: false });
-    older.timelineItems = [
-      {
-        kind: "userMessage",
-        itemKey: "authored-r",
-        requestId: "r",
-        ownsTurn: true,
-        inputRequestId: "r",
-        sequence: 1,
-        content: "repeat",
-        timestamp: null,
-        reconstruction: { state: "ready" },
-      },
-    ];
-    expect(
-      mergeOlderSessionTimelinePage(current, older).timelineItems.map(
-        (item) => item.itemKey,
-      ),
-    ).toEqual(["authored-r", "k2"]);
-  });
-
-  it.each(["older", "tip"] as const)(
-    "keeps a queued input when only the request's context row is saved on the %s page",
-    (direction) => {
+  it(
+    "keeps a queued input when only the request's context row is saved on the tip page",
+    () => {
       const page = {
         totalItems: 3,
         pageItems: 2,
@@ -427,10 +232,7 @@ describe("session timeline page merging", () => {
         timestamp: null,
         reconstruction: { state: "ready" },
       });
-      const merged =
-        direction === "tip"
-          ? mergeSessionTipSnapshot(current, incoming)
-          : mergeOlderSessionTimelinePage(incoming, current);
+      const merged = mergeSessionTipSnapshot(current, incoming);
       expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
         "pending-r",
         "k1",
@@ -440,9 +242,9 @@ describe("session timeline page merging", () => {
     },
   );
 
-  it.each(["older", "tip"] as const)(
-    "replaces a queued input with its durable owner when the %s page arrives",
-    (direction) => {
+  it(
+    "replaces a queued input with its durable owner when the tip page arrives",
+    () => {
       const page = {
         totalItems: 3,
         pageItems: 2,
@@ -475,10 +277,7 @@ describe("session timeline page merging", () => {
         timestamp: null,
         reconstruction: { state: "ready" },
       });
-      const merged =
-        direction === "tip"
-          ? mergeSessionTipSnapshot(current, incoming)
-          : mergeOlderSessionTimelinePage(incoming, current);
+      const merged = mergeSessionTipSnapshot(current, incoming);
       expect(
         merged.timelineItems
           .filter(
@@ -496,9 +295,9 @@ describe("session timeline page merging", () => {
     },
   );
 
-  it.each(["older", "tip"] as const)(
-    "replaces a queued trigger input with its published automated item when the %s page arrives",
-    (direction) => {
+  it(
+    "replaces a queued trigger input with its published automated item when the tip page arrives",
+    () => {
       const page = {
         totalItems: 3,
         pageItems: 2,
@@ -536,10 +335,7 @@ describe("session timeline page merging", () => {
         timestamp: null,
         reconstruction: { state: "ready" },
       });
-      const merged =
-        direction === "tip"
-          ? mergeSessionTipSnapshot(current, incoming)
-          : mergeOlderSessionTimelinePage(incoming, current);
+      const merged = mergeSessionTipSnapshot(current, incoming);
       expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
         "k1",
         "k2",
@@ -616,77 +412,6 @@ describe("session timeline page merging", () => {
       "k5",
     ]);
     expect(merged.timelineItems[1]).toBe(retained);
-  });
-
-  it("prepends an older page without regressing live session metadata", () => {
-    const current = session(["k3", "k4", "k5"], {
-      totalItems: 5,
-      pageItems: 3,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k3",
-      newestItemKey: "k5",
-    });
-    const older = session(["k1", "k2"], {
-      totalItems: 5,
-      pageItems: 2,
-      hasOlder: false,
-      hasNewer: true,
-      oldestItemKey: "k1",
-      newestItemKey: "k2",
-    });
-    older.status = "stale-page-metadata";
-
-    const merged = mergeOlderSessionTimelinePage(current, older);
-    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
-      "k1",
-      "k2",
-      "k3",
-      "k4",
-      "k5",
-    ]);
-    expect(merged.status).toBe("active");
-    expect(merged.timelinePage?.hasOlder).toBe(false);
-  });
-
-  it("advances through an older page containing only hidden durable rows", () => {
-    const current = session(["k8", "k9"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 2,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k8",
-      newestItemKey: "k9",
-    });
-    const older = session([], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 0,
-      hasOlder: true,
-      hasNewer: true,
-      oldestItemKey: "tools-7",
-      newestItemKey: "tools-7",
-    });
-
-    const merged = mergeOlderSessionTimelinePage(current, older);
-
-    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual(["k8", "k9"]);
-    expect(merged.timelinePage?.oldestItemKey).toBe("tools-7");
-    expect(merged.timelinePage?.hasOlder).toBe(true);
-
-    const refreshedTip = session(["k8", "k9"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 2,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k8",
-      newestItemKey: "k9",
-    });
-    const afterTipRefresh = mergeSessionTipSnapshot(merged, refreshedTip);
-    expect(afterTipRefresh.timelinePage?.oldestItemKey).toBe("tools-7");
-    expect(afterTipRefresh.timelinePage?.hasOlder).toBe(true);
   });
 
   it("never adds rows above the first one shown when the tip starts earlier", () => {
@@ -794,12 +519,4 @@ describe("transcript cursor ownership", () => {
     expect(merged.timelineItems[0]).toEqual(pending);
   });
 
-  it("keeps the older page cursor when its first visible item is temporary", () => {
-    const current = session(["k8"], { ...page, oldestItemKey: "k8" });
-    const older = session(["k6"], { ...page, oldestItemKey: "k6", hasNewer: true });
-    older.timelineItems.unshift(overlay);
-    expect(
-      mergeOlderSessionTimelinePage(current, older).timelinePage?.oldestItemKey,
-    ).toBe("k6");
-  });
 });

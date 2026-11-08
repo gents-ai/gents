@@ -128,7 +128,6 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
             Some(OPERATOR.into()),
             Some(submitted.into()),
             None,
-            None,
         )
         .await
         .expect("session read")

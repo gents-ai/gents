@@ -32,5 +32,4 @@ enable_p2p_tool?: boolean | null,
  * Native P2P changes also require enable_p2p_tool. Enrollment and DefraDB
  * remain the authorization owners. Unset is disabled.
  */
-enable_p2p_mutations?: boolean | null,
-enable_context_budget?: boolean | null, };
+enable_p2p_mutations?: boolean | null, enable_context_budget?: boolean | null, };

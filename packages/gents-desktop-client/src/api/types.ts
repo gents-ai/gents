@@ -69,8 +69,6 @@ import type {
   SessionRenameRequest,
   SessionArchiveRequest,
   SessionArchiveReceipt,
-  SessionHistoryRequest,
-  SessionHistoryPage,
   SessionLiveDeltaView,
   SessionRowsView,
   SessionRowsWindow,
@@ -84,8 +82,6 @@ import type {
   MailboxItemView,
   MCPServiceHealthView,
   McpServiceProbeResult,
-  NetworkStatusView,
-  RequestResendResult,
   RequestTimelineView,
   ScheduleDeleteRequest,
   ScheduleRunRequest,
@@ -103,7 +99,6 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
-  ToolSurfaceExplanationView,
   WorkspaceListingView,
 } from "../types.js";
 import type {
@@ -225,11 +220,6 @@ export type DesktopApiAdapter = {
     nodeDid: string,
     requestId: string,
   ) => Promise<RequestTimelineView>;
-  explainToolSurface: (
-    nodeDid: string,
-    agentDid: string,
-  ) => Promise<ToolSurfaceExplanationView>;
-  fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionContextDetails?: (
     request: SessionContextDetailsRequest,
   ) => Promise<SessionContextDetails | null>;
@@ -239,7 +229,6 @@ export type DesktopApiAdapter = {
     requestId?: string | null,
     timelinePage?: {
       limit?: number;
-      beforeItemKey?: string | null;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
   reloadSession: (
@@ -283,7 +272,6 @@ export type DesktopApiAdapter = {
   editPendingQueue: (
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;
-  listMailbox: () => Promise<MailboxItemView[]>;
   observeMailboxItem: (
     request: MailboxItemObservationRequest,
   ) => Promise<MailboxItemObservation | null>;
@@ -296,13 +284,6 @@ export type DesktopApiAdapter = {
   setSessionArchived: (
     request: SessionArchiveRequest,
   ) => Promise<SessionArchiveReceipt>;
-  sessionHistory: (
-    request: SessionHistoryRequest,
-  ) => Promise<SessionHistoryPage>;
-  resendRequest: (
-    requestId: string,
-    nodeDid?: string,
-  ) => Promise<RequestResendResult>;
   retryRequest: (
     requestId: string,
     nodeDid?: string,

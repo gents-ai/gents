@@ -73,9 +73,6 @@ export function createDesktopApiAdapter(
         nodeDid,
         requestId,
       }),
-    explainToolSurface: (nodeDid, agentDid) =>
-      invokeDesktop("desktop_tool_surface_explain", { nodeDid, agentDid }),
-    fetchNetworkStatus: () => invokeDesktop("desktop_network_status"),
     fetchSessionContextDetails: (request) =>
       invokeDesktop("desktop_session_context_details", { request }),
     fetchSessionSnapshot: (sessionId, nodeDid, requestId, timelinePage) =>
@@ -84,7 +81,6 @@ export function createDesktopApiAdapter(
         nodeDid,
         requestId,
         timelineLimit: timelinePage?.limit,
-        timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
     reloadSession: (sessionId, nodeDid) =>
       invokeDesktop("desktop_session_reload", {
@@ -128,7 +124,6 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_pending_queue_edit", {
         request,
       }),
-    listMailbox: () => invokeDesktop("desktop_mailbox_list"),
     observeMailboxItem: (request) =>
       invokeDesktop("desktop_mailbox_observe", { request }),
     startMailboxRequest: (itemId) =>
@@ -143,15 +138,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_session_fork_before_message", { request }),
     setSessionArchived: (request) =>
       invokeDesktop("desktop_session_archive", { request }),
-    sessionHistory: (request) =>
-      invokeDesktop("desktop_session_history", { request }),
     renameSession: (request) =>
       invokeDesktop("desktop_session_rename", { request }),
-    resendRequest: (requestId, nodeDid) =>
-      invokeDesktop("desktop_request_resend", {
-        requestId,
-        nodeDid,
-      }),
     retryRequest: (requestId, nodeDid) =>
       invokeDesktop("desktop_request_retry", {
         requestId,

@@ -78,8 +78,6 @@ pub fn project_bootstrap_summary(
         summary.default_node_home = String::new();
         summary.init_tool_root = None;
         summary.desktop_home = String::new();
-        summary.peer_directory_path = String::new();
-        summary.node_data_dir = String::new();
         summary.diagnostics_hint = String::new();
     }
     if !grants.fleet_read {
@@ -101,7 +99,6 @@ pub fn project_runtime_snapshot(
         runtime.operator_config_authoritative_node_dids = None;
     }
     if !grants.fleet_read {
-        runtime.listen_addresses.clear();
         runtime.enrollment_requests = None;
     }
     runtime.deployments = runtime
@@ -120,13 +117,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.runtime_connection = None;
         deployment.pairing_ready = None;
         deployment.last_error = None;
-        for route in &mut deployment.routes {
-            route.transport_peer_id = None;
-            route.address = None;
-            route.filter_summary.clear();
-            route.last_error = None;
-        }
-        deployment.pairing.clear();
     }
 
     if !grants.session_read {
@@ -223,10 +213,9 @@ fn project_backend_for_fleet(mut backend: InferenceBackendView) -> InferenceBack
 mod tests {
     use super::*;
     use crate::types::{
-        AgentEnvironmentView, AgentView, ClientRouteStatusView, DeploymentView,
-        DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot,
-        EnrollmentRequestView, MailboxItemView, NodeView, P2PHealthView,
-        PairingCollectionStatusView, SavedPeerView, SessionSummary, SkillView, SyncHealthView,
+        AgentEnvironmentView, AgentView, DeploymentView, DesktopBootstrapSummary,
+        DesktopClientSnapshot, DesktopRuntimeSnapshot, EnrollmentRequestView, MailboxItemView,
+        NodeView, P2PHealthView, SavedPeerView, SessionSummary, SkillView, SyncHealthView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -239,12 +228,8 @@ mod tests {
                 init_tool_ceiling: Some("readonly".into()),
                 init_tool_root: Some("/secret/tools".into()),
                 desktop_home: "/secret/desktop".into(),
-                peer_directory_path: "/secret/peers.json".into(),
-                node_data_dir: "/secret/node".into(),
                 diagnostics_hint: "native logging".into(),
                 node_home_exists: true,
-                desktop_home_exists: true,
-                peer_directory_exists: true,
                 client_state_exists: true,
                 saved_peers: vec![SavedPeerView {
                     peer_id: "peer_1".into(),
@@ -257,8 +242,6 @@ mod tests {
             },
             client: Some(DesktopRuntimeSnapshot {
                 client_did: "did:fixture:client".into(),
-                local_peer_id: "local".into(),
-                listen_addresses: vec!["/ip4/0.0.0.0/tcp/1".into()],
                 p2p_health: P2PHealthView {
                     status: "ok".into(),
                     connected_peer_count: 1,
@@ -290,12 +273,6 @@ mod tests {
                     expires_at: "2099-01-01T00:00:00Z".into(),
                     activation_error: None,
                 }]),
-                bootstrap_errors: vec![],
-                last_mutation_error: None,
-                focused_request_id: None,
-                configured_peer_count: 1,
-                dialed_peer_count: 1,
-                peer_issue_count: 0,
                 row_count: 10,
                 approx_serialized_bytes: 100,
                 operator_config_authoritative_node_dids: Some(vec!["did:test:local".into()]),
@@ -310,32 +287,6 @@ mod tests {
                     runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
                     pairing_ready: Some(true),
-                    pairing: vec![PairingCollectionStatusView {
-                        collection_id: "AgentSession".into(),
-                        pairing_retry_count: 2,
-                        last_retry_at: Some("2026-08-25T12:00:00Z".into()),
-                        last_retry_error_class: Some("RpcTimeout".into()),
-                        stuck_since: None,
-                    }],
-                    routes: ["client-to-runtime", "runtime-to-client"]
-                        .into_iter()
-                        .map(|direction| ClientRouteStatusView {
-                            route_id: format!("peer_1:{direction}"),
-                            direction: direction.into(),
-                            directory_id: "peer_1".into(),
-                            transport_peer_id: Some("transport".into()),
-                            address: Some("ticket".into()),
-                            template: Some("client".into()),
-                            desired: true,
-                            applied: true,
-                            live_match: true,
-                            filter_summary: "2 collections; 2 scoped filters".into(),
-                            last_error: None,
-                            retry_count: 0,
-                            last_retry_at: None,
-                            last_retry_error_class: None,
-                        })
-                        .collect(),
                     last_error: None,
                     node: NodeView {
                         node_did: "did:test:local".into(),
@@ -500,7 +451,6 @@ mod tests {
         assert!(projected.bootstrap.default_node_home.is_empty());
         assert!(projected.bootstrap.saved_peers.is_empty());
         let client = projected.client.expect("client");
-        assert!(client.listen_addresses.is_empty());
         let dep = &client.deployments[0];
         assert!(dep.sessions.is_empty());
         assert!(dep.mailbox_items.is_empty());
@@ -508,9 +458,6 @@ mod tests {
         assert!(dep.agent_environments[0].workspace_root.is_none());
         assert!(dep.agent_environments[0].inference_profile_name.is_none());
         assert!(dep.addr.is_empty());
-        assert!(dep.pairing.is_empty());
-        assert_eq!(dep.routes.len(), 2);
-        assert!(dep.routes.iter().all(|route| route.address.is_none()));
         assert!(dep.contexts.is_empty());
         assert!(dep.tools.is_empty());
         assert!(dep.compactions.is_empty());
@@ -538,10 +485,7 @@ mod tests {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::chat_package());
         let client = projected.client.as_ref().unwrap();
         let dep = &client.deployments[0];
-        assert_eq!(dep.routes.len(), 2);
-        assert!(dep.routes.iter().all(|route| route.live_match));
         assert_eq!(dep.sessions.len(), 1);
-        assert!(dep.pairing.is_empty());
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 1);
         assert!(dep.agent_environments[0].workspace_root.is_none());
@@ -581,8 +525,6 @@ mod tests {
         assert!(projected.bootstrap.saved_peers[0].graphql.is_none());
         let dep = &projected.client.as_ref().unwrap().deployments[0];
         assert_eq!(dep.addr, "/ip4/127.0.0.1/tcp/1");
-        assert_eq!(dep.pairing.len(), 1);
-        assert_eq!(dep.pairing[0].pairing_retry_count, 2);
         assert!(dep.sessions.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 0);
         assert!(dep.agent_environments[0].workspace_root.is_none());

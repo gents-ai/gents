@@ -8,7 +8,6 @@ use ts_rs::TS;
 use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
-use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
     ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
     CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
@@ -188,12 +187,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
 
     export_types!(
         crate::accounts::BackendAuthenticationView,
-        crate::accounts::BackendRotationView,
-        crate::accounts::PoolAccountView,
-        crate::accounts::BackendRotationSaveRequest,
         ConfiguredActionView,
-        crate::host::settings::ConfigEditorEntry,
-        gents_desktop_core::client::ConfigEditorDocument,
         RequestOutputView,
         gents_protocol::file_changes::ToolFileChanges,
         gents_protocol::file_inventory::FileInventoryObservation,
@@ -209,14 +203,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         gents_protocol::client_media::MediaPcmClip,
         gents_protocol::client_media::MediaMessage,
         gents_protocol::client_media::MediaDevices,
-        crate::host::speech::SpeechServiceView,
-        crate::host::speech::SpeechToolReference,
-        crate::host::speech::SpeechRecognizeRequest,
-        crate::host::speech::SpeechSynthesizeRequest,
-        crate::host::permissions::WorkspacePermissionsRequest,
-        crate::host::permissions::WorkspacePermissionsSaveRequest,
-        crate::host::permissions::WorkspacePermissionsForgetCommandsRequest,
-        crate::host::permissions::WorkspacePermissionsState,
         crate::host::protocol::ClientMessage,
         crate::host::protocol::ClientCommand,
         crate::host::protocol::HostMessage,
@@ -323,7 +309,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerResetResult,
         PeerRemoveResponse,
         EnrollmentRequestView,
-        NetworkStatusView,
         ToolServiceTestResult,
         TaskRunResult,
         ChatSendResult,
@@ -332,7 +317,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ChatSubmissionQuery,
         ClientUpdateEvent,
         SyncHealthView,
-        PairingCollectionStatusView,
         DesktopOperationsSnapshot,
         SessionProvenanceView,
         InterruptRequestResult,
@@ -347,7 +331,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         MessageView,
         QuestionReplyView,
         ToolCallView,
-        RequestResendResultView,
         SessionContextDetailsRequest,
         gents::tools::native::SessionContextDetails,
         WorkspaceListingView,
@@ -391,7 +374,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         WorkflowPromoteView,
         gents_server::packs::EditedDocuments,
         RequestTimelineView,
-        ToolSurfaceExplanationView,
         BackendDisplayState,
         InstalledPacksView,
         PackSearchView,

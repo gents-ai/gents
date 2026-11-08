@@ -1766,15 +1766,11 @@ export function createDesktopUiHarness(
         initToolCeiling: freshHome ? null : "ReadWrite",
         initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
-        peerDirectoryPath: "/tmp/gents-bombadil/peers.json",
-        nodeDataDir: "/tmp/gents-bombadil/node",
         diagnosticsHint:
           scenario === "startup-port-in-use"
             ? "journalctl --user --since '1 hour ago' SYSLOG_IDENTIFIER=gents-desktop SYSLOG_IDENTIFIER=gents-runtime. Runtime startup errors: /home/me/.local/share/gents/desktop/logs/runtime-errors.log"
             : "native logging",
         nodeHomeExists: !freshHome,
-        desktopHomeExists: true,
-        peerDirectoryExists: true,
         clientStateExists: true,
         savedPeers: !provisioned
           ? []
@@ -1791,17 +1787,9 @@ export function createDesktopUiHarness(
       },
       client: {
         clientDid: "did:key:desktop-harness",
-        localPeerId: "peer-bombadil-local",
-        listenAddresses: ["/ip4/127.0.0.1/tcp/9292"],
         p2pHealth: health,
         syncHealth,
         enrollmentRequests,
-        bootstrapErrors: [],
-        lastMutationError: null,
-        focusedRequestId: null,
-        configuredPeerCount: deployments.length,
-        dialedPeerCount: deployments.length,
-        peerIssueCount: 0,
         rowCount,
         approxSerializedBytes: rowCount * 512,
         operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
@@ -1991,9 +1979,6 @@ export function createDesktopUiHarness(
     },
     async setSessionArchived() {
       throw new Error("Archive controls are unavailable in this fixture.");
-    },
-    async sessionHistory() {
-      throw new Error("Archive history is unavailable in this fixture.");
     },
     async forkSessionBeforeMessage() {
       throw new Error("Message editing is unavailable in this fixture.");
@@ -2259,9 +2244,6 @@ export function createDesktopUiHarness(
         truncated: false,
       };
     },
-    async resendRequest(requestId) {
-      return { requestId: `${requestId}-resend`, sessionId: "session-intro" };
-    },
     async retryRequest(requestId) {
       return {
         requestId: `${requestId}-retry`,
@@ -2315,79 +2297,6 @@ export function createDesktopUiHarness(
         ],
       };
     },
-    async explainToolSurface(nodeDid, agentDid) {
-      if (nodeDid !== NODE_DID) {
-        throw new Error(
-          "tool-surface explanation for remote agents is not yet supported",
-        );
-      }
-      const agent = deployment.agents.find(
-        (candidate) => candidate.agentDid === agentDid,
-      );
-      const context = deployment.contexts.find(
-        (candidate) => candidate.context_id === agent?.contextId,
-      );
-      return {
-        agentDid,
-        enabled: agent?.enabled ?? true,
-        contextId: context?.context_id ?? null,
-        toolsId: context?.tools_id ?? null,
-        toolsSource: "context",
-        ceilingSource: "init_json",
-        mcpServicesOnline: true,
-        surface: {
-          tool_names: ["read_file", "list_files", "gents_exec"],
-          policy: {
-            requested: {
-              file_tools: ["read_file", "list_files", "write_file"],
-              meta: ["gents_exec"],
-            },
-            ceiling: { file_tools: ["read_file", "list_files"], meta: ["gents_exec"] },
-            runtime: {
-              file_tools: ["read_file", "list_files", "write_file"],
-              meta: ["gents_exec"],
-            },
-            effective: {
-              file_tools: ["read_file", "list_files"],
-              meta: ["gents_exec"],
-            },
-          },
-          included: { read_file: ["ceiling allows readonly file tools"] },
-          excluded: { write_file: ["ceiling is readonly"] },
-          unavailable: {},
-          warnings: [],
-        },
-      };
-    },
-    async fetchNetworkStatus() {
-      return {
-        localPeerId: "12D3KooWBombadilLocalPeer",
-        localPeerIdError: null,
-        listenAddresses: ["/ip4/127.0.0.1/tcp/9292/p2p/12D3KooWBombadilLocalPeer"],
-        listenAddressesError: null,
-        connectedPeers: [deployment.peerId],
-        connectedPeersError: null,
-        replicators: [
-          {
-            peerId: deployment.peerId,
-            address: deployment.addr,
-            collections: ["AgentRequest", "AgentResponse", "AgentMessage"],
-            status: 0,
-            lastStatusChange: TWO_HOURS_AGO,
-          },
-        ],
-        replicatorsError: null,
-        savedPeers: [
-          {
-            peerId: deployment.peerId,
-            label: deployment.label,
-            addr: deployment.addr,
-            nodeDid: deployment.nodeDid,
-            source: deployment.source,
-          },
-        ],
-      };
-    },
     async fetchPeerStatus() {
       return {
         label: "Bombadil UI Agent",
@@ -2415,7 +2324,6 @@ export function createDesktopUiHarness(
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
-      if (timelinePage?.beforeItemKey) await waitForOlderPage();
       const snapshot = clone(session);
       snapshot.projectionRevision = {
         storeVersion,
@@ -2430,23 +2338,13 @@ export function createDesktopUiHarness(
 
       const totalItems = snapshot.timelineItems.length;
       const limit = Math.max(1, Math.min(80, timelinePage.limit ?? 40));
-      const end = timelinePage.beforeItemKey
-        ? snapshot.timelineItems.findIndex(
-            (item) => item.itemKey === timelinePage.beforeItemKey,
-          )
-        : totalItems;
-      if (end < 0) {
-        throw new Error(
-          `session timeline cursor is no longer present: ${timelinePage.beforeItemKey}`,
-        );
-      }
-      const start = Math.max(0, end - limit);
-      snapshot.timelineItems = snapshot.timelineItems.slice(start, end);
+      const start = Math.max(0, totalItems - limit);
+      snapshot.timelineItems = snapshot.timelineItems.slice(start);
       snapshot.timelinePage = {
         totalItems,
         pageItems: snapshot.timelineItems.length,
         hasOlder: start > 0,
-        hasNewer: end < totalItems,
+        hasNewer: false,
         oldestItemKey: snapshot.timelineItems[0]?.itemKey ?? null,
         newestItemKey:
           snapshot.timelineItems[snapshot.timelineItems.length - 1]?.itemKey ?? null,
@@ -2687,9 +2585,6 @@ export function createDesktopUiHarness(
     },
     async observeMailboxItem() {
       throw new Error("Native mailbox observation is unavailable in this harness");
-    },
-    async listMailbox() {
-      return deployment.mailboxItems;
     },
     async startMailboxRequest(itemId) {
       const item = deployment.mailboxItems.find((entry) => entry.itemId === itemId);
@@ -4416,8 +4311,6 @@ function createDeployment(): DeploymentView {
         { state: "ready", agentDid: "ops" },
       ],
     },
-    routes: [],
-    pairing: [],
     lastError: null,
     node: {
       nodeDid: NODE_DID,
