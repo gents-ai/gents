@@ -259,6 +259,7 @@ pub(super) async fn handle_request(
             )
             .await?;
             let issuer = gents_desktop_bridge::enrollment::EnrollmentOfferIssuer::new(
+                server.node_arc(),
                 identity,
                 Arc::clone(server.p2p()),
                 network.network_id,
