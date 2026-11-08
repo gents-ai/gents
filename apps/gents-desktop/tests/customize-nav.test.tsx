@@ -145,6 +145,16 @@ const labels = () =>
     .filter((name) => name !== undefined);
 
 describe("customizing the nav", () => {
+  it("exposes the sidebar customization sheet as a modal dialog", () => {
+    withFlags({ "customize-nav": true });
+    panel();
+    act(() => openCustomizeNav());
+    expect(screen.getByRole("dialog", { name: "Customize navigation" })).toHaveAttribute(
+      "aria-modal",
+      "true",
+    );
+  });
+
   it("ignores a saved layout while the flag is off", () => {
     withFlags({ "customize-nav": false });
     act(() =>
