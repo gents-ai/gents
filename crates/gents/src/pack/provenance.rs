@@ -44,8 +44,10 @@ pub(super) async fn apply_pack_documents(
     let documents = super::installation::installable_documents(config)?;
     let guard = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())?
         .with_expected(expected)?;
+    // The callback re-reads its expectations and re-plans the install inside
+    // the transaction, so a confirmed conflict re-plans and re-signs it.
     access
-        .transact_write("pack.documents.install", |txn| {
+        .transact_signed_conflict_rebuild("pack.documents.install", |txn| {
             let documents = documents.clone();
             let guard = &guard;
             Box::pin(async move {
