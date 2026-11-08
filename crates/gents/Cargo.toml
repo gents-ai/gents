@@ -35,6 +35,8 @@ document.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow.workspace = true
+# Trial homes serve Agent identity provisioning beside DefraDB's own routes.
+axum = "0.8"
 async-stream = "0.3"
 async-trait = "0.1"
 # RS256 for Google service account assertions; the same build rustls already links.

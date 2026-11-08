@@ -199,7 +199,8 @@ impl EmbeddedHome {
         .await?
         .preflight(&store_key, Some(&did))
         .await?;
-        let (http, client_endpoint) = trial_http().await?;
+        let served = ServedNode::default();
+        let (http, client_endpoint) = trial_http(served.clone()).await?;
         let (node, backend_admission) = protected
             .start_node(
                 &store_key,
@@ -209,6 +210,7 @@ impl EmbeddedHome {
                 &path,
             )
             .await?;
+        let _ = served.set((node.clone(), identity.clone()));
         if initialize_schemas {
             ensure_runtime_schemas(&node)
                 .await
@@ -337,7 +339,8 @@ impl EmbeddedHome {
         .await?
         .preflight(&self.store_key, Some(&self.did))
         .await?;
-        let (http, client_endpoint) = trial_http().await?;
+        let served = ServedNode::default();
+        let (http, client_endpoint) = trial_http(served.clone()).await?;
         let (node, admission) = protected
             .start_node(
                 &self.store_key,
@@ -347,6 +350,7 @@ impl EmbeddedHome {
                 &self.path,
             )
             .await?;
+        let _ = served.set((node.clone(), self.identity.clone()));
         self.node = node;
         self.backend_admission = admission;
         self.client_endpoint = Some(client_endpoint);
@@ -399,11 +403,80 @@ fn release_unstopped_node<H>(node: Arc<EmbeddedNode>, held: H) {
     drop(held);
 }
 
-async fn trial_http() -> Result<(crate::defra_node::HttpConfig, String)> {
+/// The node a trial endpoint serves, set once the node has started.
+type ServedNode = Arc<std::sync::OnceLock<(Arc<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
+
+async fn trial_http(served: ServedNode) -> Result<(crate::defra_node::HttpConfig, String)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
-    let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?;
+    let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
+        .with_extra_routes(agent_identity_routes(served));
     Ok((config, endpoint))
+}
+
+/// A trial home serves Agent identity provisioning as a runtime does, so a
+/// client installing an Agent provisions its identity through the same
+/// authorized owner (`provision_agent_identity_authorized`).
+fn agent_identity_routes(served: ServedNode) -> axum::Router {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    let failure = |status: StatusCode, message: &str| {
+        (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
+    };
+    axum::Router::new().route(
+        gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
+        axum::routing::post(
+            move |identity: defra_http::ExtractIdentity,
+                  axum::Json(request): axum::Json<
+                gents_protocol::agent_identity::ProvisionAgentIdentityRequest,
+            >| {
+                let served = served.clone();
+                async move {
+                    let Some(caller) = identity
+                        .did()
+                        .and_then(|did| ::identity::Did::new(did.as_ref()).ok())
+                    else {
+                        return failure(
+                            StatusCode::UNAUTHORIZED,
+                            "Connect this client before creating an agent.",
+                        );
+                    };
+                    let Some((node, runtime)) = served.get() else {
+                        return failure(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "The runtime is still starting.",
+                        );
+                    };
+                    if request.node_did != runtime.did() {
+                        return failure(
+                            StatusCode::BAD_REQUEST,
+                            "The requested node does not serve this endpoint.",
+                        );
+                    }
+                    match crate::store::identity::provision_agent_identity_authorized(
+                        node,
+                        runtime.as_ref(),
+                        &caller,
+                    )
+                    .await
+                    {
+                        Ok(binding) => axum::Json(binding).into_response(),
+                        Err(crate::store::identity::AgentProvisionError::Unauthorized) => failure(
+                            StatusCode::FORBIDDEN,
+                            "This client cannot create an agent on this node.",
+                        ),
+                        Err(error) => {
+                            tracing::warn!(%error, "trial agent identity provisioning failed");
+                            failure(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "The runtime cannot provision an agent identity.",
+                            )
+                        }
+                    }
+                }
+            },
+        ),
+    )
 }
 
 async fn trial_store_key(
