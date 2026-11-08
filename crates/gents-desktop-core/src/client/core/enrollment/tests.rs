@@ -596,6 +596,7 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         server_peer: request.server_peer.clone(),
         candidate_did: request.candidate_did.clone(),
         candidate_peer: request.candidate_peer.clone(),
+        candidate_name: request.candidate_name.clone(),
         candidate_ticket: request.candidate_ticket.clone(),
         owner_agent: request.owner_agent.clone(),
         profile: request.profile.clone(),
