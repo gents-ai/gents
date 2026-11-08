@@ -1,0 +1,4 @@
+---- MODULE MCRuntimeConnectionTransportHandshake ----
+EXTENDS RuntimeConnectionTransport
+
+====

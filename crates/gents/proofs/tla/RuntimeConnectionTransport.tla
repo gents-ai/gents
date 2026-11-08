@@ -4,16 +4,25 @@
 (* authenticated HTTP as the User (gents-desktop-core client/observe).      *)
 (*                                                                         *)
 (* Three processes share the observer state:                               *)
-(*  - the Source task (remote.rs `observe`/`connected`): arms K SSE         *)
-(*    subscriptions one at a time, then sends a ready notice; a stream ends *)
-(*    by a planned bearer renewal, a transport failure or a denial;         *)
+(*  - the Source task (remote.rs `observe`/`arm`): arms K SSE              *)
+(*    subscriptions one at a time, then sends a ready notice; every         *)
+(*    renewal period it arms a replacement set while the old set keeps      *)
+(*    streaming, swaps them and sends a renewed notice; a stream ends by a  *)
+(*    transport failure or a denial;                                        *)
 (*  - the Observer loop (observe.rs): applies notices of the current        *)
 (*    generation, runs one snapshot load at a time, re-probes a denied      *)
 (*    source after a bounded delay;                                         *)
 (*  - Reconcile: a peer directory change (endpoint added, changed or        *)
 (*    removed, peer removed) replaces or drops the source.                  *)
 (* The environment revokes/restores the User's grant and takes the runtime  *)
-(* offline/online a bounded number of times.                                *)
+(* offline/online a bounded number of times. `Revocation` is how the        *)
+(* runtime answers a revoked User: "served" is the pinned served runtime    *)
+(* (handshake accepted, streams silent, a read answers with the selected    *)
+(* roots omitted; observe tests `revoked_user_is_answered_without_a_        *)
+(* classified_denial`); "handshake" (HTTP 403 at the handshake and on a     *)
+(* read) and "envelope" (a PERMISSION_DENIED envelope on an open stream and *)
+(* HTTP 403 on a read) are the access owner's other classified surfaces,    *)
+(* checked so a runtime that adopts them stays correct.                     *)
 (*                                                                         *)
 (* Generations are compared only for equality, so a new source takes the   *)
 (* smallest generation no notice or load still names (`FreshGen`).         *)
@@ -28,9 +37,10 @@ CONSTANTS
   Cap,                \* reprobe cap, in ticks (Lean reprobeCapMs)
   MaxEnv,             \* environment changes (grant, reachability, endpoint)
   MaxChan,            \* notice channel bound for TLC
+  Revocation,         \* "served" | "handshake" | "envelope" (see header)
   RenewalAsFailure,   \* RED: planned renewal reported as a transport failure
-  EnvelopeClassified, \* FALSE: an errors-envelope denial is a transport failure
-  DenyAtHandshake,    \* TRUE: a revoked grant is refused at the SSE handshake
+  MakeBeforeBreak,    \* FALSE: a renewal drops the armed set before re-arming
+  WithheldClassified, \* FALSE: a read with withheld roots is a transport failure
   NamedNoEndpoint,    \* FALSE: a peer without an endpoint has no status
   GenerationCheck,    \* FALSE: notices of a replaced source are applied
   ArmBeforeReady      \* FALSE: ready is sent before every subscription is armed
@@ -45,7 +55,7 @@ Gens == 1..MaxGen
 VARIABLES
   peer, grant, reachable, env, dirty,      \* environment and peer directory
   srcGen, srcEndpoint, srcReady, srcDenied, \* Sources entry (0 = none)
-  tPhase, tArmed, tRenewing,                \* the live source task
+  tPhase, tArmed, tRenewing, tNew,          \* the live source task
   chan,                                     \* notice channel
   status,                                   \* ObservedStore runtime_connection
   pending, load,                            \* observer snapshot scheduling
@@ -53,7 +63,7 @@ VARIABLES
   fresh, outage                             \* ghosts
 
 vars == <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, srcReady,
-          srcDenied, tPhase, tArmed, tRenewing, chan, status, pending, load,
+          srcDenied, tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
           denials, reprobeIn, fresh, outage>>
 
 NoLoad == [gen |-> 0, afterArm |-> FALSE]
@@ -73,7 +83,7 @@ TypeOK ==
   /\ env \in 0..MaxEnv /\ dirty \in BOOLEAN
   /\ srcGen \in 0..MaxGen /\ srcEndpoint \in Endpoints \cup {"none"}
   /\ srcReady \in BOOLEAN /\ srcDenied \in BOOLEAN
-  /\ tPhase \in Phases /\ tArmed \in 0..K /\ tRenewing \in BOOLEAN
+  /\ tPhase \in Phases /\ tArmed \in 0..K /\ tRenewing \in BOOLEAN /\ tNew \in 0..K
   /\ \A i \in 1..Len(chan) : chan[i].gen \in Gens /\ chan[i].kind \in Kinds
   /\ status \in Statuses /\ pending \in BOOLEAN
   /\ load.gen \in 0..MaxGen /\ load.afterArm \in BOOLEAN
@@ -84,7 +94,7 @@ Init ==
   /\ peer \in Endpoints /\ grant = TRUE /\ reachable = TRUE /\ env = 0
   /\ dirty = TRUE
   /\ srcGen = 0 /\ srcEndpoint = "none" /\ srcReady = FALSE /\ srcDenied = FALSE
-  /\ tPhase = "idle" /\ tArmed = 0 /\ tRenewing = FALSE
+  /\ tPhase = "idle" /\ tArmed = 0 /\ tRenewing = FALSE /\ tNew = 0
   /\ chan = <<>> /\ status = "unset" /\ pending = FALSE /\ load = NoLoad
   /\ denials = 0 /\ reprobeIn = 0 /\ fresh = FALSE /\ outage = FALSE
 
@@ -97,20 +107,20 @@ EnvStep == env < MaxEnv /\ env' = env + 1
 MovePeer(p) ==
   /\ EnvStep /\ p # peer /\ peer' = p /\ dirty' = TRUE
   /\ UNCHANGED <<grant, reachable, srcGen, srcEndpoint, srcReady, srcDenied,
-                 tPhase, tArmed, tRenewing, chan, status, pending, load,
+                 tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
                  denials, reprobeIn, fresh, outage>>
 
 ToggleGrant ==
   /\ EnvStep /\ grant' = ~grant
   /\ UNCHANGED <<peer, reachable, dirty, srcGen, srcEndpoint, srcReady, srcDenied,
-                 tPhase, tArmed, tRenewing, chan, status, pending, load,
+                 tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
                  denials, reprobeIn, fresh, outage>>
 
 ToggleReachable ==
   /\ EnvStep /\ reachable' = ~reachable
   /\ outage' = (outage \/ reachable)
   /\ UNCHANGED <<peer, grant, dirty, srcGen, srcEndpoint, srcReady, srcDenied,
-                 tPhase, tArmed, tRenewing, chan, status, pending, load,
+                 tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
                  denials, reprobeIn, fresh>>
 
 (* ----------------------------- reconcile ------------------------------ *)
@@ -127,7 +137,7 @@ DropSource(staleKind) ==
 StartSource(endpoint) ==
   /\ srcGen' = FreshGen /\ srcEndpoint' = endpoint
   /\ srcReady' = FALSE /\ srcDenied' = FALSE
-  /\ tPhase' = "arming" /\ tArmed' = 0 /\ tRenewing' = FALSE
+  /\ tPhase' = "arming" /\ tArmed' = 0 /\ tRenewing' = FALSE /\ tNew' = 0
   /\ status' = "connecting" /\ reprobeIn' = 0 /\ fresh' = FALSE
   /\ load' = NoLoad
 
@@ -138,7 +148,7 @@ Reconcile ==
   /\ IF peer \in Endpoints
        THEN IF Keep
               THEN UNCHANGED <<srcGen, srcEndpoint, srcReady, srcDenied, tPhase,
-                               tArmed, tRenewing, chan, status, load, reprobeIn,
+                               tArmed, tRenewing, tNew, chan, status, load, reprobeIn,
                                fresh, pending>>
               ELSE /\ CanStart
                    /\ \E k \in Kinds \cup {"none"} : DropSource(k)
@@ -147,7 +157,7 @@ Reconcile ==
        ELSE /\ \E k \in Kinds \cup {"none"} : DropSource(k)
             /\ srcGen' = 0 /\ srcEndpoint' = "none" /\ srcReady' = FALSE
             /\ srcDenied' = FALSE /\ tPhase' = "idle" /\ tArmed' = 0
-            /\ tRenewing' = FALSE /\ load' = NoLoad /\ pending' = FALSE
+            /\ tRenewing' = FALSE /\ tNew' = 0 /\ load' = NoLoad /\ pending' = FALSE
             /\ reprobeIn' = 0 /\ fresh' = FALSE
             /\ status' = IF peer = "none" /\ NamedNoEndpoint THEN "noEndpoint" ELSE "unset"
   /\ denials' = IF peer \in Endpoints THEN denials ELSE 0
@@ -160,17 +170,23 @@ TaskUnchanged == UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndp
                              reprobeIn, outage>>
 
 \* The task ends after a failure notice and re-arms after the fixed
-\* transport retry delay; after a denial it ends for good.
+\* transport retry delay; after a denial it ends for good. A failure drops
+\* every set, including a replacement still arming.
 Fail(kind) ==
   /\ Len(chan) < MaxChan /\ Send(kind) /\ fresh' = FALSE
   /\ tPhase' = IF kind = "denied" THEN "ended" ELSE "retry"
-  /\ tArmed' = 0 /\ tRenewing' = FALSE
+  /\ tArmed' = 0 /\ tRenewing' = FALSE /\ tNew' = 0
+
+\* One handshake: refused when unreachable, or for a revoked User only when
+\* the runtime refuses at the handshake.
+Handshake(armed) ==
+  IF ~reachable THEN Fail("failed")
+  ELSE IF ~grant /\ Revocation = "handshake" THEN Fail("denied")
+  ELSE armed
 
 ArmOne ==
   /\ srcGen # 0 /\ tPhase = "arming" /\ tArmed < K
-  /\ IF ~reachable THEN Fail("failed")
-     ELSE IF ~grant /\ DenyAtHandshake THEN Fail("denied")
-     ELSE /\ tArmed' = tArmed + 1 /\ UNCHANGED <<chan, tPhase, tRenewing, fresh>>
+  /\ Handshake(tArmed' = tArmed + 1 /\ UNCHANGED <<chan, tPhase, tRenewing, tNew, fresh>>)
   /\ TaskUnchanged
 
 ArmDone ==
@@ -179,34 +195,55 @@ ArmDone ==
   /\ Len(chan) < MaxChan
   /\ Send(IF tRenewing THEN "renewed" ELSE "ready")
   /\ tPhase' = "streaming" /\ tRenewing' = FALSE
-  /\ UNCHANGED <<tArmed, fresh>>
+  /\ UNCHANGED <<tArmed, tNew, fresh>>
   /\ TaskUnchanged
 
 StreamFails ==
   /\ srcGen # 0 /\ tPhase = "streaming" /\ ~reachable
   /\ Fail("failed") /\ TaskUnchanged
 
-\* The runtime answers an open stream with a GraphQL errors envelope.
+\* A runtime that answers an open stream of a revoked User with a GraphQL
+\* errors envelope; the served runtime keeps it silent instead.
 StreamDenied ==
   /\ srcGen # 0 /\ tPhase = "streaming" /\ ~grant /\ reachable
-  /\ Fail(IF EnvelopeClassified THEN "denied" ELSE "failed")
+  /\ Revocation = "envelope"
+  /\ Fail("denied")
   /\ TaskUnchanged
 
-\* Half the bearer lifetime elapsed: the stream ends to re-authenticate.
-\* Changes committed before the new subscriptions are armed are not
-\* delivered, so the shown data is fresh again only after a resnapshot.
+\* A renewal period elapsed since the current set was armed. Make-before-
+\* break: the replacement is armed while the current set keeps streaming,
+\* so no change goes undelivered and the shown data stays fresh. Breaking
+\* first leaves no armed subscription until the re-arm completes.
 Renew ==
-  /\ srcGen # 0 /\ tPhase = "streaming"
+  /\ srcGen # 0 /\ tPhase = "streaming" /\ ~tRenewing
   /\ IF RenewalAsFailure
        THEN Fail("failed")
+       ELSE IF MakeBeforeBreak
+       THEN /\ tRenewing' = TRUE /\ tNew' = 0
+            /\ UNCHANGED <<chan, tPhase, tArmed, fresh>>
        ELSE /\ tPhase' = "arming" /\ tArmed' = 0 /\ tRenewing' = TRUE
-            /\ fresh' = FALSE /\ UNCHANGED chan
+            /\ fresh' = FALSE /\ UNCHANGED <<chan, tNew>>
+  /\ TaskUnchanged
+
+ArmReplacement ==
+  /\ srcGen # 0 /\ tPhase = "streaming" /\ tRenewing /\ tNew < K
+  /\ Handshake(tNew' = tNew + 1 /\ UNCHANGED <<chan, tPhase, tArmed, tRenewing, fresh>>)
+  /\ TaskUnchanged
+
+\* The replacement is armed: the old set is dropped and `renewed` is sent so
+\* the observer resnapshots, the only read that reveals a revocation on the
+\* served runtime.
+Swap ==
+  /\ srcGen # 0 /\ tPhase = "streaming" /\ tRenewing /\ tNew = K
+  /\ Len(chan) < MaxChan /\ Send("renewed")
+  /\ tRenewing' = FALSE /\ tNew' = 0
+  /\ UNCHANGED <<tPhase, tArmed, fresh>>
   /\ TaskUnchanged
 
 Retry ==
   /\ srcGen # 0 /\ tPhase = "retry"
   /\ tPhase' = "arming" /\ tArmed' = 0
-  /\ UNCHANGED <<chan, tRenewing, fresh>>
+  /\ UNCHANGED <<chan, tRenewing, tNew, fresh>>
   /\ TaskUnchanged
 
 (* ------------------------------ observer ------------------------------ *)
@@ -234,21 +271,22 @@ Notice ==
                  [] n.kind = "denied" -> Denied
           ELSE UNCHANGED <<srcReady, srcDenied, status, pending, load, reprobeIn, denials>>
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, tPhase,
-                 tArmed, tRenewing, fresh, outage>>
+                 tArmed, tRenewing, tNew, fresh, outage>>
 
 StartLoad ==
   /\ pending /\ srcReady /\ ~srcDenied /\ load.gen = 0 /\ srcGen # 0
   /\ load' = [gen |-> srcGen, afterArm |-> (tPhase = "streaming" /\ tArmed = K)]
   /\ pending' = FALSE
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, srcReady,
-                 srcDenied, tPhase, tArmed, tRenewing, chan, status, denials,
+                 srcDenied, tPhase, tArmed, tRenewing, tNew, chan, status, denials,
                  reprobeIn, fresh, outage>>
 
-\* A snapshot read is refused (HTTP 403) when the grant is revoked; the
-\* observer's snapshot classification is the owner classifier.
+\* A revoked User's read is refused (HTTP 403) or, on the served runtime,
+\* answered with the selected roots withheld; the observer classifies both
+\* as a denial (Lean `snapshotEvent`) unless `WithheldClassified` is FALSE.
 FinishLoad ==
   /\ load.gen # 0 /\ load.gen = srcGen
-  /\ IF ~reachable
+  /\ IF ~reachable \/ (~grant /\ Revocation = "served" /\ ~WithheldClassified)
        THEN /\ status' = "disconnected" /\ pending' = TRUE /\ load' = NoLoad
             /\ UNCHANGED <<srcReady, srcDenied, reprobeIn, denials, fresh, tPhase>>
        ELSE IF ~grant
@@ -258,12 +296,12 @@ FinishLoad ==
             /\ fresh' = (fresh \/ load.afterArm)
             /\ UNCHANGED <<srcReady, srcDenied, pending, reprobeIn, tPhase>>
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint,
-                 tArmed, tRenewing, chan, outage>>
+                 tArmed, tRenewing, tNew, chan, outage>>
 
 Tick ==
   /\ srcDenied /\ reprobeIn > 0 /\ reprobeIn' = reprobeIn - 1
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, srcReady,
-                 srcDenied, tPhase, tArmed, tRenewing, chan, status, pending, load,
+                 srcDenied, tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
                  denials, fresh, outage>>
 
 \* `take_due_reprobes` then `reconcile`: the same endpoint, a new source.
@@ -273,16 +311,21 @@ Reprobe ==
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, denials, outage>>
 
 System == Reconcile \/ ArmOne \/ ArmDone \/ StreamFails \/ StreamDenied \/ Renew
-          \/ Retry \/ Notice \/ StartLoad \/ FinishLoad \/ Tick \/ Reprobe
+          \/ ArmReplacement \/ Swap \/ Retry \/ Notice \/ StartLoad \/ FinishLoad
+          \/ Tick \/ Reprobe
 
 Env == (\E p \in Peers : MovePeer(p)) \/ ToggleGrant \/ ToggleReachable
 
 Next == System \/ Env
 
-\* Renewal is a timer the task cannot skip; every system step is weakly fair.
+\* Every system step is weakly fair. Renewal is a timer the task cannot
+\* skip: a streaming source renews forever, which is how a revocation reaches
+\* an observer of the served runtime. Lean `renewalStartMs` spaces renewals
+\* a full period after each completed arm; durations are not modeled here.
 Fairness ==
   /\ WF_vars(Reconcile) /\ WF_vars(ArmOne) /\ WF_vars(ArmDone)
-  /\ WF_vars(StreamFails) /\ WF_vars(StreamDenied) /\ WF_vars(Retry)
+  /\ WF_vars(StreamFails) /\ WF_vars(StreamDenied) /\ WF_vars(Renew)
+  /\ WF_vars(ArmReplacement) /\ WF_vars(Swap) /\ WF_vars(Retry)
   /\ WF_vars(Notice) /\ WF_vars(StartLoad) /\ WF_vars(FinishLoad)
   /\ WF_vars(Tick) /\ WF_vars(Reprobe)
 
@@ -290,18 +333,18 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 
 (* ----------------------------- properties ----------------------------- *)
 
-\* The observer still owes a post-arm snapshot or a status change: a renewal
-\* is re-arming, its notice or an end notice of this source is queued, a
-\* resnapshot is scheduled, or a load that began after the arm is running.
+\* The observer still owes a post-arm snapshot or a status change: an end
+\* notice of this source is queued, a resnapshot is scheduled, or a load that
+\* began after the arm is running. A renewal owes nothing: it never leaves
+\* the source without an armed set.
 Owed ==
-  \/ tRenewing
   \/ \E i \in 1..Len(chan) : chan[i].gen = srcGen /\ chan[i].kind # "ready"
   \/ pending /\ srcReady
   \/ load.gen = srcGen /\ load.afterArm
 
 \* Connected only when the shown data comes from a snapshot that began after
-\* every subscription of the current arm was armed, or the observer still
-\* owes one: a renewal that races a snapshot is followed by a resnapshot.
+\* every subscription of the current arm was armed and some set has stayed
+\* armed since, or the observer still owes one.
 ConnectedAfterArmedSnapshot == status = "connected" => srcGen # 0 /\ (fresh \/ Owed)
 
 \* A notice of a replaced source never moves the status.
@@ -315,7 +358,8 @@ RemovalClears == (peer = "absent" /\ ~dirty) => (srcGen = 0 /\ status = "unset")
 \* A peer with no endpoint shows that, once reconciled.
 NoEndpointNamed == (peer = "none" /\ ~dirty) => status = "noEndpoint"
 
-\* `disconnected` is shown only after the runtime was actually unreachable.
+\* `disconnected` is shown only after the runtime was actually unreachable:
+\* neither a renewal nor a revocation reads as an outage.
 RenewalNeverDisconnects == status = "disconnected" => outage
 
 Stable == peer \in Endpoints /\ grant /\ reachable
