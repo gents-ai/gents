@@ -116,7 +116,7 @@ impl ConfigAccess {
     /// Rebuild an explicitly authorized, transaction-only signed operation
     /// after a confirmed conflict. The callback must re-read its inputs and
     /// have no effects outside its transaction; every attempt signs afresh.
-    pub(crate) async fn transact_signed_conflict_rebuild<'a, T, E, F>(
+    pub async fn transact_signed_conflict_rebuild<'a, T, E, F>(
         &'a self,
         operation: &'static str,
         callback: F,

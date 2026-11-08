@@ -139,44 +139,10 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     let goal = load_goal(&access, &node_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
-    let deleted = {
-        let node_did = escape_graphql_string(&node_did);
-        let session_id = escape_graphql_string(&args.scope.session);
-        let node_did_ref = &node_did;
-        let session_id_ref = &session_id;
-        access
-            .transact_write("cli.goal.clear", move |txn| {
-                Box::pin(async move {
-                    let response = txn
-                        .execute(&format!(
-                            r#"mutation {{
-                        delete_Goal(filter: {{
-                            node_did: {{ _eq: "{node_did_ref}" }},
-                            session_id: {{ _eq: "{session_id_ref}" }}
-                        }}) {{ _docID }}
-                    }}"#
-                        ))
-                        .await?;
-                    txn.execute(&format!(
-                        r#"mutation {{
-                        delete_GoalCreationClaim(filter: {{
-                            node_did: {{ _eq: "{node_did_ref}" }},
-                            session_id: {{ _eq: "{session_id_ref}" }}
-                        }}) {{ _docID }}
-                    }}"#
-                    ))
-                    .await?;
-                    Ok::<_, anyhow::Error>(response.pointer("/data/delete_Goal").is_some_and(
-                        |value| {
-                            value
-                                .as_array()
-                                .map_or_else(|| value.is_object(), |rows| !rows.is_empty())
-                        },
-                    ))
-                })
-            })
+    let deleted =
+        gents::goal::delete_goals_for_session_from_access(&access, &node_did, &args.scope.session)
             .await?
-    };
+            > 0;
     print_json(&serde_json::json!({
         "goal_id": goal.goal_id,
         "session_id": goal.session_id,
