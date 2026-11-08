@@ -256,7 +256,7 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
     let request = &rows[0];
     let within_transaction = access
         .transact_readonly("test.assignment_history_in_transaction", |txn| {
-            Box::pin(super::super::load_request_assignment_in_txn(txn, request))
+            Box::pin(super::load_request_assignment_in_txn(txn, request))
         })
         .await;
     assert_eq!(
