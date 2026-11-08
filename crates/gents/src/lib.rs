@@ -435,6 +435,44 @@ pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 #[doc(hidden)]
 pub mod __test_internals {
+    pub async fn park_backend(
+        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<bool> {
+        lifecycle.park_for_backend().await
+    }
+
+    pub async fn wake_backend(
+        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<bool> {
+        lifecycle.wake_for_backend(Some(chrono::Utc::now())).await
+    }
+
+    pub fn backend_generation(
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<&str> {
+        lifecycle.execution_generation()
+    }
+
+    pub fn backend_deadline(
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        lifecycle.claimed_deadline_at()
+    }
+
+    pub async fn settle_parked_backend(
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        request_doc_id: &str,
+        generation: &str,
+        interrupted: bool,
+    ) -> anyhow::Result<crate::request::lifecycle::TerminalizeResult> {
+        crate::request::lifecycle::terminalize_parked_request(
+            node,
+            request_doc_id,
+            generation,
+            interrupted,
+        )
+        .await
+    }
     pub use crate::request::lifecycle::activate_workspace_bound_request;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::request::lifecycle::materialize::EnqueuedAgentRequest;

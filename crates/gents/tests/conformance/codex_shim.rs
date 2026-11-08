@@ -73,6 +73,8 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "codex_shim.projection.pending",
             "codex_shim.projection.claimed",
             "codex_shim.projection.processing",
+            "codex_shim.projection.waiting_for_backend",
+            "codex_shim.projection.resuming_backend",
             "codex_shim.projection.completed_request",
             "codex_shim.projection.failed_request",
             "codex_shim.projection.dead_request",
