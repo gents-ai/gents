@@ -15,5 +15,6 @@ import Proofs.ClientShell.Installation
 import Proofs.ClientShell.Voice
 import Proofs.ClientShell.Settings
 import Proofs.ClientShell.InterruptControl
+import Proofs.ClientShell.PackWatch
 
 import Proofs.ClientShell.Telemetry
