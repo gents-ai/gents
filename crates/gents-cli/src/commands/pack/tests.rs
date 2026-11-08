@@ -374,13 +374,41 @@ async fn documents_install_rolls_back_its_record_on_failure() {
         let (access, _) = crate::resolve_config_access(Some(home.path()), None)
             .await
             .unwrap();
+        // The home's client edits the installed document as an operator
+        // would, through its signed desired-state apply.
+        let node_did = access
+            .local_node()
+            .unwrap()
+            .node_identity_did()
+            .unwrap()
+            .to_owned();
         access
-                .write(
-                    "test.edit_pack_document",
-                    r#"mutation { update_Tools(filter: {tools_id: {_eq: "demo-tools"}}, input: {display_name: "edited"}) { _docID } }"#,
-                )
-                .await
-                .unwrap();
+            .transact_write("test.edit_pack_document", |txn| {
+                let node_did = &node_did;
+                Box::pin(async move {
+                    use gents::store::config_client::{
+                        apply_desired_state_plan, read_desired_state_record_in_txn,
+                        DesiredStateApplyDocument, DesiredStateApplyPlan,
+                    };
+                    let (_, mut tools) = read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Tools,
+                        node_did,
+                        "demo-tools",
+                    )
+                    .await?
+                    .expect("installed pack tools");
+                    tools["display_name"] = "edited".into();
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: gents::Collection::Tools,
+                        add: tools.clone(),
+                        update: tools,
+                    }])?;
+                    apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                })
+            })
+            .await
+            .unwrap();
         access
             .local_node()
             .unwrap()
