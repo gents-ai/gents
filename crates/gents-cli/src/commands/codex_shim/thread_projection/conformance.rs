@@ -54,7 +54,10 @@ fn caused_thread(node_did: &str, agent_id: &str) -> CausedThread {
 #[test]
 fn generated_thread_status_cases_drive_thread_projection() {
     let cases = lean_codex_shim_thread_status_cases();
-    assert_eq!(cases.len(), 10);
+    assert_eq!(
+        cases.len(),
+        gents_protocol::request_lifecycle::RequestLifecycleState::ALL.len() + 1
+    );
     for case in cases {
         let head = case.request_state.as_deref().map(|state| {
             gents_protocol::client_protocol::project_persisted_attempt(state, false)
