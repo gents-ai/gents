@@ -2,6 +2,7 @@ mod client;
 mod forms;
 mod items;
 mod menus;
+mod packs;
 mod prefs;
 mod sections;
 mod setup;

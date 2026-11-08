@@ -5,8 +5,8 @@ use super::App;
 use crate::keys::Action;
 use crate::sample::{MenuId, Tone};
 use crate::source::{
-    Doc, FieldKind, Form, FormAct, FormAction, FormError, FormField, FormRef, Intent, MenuAct,
-    Update,
+    Doc, FieldKind, Form, FormAct, FormAction, FormError, FormField, FormRef, FormValues, Intent,
+    MenuAct, Update,
 };
 
 const LOADING: &str = "Loading…";
@@ -123,12 +123,14 @@ impl FormState {
     }
 
     /// Headings, fixed and hidden fields hold nothing to save.
-    fn values(&self) -> Vec<(String, String)> {
-        self.fields
-            .iter()
-            .filter(|entry| entry.field.focusable() && self.shows(entry))
-            .map(|entry| (entry.key.clone(), entry.field.value()))
-            .collect()
+    fn values(&self) -> FormValues {
+        FormValues(
+            self.fields
+                .iter()
+                .filter(|entry| entry.field.focusable() && self.shows(entry))
+                .map(|entry| (entry.key.clone(), entry.field.value()))
+                .collect(),
+        )
     }
 
     /// ← and → or Space cycle a choice, which takes no typing.
@@ -175,8 +177,9 @@ impl FormState {
 }
 
 fn entry(field: FormField) -> Entry {
+    let masked = field.kind == FieldKind::Secret;
     let kind = match field.kind {
-        FieldKind::Text => Kind::Text,
+        FieldKind::Text | FieldKind::Secret => Kind::Text,
         FieldKind::Lines => Kind::Lines(Lines::new(&field.value)),
         FieldKind::Choice(choices) => Kind::Choice(choices),
         FieldKind::Fixed => Kind::Fixed,
@@ -189,6 +192,7 @@ fn entry(field: FormField) -> Entry {
         error: None,
         field: Field {
             kind,
+            masked,
             ..Field::new(&field.label, &field.placeholder, &field.value)
         },
     }
@@ -413,12 +417,15 @@ impl App {
                 if open {
                     self.close_form();
                 }
-                self.notice = Some(notice);
+                if !notice.is_empty() {
+                    self.notice = Some(notice);
+                }
                 match form {
                     FormRef::New(doc) | FormRef::Edit(doc, _) | FormRef::Delete(doc, _) => {
                         self.read_menu(doc.menu());
                     }
                     FormRef::AddFolder => self.read_menu(MenuId::AllowedFolders),
+                    FormRef::PackSearch | FormRef::PackSignIn => self.read_menu(MenuId::Packs),
                     FormRef::Node => {}
                 }
             }
@@ -520,11 +527,13 @@ mod tests {
         rx.try_iter().collect()
     }
 
-    fn values(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect()
+    fn values(pairs: &[(&str, &str)]) -> FormValues {
+        FormValues(
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
     }
 
     /// The save of an app's first form opening.
@@ -823,6 +832,79 @@ mod tests {
         assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::Skills)]);
         assert_eq!(app.notice.as_deref(), Some("Saved"));
         assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Skills)]);
+    }
+
+    /// Drawn masked as Setup's API key is, and never printed by its save's `Debug`.
+    #[test]
+    fn a_secret_field_draws_masked_and_its_save_never_prints_it() {
+        let (tx, rx) = channel();
+        let mut app = App::connected(Vim, 132, 36, tx);
+        app.push_layer(LayerKind::Menu(MenuId::Packs));
+        app.open_form(FormRef::PackSignIn);
+        let token = FormField {
+            placeholder: "Registry token".to_string(),
+            ..field("token", "Registry token", FieldKind::Secret, "")
+        };
+        app.apply(Update::Form {
+            form: FormRef::PackSignIn,
+            opening: 1,
+            result: Ok(Form {
+                form: FormRef::PackSignIn,
+                ..form(vec![token], Vec::new())
+            }),
+        });
+        rx.try_iter().for_each(drop);
+        assert!(shows(&app, &row("Registry token", "Registry token")));
+
+        type_text(&mut app, "tok-secret");
+        assert!(shows(&app, &row("Registry token", "••••••••••")));
+        assert!(!shows(&app, "tok-secret"));
+        press(&mut app, "ctrl-s");
+        let told = sent(&rx);
+        let saved = Intent::SaveForm {
+            form: FormRef::PackSignIn,
+            opening: 1,
+            values: values(&[("token", "tok-secret")]),
+        };
+        assert_eq!(told, [saved]);
+        assert!(!format!("{told:?}").contains("tok-secret"), "{told:?}");
+
+        app.apply(Update::FormSaved {
+            form: FormRef::PackSignIn,
+            opening: 1,
+            result: Ok("Signed in to the registry".to_string()),
+        });
+        assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::Packs)]);
+        assert_eq!(app.notice.as_deref(), Some("Signed in to the registry"));
+        assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Packs)]);
+    }
+
+    #[test]
+    fn a_pack_search_saves_without_a_notice_and_rereads_packs() {
+        let (tx, rx) = channel();
+        let mut app = App::connected(Vim, 132, 36, tx);
+        app.push_layer(LayerKind::Menu(MenuId::Packs));
+        app.open_form(FormRef::PackSearch);
+        app.apply(Update::Form {
+            form: FormRef::PackSearch,
+            opening: 1,
+            result: Ok(Form {
+                form: FormRef::PackSearch,
+                ..form(vec![text("query", "Search", "")], Vec::new())
+            }),
+        });
+        type_text(&mut app, "git");
+        press(&mut app, "ctrl-s");
+        rx.try_iter().for_each(drop);
+        app.notice = Some("earlier".to_string());
+        app.apply(Update::FormSaved {
+            form: FormRef::PackSearch,
+            opening: 1,
+            result: Ok(String::new()),
+        });
+        assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::Packs)]);
+        assert_eq!(app.notice.as_deref(), Some("earlier"));
+        assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Packs)]);
     }
 
     #[test]

@@ -144,8 +144,10 @@ fn size_of(kind: LayerKind, on_top: bool) -> (u16, u16) {
             | MenuId::RemoteTools
             | MenuId::AllowedFolders
             | MenuId::UxPlugins
+            | MenuId::Packs
             | MenuId::Profiles
             | MenuId::More
+            | MenuId::Ask
             | MenuId::General
             | MenuId::Developer
             | MenuId::Experimental,
@@ -342,7 +344,12 @@ mod tests {
     #[test]
     fn a_section_menu_is_as_wide_as_a_form() {
         let area = Rect::new(0, 0, 132, 35);
-        for id in [MenuId::Skills, MenuId::AllowedFolders, MenuId::More] {
+        for id in [
+            MenuId::Skills,
+            MenuId::AllowedFolders,
+            MenuId::Packs,
+            MenuId::More,
+        ] {
             let rect = layer_rect(LayerKind::Menu(id), area, 0, true);
             assert_eq!(rect, Rect::new(39, 8, 76, 20), "{id:?}");
         }

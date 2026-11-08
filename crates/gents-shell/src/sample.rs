@@ -89,9 +89,12 @@ pub enum MenuId {
     RemoteTools,
     AllowedFolders,
     UxPlugins,
+    Packs,
     Profiles,
     /// The selected row's further acts.
     More,
+    /// The source's question, as `Update::Ask` titles it.
+    Ask,
     General,
     Developer,
     Experimental,
@@ -116,8 +119,10 @@ impl MenuId {
             MenuId::RemoteTools => "Remote Tools",
             MenuId::AllowedFolders => "Allowed folders",
             MenuId::UxPlugins => "UX Plugins",
+            MenuId::Packs => "Packs",
             MenuId::Profiles => "Inference profile",
             MenuId::More => "Actions",
+            MenuId::Ask => "Question",
             MenuId::General => "General",
             MenuId::Developer => "Developer",
             MenuId::Experimental => "Experimental features",
@@ -923,6 +928,24 @@ fn menu_rows(id: MenuId) -> Vec<MenuRow> {
             ]
         }
         MenuId::UxPlugins => vec![row(" review panel   code review pack", Tone::Plain, None)],
+        MenuId::Packs => {
+            let search = Some(MenuAct::Open(FormRef::PackSearch));
+            vec![
+                row(" Installed", Tone::Label, None),
+                row(" acme/git   1.0.0, 1.1.0 available", Tone::Plain, None),
+                row("   Adds 2 agents · 1 skill", Tone::Label, None),
+                row(" Registry", Tone::Label, None),
+                row(" Search   Packs and plugins", Tone::Plain, search),
+                row(" acme/git   Git tools · Installed", Tone::Label, None),
+                row(" acme/ocr   Reads the text in an image", Tone::Plain, None),
+                row(" Account", Tone::Label, None),
+                row(
+                    " Sign in   A token from your registry dashboard",
+                    Tone::Plain,
+                    None,
+                ),
+            ]
+        }
         MenuId::Workflows => [
             (
                 " review_changes   Review a diff with three readers",
@@ -979,7 +1002,7 @@ const ACCOUNTS: &[SidebarRow] = &[
     item(" ○ Cloud     not signed in", Tone::Label),
 ];
 
-/// The sections of the desktop app's Node page, in its order. Packs is not wired.
+/// The sections of the desktop app's Node page, in its order.
 const NODE_SETTINGS: &[SidebarRow] = &[
     note(" CONFIGURE", Tone::Label),
     row(" Node", Tone::Plain, RowAction::NodeForm),
@@ -997,7 +1020,7 @@ const NODE_SETTINGS: &[SidebarRow] = &[
     opens(" Remote Tools", MenuId::RemoteTools),
     opens(" Allowed folders", MenuId::AllowedFolders),
     note(" PACKS", Tone::Label),
-    item(" Packs", Tone::Plain),
+    opens(" Packs", MenuId::Packs),
     opens(" UX Plugins", MenuId::UxPlugins),
 ];
 
@@ -1056,9 +1079,11 @@ pub fn menu(id: MenuId) -> (&'static [SidebarRow], &'static str) {
             (&[], " enter open · . more · esc back")
         }
         MenuId::AllowedFolders => (&[], " d read only or read and write · . more · esc back"),
+        MenuId::Packs => (&[], " enter open or install · . more · esc back"),
         MenuId::UxPlugins | MenuId::Developer | MenuId::Experimental => (&[], " esc back"),
         MenuId::Profiles => (&[], " enter use · esc back"),
         MenuId::More => (&[], " enter choose · esc back"),
+        MenuId::Ask => (&[], " enter choose · esc cancel"),
         MenuId::General => (&[], " enter change · esc back"),
     }
 }
@@ -1149,6 +1174,9 @@ mod tests {
         assert_eq!(folders[0].enter, Some(MenuAct::Open(FormRef::AddFolder)));
         assert!(folders[1].d.is_some() && !folders[1].more.is_empty());
         assert!(!read(Intent::ReadMenu(MenuId::UxPlugins)).is_empty());
+        let search = Some(MenuAct::Open(FormRef::PackSearch));
+        let packs = read(Intent::ReadMenu(MenuId::Packs));
+        assert!(packs.iter().any(|row| row.enter == search));
 
         let engineer = &read(Intent::ReadMenu(MenuId::Agents))[0];
         let choose = MenuAct::ChooseProfile {

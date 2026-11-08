@@ -16,8 +16,8 @@ use gents_shell::app::ChatLine;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
 use gents_shell::source::{
-    BackgroundCall, Change, Connection, Doc, FormRef, Input, Intent, Job, MenuAct, Prompt,
-    SavedAccount, Session, Update,
+    BackgroundCall, Change, Connection, Doc, FormRef, FormValues, Input, Intent, Job, MenuAct,
+    PackAct, Prompt, SavedAccount, Session, Update,
 };
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::Value;
@@ -29,7 +29,7 @@ use super::client::{Client, ClientError, ClientEvent};
 use super::sections::{self, new_id};
 use super::tree::git_changes;
 use super::work::{self, Work};
-use super::{forms, items, menus, prefs, setup};
+use super::{forms, items, menus, packs, prefs, setup};
 use crate::commands::accounts::account_rows;
 use crate::commands::codex::relay::agent_route_target;
 use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
@@ -163,6 +163,8 @@ enum Watched {
     Tree(Result<Vec<Change>, String>),
     /// A sign-in's answer, with the token `CancelSignIn` cancels for it.
     SignedIn(CancellationToken, Result<SavedAccount, String>),
+    /// A pack change succeeded, so Packs is read again with the search shown by then.
+    PackChanged,
 }
 
 /// One reread of the work views, done off the chat loop.
@@ -287,6 +289,9 @@ fn prompts_not_live(error: Option<&str>) -> String {
 
 const PICK_AGAIN: &str = "pick this session again to see the answer to your reply";
 
+/// A pack change asked for while another runs.
+const BUSY: &str = "A pack change is still running";
+
 /// The status bar clips on the right, so the next step leads and the detail ends.
 pub(super) fn closed(error: Option<String>) -> String {
     let error = error.map_or(String::new(), |error| format!(" ({error})"));
@@ -347,6 +352,11 @@ struct Source {
     signing_in: Option<CancellationToken>,
     /// The id each kind's new form last opened with.
     new_ids: RapidHashMap<Doc, String>,
+    /// The registry search Packs shows: what was searched for, and the page shown.
+    pack_query: String,
+    pack_page: u32,
+    /// Held through each pack change, so another is refused while it runs.
+    pack_changes: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Source {
@@ -383,6 +393,9 @@ impl Source {
             waiting: RapidHashSet::new(),
             signing_in: None,
             new_ids: RapidHashMap::new(),
+            pack_query: String::new(),
+            pack_page: 1,
+            pack_changes: Arc::default(),
         }
     }
 
@@ -430,6 +443,10 @@ impl Source {
             Intent::ReadMenu(menu) => self.read_menu(menu),
             Intent::ReadProfiles { agent } => self.read_profiles(agent),
             Intent::SaveKeys(keys) => self.save_keys(keys),
+            Intent::Act {
+                act: MenuAct::Pack(act),
+                ..
+            } => self.pack_act(act),
             Intent::Act { menu, act } => self.act(menu, act),
             Intent::ReadSetup => self.answer_setup(Update::Setup, |access, node| async move {
                 let rows = account_rows(&access, &node, None, Utc::now()).await;
@@ -467,6 +484,41 @@ impl Source {
             } => self.answer_setup(Update::Saved, |access, node| async move {
                 setup::save(&access, &node, &connection, &model, &settings).await
             }),
+            Intent::OpenForm {
+                form: FormRef::PackSearch,
+                opening,
+            } => self.tell(Update::Form {
+                form: FormRef::PackSearch,
+                opening,
+                result: Ok(packs::search_form(&self.pack_query)),
+            }),
+            // The desktop says nothing of a search, and the shell rereads Packs on its save.
+            Intent::SaveForm {
+                form: FormRef::PackSearch,
+                opening,
+                values,
+            } => {
+                self.pack_query = forms::value(&values.0, "query").trim().to_string();
+                self.pack_page = 1;
+                self.tell(Update::FormSaved {
+                    form: FormRef::PackSearch,
+                    opening,
+                    result: Ok(String::new()),
+                });
+            }
+            Intent::OpenForm {
+                form: FormRef::PackSignIn,
+                opening,
+            } => self.tell(Update::Form {
+                form: FormRef::PackSignIn,
+                opening,
+                result: Ok(packs::sign_in_form()),
+            }),
+            Intent::SaveForm {
+                form: FormRef::PackSignIn,
+                opening,
+                values,
+            } => self.registry_sign_in(opening, &values),
             Intent::OpenForm { form, opening } => {
                 if let FormRef::New(doc) = form {
                     self.new_ids.insert(doc, new_id(sections::prefix(doc)));
@@ -495,7 +547,7 @@ impl Source {
                     result: saved.unwrap_or_else(|off| Err(forms::refused(off))),
                 };
                 self.answer_setup(saved, |access, node| async move {
-                    Ok(forms::save(&access, &home, &node, &form, &values, &id).await)
+                    Ok(forms::save(&access, &home, &node, &form, &values.0, &id).await)
                 });
             }
             Intent::FormAct {
@@ -515,7 +567,7 @@ impl Source {
                     }
                 };
                 self.answer_setup(noted, |access, node| async move {
-                    Ok(forms::act(&access, &home, &node, &form, &act, &values, &id).await)
+                    Ok(forms::act(&access, &home, &node, &form, &act, &values.0, &id).await)
                 });
             }
         }
@@ -527,7 +579,11 @@ impl Source {
         match form {
             FormRef::Edit(_, id) => id.clone(),
             FormRef::New(doc) => self.new_ids.get(doc).cloned().unwrap_or_default(),
-            FormRef::Node | FormRef::AddFolder | FormRef::Delete(..) => String::new(),
+            FormRef::Node
+            | FormRef::AddFolder
+            | FormRef::Delete(..)
+            | FormRef::PackSearch
+            | FormRef::PackSignIn => String::new(),
         }
     }
 
@@ -612,13 +668,155 @@ impl Source {
         });
     }
 
-    /// Off the chat loop, so a slow owner holds up no other intent.
+    /// A remove asks first, and a change answers its notice or the desktop's question. Reads, the
+    /// questions before a change among them, run while a change does.
+    fn pack_act(&mut self, act: PackAct) {
+        let (runtime, home) = (self.runtime.clone(), self.home.clone());
+        match act {
+            PackAct::Page(page) => {
+                self.pack_page = page;
+                self.read_menu(MenuId::Packs);
+            }
+            PackAct::Keyword(word) => {
+                self.pack_query = word;
+                self.pack_page = 1;
+                self.read_menu(MenuId::Packs);
+            }
+            PackAct::Install {
+                pack,
+                edited,
+                grant,
+            } => self.pack_change(
+                Some(format!("Installing {pack}…")),
+                packs::install(runtime, home, pack.clone(), edited, grant),
+                move |done| packs::installed(pack, edited, grant, done),
+            ),
+            PackAct::Update { pack, edited } => self.pack_change(
+                Some(format!("Updating {pack}…")),
+                packs::update(runtime, home, pack.clone(), edited),
+                move |done| packs::updated(pack, done),
+            ),
+            PackAct::Remove {
+                pack,
+                confirmed: false,
+            } => self.tell(packs::confirm_remove(pack)),
+            PackAct::Remove {
+                pack,
+                confirmed: true,
+            } => self.pack_change(
+                Some(format!("Removing {pack}…")),
+                packs::remove(runtime, home, pack.clone()),
+                move |done| packs::removed(&pack, done),
+            ),
+            PackAct::ChooseSlot { plugin } => {
+                self.pack_read(packs::choose_slot(runtime, home, plugin));
+            }
+            PackAct::BindSlot { plugin, profile } => self.pack_change(
+                None,
+                packs::bind(runtime, home, plugin, profile),
+                packs::quiet,
+            ),
+            PackAct::SignOut => {
+                self.pack_change(None, packs::sign_out(runtime, home), packs::quiet);
+            }
+            PackAct::Info { pack, installed } => {
+                self.pack_read(packs::page(runtime, home, pack, installed));
+            }
+        }
+    }
+
+    /// One at a time, as the desktop's `busy` disables every pack button (`PacksPanel.tsx:136`):
+    /// one asked for while another runs is refused. It says it `started`, when the desktop shows
+    /// it waiting, runs off the chat loop, and `answer` says what it did, if anything. Packs is
+    /// read again only once it succeeds, as the desktop refreshes (`:141`, `:168`, `:189`, `:201`,
+    /// `:226`, `:257`).
+    fn pack_change<E, C, A, U>(&self, started: Option<String>, change: C, answer: A)
+    where
+        C: Future<Output = Result<Value, E>> + Send + 'static,
+        A: FnOnce(Result<Value, E>) -> U + Send + 'static,
+        U: Into<Option<Update>>,
+    {
+        let Ok(one) = self.pack_changes.clone().try_lock_owned() else {
+            return self.tell(Update::Notice(BUSY.to_string()));
+        };
+        if let Some(started) = started {
+            self.tell(Update::Notice(started));
+        }
+        let (updates, ended) = (self.updates.clone(), self.watching.clone());
+        self.runtime.spawn(async move {
+            let done = change.await;
+            // Released before the answer, so the question it asks can be answered at once.
+            drop(one);
+            let succeeded = done.is_ok();
+            if let Some(answer) = answer(done).into() {
+                let _ = updates.send(Input::Runtime(answer));
+            }
+            if succeeded {
+                let _ = ended.send(Watched::PackChanged);
+            }
+        });
+    }
+
+    /// A pack read off the chat loop, told as it lands.
+    fn pack_read<R>(&self, read: R)
+    where
+        R: Future<Output = Update> + Send + 'static,
+    {
+        let updates = self.updates.clone();
+        self.runtime.spawn(async move {
+            let _ = updates.send(Input::Runtime(read.await));
+        });
+    }
+
+    /// A pack change, refused as the others are while one runs. Its form shows it saving, so it
+    /// says nothing it started, and the shell reads Packs again once it succeeds.
+    fn registry_sign_in(&self, opening: u64, values: &FormValues) {
+        let saved = move |result| Update::FormSaved {
+            form: FormRef::PackSignIn,
+            opening,
+            result,
+        };
+        let token = forms::value(&values.0, "token").trim().to_string();
+        if token.is_empty() {
+            let required = forms::problem("token", "Registry token is required");
+            return self.tell(saved(Err(required)));
+        }
+        let Ok(one) = self.pack_changes.clone().try_lock_owned() else {
+            return self.tell(saved(Err(forms::refused(BUSY))));
+        };
+        let (runtime, home) = (self.runtime.clone(), self.home.clone());
+        let updates = self.updates.clone();
+        self.runtime.spawn(async move {
+            let done = packs::sign_in(runtime, home, token).await;
+            drop(one);
+            let _ = updates.send(Input::Runtime(saved(packs::signed_in(done))));
+        });
+    }
+
+    /// Off the chat loop, so a slow owner holds up no other intent. A notice the read answers
+    /// follows its rows.
     fn read_menu(&self, menu: MenuId) {
         let (work, home) = (self.work.clone(), self.home.clone());
         let (principal, updates) = (self.principal.clone(), self.updates.clone());
+        let (runtime, query, page) = (
+            self.runtime.clone(),
+            self.pack_query.clone(),
+            self.pack_page,
+        );
         self.runtime.spawn(async move {
-            let rows = menus::read_menu(&work, &home, &principal, menu).await;
+            let (rows, notice) = match menu {
+                MenuId::Packs => {
+                    match packs::read(&work, &home, &principal, &runtime, &query, page).await {
+                        Ok((rows, notice)) => (Ok(rows), notice),
+                        Err(off) => (Err(off), None),
+                    }
+                }
+                _ => (menus::read_menu(&work, &home, &principal, menu).await, None),
+            };
             let _ = updates.send(Input::Runtime(Update::Menu { menu, rows }));
+            if let Some(notice) = notice {
+                let _ = updates.send(Input::Runtime(Update::Notice(notice)));
+            }
         });
     }
 
@@ -790,6 +988,7 @@ impl Source {
                     self.tell(Update::SignedIn(signed));
                 }
             }
+            Watched::PackChanged => self.read_menu(MenuId::Packs),
         }
     }
 
@@ -1221,11 +1420,12 @@ fn blank() -> ChatLine {
 
 #[cfg(test)]
 mod tests {
+    use gents::pack::PackChangeError;
     use serde_json::json;
 
     use super::super::tests::{
-        agents_a_and_b, connect, quiet, resumes_of, thread, thread_answer, turn, user_message,
-        within, FakeRuntime,
+        agents_a_and_b, connect, home_serving, quiet, resumes_of, thread, thread_answer, turn,
+        user_message, within, FakeRuntime,
     };
     use super::*;
     use crate::commands::eval::testing::test_runtime_handle;
@@ -1394,6 +1594,335 @@ mod tests {
         let timed_out = "Grok sign-in timed out waiting for the browser.";
         assert_eq!(signed_in(&told), [Err(timed_out.to_string())]);
         assert!(source.signing_in.is_none(), "the next sign-in may start");
+    }
+
+    #[tokio::test]
+    async fn a_pack_search_is_kept_and_starts_at_page_one() {
+        use gents_shell::source::PackAct;
+        let (mut source, told, _watched) = idle_source();
+        let page = |page| Intent::Act {
+            menu: MenuId::Packs,
+            act: MenuAct::Pack(PackAct::Page(page)),
+        };
+        let typed = vec![("query".to_string(), " git ".to_string())];
+        let save = Intent::SaveForm {
+            form: FormRef::PackSearch,
+            opening: 7,
+            values: FormValues(typed),
+        };
+        let open = Intent::OpenForm {
+            form: FormRef::PackSearch,
+            opening: 8,
+        };
+
+        source.handle(page(3)).await;
+        let paged = source.pack_page;
+        source.handle(save).await;
+        source.handle(open).await;
+
+        assert_eq!(paged, 3);
+        assert_eq!((source.pack_query.as_str(), source.pack_page), ("git", 1));
+        let told: Vec<_> = told
+            .try_iter()
+            .filter_map(|input| match input {
+                Input::Runtime(update @ (Update::Form { .. } | Update::FormSaved { .. })) => {
+                    Some(update)
+                }
+                _ => None,
+            })
+            .collect();
+        let saved = Update::FormSaved {
+            form: FormRef::PackSearch,
+            opening: 7,
+            result: Ok(String::new()),
+        };
+        assert_eq!(told[0], saved);
+        let Update::Form {
+            opening: 8,
+            result: Ok(form),
+            ..
+        } = &told[1]
+        else {
+            panic!("{told:?}");
+        };
+        assert_eq!(form.fields[0].value, "git");
+    }
+
+    type Told = Arc<std::sync::Mutex<std::sync::mpsc::Receiver<Input>>>;
+
+    /// A source with `work` on, over a home whose runtime does not answer, and the home and its
+    /// key's folder.
+    fn without_runtime() -> (
+        Source,
+        Told,
+        mpsc::UnboundedReceiver<Watched>,
+        [tempfile::TempDir; 2],
+    ) {
+        let keys = tempfile::tempdir().unwrap();
+        let key = keys.path().join("principal.key");
+        let (home, _) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
+        let work = work::work_for(home.path());
+        assert!(work.is_ok(), "the home's node signs: {:?}", work.err());
+        let (updates, told) = std::sync::mpsc::channel();
+        let (watching, watched) = mpsc::unbounded_channel();
+        let runtime = test_runtime_handle();
+        let source = Source::new(updates, work, home.path().into(), runtime, watching);
+        let told = Arc::new(std::sync::Mutex::new(told));
+        (source, told, watched, [home, keys])
+    }
+
+    async fn next(told: &Told) -> Update {
+        let told = told.clone();
+        let input = test_runtime_handle()
+            .spawn_blocking(move || told.lock().unwrap().recv_timeout(Duration::from_secs(10)))
+            .await
+            .unwrap()
+            .expect("the source should have told an update by now");
+        match input {
+            Input::Runtime(update) => update,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Packs is read by its own owner, which waits for the runtime, not by `menus::read_menu`,
+    /// which answers no rows for it.
+    #[tokio::test]
+    async fn packs_are_read_by_their_owner() {
+        let (mut source, told, _watched, _dirs) = without_runtime();
+
+        source.handle(Intent::ReadMenu(MenuId::Packs)).await;
+
+        let rows = Err(closed(None));
+        let menu = MenuId::Packs;
+        assert_eq!(next(&told).await, Update::Menu { menu, rows });
+    }
+
+    fn install_git() -> Intent {
+        let install = PackAct::Install {
+            pack: "acme/git".to_string(),
+            edited: gents_shell::source::EditedChoice::Refuse,
+            grant: false,
+        };
+        let act = MenuAct::Pack(install);
+        let menu = MenuId::Packs;
+        Intent::Act { menu, act }
+    }
+
+    fn installing_git() -> Update {
+        Update::Notice("Installing acme/git…".to_string())
+    }
+
+    /// Once the source ends, `watched` closes when the change's task does: `None` means the
+    /// change asked for no reread.
+    async fn reread_asked(source: Source, mut watched: mpsc::UnboundedReceiver<Watched>) -> bool {
+        drop(source);
+        within(watched.recv()).await.is_some()
+    }
+
+    #[tokio::test]
+    async fn a_pack_change_waits_for_the_runtime() {
+        let (mut source, told, watched, [home, _]) = without_runtime();
+
+        source.handle(install_git()).await;
+
+        assert_eq!(next(&told).await, installing_git());
+        assert_eq!(next(&told).await, Update::Notice(closed(None)));
+        assert!(
+            !reread_asked(source, watched).await,
+            "a failure reads nothing"
+        );
+        let data = crate::home_state::default_data_dir(home.path());
+        assert!(!data.exists(), "a pack call opened the store");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_asks_and_reads_nothing_again() {
+        use gents_shell::source::EditedChoice::Refuse;
+        let (source, told, watched, _dirs) = without_runtime();
+        let refused = PackChangeError::Edited {
+            coordinate: "acme/git".to_string(),
+            edited: vec!["skill review".to_string()],
+        };
+        let answer = |done| packs::installed("acme/git".to_string(), Refuse, false, done);
+
+        source.pack_change(
+            Some("Installing acme/git…".into()),
+            async { Err(refused) },
+            answer,
+        );
+
+        assert_eq!(next(&told).await, installing_git());
+        let asked = next(&told).await;
+        assert!(matches!(&asked, Update::Ask { title, .. } if title == "Install acme/git"));
+        assert!(
+            !reread_asked(source, watched).await,
+            "a refusal reads nothing"
+        );
+        let menus = told.lock().unwrap().try_iter().count();
+        assert_eq!(menus, 0, "no Update::Menu follows the Ask");
+    }
+
+    #[tokio::test]
+    async fn a_success_reads_packs_again() {
+        use gents_shell::source::EditedChoice::Refuse;
+        let (mut source, told, mut watched, _dirs) = without_runtime();
+        let answer = |done| packs::installed("acme/git".to_string(), Refuse, false, done);
+
+        let done = async { Ok(serde_json::json!({})) };
+        source.pack_change(Some("Installing acme/git…".into()), done, answer);
+        assert_eq!(next(&told).await, installing_git());
+        let installed = Update::Notice("Installed acme/git".to_string());
+        assert_eq!(next(&told).await, installed);
+        let ended = within(watched.recv())
+            .await
+            .expect("the change asked for a reread");
+        source.watched(ended);
+
+        let rows = Err(closed(None));
+        let menu = MenuId::Packs;
+        assert_eq!(
+            next(&told).await,
+            Update::Menu { menu, rows },
+            "through packs::read"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_pack_change_is_refused_while_one_runs() {
+        let (mut source, told, _watched) = idle_source();
+        let running = source.pack_changes.clone().try_lock_owned().unwrap();
+
+        source.handle(install_git()).await;
+
+        let told: Vec<_> = told.try_iter().collect();
+        let refused = "A pack change is still running".to_string();
+        assert!(
+            matches!(&told[..], [Input::Runtime(Update::Notice(notice))] if *notice == refused),
+            "{told:?}"
+        );
+        assert_eq!(
+            Arc::strong_count(&source.pack_changes),
+            2,
+            "nothing else runs"
+        );
+        drop(running);
+    }
+
+    #[tokio::test]
+    async fn remove_confirms_first() {
+        let (mut source, told, _watched) = idle_source();
+        let remove = |confirmed| {
+            let pack = "acme/git".to_string();
+            MenuAct::Pack(PackAct::Remove { pack, confirmed })
+        };
+
+        let act = remove(false);
+        source
+            .handle(Intent::Act {
+                menu: MenuId::Packs,
+                act,
+            })
+            .await;
+
+        let told: Vec<_> = told.try_iter().collect();
+        let [Input::Runtime(Update::Ask { title, rows })] = &told[..] else {
+            panic!("{told:?}");
+        };
+        assert_eq!(title, "Remove acme/git and everything it installed?");
+        let rows: Vec<_> = rows.iter().map(|row| (&row.text[..], &row.enter)).collect();
+        assert_eq!(rows, [(" Remove", &Some(remove(true)))]);
+        let started = Arc::strong_count(&source.pack_changes) > 1;
+        assert!(!started, "packs::remove is not called");
+    }
+
+    fn pack(act: PackAct) -> Intent {
+        let act = MenuAct::Pack(act);
+        let menu = MenuId::Packs;
+        Intent::Act { menu, act }
+    }
+
+    #[tokio::test]
+    async fn sign_in_saves_the_token_and_refuses_an_empty_one() {
+        use gents_shell::source::FormError;
+        let (mut source, told, _watched, _dirs) = without_runtime();
+        let save = |token: &str| Intent::SaveForm {
+            form: FormRef::PackSignIn,
+            opening: 1,
+            values: FormValues(vec![("token".to_string(), token.to_string())]),
+        };
+        let saved = |field: Option<&str>, message: &str| Update::FormSaved {
+            form: FormRef::PackSignIn,
+            opening: 1,
+            result: Err(FormError {
+                field: field.map(str::to_string),
+                message: message.to_string(),
+            }),
+        };
+        let open = Intent::OpenForm {
+            form: FormRef::PackSignIn,
+            opening: 1,
+        };
+
+        source.handle(open).await;
+        let form = Update::Form {
+            form: FormRef::PackSignIn,
+            opening: 1,
+            result: Ok(packs::sign_in_form()),
+        };
+        assert_eq!(next(&told).await, form);
+        source.handle(save("  ")).await;
+        let required = saved(Some("token"), "Registry token is required");
+        assert_eq!(next(&told).await, required);
+
+        let running = source.pack_changes.clone().try_lock_owned().unwrap();
+        source.handle(save("tok")).await;
+        assert_eq!(next(&told).await, saved(None, BUSY));
+        drop(running);
+        // The login waits for the runtime, which does not answer, and frees the lock after.
+        source.handle(save(" tok ")).await;
+        assert_eq!(next(&told).await, saved(None, &closed(None)));
+        assert!(source.pack_changes.clone().try_lock_owned().is_ok());
+    }
+
+    /// Binding and signing out wait for a change that runs, as install does; the reads that ask
+    /// do not.
+    #[tokio::test]
+    async fn pack_writes_wait_their_turn_and_reads_do_not() {
+        let (mut source, told, _watched, _dirs) = without_runtime();
+        let running = source.pack_changes.clone().try_lock_owned().unwrap();
+        let plugin = || "acme/git".to_string();
+        let writes = [
+            PackAct::BindSlot {
+                plugin: plugin(),
+                profile: None,
+            },
+            PackAct::SignOut,
+        ];
+
+        for write in writes {
+            source.handle(pack(write)).await;
+            assert_eq!(next(&told).await, Update::Notice(BUSY.to_string()));
+        }
+        source
+            .handle(pack(PackAct::ChooseSlot { plugin: plugin() }))
+            .await;
+        assert_eq!(next(&told).await, Update::Notice(closed(None)));
+        drop(running);
+    }
+
+    #[tokio::test]
+    async fn a_keyword_searches_from_page_one() {
+        let (mut source, told, _watched, _dirs) = without_runtime();
+        source.pack_page = 3;
+
+        source
+            .handle(pack(PackAct::Keyword("vcs".to_string())))
+            .await;
+
+        assert_eq!((source.pack_query.as_str(), source.pack_page), ("vcs", 1));
+        let rows = Err(closed(None));
+        let menu = MenuId::Packs;
+        assert_eq!(next(&told).await, Update::Menu { menu, rows });
     }
 
     #[tokio::test]

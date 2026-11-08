@@ -8,14 +8,17 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use gents::pack::PackChangeError;
+use gents::plugin::authority::GrantError;
 use gents::store::config_client::GraphqlEndpoint;
 use gents_codex_protocol as codex;
 use gents_shell::app::{App, ChatLine};
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
 use gents_shell::source::{
-    Answer as PromptAnswer, BackgroundCall, Change, ChangeKind, Connection, Doc, FormError,
-    FormRef, Input, Intent, Job, JobEnd, MenuAct, MenuRow, Prompt, PromptKind, Session, Update,
+    Answer as PromptAnswer, BackgroundCall, Change, ChangeKind, Connection, Doc, EditedChoice,
+    FormError, FormRef, FormValues, Input, Intent, Job, JobEnd, MenuAct, MenuRow, PackAct, Prompt,
+    PromptKind, Session, Update,
 };
 use rapidhash::RapidHashMap;
 use ratatui::buffer::Buffer;
@@ -1929,7 +1932,10 @@ async fn an_unanswered_request_becomes_a_notice_and_the_shell_goes_on() {
 
 /// An initialized home whose recorded runtime serves GraphQL at `graphql`, signed by `key` when
 /// one is given.
-fn home_serving(graphql: &str, key: Option<&std::path::Path>) -> (tempfile::TempDir, String) {
+pub(super) fn home_serving(
+    graphql: &str,
+    key: Option<&std::path::Path>,
+) -> (tempfile::TempDir, String) {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().to_string_lossy().into_owned();
     let node_did = match key {
@@ -3779,7 +3785,7 @@ async fn a_new_form_saves_under_the_id_it_showed() {
     shell.intend(Intent::SaveForm {
         form: new.clone(),
         opening: 7,
-        values: values.clone(),
+        values: FormValues(values.clone()),
     });
     let saved = shell
         .until(|update| matches!(update, Update::FormSaved { .. }))
@@ -3789,7 +3795,7 @@ async fn a_new_form_saves_under_the_id_it_showed() {
         form: new.clone(),
         opening: 7,
         act,
-        values,
+        values: FormValues(values),
     });
     let noted = shell
         .until(|update| matches!(update, Update::FormNote { .. }))
@@ -4588,4 +4594,417 @@ async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
     assert_eq!(*menu, MenuId::Agents);
     assert!(rows.as_ref().unwrap()[0].text.contains("Other"), "{rows:?}");
     node.shutdown().await;
+}
+
+fn shown_rows(rows: &[MenuRow]) -> Vec<(&str, Tone)> {
+    rows.iter()
+        .map(|row| (row.text.as_str(), row.tone))
+        .collect()
+}
+
+/// A registry search's answer.
+fn found(packs: Value, has_more: bool) -> Value {
+    json!({ "packs": packs, "has_more": has_more })
+}
+
+#[test]
+fn pack_rows_mirror_the_desktop() {
+    use super::packs::{adds, pack_rows};
+    use Tone::{Label, Plain, Warn};
+    let git = || vec!["gents:pack:git".to_string()];
+    let adds = adds(&[vec![git(), git()], vec![git(), vec!["other".to_string()]]]);
+    let installed = json!({ "packs": [
+        { "pack": "acme/git", "installed": "1.0.0", "latest": "1.1.0", "outdated": true, "error": null },
+        { "pack": "acme/ocr", "installed": "0.2.0", "latest": null, "outdated": null, "error": "offline" },
+    ]});
+    let slots = json!({
+        "plugins": [
+            { "plugin": "acme/ocr", "slot": "vision", "profile": "fast" },
+            { "plugin": "acme/git", "slot": "summary", "profile": null },
+        ],
+        "profiles": [
+            { "profile_id": "fast", "display_name": "", "model_name": "gpt-fast", "usable": true },
+        ],
+    });
+    let registry = found(
+        json!([
+            { "namespace": "acme", "name": "git", "description": "Git tools" },
+            { "namespace": "acme", "name": "web", "description": " " },
+        ]),
+        false,
+    );
+
+    let (offline, _) = pack_rows(
+        Ok(&installed),
+        Ok(&slots),
+        None,
+        Err("offline"),
+        "",
+        1,
+        &adds,
+    );
+    let (signed_in, _) = pack_rows(
+        Ok(&installed),
+        Ok(&Value::Null),
+        Some("ada"),
+        Ok(&registry),
+        "acme",
+        1,
+        &adds,
+    );
+
+    assert_eq!(
+        shown_rows(&offline),
+        [
+            (" Installed", Label),
+            (" acme/git   1.0.0, 1.1.0 available", Plain),
+            ("   Adds 2 agents · 1 skill", Label),
+            (" acme/ocr   0.2.0 · couldn't check for updates", Plain),
+            (" Model calls", Label),
+            (" acme/ocr   gpt-fast", Plain),
+            (" acme/git   Not set", Plain),
+            (" Registry", Label),
+            (" Search   Packs and plugins", Plain),
+            ("   offline", Warn),
+            (" Account", Label),
+            (" Sign in   A token from your registry dashboard", Plain),
+        ]
+    );
+    assert_eq!(offline[8].enter, Some(MenuAct::Open(FormRef::PackSearch)));
+    assert_eq!(
+        shown_rows(&signed_in)[4..],
+        [
+            (" Registry", Label),
+            (" Search   acme", Plain),
+            (" acme/git   Git tools · Installed", Label),
+            (" acme/web", Plain),
+            (" Account", Label),
+            (" ada   Signed in to the registry", Plain),
+        ]
+    );
+}
+
+#[test]
+fn pack_rows_show_the_empty_and_unread_states() {
+    use super::packs::pack_rows;
+    use Tone::{Label, Plain, Warn};
+    let none = Default::default();
+    let empty = found(json!([]), false);
+
+    let (unread, _) = pack_rows(
+        Err("denied"),
+        Ok(&Value::Null),
+        None,
+        Ok(&empty),
+        "",
+        1,
+        &none,
+    );
+    let listed = json!({ "packs": [] });
+    let (nothing, _) = pack_rows(
+        Ok(&listed),
+        Ok(&Value::Null),
+        None,
+        Ok(&empty),
+        "zz",
+        1,
+        &none,
+    );
+
+    assert_eq!(
+        shown_rows(&unread)[..6],
+        [
+            (" Installed", Label),
+            (" Couldn't read the installed packs", Warn),
+            ("   denied", Warn),
+            (" Registry", Label),
+            (" Search   Packs and plugins", Plain),
+            (" The registry has no packs yet", Label),
+        ]
+    );
+    assert_eq!(shown_rows(&nothing)[1], (" No packs installed", Label));
+    assert_eq!(shown_rows(&nothing)[4], (" No packs match", Label));
+}
+
+/// A failed model-calls read drops its group and says why, as the desktop's toast does
+/// (`PacksPanel.tsx:72-75`).
+#[test]
+fn pack_rows_tell_a_failed_model_calls_read() {
+    use super::packs::pack_rows;
+    let (none, listed, empty) = (
+        Default::default(),
+        json!({ "packs": [] }),
+        found(json!([]), false),
+    );
+    let slots = json!({
+        "plugins": [{ "plugin": "acme/ocr", "slot": "vision", "profile": null }],
+        "profiles": [],
+    });
+    let shows_group = |rows: &[MenuRow]| rows.iter().any(|row| row.text == " Model calls");
+
+    let (read, quiet) = pack_rows(Ok(&listed), Ok(&slots), None, Ok(&empty), "", 1, &none);
+    let unread = Err("reading the plugin store failed: locked");
+    let (failed, told) = pack_rows(Ok(&listed), unread, None, Ok(&empty), "", 1, &none);
+
+    assert!(shows_group(&read) && quiet.is_none(), "{read:?} {quiet:?}");
+    assert!(!shows_group(&failed), "{failed:?}");
+    let told = told.as_deref();
+    assert_eq!(told, Some("reading the plugin store failed: locked"));
+}
+
+#[test]
+fn pack_rows_page_the_registry() {
+    use super::packs::pack_rows;
+    use gents_shell::source::PackAct;
+    let (none, listed) = (Default::default(), json!({ "packs": [] }));
+    let paging = |page, has_more| {
+        let registry = found(json!([{ "namespace": "acme", "name": "git" }]), has_more);
+        let (rows, _) = pack_rows(
+            Ok(&listed),
+            Ok(&Value::Null),
+            None,
+            Ok(&registry),
+            "",
+            page,
+            &none,
+        );
+        let after = rows
+            .into_iter()
+            .skip_while(|row| row.text != " acme/git")
+            .skip(1);
+        let paging = after.take_while(|row| row.text != " Account");
+        paging.map(|row| (row.text, row.enter)).collect::<Vec<_>>()
+    };
+    let to = |page| Some(MenuAct::Pack(PackAct::Page(page)));
+    let shown = |text: &str, enter| (text.to_string(), enter);
+
+    assert_eq!(
+        paging(1, true),
+        [shown(" Page 1", None), shown(" Next", to(2))]
+    );
+    assert_eq!(
+        paging(2, false),
+        [shown(" Page 2", None), shown(" Previous", to(1))]
+    );
+    assert_eq!(
+        paging(2, true),
+        [
+            shown(" Page 2", None),
+            shown(" Previous", to(1)),
+            shown(" Next", to(3))
+        ]
+    );
+    assert_eq!(paging(1, false), []);
+}
+
+/// With no runtime answering, a pack call opens and claims the home's store
+/// (`resolve_config_access`), so Packs answers the shell's reason and makes none.
+#[tokio::test]
+async fn packs_wait_for_the_runtime() {
+    let keys = tempfile::tempdir().unwrap();
+    let key = keys.path().join("principal.key");
+    let (home, did) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
+    let work = work::work_for(home.path());
+    assert!(
+        work.is_ok(),
+        "the home's node signs: {:?}",
+        work.as_ref().err()
+    );
+    let off: Result<Work, String> = Err("jobs and the mailbox are off: no runtime".to_string());
+    let runtime = test_runtime_handle();
+
+    let rows = super::packs::read(&work, home.path(), &did, &runtime, "", 1).await;
+    let off_rows = super::packs::read(&off, home.path(), &did, &runtime, "", 1).await;
+
+    let data = crate::home_state::default_data_dir(home.path());
+    assert!(!data.exists(), "a pack call opened the store");
+    assert!(
+        !data.with_extension("lock").exists(),
+        "a pack call claimed the store"
+    );
+    assert_eq!(rows, Err(source::closed(None)));
+    assert_eq!(off_rows.err(), off.err());
+}
+
+fn install(edited: EditedChoice, grant: bool) -> MenuAct {
+    let pack = "acme/git".to_string();
+    MenuAct::Pack(PackAct::Install {
+        pack,
+        edited,
+        grant,
+    })
+}
+
+fn ungranted() -> PackChangeError {
+    PackChangeError::Grant(GrantError::Ungranted {
+        plugin: "acme/http".to_string(),
+        asks: "HTTP to api.example.com".to_string(),
+    })
+}
+
+fn edited_documents() -> PackChangeError {
+    PackChangeError::Edited {
+        coordinate: "acme/git".to_string(),
+        edited: vec!["skill review".to_string()],
+    }
+}
+
+/// An Ask's title and its rows' text, tone and enter act.
+fn question(update: Update) -> (String, Vec<(String, Tone, Option<MenuAct>)>) {
+    let Update::Ask { title, rows } = update else {
+        panic!("{update:?}");
+    };
+    let rows = rows.into_iter().map(|row| (row.text, row.tone, row.enter));
+    (title, rows.collect())
+}
+
+fn choice(text: &str, act: MenuAct) -> (String, Tone, Option<MenuAct>) {
+    (text.to_string(), Tone::Plain, Some(act))
+}
+
+#[test]
+fn an_ungranted_install_asks_to_allow_it() {
+    use EditedChoice::Refuse;
+    let pack = "acme/git".to_string();
+
+    let answer = super::packs::installed(pack, Refuse, false, Err(ungranted()));
+
+    let (title, rows) = question(answer);
+    assert_eq!(title, "Install acme/git");
+    assert_eq!(
+        rows,
+        [
+            (format!(" {}", ungranted()), Tone::Warn, None),
+            (" Allow it?".to_string(), Tone::Label, None),
+            choice(" Allow", install(Refuse, true)),
+        ]
+    );
+}
+
+#[test]
+fn an_edited_install_asks_replace_or_keep_and_keeps_the_grant() {
+    use EditedChoice::{Keep, Overwrite, Refuse};
+    let pack = "acme/git".to_string();
+
+    let answer = super::packs::installed(pack, Refuse, true, Err(edited_documents()));
+
+    let (title, rows) = question(answer);
+    assert_eq!(title, "Install acme/git");
+    assert_eq!(
+        rows,
+        [
+            (format!(" {}", edited_documents()), Tone::Warn, None),
+            choice(" Replace them", install(Overwrite, true)),
+            choice(" Keep my edits", install(Keep, true)),
+        ]
+    );
+}
+
+#[test]
+fn a_replaced_install_can_still_ask_for_authority() {
+    use EditedChoice::Overwrite;
+    let pack = "acme/git".to_string();
+
+    let answer = super::packs::installed(pack, Overwrite, false, Err(ungranted()));
+
+    let (_, rows) = question(answer);
+    assert_eq!(
+        rows.last(),
+        Some(&choice(" Allow", install(Overwrite, true)))
+    );
+}
+
+#[test]
+fn an_install_says_what_it_did_or_why_not() {
+    use EditedChoice::Refuse;
+    let pack = || "acme/git".to_string();
+    let failed = PackChangeError::Other(anyhow::anyhow!("offline").context("fetching acme/git"));
+
+    let done = super::packs::installed(pack(), Refuse, false, Ok(json!({})));
+    let refused = super::packs::installed(pack(), Refuse, false, Err(failed));
+
+    assert_eq!(done, Update::Notice("Installed acme/git".to_string()));
+    let why = "fetching acme/git: offline".to_string();
+    assert_eq!(refused, Update::Notice(why));
+}
+
+#[test]
+fn an_update_cannot_grant_so_it_says_why() {
+    use EditedChoice::{Keep, Overwrite};
+    let pack = || "acme/git".to_string();
+    let update = |edited| {
+        let pack = pack();
+        MenuAct::Pack(PackAct::Update { pack, edited })
+    };
+
+    let ungranted_update = super::packs::updated(pack(), Err(ungranted()));
+    let edited = super::packs::updated(pack(), Err(edited_documents()));
+    let done = super::packs::updated(pack(), Ok(json!({})));
+
+    assert_eq!(ungranted_update, Update::Notice(ungranted().to_string()));
+    let (title, rows) = question(edited);
+    assert_eq!(title, "Update acme/git");
+    assert_eq!(
+        rows[1..],
+        [
+            choice(" Replace them", update(Overwrite)),
+            choice(" Keep my edits", update(Keep)),
+        ]
+    );
+    assert_eq!(done, Update::Notice("Updated acme/git".to_string()));
+}
+
+/// Install is enter on a registry pack not installed; update, when one is available, and remove
+/// are an installed pack's further acts.
+#[test]
+fn pack_rows_install_update_and_remove() {
+    use super::packs::pack_rows;
+    use EditedChoice::Refuse;
+    let installed = json!({ "packs": [
+        { "pack": "acme/git", "installed": "1.0.0", "latest": "1.1.0", "outdated": true, "error": null },
+        { "pack": "acme/ocr", "installed": "0.2.0", "latest": "0.2.0", "outdated": false, "error": null },
+    ]});
+    let registry = found(
+        json!([
+            { "namespace": "acme", "name": "git" },
+            { "namespace": "acme", "name": "web" },
+        ]),
+        false,
+    );
+    let none = Default::default();
+
+    let (rows, _) = pack_rows(
+        Ok(&installed),
+        Ok(&Value::Null),
+        None,
+        Ok(&registry),
+        "",
+        1,
+        &none,
+    );
+
+    let named = |text: &str| rows.iter().find(|row| row.text == text).expect(text);
+    let remove = |pack: &str| {
+        let pack = pack.to_string();
+        let remove = PackAct::Remove {
+            pack,
+            confirmed: false,
+        };
+        ("Remove".to_string(), MenuAct::Pack(remove))
+    };
+    let update = PackAct::Update {
+        pack: "acme/git".to_string(),
+        edited: Refuse,
+    };
+    let update = ("Update".to_string(), MenuAct::Pack(update));
+    let git = named(" acme/git   1.0.0, 1.1.0 available");
+    assert_eq!(git.more, [update, remove("acme/git")]);
+    assert_eq!(named(" acme/ocr   0.2.0").more, [remove("acme/ocr")]);
+    let web = PackAct::Install {
+        pack: "acme/web".to_string(),
+        edited: Refuse,
+        grant: false,
+    };
+    assert_eq!(named(" acme/web").enter, Some(MenuAct::Pack(web)));
+    assert_eq!(named(" acme/git · Installed").enter, None);
 }

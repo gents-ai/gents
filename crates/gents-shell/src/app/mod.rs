@@ -389,6 +389,8 @@ pub struct App {
     pub menus: RapidHashMap<MenuId, Result<Vec<MenuRow>, String>>,
     /// The menu `MenuId::More` acts on, and the row it was opened for as its title.
     more: Option<(MenuId, String)>,
+    /// The title of the question `MenuId::Ask` shows.
+    asked: String,
     /// The agent `MenuId::Profiles` lists for.
     profiles_of: Option<String>,
     /// The Setup layer's state, from when it last opened.
@@ -462,6 +464,7 @@ impl App {
             working_tree: None,
             menus: RapidHashMap::new(),
             more: None,
+            asked: String::new(),
             profiles_of: None,
             setup: None,
             form: None,
@@ -597,6 +600,7 @@ impl App {
             Update::Begin { agent, prompt } => self.begin(agent, prompt),
             Update::WorkingTree(tree) => self.set_working_tree(tree),
             Update::Menu { menu, rows } => self.set_menu(menu, rows),
+            Update::Ask { title, rows } => self.ask(title, rows),
             update @ (Update::Setup(_)
             | Update::SignInUrl { .. }
             | Update::SignedIn(_)

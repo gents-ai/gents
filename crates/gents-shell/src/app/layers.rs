@@ -2,7 +2,7 @@ use ratatui::layout::Rect;
 
 use super::input::LineInput;
 use super::work::{in_range, item};
-use super::{first_selectable, step_row, stepped, App};
+use super::{first_selectable, step_row, stepped, wrap, App};
 use crate::commands::COMMANDS;
 use crate::filter::subsequence;
 use crate::jump::{self, Target};
@@ -107,8 +107,8 @@ impl App {
     }
 
     /// Enter, or with `d` the `d` key, on the menu's `row`th row as read. A row without that act
-    /// does nothing. More and Profiles close as they choose, and More's choice acts on the menu
-    /// it was opened over.
+    /// does nothing. More, Profiles and Ask close as they choose, and More's choice acts on the
+    /// menu it was opened over.
     pub(super) fn run_row(&mut self, menu: MenuId, row: usize, d: bool) {
         let Some(Ok(rows)) = self.menus.get(&menu) else {
             return;
@@ -119,7 +119,7 @@ impl App {
         else {
             return;
         };
-        if matches!(menu, MenuId::More | MenuId::Profiles) {
+        if matches!(menu, MenuId::More | MenuId::Profiles | MenuId::Ask) {
             self.layers
                 .retain(|layer| layer.kind != LayerKind::Menu(menu));
         }
@@ -191,10 +191,31 @@ impl App {
         self.push_layer(LayerKind::Menu(MenuId::More));
     }
 
-    /// More is titled with the row it was opened for.
+    /// The source's question, on top. Each opens fresh, so no cursor left on an earlier question
+    /// answers this one. Each row wraps to the layer, keeping its indent.
+    pub(super) fn ask(&mut self, title: String, rows: Vec<MenuRow>) {
+        self.asked = title;
+        let ask = LayerKind::Menu(MenuId::Ask);
+        self.layers.retain(|layer| layer.kind != ask);
+        self.push_layer(ask);
+        let inner = self.top_layer_rect();
+        let inner = inner.map_or(usize::MAX, |rect| usize::from(rect.width.saturating_sub(2)));
+        let rows = rows.into_iter().flat_map(|row| {
+            let indent = row.text.len() - row.text.trim_start().len();
+            let lines = wrap(&row.text[indent..], inner.saturating_sub(indent));
+            lines.into_iter().map(move |line| MenuRow {
+                text: format!("{}{line}", &row.text[..indent]),
+                ..row.clone()
+            })
+        });
+        self.set_menu(MenuId::Ask, Ok(rows.collect()));
+    }
+
+    /// More is titled with the row it was opened for, and Ask with its question.
     pub fn menu_title(&self, id: MenuId) -> &str {
         match (id, &self.more) {
             (MenuId::More, Some((_, title))) => title,
+            (MenuId::Ask, _) => &self.asked,
             _ => id.name(),
         }
     }
@@ -234,6 +255,7 @@ impl App {
                 MenuId::NodeSettings
                 | MenuId::AppSettings
                 | MenuId::More
+                | MenuId::Ask
                 | MenuId::General
                 | MenuId::Developer
                 | MenuId::Experimental,
@@ -426,7 +448,7 @@ mod tests {
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{self, MENUS};
-    use crate::source::{Doc, FormRef, Update};
+    use crate::source::{Doc, EditedChoice, FormRef, PackAct, Update};
     use crate::testing::{
         buffer, find, kinds, press, screen, type_text, with_right_pane, with_sample_session,
     };
@@ -578,16 +600,6 @@ mod tests {
     }
 
     #[test]
-    fn packs_says_not_wired() {
-        let mut app = App::new(Vim, 132, 36);
-        app.push_layer(NODE);
-        app.layers[0].selected = row_named(MenuId::NodeSettings, "Packs");
-        press(&mut app, "enter");
-        assert_eq!(app.notice.as_deref(), Some("not wired yet"));
-        assert_eq!(kinds(&app), [NODE]);
-    }
-
-    #[test]
     fn node_settings_rows_open_their_sections() {
         for (name, id) in [
             ("Skills", MenuId::Skills),
@@ -596,6 +608,7 @@ mod tests {
             ("Event sources", MenuId::EventSources),
             ("Remote Tools", MenuId::RemoteTools),
             ("Allowed folders", MenuId::AllowedFolders),
+            ("Packs", MenuId::Packs),
             ("UX Plugins", MenuId::UxPlugins),
         ] {
             let (mut app, intended) = connected();
@@ -1881,5 +1894,107 @@ mod tests {
             sample::answer(&act),
             vec![Update::Notice("not wired yet".to_string())]
         );
+    }
+
+    const PACKS: LayerKind = LayerKind::Menu(MenuId::Packs);
+    const ASK: LayerKind = LayerKind::Menu(MenuId::Ask);
+
+    fn allow(pack: &str) -> MenuAct {
+        MenuAct::Pack(PackAct::Install {
+            pack: pack.to_string(),
+            edited: EditedChoice::Refuse,
+            grant: true,
+        })
+    }
+
+    /// The source's question for an install of `pack` that asks for authority.
+    fn install_question(pack: &str) -> Update {
+        let refusal = " plugin acme/http asks for HTTP to api.example.com; install it with --grant-authority to allow that";
+        let rows = vec![
+            MenuRow {
+                tone: Tone::Warn,
+                ..menu_row(refusal, None, None)
+            },
+            MenuRow {
+                tone: Tone::Label,
+                ..menu_row(" Allow it?", None, None)
+            },
+            menu_row(" Allow", Some(allow(pack)), None),
+        ];
+        let title = format!("Install {pack}");
+        Update::Ask { title, rows }
+    }
+
+    /// Packs, and over it the question for installing acme/git.
+    fn asked() -> (App, Receiver<Intent>) {
+        let (mut app, intended) = connected();
+        app.push_layer(PACKS);
+        intended.try_iter().for_each(drop);
+        app.apply(install_question("acme/git"));
+        (app, intended)
+    }
+
+    #[test]
+    fn an_ask_opens_over_the_menu_and_enter_runs_the_row() {
+        let (mut app, intended) = asked();
+
+        assert_eq!(kinds(&app), [PACKS, ASK]);
+        assert_eq!(sent(&intended), [], "an Ask reads nothing");
+        let rect = app.top_layer_rect().expect("the Ask");
+        let s = screen(&app);
+        assert!(s[usize::from(rect.y)].contains(" Install acme/git "));
+        assert!(find(&s, " enter choose · esc cancel").is_some());
+        let rows = shown(&app, MenuId::Ask);
+        let warn = |text: &str| (text.to_string(), Tone::Warn);
+        assert_eq!(
+            rows[..2],
+            [
+                warn(" plugin acme/http asks for HTTP to api.example.com; install it with"),
+                warn(" --grant-authority to allow that"),
+            ],
+            "the refusal wraps inside the layer"
+        );
+        let allow_row = rows.iter().position(|(text, _)| text == " Allow");
+
+        press(&mut app, &"j ".repeat(allow_row.expect("Allow")));
+        press(&mut app, "enter");
+        let act = Intent::Act {
+            menu: MenuId::Ask,
+            act: allow("acme/git"),
+        };
+        assert_eq!(sent(&intended), [act]);
+        assert_eq!(kinds(&app), [PACKS]);
+    }
+
+    #[test]
+    fn a_second_ask_replaces_the_first_with_its_cursor_on_top() {
+        let (mut app, intended) = asked();
+        press(&mut app, "j j j");
+        assert_eq!(selected_text(&app, MenuId::Ask), " Allow");
+
+        app.apply(install_question("acme/ocr"));
+
+        assert_eq!(kinds(&app), [PACKS, ASK]);
+        assert_eq!(app.layers[1].selected, 0);
+        let rect = app.top_layer_rect().expect("the Ask");
+        assert!(screen(&app)[usize::from(rect.y)].contains(" Install acme/ocr "));
+        press(&mut app, "enter");
+        assert_eq!(
+            sent(&intended),
+            [],
+            "acme/git's cursor does not allow acme/ocr"
+        );
+    }
+
+    #[test]
+    fn esc_leaves_an_ask_without_acting() {
+        let (mut app, intended) = asked();
+
+        press(&mut app, "enter");
+        assert_eq!(kinds(&app), [PACKS, ASK], "the refusal is no choice");
+        press(&mut app, "esc");
+
+        assert_eq!(kinds(&app), [PACKS]);
+        assert_eq!(sent(&intended), []);
     }
 }

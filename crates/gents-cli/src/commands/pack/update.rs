@@ -1,6 +1,5 @@
 use anyhow::Result;
 use gents::pack::PackChangeError;
-use gents::plugin::authority::GrantError;
 use serde_json::{json, Value};
 
 use super::registry::{resolve_registry_url, RegistryClient};
@@ -107,6 +106,10 @@ pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
 pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> {
     let packs = outdated_packs(&args.scope, args.registry.as_deref()).await?;
     let selected = select_packs(&packs, args.package.as_deref())?;
+    // A caller of one named pack, such as the shell or the desktop, drops the report, so its
+    // failure is returned itself, after the report a person at the command line reads.
+    let named = args.package.is_some();
+    let mut own_failure = None;
 
     let mut updated = Vec::new();
     let mut failed = Vec::new();
@@ -114,6 +117,9 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
     for pack in selected {
         let coordinate = pack["pack"].as_str().unwrap_or_default().to_owned();
         if let Some(error) = pack["error"].as_str() {
+            if named {
+                own_failure = Some(anyhow::Error::msg(error.to_owned()).into());
+            }
             failed.push(json!({ "pack": coordinate, "error": error }));
             continue;
         }
@@ -147,16 +153,20 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
             Ok(_) => updated.push(coordinate),
-            Err(
-                refusal @ (PackChangeError::Edited { .. }
-                | PackChangeError::Grant(GrantError::Ungranted { .. })),
-            ) if args.package.is_some() => return Err(refusal),
-            Err(error) => failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") })),
+            Err(error) => {
+                failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") }));
+                if named {
+                    own_failure = Some(error);
+                }
+            }
         }
     }
 
     let any_failed = !failed.is_empty();
     crate::print_json(&json!({ "updated": updated, "failed": failed, "current": current }))?;
+    if let Some(error) = own_failure {
+        return Err(error);
+    }
     if any_failed {
         return Err(anyhow::anyhow!(
             "updating failed for at least one pack; see \"failed\" in the report above"
@@ -412,6 +422,58 @@ mod tests {
             .map(|dependency| &dependency["pack"])
             .collect();
         assert_eq!(released, [&json!("fixture/dependee_fixture")], "{removed}");
+    }
+
+    /// A caller of one named pack's update, such as the shell or the desktop, drops the report, so
+    /// its failure is the error itself rather than a pointer to "failed".
+    #[tokio::test]
+    async fn a_named_update_tells_its_own_failure() {
+        let home = tempfile::tempdir().unwrap();
+        let scope = crate::cli::ScopeArgs {
+            home: Some(home.path().to_path_buf()),
+            graphql: None,
+            node_did: None,
+        };
+        let fixture = super::super::test_support::fixture_dir("assets_fixture");
+        crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+            package: fixture.to_str().unwrap().to_owned(),
+            inference_slots: Vec::new(),
+            preview: false,
+            scope: scope.clone(),
+            output: OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry: None,
+            drift: crate::cli::PackDriftArgs::default(),
+            grant_authority: false,
+            wire: Vec::new(),
+            expect_digest: None,
+            explicit: true,
+        }))
+        .await
+        .expect("installing an assets pack needs no node");
+        let serve = |name: &'static str| {
+            let digest = "0".repeat(64);
+            let broken = b"not a pack".to_vec();
+            crate::commands::pack::registry::tests::serve_fake_pack(name, "1.1.0", broken, digest)
+        };
+        let (broken, _broken) = serve("assets_fixture").await;
+        let (elsewhere, _elsewhere) = serve("another_pack").await;
+        let update_from = |registry| {
+            let failed = crate::request_helpers::capture_report(update(PackUpdateArgs {
+                package: Some("fixture/assets_fixture".to_owned()),
+                inference_slots: Vec::new(),
+                scope: scope.clone(),
+                registry: Some(registry),
+                drift: crate::cli::PackDriftArgs::default(),
+            }));
+            async move { format!("{:#}", failed.await.expect_err("the update fails")) }
+        };
+
+        let install = update_from(broken).await;
+        let lookup = update_from(elsewhere).await;
+
+        assert!(install.contains("refusing to install"), "{install}");
+        assert!(lookup.contains("the registry has nothing at"), "{lookup}");
     }
 
     #[tokio::test]

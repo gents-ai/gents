@@ -16,7 +16,7 @@ use gents_desktop_core::client::{
 };
 use gents_desktop_core::inference::{load_inference_setup_state, AgentView, InferenceSetupState};
 use gents_shell::sample::{MenuId, Tone};
-use gents_shell::source::{Doc, MenuAct, MenuRow};
+use gents_shell::source::{Doc, MenuAct, MenuRow, PackAct};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -97,11 +97,14 @@ pub(super) async fn read_menu(
         | MenuId::AllowedFolders
         | MenuId::UxPlugins
         | MenuId::More
+        | MenuId::Ask
         | MenuId::General
         | MenuId::Developer
         | MenuId::Experimental => Ok(Vec::new()),
         // Asked for by agent, which `read_profiles` knows.
         MenuId::Profiles => Ok(Vec::new()),
+        // Read by `packs::read`, with the registry search the source holds.
+        MenuId::Packs => Ok(Vec::new()),
     };
     rows.map_err(|error| format!("{error:#}"))
 }
@@ -207,6 +210,17 @@ pub(super) async fn act(
         | MenuAct::ChooseProfile { .. } => {
             unreachable!("the shell runs these acts itself")
         }
+        MenuAct::Pack(
+            PackAct::Page(_)
+            | PackAct::Install { .. }
+            | PackAct::Update { .. }
+            | PackAct::Remove { .. }
+            | PackAct::ChooseSlot { .. }
+            | PackAct::BindSlot { .. }
+            | PackAct::SignOut
+            | PackAct::Info { .. }
+            | PackAct::Keyword(_),
+        ) => unreachable!("the source runs Packs' acts itself"),
     }
 }
 
@@ -224,7 +238,7 @@ pub(super) async fn grant(home: &Path, path: &str, access: &str) -> anyhow::Resu
 }
 
 /// `work` off the runtime's threads: the home's files are locked and read synchronously.
-async fn blocking<T, F>(work: F) -> anyhow::Result<T>
+pub(super) async fn blocking<T, F>(work: F) -> anyhow::Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> anyhow::Result<T> + Send + 'static,

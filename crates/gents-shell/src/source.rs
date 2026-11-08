@@ -85,19 +85,31 @@ pub enum Intent {
         form: FormRef,
         opening: u64,
     },
-    /// The shown fields' keys and values, in order: answered with `Update::FormSaved`.
+    /// Answered with `Update::FormSaved`.
     SaveForm {
         form: FormRef,
         opening: u64,
-        values: Vec<(String, String)>,
+        values: FormValues,
     },
     /// Runs one of the form's actions on its current values: answered with `Update::FormNote`.
     FormAct {
         form: FormRef,
         opening: u64,
         act: FormAct,
-        values: Vec<(String, String)>,
+        values: FormValues,
     },
+}
+
+/// The shown fields' keys and values, in order. Its `Debug` shows only the keys, as a `Secret`
+/// field's value is among them.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct FormValues(pub Vec<(String, String)>);
+
+impl fmt::Debug for FormValues {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let keys: Vec<_> = self.0.iter().map(|(key, _)| key).collect();
+        f.debug_tuple("FormValues").field(&keys).finish()
+    }
 }
 
 /// What the source tells the shell. One for a session no tab shows is dropped.
@@ -176,6 +188,12 @@ pub enum Update {
     Menu {
         menu: MenuId,
         rows: Result<Vec<MenuRow>, String>,
+    },
+    /// A question the source asks before it acts, shown on top as `MenuId::Ask`: a row's enter
+    /// answers it, and esc leaves it unanswered.
+    Ask {
+        title: String,
+        rows: Vec<MenuRow>,
     },
     /// The providers the Setup layer offers, or why they could not be read.
     Setup(Result<Vec<SetupProvider>, String>),
@@ -288,6 +306,55 @@ pub enum MenuAct {
         id: String,
         label: String,
     },
+    Pack(PackAct),
+}
+
+/// What a row of the Packs menu does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackAct {
+    /// Shows this page of the registry's search.
+    Page(u32),
+    /// With `grant`, the pack's plugins get the authority they ask for.
+    Install {
+        pack: String,
+        edited: EditedChoice,
+        grant: bool,
+    },
+    Update {
+        pack: String,
+        edited: EditedChoice,
+    },
+    /// Unconfirmed, the source asks first.
+    Remove {
+        pack: String,
+        confirmed: bool,
+    },
+    /// Asks which profile `plugin`'s model calls run on.
+    ChooseSlot {
+        plugin: String,
+    },
+    /// With no profile, the plugin runs without a model.
+    BindSlot {
+        plugin: String,
+        profile: Option<String>,
+    },
+    SignOut,
+    /// The registry pack's page; one not `installed` offers Install.
+    Info {
+        pack: String,
+        installed: bool,
+    },
+    /// Searches the registry for this from its first page.
+    Keyword(String),
+}
+
+/// What a pack change does with documents edited since their pack installed them, as
+/// `gents_server::packs::EditedDocuments` says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditedChoice {
+    Refuse,
+    Overwrite,
+    Keep,
 }
 
 /// A kind of document a form edits.
@@ -335,6 +402,10 @@ pub enum FormRef {
     Node,
     AddFolder,
     Delete(Doc, String),
+    /// The registry search Packs shows, one text field keyed `query`.
+    PackSearch,
+    /// The registry token, one `Secret` field keyed `token`.
+    PackSignIn,
 }
 
 /// A form the source describes for the shell to show.
@@ -362,6 +433,8 @@ pub struct FormField {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldKind {
     Text,
+    /// Text drawn masked.
+    Secret,
     Lines,
     /// Its `(value, label)` pairs.
     Choice(Vec<(String, String)>),

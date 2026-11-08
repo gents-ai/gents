@@ -185,7 +185,11 @@ async fn run_schedule(
 fn doc(form: &FormRef) -> Option<Doc> {
     match form {
         FormRef::New(doc) | FormRef::Edit(doc, _) => Some(*doc),
-        FormRef::Node | FormRef::AddFolder | FormRef::Delete(..) => None,
+        FormRef::Node
+        | FormRef::AddFolder
+        | FormRef::Delete(..)
+        | FormRef::PackSearch
+        | FormRef::PackSignIn => None,
     }
 }
 

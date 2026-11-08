@@ -468,7 +468,8 @@ mod tests {
         let mut app = App::new(Vim, 132, 36);
         app.push_layer(node);
         click_text(&mut app, " Packs ");
-        assert_eq!(app.notice.as_deref(), Some("not wired yet"));
+        assert_eq!(top(&app), Some(LayerKind::Menu(MenuId::Packs)));
+        press(&mut app, "esc");
         assert_eq!(top(&app), Some(node));
         click_text(&mut app, " Agents ");
         assert_eq!(top(&app), Some(LayerKind::Menu(MenuId::Agents)));
