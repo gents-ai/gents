@@ -6,7 +6,7 @@ namespace Conformance.GoalClientMutationContracts
 open GoalAutomation.ClientMutation Conformance.Contracts
 
 def initial : State := ⟨GoalClientControlContracts.initial .active, []⟩
-def authority : AgentSession.CommandAuthority.Facts := ⟨true, true, false, true, true⟩
+def authority : AgentSession.CommandAuthority.Facts := ⟨true, true, true, true⟩
 def facts : Facts := ⟨authority, true, true, none, "session-document"⟩
 def pause : Command := ⟨10, 20, true, "session-document", 1, 10, initial.goal.revision, .pause⟩
 def resume : Command :=
@@ -53,8 +53,6 @@ def cases : List Case :=
   , entry "unowned_session" [] pause { facts with authority.sessionOwned := false } 2
   , entry "revoked_enrollment" [] pause { facts with authority.enrollmentFresh := false } 2
   , entry "missing_route" [] pause { facts with authority.routeApplied := false } 2
-  , entry "local_node_author" [] { pause with hasPeer := false }
-      { facts with authority.requesterIsNode := true } 2
   , entry "local_foreign_author" [] { pause with hasPeer := false } facts 2
   , entry "future_issuance" [] pause facts 0
   , entry "invalid_future_signature" [] pause { facts with authority.signatureValid := false } 0
@@ -71,12 +69,12 @@ def cases : List Case :=
   ]
 
 theorem replay_after_status_round_trip_cannot_pause_again :
-    ((cases[14]!).after.1.goal.execution.goal.status,
-      (cases[14]!).after.2.map (·.outcome)) = (.active, some .rejected) := by
+    ((cases[13]!).after.1.goal.execution.goal.status,
+      (cases[13]!).after.2.map (·.outcome)) = (.active, some .rejected) := by
   native_decide
 
 theorem lost_ack_returns_the_original_outcome :
-    (cases[11]!).after = ((cases[11]!).before, some ⟨10, 20, .applied⟩) := by
+    (cases[10]!).after = ((cases[10]!).before, some ⟨10, 20, .applied⟩) := by
   native_decide
 
 def receiptJson (r : Receipt) : String :=
@@ -98,7 +96,6 @@ def commandJson (c : Command) : String :=
 def factsJson (f : Facts) : String :=
   "{\"authority\":{\"signature_valid\":" ++ (if f.authority.signatureValid then "true" else "false") ++
     ",\"session_owned\":" ++ (if f.authority.sessionOwned then "true" else "false") ++
-    ",\"requester_is_node\":" ++ (if f.authority.requesterIsNode then "true" else "false") ++
     ",\"enrollment_fresh\":" ++ (if f.authority.enrollmentFresh then "true" else "false") ++
     ",\"route_applied\":" ++ (if f.authority.routeApplied then "true" else "false") ++ "}" ++
     ",\"command_identity_unique\":" ++ (if f.commandIdentityUnique then "true" else "false") ++
@@ -129,13 +126,10 @@ def caseJson (c : Case) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-def localFacts (facts : Facts) : Facts :=
-  { facts with authority.requesterIsNode := true }
-
 def localStep : Step → Step
   | .loseReceipts => .loseReceipts
   | .apply command facts now next commit =>
-      .apply { command with hasPeer := false } (localFacts facts) now next commit
+      .apply { command with hasPeer := false } facts now next commit
 
 def localReceiptCases : List Case :=
   (cases.filter fun c => c.name ∈ ["fresh_pause", "lost_ack", "erased_receipt",
@@ -144,7 +138,7 @@ def localReceiptCases : List Case :=
         name := "local_" ++ c.name
         history := c.history.map localStep
         command := { c.command with hasPeer := false }
-        facts := localFacts c.facts }
+        facts := c.facts }
 
 def receiptCasesJson : String := jsonArray (localReceiptCases.map caseJson)
 

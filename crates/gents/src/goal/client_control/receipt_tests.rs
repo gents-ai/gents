@@ -167,7 +167,7 @@ impl Driver {
     ) {
         assert!(commit);
         assert_eq!(facts["command_identity_unique"], true);
-        for field in ["signature_valid", "session_owned", "requester_is_node"] {
+        for field in ["signature_valid", "session_owned"] {
             assert_eq!(facts["authority"][field], true);
         }
         assert_eq!(facts["control"]["unfinished_request"], true);

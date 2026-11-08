@@ -140,7 +140,6 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
         &access,
         &actors.fixture.user,
         AgentRequestAdmissionRecord::client(user_did),
-        None,
         did,
         SESSION,
         PendingQueueEdit {
@@ -170,7 +169,6 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
         &access,
         &actors.fixture.user,
         AgentRequestAdmissionRecord::client(user_did),
-        None,
         did,
         SESSION,
         PendingQueueEdit {

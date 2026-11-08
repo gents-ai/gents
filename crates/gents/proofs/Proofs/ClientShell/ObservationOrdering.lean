@@ -716,10 +716,6 @@ def observe (status : Status) (event : Event) : Status :=
 
 def blocksAdmission (status : Status) : Bool := decide (status ≠ .connected)
 
-theorem pairing_does_not_decide_runtime_admission (status : Status) (p2p sync : Bool) :
-    (if p2p || sync then blocksAdmission status else blocksAdmission status) = blocksAdmission status := by
-  cases p2p <;> cases sync <;> rfl
-
 theorem empty_snapshot_is_connected (status : Status) :
     observe status .snapshotSucceeded = .connected := by rfl
 

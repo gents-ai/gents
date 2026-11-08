@@ -525,19 +525,6 @@ theorem desired_route_rejects_foreign_or_unheld_author :
     [desiredRoutePublisher "other" "client" "remote" true,
      desiredRoutePublisher "client" "client" "remote" false] = [false, false] := by decide
 
-/-- A route witness can inform admission only when its native owner is the
-runtime for the requested Node. Writable DID and peer fields are not proof of
-that authority. Both desired and applied witnesses are required. -/
-def runtimeRouteWitnesses (runtime desiredOwner appliedOwner : DID)
-    (desiredVisible appliedVisible : Bool) : Bool :=
-  desiredVisible && appliedVisible && runtime == desiredOwner && runtime == appliedOwner
-
-theorem forged_route_witness_does_not_authorize :
-    [runtimeRouteWitnesses "node" "other" "node" true true,
-     runtimeRouteWitnesses "node" "node" "other" true true,
-     runtimeRouteWitnesses "node" "node" "node" true true] =
-    [false, false, true] := by decide
-
 /-- A native relationship on one Local ACP store does not itself establish
 the same relationship on another store. Exact document delivery supplies no
 such premise; the receiver's native relation must be separately established by

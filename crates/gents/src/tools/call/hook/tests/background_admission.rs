@@ -87,14 +87,27 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         tool_call_id: child.to_owned(),
         tool_call_doc_id: row["_docID"].as_str().unwrap().to_owned(),
     };
-    let outcome = crate::tools::call::control::operator_process_control(
+    let agent_did = ::identity::Did::new(harness.access.actor_did().unwrap()).unwrap();
+    let outcome = crate::tools::call::control::client::apply_claimed(
+        &harness.node,
         &harness.access,
         &executions,
-        Some(&key.node_did),
-        &request,
+        &agent_did,
+        crate::tools::call::control::client::ClaimedTarget {
+            node_did: &request.node_did,
+            session_id: &request.session_id,
+            requester_did: Some(&key.requester_did),
+            tool_call_id: &request.tool_call_id,
+            tool_call_doc_id: &request.tool_call_doc_id,
+            action: "process_stop",
+        },
     )
     .await
     .unwrap();
+    let gents_protocol::process_control::ToolControlReceiptOutcome::Process(outcome) = outcome
+    else {
+        panic!("process stop produced {outcome:?}")
+    };
     assert!(matches!(
         outcome,
         crate::tools::call::control::CancelBackgroundToolCallOutcome::Cancelled {

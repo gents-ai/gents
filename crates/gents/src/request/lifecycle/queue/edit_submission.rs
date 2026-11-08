@@ -11,12 +11,10 @@ const COMMAND_LIFETIME: chrono::Duration = chrono::Duration::minutes(5);
 const RECEIPT_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 const RECEIPT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-#[allow(clippy::too_many_arguments)]
 pub async fn submit_pending_user_edit(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-    requester_peer_id: Option<&str>,
     node_did: &str,
     session_id: &str,
     edit: PendingQueueEdit,
@@ -36,7 +34,6 @@ pub async fn submit_pending_user_edit(
     submit_prepared_edit(
         access,
         signer,
-        requester_peer_id,
         node_did,
         session_id,
         edit,
@@ -50,7 +47,6 @@ pub async fn submit_pending_user_steer(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-    requester_peer_id: Option<&str>,
     node_did: &str,
     session_id: &str,
     edit: PendingQueueEdit,
@@ -91,7 +87,6 @@ pub async fn submit_pending_user_steer(
     submit_prepared_edit(
         access,
         signer,
-        requester_peer_id,
         node_did,
         session_id,
         edit,
@@ -100,11 +95,9 @@ pub async fn submit_pending_user_steer(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn submit_prepared_edit(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
-    requester_peer_id: Option<&str>,
     node_did: &str,
     session_id: &str,
     edit: PendingQueueEdit,
@@ -158,9 +151,7 @@ async fn submit_prepared_edit(
         version: SESSION_INPUT_EDIT_VERSION,
         command_id: uuid::Uuid::new_v4().to_string(),
         requester_did: requester_did.to_owned(),
-        requester_peer_id: requester_peer_id
-            .filter(|_| requester_did != node_did)
-            .map(str::to_owned),
+        requester_peer_id: None,
         node_did: node_did.to_owned(),
         session_id: session_id.to_owned(),
         session_doc_id,

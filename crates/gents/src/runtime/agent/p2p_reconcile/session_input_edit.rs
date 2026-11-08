@@ -7,7 +7,6 @@ use gents_protocol::session_input_edit::{
     SessionInputEdit, SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
 };
 
-use super::enrollment_store::GraphqlEnrollmentStore;
 #[cfg(test)]
 use super::session_commands::run_session_command_reconciler_with_agents;
 use super::session_commands::{CommandRow, FIELDS};
@@ -69,26 +68,17 @@ async fn intrinsic_rejection(
 
 async fn authority_rejection(
     txn: &ConfigApplyTxn<'_>,
-    store: &GraphqlEnrollmentStore,
     command: &SessionInputEdit,
-    now: DateTime<Utc>,
 ) -> Result<Option<String>> {
-    let expected_admission = match super::session_command_authority::current_admission(
-        txn,
-        store,
-        super::session_command_authority::AuthorScope {
-            requester_did: &command.requester_did,
-            requester_peer_id: command.requester_peer_id.as_deref(),
-            node_did: &command.node_did,
-        },
-        "AgentSessionInputEdit",
-        now,
-    )
-    .await?
-    {
-        Ok(admission) => admission,
-        Err(reason) => return Ok(Some(reason)),
-    };
+    // P2P carries no session edit, so a command naming a requester peer
+    // arrived outside the direct client-signed path and fails closed.
+    if command.requester_peer_id.is_some() {
+        return Ok(Some("remote session edits are not accepted".into()));
+    }
+    let expected_admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+            &command.requester_did,
+        );
     for replacement in &command.replacements {
         let mut actual = replacement.admission.clone();
         actual.signature.clear();
@@ -347,10 +337,8 @@ pub(crate) async fn process_command(
 ) -> Result<Option<DateTime<Utc>>> {
     let actor = ::identity::Did::new(agent_identity.did())?;
     let access = ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent_identity)?;
-    let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
     access.transact_idempotent(IdempotentTransactionRetry::Standard,
         "queue.apply_signed_edit", |txn| {
-        let store = &store;
         let actor = &actor;
         Box::pin(async move {
             let response = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {FIELDS} }} }}"#, escape_graphql_string(doc_id))).await?;
@@ -423,7 +411,7 @@ pub(crate) async fn process_command(
                         if now < issued_at { return Ok(Some(issued_at)); }
                         let rejection = if now >= DateTime::parse_from_rfc3339(&command.expires_at)? {
                             Some("edit intent has expired".into())
-                        } else { authority_rejection(txn, store, &command, now).await? };
+                        } else { authority_rejection(txn, &command).await? };
                         match rejection {
                             Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                             None => {

@@ -1,10 +1,59 @@
-use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
+use gents_protocol::process_control::{
+    OperatorProcessControlRequest, ProcessControlOutcome, ToolControlReceiptOutcome,
+};
 use tokio_util::sync::CancellationToken;
 
 use super::admission_fixture::{published_admission_with_owner, PublishedAdmissionOptions};
 use super::{AwaitMode, ToolCallLifecycle};
-use crate::tools::call::control::operator_process_control;
+use crate::tools::call::control::client::{apply_claimed, ClaimedTarget};
 use crate::tools::call::hook::BackgroundExecutionRegistry;
+
+/// Applies a claimed `process_stop` the way the client-signed control owner
+/// does after verifying the client's intent: as the selected Agent, through
+/// the existing background process owner.
+async fn client_stop(
+    owner: &crate::request::lifecycle::RequestLifecycle,
+    registry: &BackgroundExecutionRegistry,
+    request: &OperatorProcessControlRequest,
+) -> anyhow::Result<ProcessControlOutcome> {
+    let access = owner.access()?;
+    let node = access
+        .local_node()
+        .cloned()
+        .expect("embedded request owner");
+    let requester_did = owner.request().requester_did.clone();
+    stop_as(
+        &node,
+        &access,
+        &owner.actor_did()?,
+        registry,
+        request,
+        requester_did.as_deref(),
+    )
+    .await
+}
+
+async fn stop_as(
+    node: &std::sync::Arc<defra_node::Node>,
+    access: &crate::ConfigAccess,
+    agent: &::identity::Did,
+    registry: &BackgroundExecutionRegistry,
+    request: &OperatorProcessControlRequest,
+    requester_did: Option<&str>,
+) -> anyhow::Result<ProcessControlOutcome> {
+    let target = ClaimedTarget {
+        node_did: &request.node_did,
+        session_id: &request.session_id,
+        requester_did,
+        tool_call_id: &request.tool_call_id,
+        tool_call_doc_id: &request.tool_call_doc_id,
+        action: "process_stop",
+    };
+    match apply_claimed(node, access, registry, agent, target).await? {
+        ToolControlReceiptOutcome::Process(outcome) => Ok(outcome),
+        other => anyhow::bail!("process stop produced {other:?}"),
+    }
+}
 
 /// Loads as the owning Agent and binds its signer, as the runtime's tool owner does.
 async fn load_as_agent(
@@ -14,7 +63,10 @@ async fn load_as_agent(
 ) -> ToolCallLifecycle {
     let access = owner.access().unwrap();
     let mut lifecycle = ToolCallLifecycle::load_by_doc_id_as(
-        access.local_node().cloned().expect("embedded request owner"),
+        access
+            .local_node()
+            .cloned()
+            .expect("embedded request owner"),
         owner.actor_did().unwrap(),
         &request.tool_call_doc_id,
         &request.node_did,
@@ -32,7 +84,7 @@ async fn load_as_agent(
 
 #[cfg(unix)]
 #[tokio::test]
-async fn operator_cancel_races_completion_without_replacing_terminal_state() {
+async fn client_cancel_races_completion_without_replacing_terminal_state() {
     let (admission, request_owner) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "operator-cancel-completion-race".into(),
         real_identity: true,
@@ -42,7 +94,6 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
     .await
     .unwrap();
     let requester_did = request_owner.request().requester_did.clone();
-    let agent_access = request_owner.access().unwrap();
     let node = admission.node.clone();
     let mut tool = admission.tool;
     let request = OperatorProcessControlRequest {
@@ -51,10 +102,7 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
         tool_call_id: tool.tool_call_id().to_owned(),
         tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
     };
-    let mut stale = load_as_agent(&request_owner, &request,
-        requester_did.as_deref(),
-    )
-    .await;
+    let mut stale = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
     let records = tempfile::tempdir().unwrap();
     let registry =
         BackgroundExecutionRegistry::default().with_process_records(records.path().into());
@@ -78,13 +126,10 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
             drop(reservation);
             result
         },
-        operator_process_control(&agent_access, &registry, Some(&admission.node_did), &request),
+        client_stop(&request_owner, &registry, &request),
     );
     let cancelled = cancelled.unwrap();
-    let row = load_as_agent(&request_owner, &request,
-        requester_did.as_deref(),
-    )
-    .await;
+    let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
     assert!(row.is_terminal());
     let terminal = row.state().as_str().to_owned();
     assert!(matches!(terminal.as_str(), "completed" | "cancelled"));
@@ -97,26 +142,22 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
     match cancelled {
         ProcessControlOutcome::Cancelled { .. } => assert_eq!(terminal, "cancelled"),
         ProcessControlOutcome::AlreadyTerminal { state } => assert_eq!(state, terminal),
-        other => panic!("unexpected operator outcome: {other:?}"),
+        other => panic!("unexpected control outcome: {other:?}"),
     }
     let late = stale.complete("late completion").await.unwrap_err();
     assert!(late
         .to_string()
         .contains("terminal raw tool result is not an exact extension"));
-    let repeated =
-        operator_process_control(&agent_access, &registry, Some(&admission.node_did), &request)
-            .await
-            .unwrap();
+    let repeated = client_stop(&request_owner, &registry, &request)
+        .await
+        .unwrap();
     assert_eq!(
         repeated,
         ProcessControlOutcome::AlreadyTerminal {
             state: terminal.clone()
         }
     );
-    let reloaded = load_as_agent(&request_owner, &request,
-        requester_did.as_deref(),
-    )
-    .await;
+    let reloaded = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
     assert_eq!(reloaded.state().as_str(), terminal);
     drop(request_owner);
     node.shutdown().await.expect("shut down test node");
@@ -125,7 +166,7 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
+async fn client_cancel_and_completion_preserve_each_winning_terminal() {
     for cancel_first in [false, true] {
         let (admission, request_owner) =
             published_admission_with_owner(PublishedAdmissionOptions {
@@ -137,7 +178,6 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
             .await
             .unwrap();
         let requester_did = request_owner.request().requester_did.clone();
-        let agent_access = request_owner.access().unwrap();
         let node = admission.node.clone();
         let mut tool = admission.tool;
         let request = OperatorProcessControlRequest {
@@ -168,13 +208,9 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
                 drop(reservation);
             });
             assert_eq!(
-                operator_process_control(&agent_access,
-                    &registry,
-                    Some(&admission.node_did),
-                    &request
-                )
-                .await
-                .unwrap(),
+                client_stop(&request_owner, &registry, &request)
+                    .await
+                    .unwrap(),
                 ProcessControlOutcome::Cancelled {
                     live_execution_cancelled: true
                 },
@@ -188,13 +224,9 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
             tool.complete("first completion").await.unwrap();
             drop(reservation);
             assert_eq!(
-                operator_process_control(&agent_access,
-                    &registry,
-                    Some(&admission.node_did),
-                    &request
-                )
-                .await
-                .unwrap(),
+                client_stop(&request_owner, &registry, &request)
+                    .await
+                    .unwrap(),
                 ProcessControlOutcome::AlreadyTerminal {
                     state: "completed".into()
                 },
@@ -205,10 +237,7 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
         } else {
             "completed"
         };
-        let row = load_as_agent(&request_owner, &request,
-            requester_did.as_deref(),
-        )
-        .await;
+        let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
         assert_eq!(row.state().as_str(), terminal);
         drop(request_owner);
         node.shutdown().await.expect("shut down test node");
@@ -217,7 +246,7 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
 }
 
 #[tokio::test]
-async fn operator_unverified_stop_preserves_running_tool() {
+async fn client_unverified_stop_preserves_running_tool() {
     let (admission, request_owner) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "operator-unverified-stop".into(),
         real_identity: true,
@@ -252,12 +281,21 @@ async fn operator_unverified_stop_preserves_running_tool() {
         .find(|case| case.before == "running" && case.after == "running")
         .expect("Lean running process observation");
     let mut control = tokio::spawn({
-        let agent_access = agent_access.clone();
+        let node_for_control = node.clone();
+        let agent = request_owner.actor_did().unwrap();
         let registry = registry.clone();
         let request = request.clone();
+        let requester_did = requester_did.clone();
         async move {
-            operator_process_control(&agent_access, &registry, Some(&request.node_did), &request)
-                .await
+            stop_as(
+                &node_for_control,
+                &agent_access,
+                &agent,
+                &registry,
+                &request,
+                requester_did.as_deref(),
+            )
+            .await
         }
     });
     tokio::select! {
@@ -270,10 +308,7 @@ async fn operator_unverified_stop_preserves_running_tool() {
     tokio::time::resume();
     let outcome = control.await.unwrap().unwrap();
     assert_eq!(outcome, ProcessControlOutcome::Unverified);
-    let row = load_as_agent(&request_owner, &request,
-        requester_did.as_deref(),
-    )
-    .await;
+    let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
     assert_eq!(row.state().as_str(), expected.durable_state);
     drop(reservation);
     drop(request_owner);
@@ -282,7 +317,7 @@ async fn operator_unverified_stop_preserves_running_tool() {
 }
 
 #[tokio::test]
-async fn operator_cancels_released_native_future_without_process_record() {
+async fn client_cancels_released_native_future_without_process_record() {
     let (admission, request_owner) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "operator-generic-native-stop".into(),
         tool_name: Some("read_file".into()),
@@ -293,7 +328,6 @@ async fn operator_cancels_released_native_future_without_process_record() {
     .await
     .unwrap();
     let requester_did = request_owner.request().requester_did.clone();
-    let agent_access = request_owner.access().unwrap();
     let node = admission.node.clone();
     let tool = admission.tool;
     let request = OperatorProcessControlRequest {
@@ -315,10 +349,9 @@ async fn operator_cancels_released_native_future_without_process_record() {
         token.cancelled().await;
         drop(reservation);
     });
-    let outcome =
-        operator_process_control(&agent_access, &registry, Some(&admission.node_did), &request)
-            .await
-            .unwrap();
+    let outcome = client_stop(&request_owner, &registry, &request)
+        .await
+        .unwrap();
     assert_eq!(
         outcome,
         ProcessControlOutcome::Cancelled {
@@ -326,10 +359,7 @@ async fn operator_cancels_released_native_future_without_process_record() {
         },
     );
     worker.await.unwrap();
-    let row = load_as_agent(&request_owner, &request,
-        requester_did.as_deref(),
-    )
-    .await;
+    let row = load_as_agent(&request_owner, &request, requester_did.as_deref()).await;
     let expected = crate::lean_vocab_test::lean_process_stop_cases()
         .iter()
         .find(|case| case.before == "running" && case.after == "exited")

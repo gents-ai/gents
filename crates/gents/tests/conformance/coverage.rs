@@ -1208,16 +1208,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "plugin_job_commit_kill_cases".into(),
         "PluginJobCommitKillCases".into(),
     ));
-    assert!(!snapshot.operator_job_control_cases.is_empty());
-    emitted.insert((
-        "operator_job_control_cases".into(),
-        "OperatorJobControlCases".into(),
-    ));
-    assert!(!snapshot.operator_process_control_cases.is_empty());
-    emitted.insert((
-        "operator_process_control_cases".into(),
-        "OperatorProcessControlCases".into(),
-    ));
     assert!(!snapshot.process_stop_action_cases.is_empty());
     emitted.insert((
         "process_stop_action_cases".into(),
@@ -1554,10 +1544,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "client_request_patch_publication_cases".into(),
         "ClientRequestPatchPublicationCases".into(),
     ));
-    assert!(!snapshot.client_session_delivery_cases.is_empty());
+    assert!(!snapshot.client_direct_session_read_cases.is_empty());
     emitted.insert((
-        "client_session_delivery_cases".into(),
-        "ClientSessionDeliveryCases".into(),
+        "client_direct_session_read_cases".into(),
+        "ClientDirectSessionReadCases".into(),
     ));
     assert!(!snapshot.storage_failure_cases.is_empty());
     emitted.insert(("storage_failure_cases".into(), "StorageFailureCases".into()));
@@ -1727,9 +1717,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     if !snapshot.session_input_edit_cases.is_empty() {
-        for domain in ["SessionInputEditCases", "SessionInputEditRemoteCases"] {
-            emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
-        }
+        emitted.insert((
+            "session_input_edit_cases".to_string(),
+            "SessionInputEditCases".to_string(),
+        ));
     }
     if !snapshot
         .session_input_edit_native_discovery_cases

@@ -684,12 +684,6 @@ def packFinalityCases : List (List PackAttemptEvidence) :=
 theorem later_begin_failure_cannot_clear_unknown_commit :
     packCommitUnconfirmed [.unknownCommit, .noCommit] = true := by decide
 
-/-- An installed pin is rechecked while holding the store lock through the
-document commit, so a concurrent publisher cannot change its artifact between
-the check and the corresponding configuration write. -/
-def installedPinCommitAllowed (pin : Option String) (underLock : String) : Bool :=
-  pluginPinMatches pin underLock
-
 /-- Wiring holds the shared plugin store lock from reading the digest through
 configuration publication. Competing store mutation cannot publish in that interval. -/
 def wireAndPluginPublishAllowed (wireHoldsLock : Bool) : Bool := !wireHoldsLock

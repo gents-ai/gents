@@ -141,7 +141,7 @@ pub(crate) mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
 #[cfg(test)]
-mod operator_control_race_tests;
+mod client_control_race_tests;
 #[cfg(test)]
 mod recovery_closeout_conformance;
 #[cfg(test)]

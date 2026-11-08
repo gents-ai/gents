@@ -67,10 +67,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("ManagedExec", Gap("Real process-group/job kill and bounded-drain tests live in src/tools/exec/mod.rs; generated OS/process-tree cases still need those consumers, not fixture-only flags.")),
         ("Mailbox", Module("conformance/mailbox.rs")),
         ("MCPHealth", Module("conformance/mcp_health.rs")),
-        (
-            "Migration",
-            WorkspaceTest("crates/gents-migration/tests/phase_b_steps.rs"),
-        ),
         ("NativeSpawn", WorkspaceTest("crates/gents/src/tools/exec/native_spawn.rs")),
         ("Optimization", WorkspaceTest("crates/gents/src/eval/optimization/policy.rs")),
         (

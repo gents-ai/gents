@@ -68,19 +68,6 @@ theorem ordinary_source_allows_outcome (source : String) (emit : Bool)
 
 end Triggers
 
-def resolveConcurrency (_source : TriggerKind) (configured : Option ConcurrencyMode) :
-    ConcurrencyMode := configured.getD .parallel
-
-def resolveEventKind (configured : Option String) : String := configured.getD "created"
-
-theorem concurrency_default_parallel (source : TriggerKind) :
-    resolveConcurrency source none = .parallel := rfl
-
-theorem concurrency_source_independent (a b : TriggerKind) (c : Option ConcurrencyMode) :
-    resolveConcurrency a c = resolveConcurrency b c := rfl
-
-theorem event_kind_default_created : resolveEventKind none = "created" := rfl
-
 structure ActiveSchedule where
   triggerId : String
   taskId : String

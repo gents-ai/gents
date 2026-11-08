@@ -504,13 +504,26 @@ pub(crate) async fn recover_claim(
     }).await
 }
 
-pub(crate) async fn execute_claimed(
+/// The physical invocation and action of a claimed, signature-verified control.
+pub(crate) struct ClaimedTarget<'a> {
+    pub(crate) node_did: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) requester_did: Option<&'a str>,
+    pub(crate) tool_call_id: &'a str,
+    pub(crate) tool_call_doc_id: &'a str,
+    pub(crate) action: &'a str,
+}
+
+/// Applies a claimed control as its selected Agent through the existing process
+/// or job owner. The invocation is reloaded as that Agent, so native ACP decides
+/// visibility, and the terminal write races the call's own completion there.
+pub(crate) async fn apply_claimed(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
     executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     agent: &identity::Did,
-    intent: Intent,
-) -> Result<()> {
+    target: ClaimedTarget<'_>,
+) -> Result<gents_protocol::process_control::ToolControlReceiptOutcome> {
     use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolRowKind};
     use gents_protocol::process_control::ToolControlReceiptOutcome;
     use gents_protocol::tool_call::AwaitMode;
@@ -521,62 +534,91 @@ pub(crate) async fn execute_claimed(
         access.actor_did().as_deref() == Some(agent.as_str()) && signer.did() == agent.as_str(),
         "tool control actor mismatch"
     );
+    let mut lifecycle = ToolCallLifecycle::load_by_doc_id_as(
+        node.clone(),
+        agent.clone(),
+        target.tool_call_doc_id,
+        target.node_did,
+        target.session_id,
+        target.requester_did,
+    )
+    .await?
+    .context("claimed invocation is unavailable to its selected agent")?;
+    lifecycle.bind_agent_signer(Some(signer))?;
+    anyhow::ensure!(
+        lifecycle.actor() == agent && lifecycle.tool_call_id() == target.tool_call_id,
+        "claimed invocation has a different execution owner"
+    );
+    Ok(match target.action {
+        "process_stop"
+            if lifecycle.kind() == ToolRowKind::Native
+                && lifecycle.await_mode() == AwaitMode::Background =>
+        {
+            ToolControlReceiptOutcome::Process(
+                super::cancel_loaded_background_tool_call(
+                    node.clone(),
+                    executions,
+                    lifecycle,
+                    "explicit_cancel",
+                )
+                .await?,
+            )
+        }
+        "job_stop" | "job_pause" if lifecycle.kind() == ToolRowKind::PluginJob => {
+            let action = if target.action == "job_stop" {
+                gents_protocol::job::JobControlKind::Stop
+            } else {
+                gents_protocol::job::JobControlKind::Pause
+            };
+            let scope = crate::tools::background::status::ProcessControlScope {
+                request_id: String::new(),
+                session_id: target.session_id.to_owned(),
+                node_did: target.node_did.to_owned(),
+                requester_did: target.requester_did.map(str::to_owned),
+            };
+            ToolControlReceiptOutcome::Job(
+                crate::tools::background::job::control::control_lifecycle(
+                    access, &scope, lifecycle, action,
+                )
+                .await?,
+            )
+        }
+        _ => ToolControlReceiptOutcome::Rejected,
+    })
+}
+
+pub(crate) async fn execute_claimed(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
+    agent: &identity::Did,
+    intent: Intent,
+) -> Result<()> {
+    use gents_protocol::process_control::ToolControlReceiptOutcome;
+    let signer = access
+        .managed_agent_signer()
+        .context("tool control requires a managed Agent signer")?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(agent.as_str()) && signer.did() == agent.as_str(),
+        "tool control actor mismatch"
+    );
     let receipt = if let Some(receipt) = intent.existing_receipt.as_ref() {
         receipt.clone()
     } else {
-        let attempted: Result<ToolControlReceiptOutcome> = async {
-            let mut lifecycle = ToolCallLifecycle::load_by_doc_id_as(
-                node.clone(),
-                agent.clone(),
-                &intent.tool_call_doc_id,
-                &intent.node_did,
-                &intent.session_id,
-                intent.requester_did.as_deref(),
-            )
-            .await?
-            .context("claimed invocation is unavailable to its selected agent")?;
-            lifecycle.bind_agent_signer(Some(signer.clone()))?;
-            anyhow::ensure!(
-                lifecycle.actor() == agent && lifecycle.tool_call_id() == intent.tool_call_id,
-                "claimed invocation has a different execution owner"
-            );
-            Ok(match intent.action.as_str() {
-                "process_stop"
-                    if lifecycle.kind() == ToolRowKind::Native
-                        && lifecycle.await_mode() == AwaitMode::Background =>
-                {
-                    ToolControlReceiptOutcome::Process(
-                        super::cancel_loaded_background_tool_call(
-                            node.clone(),
-                            executions,
-                            lifecycle,
-                            "explicit_cancel",
-                        )
-                        .await?,
-                    )
-                }
-                "job_stop" | "job_pause" if lifecycle.kind() == ToolRowKind::PluginJob => {
-                    let action = if intent.action == "job_stop" {
-                        gents_protocol::job::JobControlKind::Stop
-                    } else {
-                        gents_protocol::job::JobControlKind::Pause
-                    };
-                    let scope = crate::tools::background::status::ProcessControlScope {
-                        request_id: String::new(),
-                        session_id: intent.session_id.clone(),
-                        node_did: intent.node_did.clone(),
-                        requester_did: intent.requester_did.clone(),
-                    };
-                    ToolControlReceiptOutcome::Job(
-                        crate::tools::background::job::control::control_lifecycle(
-                            access, &scope, lifecycle, action,
-                        )
-                        .await?,
-                    )
-                }
-                _ => ToolControlReceiptOutcome::Rejected,
-            })
-        }
+        let attempted = apply_claimed(
+            node,
+            access,
+            executions,
+            agent,
+            ClaimedTarget {
+                node_did: &intent.node_did,
+                session_id: &intent.session_id,
+                requester_did: intent.requester_did.as_deref(),
+                tool_call_id: &intent.tool_call_id,
+                tool_call_doc_id: &intent.tool_call_doc_id,
+                action: &intent.action,
+            },
+        )
         .await;
         let outcome = match attempted {
             Ok(outcome) => outcome,

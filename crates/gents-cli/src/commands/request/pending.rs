@@ -87,7 +87,6 @@ async fn apply_pending_edit(
         &access,
         signer.as_ref(),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(signer.did()),
-        None,
         &node,
         &args.scope.session_id,
         gents::request::lifecycle::PendingQueueEdit {

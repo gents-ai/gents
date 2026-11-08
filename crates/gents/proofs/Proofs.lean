@@ -77,7 +77,6 @@ import Proofs.Workspace
 import Proofs.Conformance.FileImageHydration
 import Proofs.Conformance.FileInventory
 import Proofs.Callback
-import Proofs.Migration
 import Proofs.CodexShim
 import Proofs.Properties.Safety
 import Proofs.Properties.Decidable
@@ -88,7 +87,6 @@ import Proofs.Properties.SchedulingLiveness
 import Proofs.Conformance.Gents
 import Proofs.Conformance.Boundaries
 import Proofs.Conformance.Deviations
-import Proofs.Conformance.SchedulerConformance
 import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Contracts
 import Proofs.ApplyReconcile

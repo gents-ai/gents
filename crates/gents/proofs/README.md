@@ -571,9 +571,14 @@ The proof boundary matters:
 The `tla/` sibling directory contains TLA+ specifications for cross-node properties beyond per-node Lean coverage. See `tla/README.md`.
 
 Currently:
+- `ReversePairing` — control-plane convergence of reverse-pairing subscriptions; first concrete artifact under issue #155's cross-boundary verification strategy.
 - `PairingTransport` — connection/install liveness for one directed pairing edge.
 - `BackgroundAdmissionContention` — optimistic-transaction writers of one request's `AgentRequest` row and session documents: dispatch start, background admission, receipt, running children and the execution lease renewal. Checks the owned loop's call order, the admission sequence fence, the renewal owner's re-drive of a poll that admission bumps exhaust (without it the lease lapses), the renewal cadence premise (`RequestExecutionLease.consecutive_renewals_obey_cadence`) and the `Background.receiptContentionAttempts` bound, whose second extra attempt absorbs one renewal (#3592).
 - `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness obligations for issue #630 (obligation model; not a fleet stability proof).
+- `ReplicatedRequestConvergence` — replicated terminal-state convergence under
+  persisted bounded owner re-drive of unacknowledged requests plus bounded
+  full replay when an unacknowledged configured peer reconnects after a longer
+  partition.
 
 ## Why This Matters
 
@@ -609,7 +614,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition; a detached plugin-job tool keeps the reachable domain nonempty (#555) |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
-| `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection. `newer` orders a session's requests by created second, then live over terminal, then later terminalization, then `request_id` (`live_newer_than_same_second_terminal`, `later_terminalization_newer`, #3604); `selection` cases drive the native head (`generated_selection_cases_drive_the_native_request_head`), and `tla/SessionHeadObservation` checks the reopened client's projection against it |
+| `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
 | `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
 | `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input, continuation assignment attribution and context-bound activation |
 | `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another node and is authorized by the target's `PeerAdmissionAuthority` ACP. Admission enforces the target's causal-hop cap when configured. Title requests are runtime-internal local control with parent-only provenance |
@@ -683,7 +688,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
 | `Proofs/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). It additionally models bounded recursive resolution of full or witnessed splice records and makes a failed decode block capture and send. Ordered per-block manifests (#2333) extend the same resolution: each entry pins its block's field-commit witness, blocks resolve uniformly (full or delta) under one shared fuel budget, and an absent block, mismatched witness, or insufficient fuel fails closed (`manifest_of_fulls_resolves_exactly`, `manifest_witness_mismatch_fails_closed`, `manifest_missing_ref_fails_closed`, `manifest_no_fuel_fails_closed`). `CanonicalRequest` is still abstracted as a singleton list of naturals: the conditional splice theorem proves reconstruction once an encoder supplies the target middle, not the concrete UTF-8 JSON algorithm. Rust refines that boundary with independent top-level-field JSON splices, fixed-width persisted offsets, exact base document/field-CID witnesses, and generated cases plus UTF-8/removal/overflow tests. DefraDB CID correctness and collision resistance remain external storage assumptions. Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send` (ordering, driven through the real owned loop), `rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec` (storage refinement), `tests/conformance/rendered_capture.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the decoded persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
-| `Proofs/DurableLineage.lean` | DefraDB ingest boundary for request provenance: logical/physical document-edge coherence, root/bridge/control-continuation shapes, per-row rejection that cannot poison later admissible work, and steering normalization that clears both halves of the spawn tool edge. Raw admission input is retained separately from canonical execution-start publication. The R4C generated steering witness fences lineage values in Rust conformance tests. Plugin-job spawn and message writes: `openingRequest` picks one opening request per session (`opening_request_unique`), message requests never open one, a reattempt opens a new session, and two job requests have no single-request projection. |
+| `Proofs/DurableLineage.lean` | DefraDB ingest boundary for request provenance: logical/physical document-edge coherence, root and bridge shapes, per-row rejection that cannot poison later admissible work, and steering normalization that clears both halves of the spawn tool edge. Raw admission input is retained separately from canonical execution-start publication. The R4C generated steering witness fences lineage values in Rust conformance tests. Plugin-job spawn and message writes: `openingRequest` picks one opening request per session (`opening_request_unique`), message requests never open one, a reattempt opens a new session, and two job requests have no single-request projection. |
 | `Proofs/QueuedSteering.lean` | Composes the existing queue, request, canonical execution Gate, reconstruction, RenderedCapture, and pending-turn projection owners. Signed raw input survives pre-start and owned pre-publication terminal outcomes; the latter terminalize the execution and finish the active queue. Input retention is structural, queue clearance follows Handover's finish theorem, and lease/request agreement is checked at this composition boundary. Execution-start publication of the separately prepared message gates authored-input provider send. The send predicate covers the authored-input and capture fences only: lease authorization and the native prepared-message-to-serialized-body projection remain Rust refinement obligations. Generated traces include ordered actions, full prepared candidate records, opaque capture inputs, and derived expectations. |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
@@ -693,11 +698,10 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Conformance/Gents.lean` | Mapping from Lean state to Rust/DefraDB state |
 | `Proofs/Conformance/Boundaries.lean` | Intentional product policies and external assumptions at the Rust/Lean boundary |
 | `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches |
-| `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
 | `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up |
 | `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, ClientShell cases, and the coverage ledger |
 | `Proofs/Conformance/ClientShell/Contracts.lean` | Generated finite ClientShell step/projection cases for frontend and desktop shell tests |
-| `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
+| `Proofs/Conformance/Triggers.lean` | Barrel for trigger materialization lineage and dispatch-case conformance |
 
 Semantic submodules:
 
@@ -719,7 +723,7 @@ Semantic submodules:
 | `Proofs.BackendHealth` | `State`, `Transition`, `Properties`, `Executable` |
 | `Proofs.Fleet` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.CompletionRetry` | `State`, `Transition`, `Executable`, `Properties` |
-| `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
+| `Proofs.Conformance.Triggers` | `Materialization`, `Contracts` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
 
@@ -1039,7 +1043,7 @@ Numeric tiers (1–4) apply to **liveness** rows only. Safety invariants are mar
 | ID | Property | Tier | Why it matters | Theorem |
 |----|----------|------|----------------|---------|
 | S7 | Capacity invariants are preserved | — (safety) | Running-slot counts stay within backend limits | `capacity_invariant_preserved`, `reconstructedSlotCount_bounded_by_max_concurrent` |
-| S8 | Slot accounting is preserved | — (safety) | Scheduler running counts stay aligned with per-request admission state and persisted running call rows | `slot_accounting_preserved`, `scheduler_running_reconstructed_from_inference_calls` |
+| S8 | Slot accounting is preserved | — (safety) | Scheduler running counts stay aligned with per-request admission state and persisted running call rows | `slot_accounting_preserved`, `reconstructedSlotCount_bounded_by_max_concurrent` |
 | S9 | Terminal work releases capacity; unavailable backends cannot acquire | — (safety) | Slots are not leaked and unrunnable backends do not accept new work | `terminal_implies_released`, `permitDrop_terminalization_not_counted`, `unavailable_blocks_acquire` |
 | L | Capacity-available work can acquire | 1 | A waiting request is not artificially blocked when slots exist | `acquire_when_capacity_available` |
 | L | Accepted work eventually releases | 1 | The model has a constructive path from accepted work to released capacity | `accepted_work_eventually_releases` |
@@ -1338,19 +1342,10 @@ representable; provider-input sanitation owns the stricter boundary.
 - unordered scoped observations resolve only a unique retry tip; output readiness
   cannot alter execution status
 
-`deriveSessionDelivery` extends the same projection to a selected session whose
-canonical `AgentSession` row has not replicated back. It reads four signals and
-no clock: the client's own `AgentRequest` (`SubmittedAttempt`, an `AttemptView`
-with the node's replicated claim), the client-to-runtime pairing, and the row.
-The row wins (`canonical_row_wins`); duplicate or out-of-scope rows are faults;
-without the row, the node's claim or a lifecycle past pending is `accepted`,
-otherwise the pairing decides `delivering` or `notConnected`
-(`pairing_down_is_not_connected`). A sent request with no row is never an error
-(`sent_without_row_is_never_an_error`, `waiting_for_claim_without_row_is_in_flight`),
-and the result depends on the signals alone
-(`deriveSessionDelivery_determined_by_signals`). `client_session_delivery_cases`
-emits the classification over every signal and lifecycle combination for the
-`gents_protocol::client_protocol` consumer.
+A selected-session read is a direct runtime read (`directSessionRead`): an
+absent or hidden session is an ordinary empty result, and only a duplicate or
+out-of-scope row is an integrity fault. `client_direct_session_read_cases`
+emits it for the desktop-core selected-session reader.
 
 `client-state-machine.md` and external fixtures still need migration to this
 target contract.
@@ -1414,7 +1409,6 @@ The main conformance files are:
 - `Proofs/Conformance/Gents.lean`
 - `Proofs/Conformance/Boundaries.lean`
 - `Proofs/Conformance/CoverageLedger.lean`
-- `Proofs/Conformance/SchedulerConformance.lean`
 - `Proofs/Conformance/Triggers.lean`
 - `Proofs/Conformance/Deviations.lean`
 

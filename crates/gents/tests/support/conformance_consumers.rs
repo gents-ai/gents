@@ -455,20 +455,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "kill_reads_children_that_committed_after_the_recovery_snapshot",
         },
         ConformanceConsumer::RustTest {
-            id: "plugin_job::operator_control_conformance::generated_operator_controls_stay_on_the_owning_runtime",
-            package: "gents",
-            source_path: "crates/gents/src/tools/background/job/operator_control_conformance.rs",
-            module_path: "plugin_job::operator_control_conformance",
-            function: "generated_operator_controls_stay_on_the_owning_runtime",
-        },
-        ConformanceConsumer::RustTest {
-            id: "tool_control::tests::operator_process_control_matches_executable_model",
-            package: "gents",
-            source_path: "crates/gents/src/tools/call/control.rs",
-            module_path: "tool_control::tests",
-            function: "operator_process_control_matches_executable_model",
-        },
-        ConformanceConsumer::RustTest {
             id: "request::lifecycle::client::tests::claim_tests::client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim",
             package: "gents",
             source_path: "crates/gents/src/request/lifecycle/client/tests/claim_tests.rs",
@@ -525,11 +511,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_ancestry_scope_cases_use_the_lean_composition",
         },
         ConformanceConsumer::RustTest {
-            id: "gents_protocol::client_protocol::tests::generated_session_delivery_cases_match_the_lean_classification",
-            package: "gents-protocol",
-            source_path: "crates/gents-protocol/src/client_protocol/tests.rs",
-            module_path: "gents_protocol::client_protocol::tests",
-            function: "generated_session_delivery_cases_match_the_lean_classification",
+            id: "client::query::tests::projection_and_patches::direct_session_read_matches_the_lean_model",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/query/tests/projection_and_patches.rs",
+            module_path: "client::query::tests::projection_and_patches",
+            function: "direct_session_read_matches_the_lean_model",
         },
         ConformanceConsumer::RustTest {
             id: "gents_protocol::database_error::tests::generated_storage_failures_preserve_recovery_evidence",

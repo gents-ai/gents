@@ -466,7 +466,6 @@ impl ModeledQueue {
         model: &LeanSessionInputEditCommand,
         authority: &LeanSessionInputEditAuthority,
     ) -> SessionInputEdit {
-        assert!(!model.has_peer, "remote authority is bound by e2e_runtime");
         assert!(authority.command_identity_unique);
         let foreign;
         // The fixture's client key is the session's requester; a fresh key is
@@ -700,12 +699,11 @@ async fn generated_commands_bind_to_atomic_queue_owner() {
     let cases = crate::lean_vocab_test::lean_session_input_edit_cases()
         .iter()
         .filter(|case| {
-            !case.command.has_peer
-                && case.authority.command_identity_unique
+            case.authority.command_identity_unique
                 && case.history.iter().all(|step| match step {
-                    LeanSessionInputEditStep::Apply {
-                        command, authority, ..
-                    } => !command.has_peer && authority.command_identity_unique,
+                    LeanSessionInputEditStep::Apply { authority, .. } => {
+                        authority.command_identity_unique
+                    }
                     LeanSessionInputEditStep::LoseReceipts => true,
                     LeanSessionInputEditStep::OtherSession { .. } => false,
                 })

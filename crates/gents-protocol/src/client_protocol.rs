@@ -127,16 +127,8 @@ pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
     }
 }
 
-/// Signal 2 of `deriveSessionDelivery` in `Proofs/Client/Types.lean`: whether
-/// the client-to-runtime pairing for the target node replicates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingSignal {
-    Connected,
-    NotConnected,
-}
-
-/// Signal 4: the canonical `AgentSession` rows a selected-session read found
-/// for its exact node/session scope.
+/// The canonical `AgentSession` rows a selected-session read found for its
+/// exact node/session scope (`SessionRowObservation` in `Proofs/Client/Types.lean`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionRowObservation {
     Absent,
@@ -153,60 +145,6 @@ impl SessionRowObservation {
             1 => Self::Canonical,
             _ => Self::Duplicate,
         }
-    }
-}
-
-/// Signals 1 and 3: the `AgentRequest` this client wrote, with the node
-/// runtime's replicated `claimed_at`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubmittedAttempt {
-    pub attempt: AttemptView,
-    pub claimed: bool,
-}
-
-impl SubmittedAttempt {
-    /// Signal 3: only the node runtime claims a submitted request or moves
-    /// its lifecycle past the pending states it is written in.
-    pub fn node_has_it(&self) -> bool {
-        self.claimed
-            || !matches!(
-                self.attempt.request.lifecycle_state,
-                RequestLifecycleState::WorkspaceBindingPending | RequestLifecycleState::Pending
-            )
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionDeliveryView {
-    pub submitted: Option<SubmittedAttempt>,
-    pub pairing: PairingSignal,
-    pub session_row: SessionRowObservation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionDelivery {
-    Visible,
-    Accepted,
-    Delivering,
-    NotConnected,
-    NoRequest,
-    IntegrityFault,
-}
-
-pub fn derive_session_delivery(view: &SessionDeliveryView) -> SessionDelivery {
-    match (view.session_row, view.submitted.as_ref()) {
-        (SessionRowObservation::Canonical, _) => SessionDelivery::Visible,
-        (SessionRowObservation::Duplicate | SessionRowObservation::OutOfScope, _) => {
-            SessionDelivery::IntegrityFault
-        }
-        (SessionRowObservation::Absent, None) => SessionDelivery::NoRequest,
-        (SessionRowObservation::Absent, Some(attempt)) if attempt.node_has_it() => {
-            SessionDelivery::Accepted
-        }
-        (SessionRowObservation::Absent, Some(_)) => match view.pairing {
-            PairingSignal::Connected => SessionDelivery::Delivering,
-            PairingSignal::NotConnected => SessionDelivery::NotConnected,
-        },
     }
 }
 

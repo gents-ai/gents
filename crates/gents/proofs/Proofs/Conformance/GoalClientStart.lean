@@ -10,7 +10,7 @@ open GoalAutomation.ClientStart Conformance.Contracts Lean
 def requested : AgentSession.Document :=
   { scope := ⟨1, 10, some 1⟩, agent := 3, createdAt := 5 }
 def empty : State := ⟨some requested, ⟨false, false, false, false⟩⟩
-def facts : Facts := ⟨⟨true, true, true, false, false⟩, false, 2, 10, true, false,
+def facts : Facts := ⟨⟨true, true, false, false⟩, false, 2, 10, true, false,
   some "session-document", some "session-document", none, some "initial-assignment", none,
   3, true, true, 0, 0, true, 0, 0⟩
 

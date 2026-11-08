@@ -398,34 +398,6 @@ def retentionDependencies (history : History) : RetentionDependencies :=
       message.header.refs.filterMap fun ref =>
         (resolveIn history.closures message.header.session ref.closeId).map (·.id)).dedup }
 
-def canDeleteOriginMessage (dependencies : RetentionDependencies) (id : DocId) : Bool :=
-  !dependencies.originMessages.contains id
-
-def canDeleteClosingRecord (dependencies : RetentionDependencies) (id : DocId) : Bool :=
-  !dependencies.closingRecords.contains id
-
-theorem copied_reference_is_retained (history : History) (message : MessageEnvelope)
-    (ref : PayloadRef) (closure : Closure) (hmessage : message ∈ history.messages)
-    (href : ref ∈ message.header.refs)
-    (hresolved : resolveIn history.closures message.header.session ref.closeId = some closure) :
-    canDeleteClosingRecord (retentionDependencies history) closure.id = false := by
-  have hmem : closure.id ∈ (history.messages.flatMap fun message =>
-      message.header.refs.filterMap fun ref =>
-        (resolveIn history.closures message.header.session ref.closeId).map (·.id)).dedup := by
-    rw [List.mem_dedup]
-    exact List.mem_flatMap.mpr
-      ⟨message, hmessage, List.mem_filterMap.mpr ⟨ref, href, by simp [hresolved]⟩⟩
-  simpa [canDeleteClosingRecord, retentionDependencies, List.contains_eq_mem] using hmem
-
-theorem copied_origin_message_is_retained (history : History) (message : MessageEnvelope)
-    (origin : DocId) (hmessage : message ∈ history.messages)
-    (horigin : message.header.origin = some origin) :
-    canDeleteOriginMessage (retentionDependencies history) origin = false := by
-  have hmem : origin ∈ (history.messages.filterMap (·.header.origin)).dedup := by
-    rw [List.mem_dedup, List.mem_filterMap]
-    exact ⟨message, hmessage, horigin⟩
-  simpa [canDeleteOriginMessage, retentionDependencies, List.contains_eq_mem] using hmem
-
 theorem closing_record_is_closure (history : History) (id : DocId)
     (h : id ∈ (retentionDependencies history).closingRecords) :
     id ∈ history.closures.map (·.id) := by
@@ -436,8 +408,8 @@ theorem closing_record_is_closure (history : History) (id : DocId)
   obtain ⟨closure, hcase, rfl⟩ := hresolved
   exact List.mem_map.mpr ⟨closure, resolveIn_mem hcase, rfl⟩
 
-/-- Copied content is owned by the child: deleting any source document never
-removes a closing record the published fork depends on. -/
+/-- Copied content is owned by the child: no closing record the published fork
+depends on is a source document, so deleting source documents never removes one. -/
 theorem source_deletion_preserves_fork_content
     (source : History) (parent child : AgentSession.Scope)
     (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
@@ -445,19 +417,17 @@ theorem source_deletion_preserves_fork_content
     (hpub : publish source parent child childDocumentId childKey cut
       authorization idle coherent = some copied)
     (id : DocId) (hsource : id ∈ documentIds source) :
-    canDeleteClosingRecord (retentionDependencies copied) id = true := by
+    id ∉ (retentionDependencies copied).closingRecords := by
   obtain ⟨_, hfresh, _⟩ := publish_postconditions source parent child childDocumentId
     childKey cut authorization idle coherent copied hpub
-  cases hdep : (retentionDependencies copied).closingRecords.contains id with
-  | false => simp only [canDeleteClosingRecord, hdep, Bool.not_false]
-  | true =>
-      have hmem := closing_record_is_closure copied id (by simpa using hdep)
-      have hcopied : id ∈ documentIds copied := by
-        simp only [documentIds, List.mem_append]
-        exact Or.inr hmem
-      simp only [List.all_eq_true] at hfresh
-      have := hfresh id hcopied
-      simp [List.contains_eq_mem, hsource] at this
+  intro hdep
+  have hmem := closing_record_is_closure copied id hdep
+  have hcopied : id ∈ documentIds copied := by
+    simp only [documentIds, List.mem_append]
+    exact Or.inr hmem
+  simp only [List.all_eq_true] at hfresh
+  have := hfresh id hcopied
+  simp [List.contains_eq_mem, hsource] at this
 
 /-- The caller saves the child identity before requesting an edit fork. The
 existing AgentSession owner persists its exact source-message binding with the

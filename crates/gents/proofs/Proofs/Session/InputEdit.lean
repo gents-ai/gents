@@ -24,8 +24,6 @@ structure Authority where
   replacementsValid : Bool
   sessionOwned : Bool
   editor : Editor
-  enrollmentFresh : Bool
-  routeApplied : Bool
   /-- All physical command documents have been observed without relying on a unique
   index winner. Distinct documents sharing the command ID fail closed even for identical
   signed intents, and committed effects are never undone. -/
@@ -36,7 +34,6 @@ structure Command where
   id : Nat
   digest : Nat
   caller : Option Nat
-  hasPeer : Bool
   issuedAt : Nat
   expiresAt : Nat
   expected : List RequestId
@@ -79,12 +76,11 @@ structure State where
   receipts : List Receipt
   deriving DecidableEq
 
+/-- Edits are direct client-signed commands: P2P carries no session edit, so a
+command naming a requester peer is not admissible input to this model. -/
 def authorized (a : Authority) (c : Command) (now : Nat) : Bool :=
   a.replacementsValid && a.editor.mayEdit && AgentSession.CommandAuthority.authorized
-    { signatureValid := a.signatureValid, sessionOwned := a.sessionOwned,
-      requesterIsNode := false, enrollmentFresh := a.enrollmentFresh,
-      routeApplied := a.routeApplied }
-    c.hasPeer now c.expiresAt
+    (.direct a.signatureValid a.sessionOwned) false now c.expiresAt
 
 theorem other_editor_is_denied (a : Authority) (c : Command) (now : Nat)
     (h : a.editor = .other) : authorized a c now = false := by

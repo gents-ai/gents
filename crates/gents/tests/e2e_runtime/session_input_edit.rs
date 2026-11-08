@@ -506,8 +506,7 @@ async fn generated_client_edits_publish_concurrently_with_signed_effect_and_rece
         .unwrap()
         .iter()
         .filter(|case| {
-            case["command"]["has_peer"] == false
-                && case["authority"]["command_identity_unique"] == true
+            case["authority"]["command_identity_unique"] == true
                 && case["authority"]["editor"] == "requester"
                 && case["history"].as_array().unwrap().is_empty()
                 && !case["receipt"].is_null()

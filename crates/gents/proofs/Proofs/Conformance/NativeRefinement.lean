@@ -81,37 +81,6 @@ def processIdentityCasesJson : String :=
         ⟨requestedId, requestedDoc⟩ ⟨ownedId, ownedDoc⟩))])
   (toJson cases).compress
 
-def operatorControlCasesJson : String :=
-  let cases := do
-    let executing ← ["did:node:a", "did:node:b"]
-    let requested ← ["did:node:a", "did:node:b"]
-    let owner ← ["did:node:a", "did:node:b"]
-    let actor ← [none, some "did:node:a", some "did:node:b", some "did:operator:other"]
-    pure (Json.mkObj [("executing", toJson executing), ("requested", toJson requested),
-      ("owner", toJson owner), ("actor", toJson actor),
-      ("expected", toJson (Background.ProcessControl.operatorAtNode executing requested owner actor))])
-  (toJson cases).compress
-
-def operatorProcessCasesJson : String :=
-  let cases := do
-    let actor ← [none, some "node", some "foreign"]
-    let requested ← ["node", "foreign"]
-    let owner ← ["node", "foreign"]
-    let requestedId ← ["call", "other"]
-    let requestedDoc ← ["doc", "other"]
-    let background ← [false, true]
-    let native ← [false, true]
-    pure (Json.mkObj [
-      ("executing", toJson "node"),
-      ("owned_id", toJson "call"), ("owned_doc", toJson "doc"),
-      ("actor", toJson actor), ("requested", toJson requested), ("owner", toJson owner),
-      ("requested_id", toJson requestedId), ("requested_doc", toJson requestedDoc),
-      ("background", toJson background), ("native", toJson native),
-      ("expected", toJson (Background.ProcessControl.operatorProcessAuthorized
-        "node" requested owner actor ⟨requestedId, requestedDoc⟩ ⟨"call", "doc"⟩
-        background native))])
-  (toJson cases).compress
-
 def clientProcessClaimCasesJson : String :=
   let cases := do
     let claimant ← ["agent", "other"]

@@ -410,16 +410,6 @@ pub async fn control(
     control_lifecycle(access, scope, lifecycle, action).await
 }
 
-#[cfg(test)]
-pub fn operator_control_authorized(
-    executing: &str,
-    requested: &str,
-    owner: &str,
-    actor: Option<&str>,
-) -> bool {
-    actor == Some(executing) && requested == executing && owner == executing
-}
-
 pub async fn control_by_doc_id(
     access: &ConfigAccess,
     scope: &ProcessControlScope,
