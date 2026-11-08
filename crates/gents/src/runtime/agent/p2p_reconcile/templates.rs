@@ -565,29 +565,7 @@ pub fn compare_client_replicated_schema(
     local: &ReplicatedSchema,
     remote: Option<&ReplicatedSchema>,
 ) -> Result<(), ReplicatedSchemaSkew> {
-    compare_replicated_schema(CLIENT_COLLECTIONS, local, remote).map_err(|mut skew| {
-        // Name the side that is off the canonical lineage, so the fix offered is re-creating
-        // that store rather than "update to the same version", which cannot help.
-        fn off_lineage(collections: &[String], schema: &ReplicatedSchema) -> Vec<String> {
-            collections
-                .iter()
-                .filter(|name| {
-                    schema.get(*name).is_some_and(|identity| {
-                        crate::store::schema::migration::is_known_off_lineage(
-                            name,
-                            &identity.version_id,
-                        )
-                    })
-                })
-                .cloned()
-                .collect()
-        }
-        skew.local_off_lineage = off_lineage(&skew.collections, local);
-        skew.remote_off_lineage = remote
-            .map(|schema| off_lineage(&skew.collections, schema))
-            .unwrap_or_default();
-        skew
-    })
+    compare_replicated_schema(CLIENT_COLLECTIONS, local, remote)
 }
 
 pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
@@ -678,57 +656,6 @@ mod tests {
         let skew = compare_client_replicated_schema(&local, Some(&old))
             .expect_err("an old runtime schema must not enroll or sync");
         assert!(format!("{skew:?}").contains("AgentRequest"), "{skew:?}");
-    }
-
-    #[test]
-    fn skew_names_the_side_off_the_canonical_lineage() {
-        let canonical = crate::store::schema::migration::canonical_versions().unwrap();
-        let identity = |version: &str| ReplicatedCollectionIdentity {
-            version_id: version.to_string(),
-            branchable: true,
-            policy_resource: None,
-        };
-        let canonical_schema: ReplicatedSchema = CLIENT_COLLECTIONS
-            .iter()
-            .map(|name| {
-                let version = canonical.get(*name).map_or("unmanaged", String::as_str);
-                ((*name).to_string(), identity(version))
-            })
-            .collect();
-        assert!(canonical_schema.contains_key("AgentMessage"));
-        // AgentMessage as a store created by v1.0.0-rc1 registered it.
-        let mut rc1_born = canonical_schema.clone();
-        rc1_born.insert(
-            "AgentMessage".to_string(),
-            identity("bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm"),
-        );
-
-        let skew = compare_client_replicated_schema(&canonical_schema, Some(&rc1_born))
-            .expect_err("an rc1-born runtime must not sync with a canonical app");
-        assert_eq!(skew.remote_off_lineage, vec!["AgentMessage".to_string()]);
-        assert!(skew.local_off_lineage.is_empty());
-        assert!(
-            skew.to_string().contains("re-create the runtime's"),
-            "{skew}"
-        );
-
-        let skew = compare_client_replicated_schema(&rc1_born, Some(&canonical_schema))
-            .expect_err("an rc1-born app must not sync with a canonical runtime");
-        assert_eq!(skew.local_off_lineage, vec!["AgentMessage".to_string()]);
-        assert!(
-            skew.to_string().contains("reset this app's local data"),
-            "{skew}"
-        );
-
-        // A plain version difference keeps the "same version" advice.
-        let mut other = canonical_schema.clone();
-        other.insert("AgentSession".to_string(), identity("bafyother"));
-        let skew = compare_client_replicated_schema(&canonical_schema, Some(&other)).unwrap_err();
-        assert!(skew.local_off_lineage.is_empty() && skew.remote_off_lineage.is_empty());
-        assert!(
-            skew.to_string().contains("different Gents versions"),
-            "{skew}"
-        );
     }
 
     #[test]
