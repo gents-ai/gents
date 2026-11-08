@@ -142,14 +142,17 @@ stream carries.
 Decision: the page learns of a reconnect when it starts, not only when it
 fails for good, so a stalled stream is never shown as live. The next
 snapshot is the page's signal that it is live again; `starting` sends
-nothing, since the page still shows the reconnect it was told of. -/
+nothing, since the page still shows the reconnect it was told of. A clean
+end (`backoff 0`) sends nothing either: it is the runtime's planned stream
+lifetime, the data is current, and the next connect is one second away; an
+attempt that then fails is noticed as `backoff 1`. -/
 inductive Notice where
   | reconnecting (delayMs : Nat)
   | unavailable (reason : TerminalReason) (next : NextAction)
   deriving DecidableEq, Repr
 
 def notice : Phase → Option Notice
-  | .backoff failures => some (.reconnecting (delayMs failures))
+  | .backoff (failures + 1) => some (.reconnecting (delayMs (failures + 1)))
   | .terminal reason => some (.unavailable reason .reopenPage)
   | _ => none
 
@@ -282,16 +285,21 @@ theorem terminal_only_from_permanent_auth_or_budget
 theorem backoff_retry_reacquires (failures : Nat) :
     step (.backoff failures) .retry = .starting failures := rfl
 
-/-- Nothing gets silently stuck: every transition into a phase that is not
-receiving data sends the page a notice naming it, and the notice is what the
+/-- Nothing gets silently stuck: every transition into a phase that follows a
+failure sends the page a notice naming it, and the notice is what the
 phase's view shows. -/
 theorem every_stall_is_noticed (phase : Phase) :
-    (∃ failures, phase = .backoff failures) ∨ (∃ reason, phase = .terminal reason) →
+    (∃ failures, phase = .backoff (failures + 1)) ∨ (∃ reason, phase = .terminal reason) →
       ∃ shown, notice phase = some shown ∧
         (∀ delay, shown = .reconnecting delay → view phase = .reconnecting delay) ∧
         (∀ reason next, shown = .unavailable reason next →
           view phase = .unavailable reason next) := by
   rintro (⟨failures, rfl⟩ | ⟨reason, rfl⟩) <;> simp [notice, view]
+
+/-- Every failure that does not end the watch enters a noticed backoff. -/
+theorem a_failure_is_noticed (failures : Nat) (h : failures + 1 < retryBudget) :
+    notice (fail failures) = some (.reconnecting (delayMs (failures + 1))) := by
+  simp [fail, h, notice]
 
 /-- Every view is progressing on its own, or names its cause and the next
 action, or is closed because nobody watches it. -/
