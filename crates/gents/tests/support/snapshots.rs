@@ -576,8 +576,17 @@ impl ToolCallSnapshot {
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
+        self.try_load_arguments_as(&gents::store::config_client::ConfigAccess::local(node))
+            .await
+    }
+
+    /// The call's exact arguments as `access` reads them.
+    pub async fn try_load_arguments_as(
+        &self,
+        access: &gents::ConfigAccess,
+    ) -> anyhow::Result<String> {
         gents::tools::call::lifecycle::load_tool_call_arguments(
-            &gents::store::config_client::ConfigAccess::local(node),
+            access,
             &self.doc_id,
             &self.node_did,
             &self.session_id,
@@ -611,6 +620,30 @@ pub async fn fetch_tool_call_payloads_for_request(
             tool_call_id: call.tool_call_id.clone(),
             arguments: call.try_load_arguments(node.clone()).await.ok(),
             result: call.try_load_result(node.clone()).await.ok(),
+            tool_name: call.tool_name,
+            status: call.status,
+            lifecycle_state: call.lifecycle_state,
+        });
+    }
+    payloads
+}
+
+/// [`fetch_tool_call_payloads_for_request`] read as `access`, one of the
+/// call's related actors or the node's native admin.
+pub async fn fetch_tool_call_payloads_for_request_as(
+    access: &gents::ConfigAccess,
+    request_id: &str,
+) -> Vec<ToolCallPayload> {
+    let filter = format!(
+        r#"request_id: {{ _eq: "{}" }}"#,
+        escape_graphql_string(request_id)
+    );
+    let mut payloads = Vec::new();
+    for call in fetch_tool_call_snapshots(access, &filter).await {
+        payloads.push(ToolCallPayload {
+            tool_call_id: call.tool_call_id.clone(),
+            arguments: call.try_load_arguments_as(access).await.ok(),
+            result: call.try_load_result_as(access).await.ok(),
             tool_name: call.tool_name,
             status: call.status,
             lifecycle_state: call.lifecycle_state,

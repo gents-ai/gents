@@ -1,21 +1,17 @@
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
-use serde::Deserialize;
 
-use crate::support::fixtures::test_identity;
-use crate::support::interrupt::{create_runtime_request, BootedAgent};
-use crate::support::live_inference::{bind_target, boot_live_agent, live_target};
+use crate::support::builder_runtime::submit_request;
+use crate::support::interrupt::BootedAgent;
+use crate::support::live_inference::{
+    bind_target, boot_live_agent, live_target, wait_for_request_terminal,
+};
 use crate::support::p2p_waits::wait_for_listen_addr;
-use crate::support::{first_optional_row, test_p2p_db_with_admission, TestDb, TestP2pAdmission};
+use crate::support::{test_p2p_db_with_admission, TestDb, TestP2pAdmission};
 
 const CONCURRENT_WAVES: usize = 4;
-const REPLICATED: &[&str] = &["AgentRequest", "AgentOutputSegment", "AgentMessage"];
 
 fn live_enabled() -> bool {
     std::env::var("GENTS_LIVE_P2P_ADMISSION").as_deref() == Ok("1")
@@ -40,139 +36,18 @@ async fn wait_for_connected_peer(node: &EmbeddedNode) {
     }
 }
 
-async fn install_one_way_replicator(
-    sender: &EmbeddedNode,
-    receiver: &EmbeddedNode,
-    collections: &[&str],
-) {
-    let sender_addr = wait_for_listen_addr(sender).await;
-    let receiver_addr = wait_for_listen_addr(receiver).await;
-    let sender_p2p = sender.p2p().expect("sender p2p");
-    let receiver_p2p = receiver.p2p().expect("receiver p2p");
-
-    sender_p2p
-        .connect_peer(&receiver_addr)
+/// P2P carries only discovery and enrollment: the owner dials each peer, and
+/// no document collection replicates over the connection.
+async fn connect_discovery_peer(owner: &EmbeddedNode, peer: &EmbeddedNode) {
+    let peer_addr = wait_for_listen_addr(peer).await;
+    // Transport administration runs as the Node's own identity.
+    gents::store::identity::node_p2p(owner)
+        .expect("owner p2p")
+        .connect_peer(&peer_addr)
         .await
-        .expect("connect sender → receiver");
-    wait_for_connected_peer(sender).await;
-    wait_for_connected_peer(receiver).await;
-
-    let names: Vec<String> = collections.iter().map(|c| (*c).to_string()).collect();
-    sender_p2p
-        .add_collections(names.clone())
-        .await
-        .expect("sender collections");
-    receiver_p2p
-        .add_collections(names.clone())
-        .await
-        .expect("receiver collections");
-    receiver_p2p
-        .add_replicator(
-            names.clone(),
-            Some(&sender_addr),
-            Default::default(),
-            Vec::new(),
-            None,
-        )
-        .await
-        .expect("authorize sender on receiver");
-    sender_p2p
-        .add_replicator(
-            names,
-            Some(&receiver_addr),
-            Default::default(),
-            Vec::new(),
-            None,
-        )
-        .await
-        .expect("install sender → receiver replicator");
-}
-
-fn is_terminal(state: &str) -> bool {
-    RequestLifecycleState::is_terminal_str(Some(state))
-}
-
-async fn fetch_lifecycle(node: &EmbeddedNode, request_id: &str) -> Option<String> {
-    let escaped = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
-                lifecycle_state
-                node_did
-            }}
-        }}"#
-    );
-    #[derive(Deserialize)]
-    struct Row {
-        lifecycle_state: Option<String>,
-    }
-    let resp = node.execute(&query).await;
-    first_optional_row::<Row>(&resp, "AgentRequest").and_then(|r| r.lifecycle_state)
-}
-
-async fn wait_for_terminal(node: &EmbeddedNode, request_id: &str, timeout: Duration) -> String {
-    let deadline = Instant::now() + timeout;
-    let mut last = String::from("<none>");
-    loop {
-        if let Some(state) = fetch_lifecycle(node, request_id).await {
-            last = state.clone();
-            if is_terminal(&state) {
-                return state;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for {request_id} terminal; last={last}");
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-async fn wait_for_peer_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-    expected_owner_did: &str,
-    timeout: Duration,
-    label: &str,
-) {
-    let deadline = Instant::now() + timeout;
-    let mut last = String::from("<none>");
-    loop {
-        let escaped = escape_graphql_string(request_id);
-        let query = format!(
-            r#"{{
-                AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
-                    lifecycle_state
-                    node_did
-                }}
-            }}"#
-        );
-        #[derive(Deserialize)]
-        struct Row {
-            lifecycle_state: Option<String>,
-            node_did: Option<String>,
-        }
-        let resp = node.execute(&query).await;
-        if let Some(row) = first_optional_row::<Row>(&resp, "AgentRequest") {
-            let state = row.lifecycle_state.unwrap_or_default();
-            last = format!("lifecycle={state} did={:?}", row.node_did);
-            if is_terminal(&state) {
-                assert_eq!(
-                    row.node_did.as_deref(),
-                    Some(expected_owner_did),
-                    "{label}: peer replica must keep owner DID"
-                );
-                assert_eq!(
-                    state, "completed",
-                    "{label}: expected completed, got {state} ({last})"
-                );
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for {request_id} on {label}; last={last}");
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+        .expect("connect owner → peer");
+    wait_for_connected_peer(owner).await;
+    wait_for_connected_peer(peer).await;
 }
 
 struct LiveTopologyGuard {
@@ -273,12 +148,12 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
 
     let mut topo = LiveTopologyGuard::new(owner, peer_a, peer_b);
 
-    install_one_way_replicator(&topo.owner().node, &topo.peer_a().node, REPLICATED).await;
-    install_one_way_replicator(&topo.owner().node, &topo.peer_b().node, REPLICATED).await;
+    connect_discovery_peer(&topo.owner().node, &topo.peer_a().node).await;
+    connect_discovery_peer(&topo.owner().node, &topo.peer_b().node).await;
 
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("p2p-adm-live-owner"));
-    let (node_did, agent_did) = bind_target(&topo.owner().node, identity.as_ref(), &target).await;
-    let agent = boot_live_agent(topo.owner(), identity).await?;
+    let actors = bind_target(topo.owner(), &target).await;
+    let node_did = actors.node_did().to_owned();
+    let agent = boot_live_agent(topo.owner(), topo.owner().node_identity.clone()).await?;
     topo.set_agent(agent);
     eprintln!("[p2p-admission-live] owner ready did={node_did}");
 
@@ -291,12 +166,11 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
 
     let submit_start = Instant::now();
     for (i, request_id) in wave_ids.iter().enumerate() {
-        create_runtime_request(
-            &topo.owner().node,
-            &node_did,
-            &agent_did,
+        submit_request(
+            &actors,
             request_id,
             &session_ids[i],
+            "interactive",
             &format!("Reply with exactly one word: wave{i}"),
         )
         .await;
@@ -308,7 +182,8 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
 
     let owner_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
-        let state = wait_for_terminal(&topo.owner().node, request_id, owner_deadline).await;
+        let state =
+            wait_for_request_terminal(&actors.fixture.access, request_id, owner_deadline).await;
         assert_eq!(
             state, "completed",
             "owner wave {request_id} must complete against target {}, got {state}",
@@ -317,28 +192,20 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
         eprintln!("[p2p-admission-live] owner terminal {request_id}={state}");
     }
 
-    let peer_deadline = Duration::from_secs(180);
-    for request_id in &wave_ids {
-        wait_for_peer_request(
-            &topo.peer_a().node,
-            request_id,
-            &node_did,
-            peer_deadline,
-            "peer-a",
-        )
-        .await;
-        wait_for_peer_request(
-            &topo.peer_b().node,
-            request_id,
-            &node_did,
-            peer_deadline,
-            "peer-b",
-        )
-        .await;
-        eprintln!("[p2p-admission-live] both peers have {request_id}");
+    for db in [topo.peer_a(), topo.peer_b()] {
+        assert!(
+            !db.node
+                .p2p()
+                .expect("peer p2p")
+                .connected_peers()
+                .await
+                .expect("connected peers")
+                .is_empty(),
+            "discovery peers stay connected through the concurrent waves"
+        );
     }
 
     topo.shutdown().await;
-    eprintln!("[p2p-admission-live] PASS concurrent multi-wave under single push worker");
+    eprintln!("[p2p-admission-live] PASS concurrent multi-wave under single push worker with discovery peers");
     Ok(())
 }

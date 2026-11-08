@@ -1,9 +1,6 @@
-use crate::support::fixtures::test_identity;
-use crate::support::interrupt::create_runtime_request;
+use crate::support::builder_runtime::submit_request;
 use crate::support::live_inference::*;
 use crate::support::test_db;
-use gents::NodeIdentity;
-use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -13,28 +10,26 @@ async fn target_backend_probes_healthy_and_completes() {
     target.assert_reachable().await;
 
     let db = test_db("steward-loop-live-smoke").await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("steward-loop-live-smoke"));
+    let actors = bind_target(&db, &target).await;
+    let reader = &actors.fixture.access;
 
-    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
-
-    let agent = boot_live_agent(&db, identity)
+    let agent = boot_live_agent(&db, db.node_identity.clone())
         .await
         .expect("boot live agent");
 
     let request_id = "req-live-smoke";
     let session_id = "session-live-smoke";
     let started = std::time::Instant::now();
-    create_runtime_request(
-        &db.node,
-        &node_did,
-        &agent_did,
+    submit_request(
+        &actors,
         request_id,
         session_id,
+        "interactive",
         "Reply with the single word: ok",
     )
     .await;
 
-    let terminal = wait_for_request_terminal(&db.node, request_id, Duration::from_secs(120)).await;
+    let terminal = wait_for_request_terminal(reader, request_id, Duration::from_secs(120)).await;
     let elapsed = started.elapsed();
     eprintln!("[live-smoke] request terminal state = {terminal} (latency {elapsed:?})");
     assert_eq!(
@@ -43,7 +38,7 @@ async fn target_backend_probes_healthy_and_completes() {
         target.name
     );
 
-    let answer = wait_for_assistant_answer(&db.node, request_id, Duration::from_secs(30)).await;
+    let answer = wait_for_assistant_answer(reader, request_id, Duration::from_secs(30)).await;
     eprintln!("[live-smoke] assistant answer = {answer:?}");
     assert!(
         !answer.trim().is_empty(),

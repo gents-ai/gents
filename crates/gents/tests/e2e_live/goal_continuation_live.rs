@@ -1,17 +1,16 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use gents::goal::{load_canonical_goal, set_goal, GoalStatus, UPDATE_GOAL_TOOL_NAME};
+use gents::goal::{load_canonical_goal_in_txn, set_goal, GoalStatus, UPDATE_GOAL_TOOL_NAME};
 use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
 use serde::Deserialize;
 
-use crate::support::fixtures::test_identity;
-use crate::support::interrupt::create_runtime_request;
+use crate::support::agent_requests::canonical_now;
+use crate::support::builder_runtime::submit_request;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::{first_optional_row, test_db};
+use crate::support::snapshots::SnapshotReader;
+use crate::support::test_db;
 
 #[derive(Debug, Deserialize)]
 struct GoalChildRow {
@@ -19,16 +18,15 @@ struct GoalChildRow {
     session_id: String,
 }
 
-async fn wait_for_goal_child(
-    node: &gents::defra_node::Node,
-    goal_id: &str,
-    timeout: Duration,
-) -> GoalChildRow {
+async fn wait_for_goal_child<R>(reader: &R, goal_id: &str, timeout: Duration) -> GoalChildRow
+where
+    R: SnapshotReader,
+{
     let deadline = tokio::time::Instant::now() + timeout;
     let goal_id = escape_graphql_string(goal_id);
     loop {
-        let response = node
-            .execute(&format!(
+        let data = reader
+            .read_data(&format!(
                 r#"{{
                     AgentRequest(
                         filter: {{
@@ -41,13 +39,11 @@ async fn wait_for_goal_child(
                 }}"#
             ))
             .await;
-        assert!(
-            !response.has_errors(),
-            "query goal child: {:?}",
-            response.errors
-        );
-        if let Some(row) = first_optional_row::<GoalChildRow>(&response, "AgentRequest") {
-            return row;
+        if let Some(row) = data["AgentRequest"]
+            .as_array()
+            .and_then(|rows| rows.first())
+        {
+            return serde_json::from_value(row.clone()).expect("decode goal child");
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -70,23 +66,31 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     let target = live_target();
 
     let db = test_db("durable-goal-real-inference").await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("durable-goal-real-inference"));
-    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
-    let runtime = identity.clone();
-    let agent = boot_live_agent(&db, identity)
+    let actors = bind_target(&db, &target).await;
+    let node_did = actors.node_did().to_owned();
+    let reader = &actors.fixture.access;
+    let agent = boot_live_agent(&db, db.node_identity.clone())
         .await
         .expect("boot real-inference goal agent");
     let session_id = "session-durable-goal-real";
-    let session_agent = crate::support::fixtures::session_agent_identity(
-        &db.node,
-        runtime.as_ref(),
-        &node_did,
-        session_id,
-    )
-    .await;
+    // The Goal belongs to an existing session and is set by its working Agent.
+    actors
+        .create_session_with(serde_json::json!({
+            "node_did": node_did,
+            "session_id": session_id,
+            "requester_did": actors.agent_did(),
+            "agent_did": actors.agent_did(),
+            "created_at": canonical_now(),
+            "relationships_pending": false,
+            "title": gents_protocol::session::SessionTitle {
+                text: "generated-title".into(),
+                source: gents_protocol::session::SessionTitleSource::Generated,
+            },
+        }))
+        .await;
     let goal = set_goal(
         &db.node,
-        session_agent.as_ref(),
+        actors.agent().as_ref(),
         &node_did,
         session_id,
         Some(
@@ -99,40 +103,43 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     .expect("create durable goal");
 
     let initial_request_id = "request-durable-goal-initial";
-    create_runtime_request(
-        &db.node,
-        &node_did,
-        &agent_did,
+    submit_request(
+        &actors,
         initial_request_id,
         session_id,
+        "interactive",
         "This is the initial human turn, not a durable-controller continuation. Do not call update_goal on this turn. Reply with exactly INITIAL_GOAL_PROGRESS.",
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&db.node, initial_request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(reader, initial_request_id, Duration::from_secs(120)).await,
         "completed"
     );
     assert!(
-        !wait_for_assistant_answer(&db.node, initial_request_id, Duration::from_secs(30))
+        !wait_for_assistant_answer(reader, initial_request_id, Duration::from_secs(30))
             .await
             .trim()
             .is_empty()
     );
 
-    let child = wait_for_goal_child(&db.node, &goal.goal_id, Duration::from_secs(30)).await;
+    let child = wait_for_goal_child(reader, &goal.goal_id, Duration::from_secs(30)).await;
     assert_eq!(child.session_id, session_id);
     assert_eq!(
-        wait_for_request_terminal(&db.node, &child.request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(reader, &child.request_id, Duration::from_secs(120)).await,
         "completed"
     );
     let answer =
-        wait_for_assistant_answer(&db.node, &child.request_id, Duration::from_secs(30)).await;
+        wait_for_assistant_answer(reader, &child.request_id, Duration::from_secs(30)).await;
     assert!(
         answer.contains("DURABLE_GOAL_COMPLETE"),
         "real continuation response omitted completion marker: {answer:?}"
     );
 
-    let persisted = load_canonical_goal(&db.node, &node_did, session_id)
+    let persisted = reader
+        .transact_readonly("test.live_goal.load", |txn| {
+            let node_did = &node_did;
+            Box::pin(async move { load_canonical_goal_in_txn(txn, node_did, session_id).await })
+        })
         .await
         .expect("load durable goal")
         .expect("durable goal exists");
@@ -151,16 +158,9 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
         escape_graphql_string(session_id),
         UPDATE_GOAL_TOOL_NAME,
     );
-    let response = db.node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query live evidence: {:?}",
-        response.errors
-    );
-    let inference_count = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceCall"))
+    let data = reader.read_data(&query).await;
+    let inference_count = data
+        .get("InferenceCall")
         .and_then(serde_json::Value::as_array)
         .map(Vec::len)
         .unwrap_or_default();
@@ -168,10 +168,8 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
         inference_count >= 2,
         "expected initial and automatic real inference calls, got {inference_count}"
     );
-    let tool_count = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
+    let tool_count = data
+        .get("AgentToolCall")
         .and_then(serde_json::Value::as_array)
         .map(Vec::len)
         .unwrap_or_default();
