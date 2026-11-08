@@ -39,6 +39,7 @@ pub mod agent_session;
 mod client_signed_agent_conformance;
 mod common;
 pub(crate) mod desired_state;
+mod destructive_decision;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;
@@ -146,6 +147,7 @@ pub use txn::{
     NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite,
 };
 
+pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, TransactionConflict};
 pub use relationships::ConfigRelationshipGrant;
 pub use retry::TransactionFailure;

@@ -6,6 +6,7 @@ use serde_json::Value;
 use super::read::read_record;
 use super::ConfigApplyTxn;
 use crate::documents::references_of;
+use crate::store::config_client::ConfigClientError;
 use crate::Collection;
 
 pub(super) struct Change {
@@ -63,16 +64,17 @@ pub(super) fn context_hierarchy_enabled(bound: fn(Collection) -> bool) -> bool {
 /// management and all document writes share the caller's transaction; an
 /// inaccessible source or rejected edge aborts the complete publication.
 /// `repair` is the explicit dangling-selection repair
-/// (`Identity.Configuration.repairUsersetSelection`): only the native admin,
-/// to whom an unreadable source is an absent one, may drop a removed source
-/// that no longer exists.
+/// (`Identity.Configuration.repairUsersetSelection`), a destructive admin
+/// decision: it may drop a removed source only when
+/// `DestructiveAuthority::decide` allows it, which needs a complete inventory
+/// no Gents read provides, so it is refused with a typed reason.
 pub(super) async fn apply_selection_changes(
     txn: &ConfigApplyTxn<'_>,
     changes: &[Change],
     bound: fn(Collection) -> bool,
     repair: bool,
 ) -> Result<()> {
-    let mut repair_admin = None;
+    let mut repair_authority = None;
     for change in changes
         .iter()
         .filter(|change| selects_configuration(change.collection))
@@ -110,19 +112,21 @@ pub(super) async fn apply_selection_changes(
                     let Some((source_doc, _)) =
                         read_record(txn, source, &change.node_did, id).await?
                     else {
-                        let unavailable =
-                            format!("selected {} {id:?} is unavailable", source.graphql_type());
+                        let selection = format!("{} {id:?}", source.graphql_type());
                         if add || !repair {
-                            anyhow::bail!(unavailable);
+                            anyhow::bail!("selected {selection} is unavailable");
                         }
-                        let admin = match repair_admin {
-                            Some(admin) => admin,
-                            None => *repair_admin.insert(txn.actor_is_native_admin().await?),
+                        let authority = match repair_authority {
+                            Some(authority) => authority,
+                            None => *repair_authority.insert(txn.destructive_authority().await?),
                         };
-                        anyhow::ensure!(
-                            admin,
-                            "{unavailable}; only the native admin may repair a dangling selection"
-                        );
+                        if let Err(refusal) = authority.decide() {
+                            return Err(ConfigClientError::DanglingSelectionRepairRefused {
+                                selection,
+                                refusal,
+                            }
+                            .into());
+                        }
                         continue;
                     };
                     if add {

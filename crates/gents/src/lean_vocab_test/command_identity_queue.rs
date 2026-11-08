@@ -646,6 +646,8 @@ pub(crate) struct LeanIdentityHouseholdCase {
     #[serde(default)]
     pub(crate) dangling_selection_repair_cases: Vec<serde_json::Value>,
     #[serde(default)]
+    pub(crate) destructive_decision_cases: Vec<serde_json::Value>,
+    #[serde(default)]
     pub(crate) tool_source_change_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) tool_operation_cases: Vec<serde_json::Value>,

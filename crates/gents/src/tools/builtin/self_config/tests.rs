@@ -510,6 +510,13 @@ impl SelfConfigFixture {
             .unwrap();
     }
 
+    /// Turn native node ACP off as its owner, keeping its relationships.
+    pub(super) async fn disable_native_nac(&self) {
+        let owner = defra_core::RequestContext::default()
+            .with_identity(Some(self.db.node_identity.did().to_string()));
+        self.db.node.disable_nac_as(&owner).await.unwrap();
+    }
+
     /// The fixture Agent's own signed access.
     pub(super) fn agent_access(&self) -> crate::ConfigAccess {
         crate::ConfigAccess::local_managed_agent(

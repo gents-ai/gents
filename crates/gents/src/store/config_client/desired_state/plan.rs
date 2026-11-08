@@ -163,7 +163,8 @@ impl DesiredStateApplyPlan {
 
     /// Request the explicit dangling-selection repair
     /// (`Identity.Configuration.repairUsersetSelection`). Publication refuses
-    /// it unless the transaction actor is the native admin.
+    /// it with `ConfigClientError::DanglingSelectionRepairRefused` while no
+    /// complete-inventory read exists, and whenever NAC is disabled.
     pub fn with_dangling_selection_repair(mut self) -> Self {
         self.repair_dangling_selections = true;
         self

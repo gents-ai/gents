@@ -150,6 +150,13 @@ pub enum ConfigClientError {
     NodePermissionIdentity(#[source] identity::Error),
     #[error("native admin status could not be observed")]
     NativeAdminObservation(#[source] db::nac::Error),
+    /// `Identity.Configuration.repairUsersetSelection`: the explicit repair
+    /// is a destructive admin decision, refused for `refusal`.
+    #[error("selected {selection} is unavailable, and its dangling selection repair is refused: {refusal}")]
+    DanglingSelectionRepairRefused {
+        selection: String,
+        refusal: super::DestructiveRefusal,
+    },
     #[error("native node permission could not be observed")]
     NativePermissionObservation(#[source] db::nac::Error),
     #[error("node permission grant failed ({status}): {body}")]

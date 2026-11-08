@@ -664,37 +664,53 @@ impl ConfigApplyTxn<'_> {
         .map_err(native_observation_error)
     }
 
-    /// Whether this transaction's actor is the native admin: the NAC owner or
-    /// an `admin` relation, as native NAC reports it. Only the explicit
-    /// dangling-selection repair consults this; it confers no authority, and
-    /// every write it gates is still checked natively.
-    pub(crate) async fn actor_is_native_admin(&self) -> Result<bool> {
-        match &self.backend {
+    /// The native observations for a destructive admin decision
+    /// (`Identity.Configuration.destructiveAdminDecision`): whether native NAC
+    /// is enabled and whether it reports this transaction's actor as admin.
+    /// Every available read is ACP-filtered. It confers no authority, and
+    /// every write it gates is still checked natively. Over HTTP, NAC status
+    /// and the admin relation are read as the caller; a caller native refuses
+    /// either observation is refused.
+    pub(crate) async fn destructive_authority(
+        &self,
+    ) -> Result<super::super::DestructiveAuthority> {
+        let (node, native_operations) = match &self.backend {
             TxnBackend::Embedded {
                 node,
                 native_operations,
                 ..
-            } => {
-                let actor = identity::Did::new(
-                    self.actor_did()
-                        .ok_or(ConfigClientError::NodePermissionActorRequired)?,
-                )
-                .map_err(ConfigClientError::NodePermissionIdentity)?;
-                let node = Arc::clone(node);
-                execute_owned_native(
-                    async move { node.nac_manager().is_admin(&actor).await },
-                    Arc::clone(native_operations),
-                    self.operation,
-                )
-                .await?
-                .map_err(ConfigClientError::NativeAdminObservation)
-            }
+            } => (node, native_operations),
             TxnBackend::Http { endpoint, .. } => {
-                super::super::ConfigAccess::Graphql((*endpoint).clone())
-                    .actor_is_native_admin()
-                    .await
+                let access = super::super::ConfigAccess::Graphql((*endpoint).clone());
+                return Ok(super::super::DestructiveAuthority {
+                    nac_enabled: access.nac_enabled().await?,
+                    admin: access.actor_is_native_admin().await?,
+                    inventory: super::super::InventoryRead::AcpFiltered,
+                });
             }
-        }
+        };
+        let actor = identity::Did::new(
+            self.actor_did()
+                .ok_or(ConfigClientError::NodePermissionActorRequired)?,
+        )
+        .map_err(ConfigClientError::NodePermissionIdentity)?;
+        let node = Arc::clone(node);
+        let (nac_enabled, admin) = execute_owned_native(
+            async move {
+                let nac = node.nac_manager();
+                let enabled = nac.is_enabled().await;
+                nac.is_admin(&actor).await.map(|admin| (enabled, admin))
+            },
+            Arc::clone(native_operations),
+            self.operation,
+        )
+        .await?
+        .map_err(ConfigClientError::NativeAdminObservation)?;
+        Ok(super::super::DestructiveAuthority {
+            nac_enabled,
+            admin,
+            inventory: super::super::InventoryRead::AcpFiltered,
+        })
     }
 
     /// Whether this transaction's actor holds `permission` natively, as NAC

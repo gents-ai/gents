@@ -1580,7 +1580,7 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
 }
 
 #[tokio::test]
-async fn saved_config_audit_reports_broken_references_without_mutation_and_accepts_repair() {
+async fn saved_config_audit_reports_broken_references_without_mutation_and_refuses_repair() {
     let (fixture, tools) = authenticated_setup("saved-audit", &["node", "tools", "agent"]).await;
     let context_id = format!("{}:context", fixture.agent_did());
     let tools_id = format!("{}:tools", fixture.agent_did());
@@ -1629,12 +1629,26 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model")
         .dangling_selection_repair_cases;
-    assert_eq!(modeled.len(), 4);
+    assert_eq!(modeled.len(), 5);
+    assert!(
+        modeled.iter().all(|case| case["applied"] == false),
+        "every available read is ACP-filtered, so no modeled repair applies"
+    );
     let agent_access = fixture.agent_access();
-    // Refused cases run against the dangling state; the accepted one runs last.
+    // NAC-enabled cases run first; disabling NAC is the last observation.
     let mut ordered = modeled.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|case| case["applied"].as_bool());
+    ordered.sort_by_key(|case| !case["nac_enabled"].as_bool().unwrap());
+    let mut nac_disabled = false;
     for case in ordered {
+        assert_eq!(case["complete_inventory"], false, "{case}");
+        if !case["nac_enabled"].as_bool().unwrap() && !nac_disabled {
+            assert_eq!(
+                ok(&tools, json!({"argv":["validate"]})).await["valid"],
+                false
+            );
+            fixture.disable_native_nac().await;
+            nac_disabled = true;
+        }
         let (actor_access, actor) = match case["actor"].as_str().unwrap() {
             "user" => (access, fixture.user_access().actor_did().unwrap()),
             "agent" => (&agent_access, fixture.agent_did().to_owned()),
@@ -1648,11 +1662,28 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
                 let actor = &actor;
                 let node_did = fixture.node_did();
                 Box::pin(async move {
+                    let authority = txn.destructive_authority().await?;
                     assert_eq!(
-                        txn.actor_is_native_admin().await?,
-                        case["admin"].as_bool().unwrap(),
+                        (authority.nac_enabled, authority.admin),
+                        (
+                            case["nac_enabled"].as_bool().unwrap(),
+                            case["admin"].as_bool().unwrap()
+                        ),
                         "{actor}"
                     );
+                    assert_eq!(
+                        authority.native_admin(),
+                        case["nac_enabled"].as_bool().unwrap()
+                            && case["admin"].as_bool().unwrap(),
+                        "with NAC disabled no actor is the native admin: {actor}"
+                    );
+                    if repair {
+                        assert_eq!(
+                            authority.decide().err().map(|refusal| refusal.name()),
+                            case["refusal"].as_str(),
+                            "{actor}"
+                        );
+                    }
                     let (_, mut context) =
                         crate::store::config_client::read_desired_state_record_in_txn(
                             txn,
@@ -1688,14 +1719,32 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
             case["applied"].as_bool().unwrap(),
             "{case}: {applied:?}"
         );
-        if applied.is_err() {
-            assert_eq!(before, access.execute(&query).await.unwrap(), "{case}");
+        let error = applied.expect_err("modeled repairs are refused");
+        let refusal = error.chain().find_map(|cause| {
+            match cause.downcast_ref::<crate::store::config_client::ConfigClientError>() {
+                Some(
+                    crate::store::config_client::ConfigClientError::DanglingSelectionRepairRefused {
+                        refusal,
+                        ..
+                    },
+                ) => Some(refusal.name()),
+                _ => None,
+            }
+        });
+        if case["nac_enabled"].as_bool().unwrap() {
+            assert_eq!(refusal, case["refusal"].as_str(), "{case}: {error:#}");
+            assert!(format!("{error:#}").contains("is unavailable"), "{error:#}");
+        } else {
+            // While NAC is disabled native refuses the document's source
+            // projection before publication reaches the selection repair.
+            assert!(
+                format!("{error:#}").contains("source projection requires an authorized actor"),
+                "{case}: {error:#}"
+            );
         }
+        assert_eq!(before, access.execute(&query).await.unwrap(), "{case}");
     }
-    assert_eq!(
-        ok(&tools, json!({"argv":["validate"]})).await["valid"],
-        true
-    );
+    assert!(nac_disabled, "the NAC-disabled case ran");
 }
 
 #[tokio::test]

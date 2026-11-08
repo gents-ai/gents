@@ -1272,7 +1272,7 @@ theorem dangling_selection_repair_is_refused_for_every_available_read :
      danglingRepairApplied "user" ⟨true, true, .acpFiltered⟩ false,
      danglingRepairApplied "agent" ⟨true, false, .acpFiltered⟩ true,
      danglingRepairApplied "agent" ⟨true, false, .acpFiltered⟩ false,
-     danglingRepairApplied "agent" ⟨false, true, .acpFiltered⟩ true,
+     danglingRepairApplied "user" ⟨false, true, .acpFiltered⟩ true,
      danglingRepairApplied "user" ⟨false, true, .complete⟩ true] =
       [false, false, false, false, false, false] := by native_decide
 

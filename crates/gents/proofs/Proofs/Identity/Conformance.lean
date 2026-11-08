@@ -1825,7 +1825,7 @@ def json : Json := Json.mkObj
       danglingRepairCaseJson "user" ⟨true, true, .acpFiltered⟩ false,
       danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ true,
       danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ false,
-      danglingRepairCaseJson "agent" ⟨false, true, .acpFiltered⟩ true])),
+      danglingRepairCaseJson "user" ⟨false, true, .acpFiltered⟩ true])),
    ("destructive_decision_cases", toJson destructiveDecisionCases),
    ("tool_source_change_cases", toJson ([
       toolSourceChangeCaseJson "present-noop" true false false,
