@@ -1,4 +1,0 @@
----- MODULE MCRuntimeConnectionDeniedEnvelope ----
-EXTENDS RuntimeConnectionTransport
-
-====

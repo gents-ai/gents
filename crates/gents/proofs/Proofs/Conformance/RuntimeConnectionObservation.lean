@@ -68,11 +68,48 @@ def streamEndsJson : String :=
     optionJson ((streamEndEvent streamEnd).map eventName) ++ "}"
   "[" ++ String.intercalate "," cases ++ "]"
 
+def snapshotOutcomeName : SnapshotOutcome → String
+  | .succeeded => "succeeded"
+  | .refused => "refused"
+  | .rootWithheld => "rootWithheld"
+  | .unreachable => "unreachable"
+
+def armedEventsJson : String :=
+  let cases := [false, true].map fun renewal =>
+    "{\"renewal\":" ++ toString renewal ++ ",\"event\":\"" ++ eventName (armedEvent renewal) ++ "\"}"
+  "[" ++ String.intercalate "," cases ++ "]"
+
+def armedJson : String :=
+  let cases := [false, true].flatMap fun wasArmed => events.map fun event =>
+    "{\"wasArmed\":" ++ toString wasArmed ++ ",\"event\":\"" ++ eventName event ++
+    "\",\"armed\":" ++ toString (armedAfter wasArmed event) ++ "}"
+  "[" ++ String.intercalate "," cases ++ "]"
+
+def snapshotOutcomesJson : String :=
+  let outcomes : List SnapshotOutcome := [.succeeded, .refused, .rootWithheld, .unreachable]
+  let cases := outcomes.map fun outcome =>
+    "{\"outcome\":\"" ++ snapshotOutcomeName outcome ++ "\",\"event\":\"" ++
+    eventName (snapshotEvent outcome) ++ "\"}"
+  "[" ++ String.intercalate "," cases ++ "]"
+
+def renewalStartsJson : String :=
+  let cases := [(0, 0), (0, 1), (1000, 29999), (5000, 30000), (0, 45000), (7, 120000)].map
+    fun (started, arm) =>
+      "{\"startedMs\":" ++ toString started ++ ",\"armMs\":" ++ toString arm ++
+      ",\"nextMs\":" ++ toString (renewalStartMs started arm) ++ "}"
+  "[" ++ String.intercalate "," cases ++ "]"
+
 /-- `cases` keeps its original shape (one row per status and event); the
-presentation, stream-end and transport-retry rows are additional keys. -/
+presentation, stream-end, notice, snapshot-outcome, renewal and retry rows are
+additional keys. -/
 def casesJson : String :=
   "{\"cases\":" ++ transitionsJson ++ ",\"presentations\":" ++ presentationsJson ++
   ",\"streamEnds\":" ++ streamEndsJson ++
+  ",\"armedEvents\":" ++ armedEventsJson ++ ",\"armed\":" ++ armedJson ++
+  ",\"snapshotOutcomes\":" ++ snapshotOutcomesJson ++
+  ",\"renewalStarts\":" ++ renewalStartsJson ++
+  ",\"renewalPeriodMs\":" ++ toString renewalPeriodMs ++
+  ",\"snapshotRetryDelayMs\":" ++ toString snapshotRetryDelayMs ++
   ",\"transportRetryDelayMs\":" ++ toString transportRetryDelayMs ++ "}"
 end Conformance.RuntimeConnectionObservation
 
