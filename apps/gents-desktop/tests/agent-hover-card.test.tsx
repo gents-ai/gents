@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -154,5 +154,53 @@ describe("an agent's hover card", () => {
     await userEvent.hover(screen.getByRole("button", { name: "agent" }));
     const card = await screen.findByTestId("agent-hover-card", {}, { timeout: 2000 });
     expect(card).toHaveTextContent("Tasks2");
+  });
+});
+
+describe("starting this machine's node from its card", () => {
+  const withServer = (state: string) => {
+    const startManagedServer = vi.fn().mockResolvedValue({ state: "running" });
+    const app = testApp({
+      api: {
+        managedServerStatus: vi.fn().mockResolvedValue({ state, nodeName: "Forge" }),
+        startManagedServer,
+      },
+      snapshot: {
+        bootstrap: { initNodeDid: "did:key:home" },
+        client: { deployments: [node({ nodeDid: "did:key:home" })] },
+      },
+    });
+    act(() =>
+      app.stores.localServer.setState({
+        status: { state, nodeName: "Forge" },
+      } as never),
+    );
+    const [shown] = fleetNodes(app.stores.fleet.getState());
+    renderIn(
+      app,
+      <NodeHoverCard deployment={shown!}>
+        <button type="button">avatar</button>
+      </NodeHoverCard>,
+    );
+    return startManagedServer;
+  };
+
+  it("offers Start node while it is stopped, and starts it", async () => {
+    const start = withServer("stopped");
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    const button = await screen.findByRole(
+      "button",
+      { name: /Start node/ },
+      { timeout: 2000 },
+    );
+    await userEvent.click(button);
+    expect(start).toHaveBeenCalled();
+  });
+
+  it("offers nothing to start while it runs", async () => {
+    withServer("running");
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await screen.findByText("New session", {}, { timeout: 2000 });
+    expect(screen.queryByRole("button", { name: /Start node/ })).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// MCP connection configuration; discovered tools and health are observations.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ToolServiceRegistry {
@@ -36,6 +36,7 @@ pub struct ToolServiceRegistry {
         skip_serializing_if = "super::serde_helpers::is_disabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub send_node_did: bool,
     /// Operator availability gate, distinct from observed connectivity/health.
     #[serde(
@@ -44,6 +45,7 @@ pub struct ToolServiceRegistry {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(
         default,
@@ -51,11 +53,12 @@ pub struct ToolServiceRegistry {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 
 /// Principal-local checkout used by existing workspace provisioning callbacks.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct RepositoryPlacement {
@@ -68,6 +71,7 @@ pub struct RepositoryPlacement {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(
         default,
@@ -75,11 +79,12 @@ pub struct RepositoryPlacement {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 
 /// References existing DefraDB ACP policies; this is not a second ACL system.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ProjectionAcpBinding {
@@ -107,6 +112,7 @@ pub struct ProjectionAcpBinding {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(
         default,
@@ -114,6 +120,7 @@ pub struct ProjectionAcpBinding {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

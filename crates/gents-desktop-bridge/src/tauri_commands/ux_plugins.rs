@@ -182,12 +182,15 @@ pub async fn desktop_ux_data_surfaces(
 }
 
 #[tauri::command]
-pub fn desktop_ux_data_watch<R: tauri::Runtime>(
+pub fn desktop_ux_data_watch<R>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
     request: UxDataCallRequest,
     channel: tauri::ipc::Channel<Value>,
-) -> Result<String, BridgeError> {
+) -> Result<String, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let home = home(&state)?;
     let core = current_core(&state).ok_or_else(|| {
         BridgeError::new(
@@ -233,11 +236,13 @@ pub fn desktop_ux_data_watch<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub fn desktop_ux_data_unwatch<R: tauri::Runtime>(
+pub fn desktop_ux_data_unwatch<R>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
     id: String,
-) {
+) where
+    R: tauri::Runtime,
+{
     state.ux_watches.cancel(window.label(), &id);
 }
 

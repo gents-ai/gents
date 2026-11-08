@@ -1,11 +1,5 @@
-import {
-  cloneElement,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from "react";
-import { Check, ChevronDown, GripVertical, Minus, Plus, X } from "lucide-react";
+import { useRef, useState, type ReactElement, type ReactNode } from "react";
+import { ChevronDown, GripVertical, Minus, Plus, X } from "lucide-react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { Button } from "@gents/ui/components/button";
@@ -28,6 +22,7 @@ import {
 } from "@gents/ui/components/dialog";
 import { cn } from "@gents/ui/lib/utils";
 import { ContribBoundary } from "@/contrib/react/boundary";
+import { SidebarModeItems } from "./sidebarModes";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,15 +35,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
-import {
-  preferences,
-  LISTED_COUNTS,
-  RECENT_COUNTS,
-  useFlag,
-  useNavLayout,
-  useNavMode,
-  type NavMode,
-} from "@/preferences";
+import { preferences, LISTED_COUNTS, RECENT_COUNTS, useNavLayout } from "@/preferences";
 import {
   arrange,
   DEFAULT_RECENT,
@@ -67,14 +54,7 @@ const sheet = createStore<{ open: boolean }>(() => ({ open: false }));
 
 export const openCustomizeNav = () => sheet.setState({ open: true });
 
-const NAV_MODES: { value: NavMode; label: string }[] = [
-  { value: "hover", label: "Open on hover" },
-  { value: "expanded", label: "Always open" },
-  { value: "collapsed", label: "Icons only" },
-];
-
-/** the nav, with how it shows and "Customize…" on its context
-    menu while customizing is on */
+/** the sidebar, with how it shows and "Customize…" on its context menu */
 export function NavMenu({
   render,
   children,
@@ -82,27 +62,14 @@ export function NavMenu({
   render: ReactElement;
   children: ReactNode;
 }) {
-  const customizable = useFlag("customize-nav");
-  const mode = useNavMode();
-  if (!customizable) return cloneElement(render, undefined, children);
   return (
     <ContextMenu>
       <ContextMenuTrigger render={render}>{children}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-48">
         <ContextMenuSub>
-          <ContextMenuSubTrigger>Side nav</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger>Sidebar</ContextMenuSubTrigger>
           <ContextMenuSubContent className="min-w-44">
-            {NAV_MODES.map(({ value, label }) => (
-              <ContextMenuItem
-                key={value}
-                role="menuitemradio"
-                aria-checked={mode === value}
-                onClick={() => preferences.setNav(value)}
-              >
-                <Check className={cn("size-4", mode !== value && "invisible")} />
-                {label}
-              </ContextMenuItem>
-            ))}
+            <SidebarModeItems />
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuItem onClick={openCustomizeNav}>Customize…</ContextMenuItem>
@@ -428,7 +395,6 @@ function CountPicker<T extends number>({
 
 export function CustomizeNavDialog() {
   const open = useStore(sheet, (s) => s.open);
-  const customizable = useFlag("customize-nav");
   const layout = useNavLayout();
   const groups = {
     items: arrange(useNavCandidates(), layout),
@@ -491,7 +457,7 @@ export function CustomizeNavDialog() {
 
   return (
     <Dialog
-      open={open && customizable}
+      open={open}
       onOpenChange={(next) => !next && sheet.setState({ open: false })}
     >
       <DialogContent
@@ -505,7 +471,7 @@ export function CustomizeNavDialog() {
         }}
       >
         <DialogHeader>
-          <DialogTitle>Customize navigation</DialogTitle>
+          <DialogTitle>Customize sidebar</DialogTitle>
           <DialogDescription>
             Drag to reorder, remove what you don't use, and add it back from Add. Saved
             on this device.
@@ -519,7 +485,7 @@ export function CustomizeNavDialog() {
             newDivider={() => newDividerId(layout.order)}
           />
           <NavGroup
-            title="Sections · in the expanded nav"
+            title="Sections · in the expanded sidebar"
             entries={entries("sections", true)}
             onChange={change("sections")}
             newDivider={() => newDividerId(layout.order, "sections")}

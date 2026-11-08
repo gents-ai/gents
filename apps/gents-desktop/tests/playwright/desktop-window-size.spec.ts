@@ -261,7 +261,6 @@ test.describe("nav modes", () => {
             JSON.stringify({
               state: {
                 nav: mode,
-                flags: { "customize-nav": "on" },
                 navLayout: {
                   order: [],
                   shown: { ...rows, "mailbox-decide": true, "mailbox-look": true },

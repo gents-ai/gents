@@ -27,19 +27,21 @@ import {
   DEFAULT_NAV_LAYOUT,
   preferences,
   useNavLayout,
+  useNavHidden,
   useNavMode,
   restorePreferences,
   resetPreferences,
 } from "../src/ui/preferences";
 import { sessionKeyOf } from "../src/hooks/fleetStore";
 import { deployment } from "./config-panel-wiring/fixtures";
-import { node, renderIn, testApp, withFlags } from "./app-fixture";
+import { node, renderIn, testApp } from "./app-fixture";
 
 afterEach(() => resetPreferences());
 
 /* the app's own items and its configuration pages, as the nav offers them */
+/* the rows a sidebar lists with every experimental feature off */
 const ROWS = [
-  ...APP_NAV_ROWS,
+  ...APP_NAV_ROWS.filter((row) => !row.flag),
   ...SECTIONS.filter(isListed).map((section) => configRow(section, true)),
 ];
 
@@ -146,7 +148,6 @@ const labels = () =>
 
 describe("customizing the nav", () => {
   it("exposes the sidebar customization sheet as a modal dialog", () => {
-    withFlags({ "customize-nav": true });
     panel();
     act(() => openCustomizeNav());
     expect(screen.getByRole("dialog", { name: "Customize navigation" })).toHaveAttribute(
@@ -155,20 +156,12 @@ describe("customizing the nav", () => {
     );
   });
 
-  it("ignores a saved layout while the flag is off", () => {
-    withFlags({ "customize-nav": false });
-    act(() =>
-      preferences.setNavLayout({
-        order: ["sessions"],
-        shown: { mailbox: false, "config:tasks": true },
-      }),
-    );
+  it("draws the default items until the person customizes them", () => {
     panel();
     expect(labels()).toEqual(["New session", "Mailbox", "Sessions"]);
   });
 
   it("reorders, removes and adds items from the sheet, and restores the defaults", async () => {
-    withFlags({ "customize-nav": true });
     panel();
     act(() => openCustomizeNav());
     const sheet = within(screen.getByTestId("customize-nav"));
@@ -194,7 +187,6 @@ describe("customizing the nav", () => {
   });
 
   it("removes and adds back the foot's rows and the sync status, keeping Settings", async () => {
-    withFlags({ "customize-nav": true });
     const footer = renderHook(() => useNavFooter());
     renderIn(
       testApp({ deployments: [node()] }),
@@ -241,7 +233,6 @@ describe("the expanded nav's sections", () => {
   const sessions = Array.from({ length: 10 }, (_, i) => session(i));
 
   it("reorders and hides Pinned and Recent, and lists as many recent sessions as chosen", async () => {
-    withFlags({ "customize-nav": true });
     preferences.setPinned(sessionKeyOf(sessions[0]!), true);
     panel(sessions);
     expect(headings()).toEqual(["Pinned", "Recent"]);
@@ -266,15 +257,7 @@ describe("the expanded nav's sections", () => {
     expect(headings()).toEqual(["Recent", "Pinned"]);
   });
 
-  it("draws the default sections while the flag is off", () => {
-    withFlags({ "customize-nav": false });
-    act(() =>
-      preferences.setNavLayout({
-        order: ["recent"],
-        shown: { pinned: false },
-        recent: 5,
-      }),
-    );
+  it("draws the default sections until the person customizes them", () => {
     preferences.setPinned(sessionKeyOf(sessions[0]!), true);
     panel(sessions);
     expect(headings()).toEqual(["Pinned", "Recent"]);
@@ -282,10 +265,10 @@ describe("the expanded nav's sections", () => {
   });
 });
 
-describe("the nav's context menu", () => {
-  it("sets how the side nav shows from its submenu, and opens the sheet", async () => {
-    withFlags({ "customize-nav": true });
+describe("the sidebar's context menu", () => {
+  it("sets how the sidebar shows from its submenu, and opens the sheet", async () => {
     const mode = renderHook(() => useNavMode());
+    const hidden = renderHook(() => useNavHidden());
     renderIn(
       testApp({ deployments: [node()] }),
       <>
@@ -296,7 +279,7 @@ describe("the nav's context menu", () => {
     fireEvent.contextMenu(screen.getByTestId("nav"));
     /* the modes sit a level down; the keyboard opens it once, where a
        pointer both hovers it open and clicks it, which can close it again */
-    screen.getByRole("menuitem", { name: "Side nav" }).focus();
+    screen.getByRole("menuitem", { name: "Sidebar" }).focus();
     await userEvent.setup({ pointerEventsCheck: 0 }).keyboard("{ArrowRight}");
     expect(
       await screen.findByRole("menuitemradio", { name: "Open on hover" }),
@@ -304,19 +287,16 @@ describe("the nav's context menu", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Always open" }));
     expect(mode.result.current).toBe("expanded");
 
+    /* Hidden is one of its choices too */
+    fireEvent.contextMenu(screen.getByTestId("nav"));
+    screen.getByRole("menuitem", { name: "Sidebar" }).focus();
+    await userEvent.setup({ pointerEventsCheck: 0 }).keyboard("{ArrowRight}");
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Hidden" }));
+    expect(hidden.result.current).toBe(true);
+
     fireEvent.contextMenu(screen.getByTestId("nav"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Customize…" }));
     expect(screen.getByTestId("customize-nav")).toBeInTheDocument();
-  });
-
-  it("is not there while the flag is off", () => {
-    withFlags({ "customize-nav": false });
-    renderIn(
-      testApp({ deployments: [node()] }),
-      <NavMenu render={<nav data-testid="nav" />}>nav</NavMenu>,
-    );
-    fireEvent.contextMenu(screen.getByTestId("nav"));
-    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 
@@ -359,7 +339,6 @@ describe("the expanded nav's mailbox sections", () => {
       .map((b) => b.textContent);
 
   it("adds a category from the sheet, under its name, listing its first five items and opening one", async () => {
-    withFlags({ "customize-nav": true });
     show(Array.from({ length: 7 }, (_, i) => mailboxItem(i + 1)));
     expect(screen.queryByRole("list", { name: "Needs a decision" })).toBeNull();
 
@@ -398,7 +377,6 @@ describe("the expanded nav's mailbox sections", () => {
   });
 
   it("marks an item new since the person looked the way a session is marked", () => {
-    withFlags({ "customize-nav": true });
     act(() => {
       resetMailboxSeen();
       mailboxSeen.start("2026-10-06T02:30:00.000Z");
@@ -415,7 +393,6 @@ describe("the expanded nav's mailbox sections", () => {
   });
 
   it("lists every open item under All, what needs a decision first", () => {
-    withFlags({ "customize-nav": true });
     act(() => preferences.setNavLayout({ order: [], shown: { "mailbox-all": true } }));
     show([
       {
@@ -440,12 +417,11 @@ describe("the expanded nav's mailbox sections", () => {
   });
 
   it("offers All above the categories it covers", async () => {
-    withFlags({ "customize-nav": true });
     show([]);
     act(() => openCustomizeNav());
     const sheet = within(screen.getByTestId("customize-nav"));
     fireEvent.click(
-      sheet.getByRole("button", { name: "Add to Sections · in the expanded nav" }),
+      sheet.getByRole("button", { name: "Add to Sections · in the expanded sidebar" }),
     );
     (await screen.findByRole("menuitem", { name: "Mailbox" })).focus();
     await userEvent.setup({ pointerEventsCheck: 0 }).keyboard("{ArrowRight}");
@@ -460,7 +436,6 @@ describe("the expanded nav's mailbox sections", () => {
   });
 
   it("isn't drawn while its category is empty", () => {
-    withFlags({ "customize-nav": true });
     act(() =>
       preferences.setNavLayout({ order: [], shown: { "mailbox-decide": true } }),
     );
@@ -501,7 +476,6 @@ describe("dividers", () => {
   });
 
   it("adds any number from the sheet, and removing one deletes it", async () => {
-    withFlags({ "customize-nav": true });
     panel();
     act(() => openCustomizeNav());
     const sheet = within(screen.getByTestId("customize-nav"));
@@ -535,7 +509,6 @@ describe("dividers between sections", () => {
   const sessions = Array.from({ length: 3 }, (_, i) => session(i));
 
   it("draws one between two drawn sections, and none beside an empty one", async () => {
-    withFlags({ "customize-nav": true });
     panel(sessions);
     act(() => openCustomizeNav());
     const sheet = within(screen.getByTestId("customize-nav"));
@@ -572,7 +545,6 @@ describe("the expanded nav's Nodes section", () => {
   const list = () => screen.queryByRole("list", { name: "Nodes", hidden: true });
 
   it("lists every node once added, marks the current one, and switches on a click", () => {
-    withFlags({ "customize-nav": true });
     act(() => preferences.setNavLayout({ order: [], shown: { "node-list": true } }));
     show([node(), amy()]);
     const rows = within(list()!).getAllByRole("button", { hidden: true });
@@ -585,7 +557,6 @@ describe("the expanded nav's Nodes section", () => {
   });
 
   it("isn't drawn while the only node is this machine's, nor until added", () => {
-    withFlags({ "customize-nav": true });
     act(() => preferences.setNavLayout({ order: [], shown: { "node-list": true } }));
     const { unmount } = show([node()]);
     expect(list()).toBeNull();

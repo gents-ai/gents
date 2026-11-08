@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CircleAlert, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import type { History, Route } from "@/lib/router";
+import { MorphProvider, useMorphCard } from "@/lib/morph";
 import "@/screens/surfaces";
 import { useApp } from "./AppContext";
 import { PaneBarSlotContext } from "./PaneBar";
@@ -10,9 +11,11 @@ import { CustomizeNavDialog } from "./CustomizeNav";
 import { Rail } from "./Rail";
 import { RailFlyout } from "./RailFlyout";
 import { SettingsLink } from "./SettingsLink";
+import { PanelPicker, usePanelCommands } from "./panelCommands";
+import { useSidebarMorph } from "./sidebarChange";
 import { DockColumn, DockSheet } from "./ShellDock";
 import { SwipeHandles } from "./SwipeHandles";
-import { useShellLayout } from "./useShellLayout";
+import { useShellLayout, type ShellLayout } from "./useShellLayout";
 import { WindowBar } from "./WindowBar";
 
 function ErrorBanner() {
@@ -40,6 +43,83 @@ function ErrorBanner() {
   );
 }
 
+/* a hidden sidebar comes back over the page while the pointer rests at the
+   window's left edge, and goes when it leaves, as the hover panel does */
+const PEEK_AFTER = 150;
+const UNPEEK_AFTER = 180;
+
+function SidebarPeek({
+  route,
+  width,
+  settings,
+}: {
+  route: Route;
+  width: number;
+  settings: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const timer = useRef<number | null>(null);
+  const later = (next: boolean, ms: number) => {
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setOpen(next), ms);
+  };
+  useEffect(
+    () => () => {
+      if (timer.current) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  return (
+    <>
+      <div
+        aria-hidden
+        data-testid="sidebar-edge"
+        className="absolute start-0 top-12 bottom-0 z-30 w-2"
+        onPointerEnter={(e) => e.pointerType === "mouse" && later(true, PEEK_AFTER)}
+        /* the panel slides in under a pointer already resting here, so it
+           sees no entry; leaving the edge is what closes it then */
+        onPointerLeave={() => later(false, open ? UNPEEK_AFTER : 0)}
+      />
+      <div
+        data-testid="sidebar-peek"
+        inert={!open}
+        aria-hidden={!open}
+        className={cn(
+          "absolute start-0 top-12 bottom-0 z-40 transition-transform duration-200 ease-out motion-reduce:transition-none",
+          open
+            ? "translate-x-0"
+            : "pointer-events-none -translate-x-full rtl:translate-x-full",
+        )}
+        style={{ width }}
+        onPointerEnter={() => later(true, 0)}
+        onPointerLeave={() => later(false, UNPEEK_AFTER)}
+        onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+      >
+        <RailFlyout
+          route={route}
+          mode="expanded"
+          width={width}
+          peek
+          peekOpen={open}
+          settings={settings}
+        />
+      </div>
+    </>
+  );
+}
+
+function NavResizeHandle({ layout }: { layout: ShellLayout }) {
+  return (
+    <div
+      {...layout.navResize.handleProps}
+      aria-label="Resize sidebar"
+      className="group absolute -end-1 top-2 bottom-2 z-10 flex w-2 cursor-col-resize items-center justify-center outline-none focus-visible:bg-accent"
+    >
+      <div className="h-10 w-0.5 rounded-full bg-transparent transition-colors group-hover:bg-muted-foreground group-focus-visible:bg-ring" />
+    </div>
+  );
+}
+
 export function AppShell({
   route,
   history,
@@ -50,61 +130,100 @@ export function AppShell({
   children: ReactNode;
 }) {
   const layout = useShellLayout(route);
-  const { shellRef, columns, wide, docked, dockVisible, paneCol, paneWidth, shownNav } =
-    layout;
+  usePanelCommands(route, layout);
+  const {
+    shellRef,
+    columns,
+    wide,
+    docked,
+    dockVisible,
+    paneCol,
+    paneWidth,
+    paneInset,
+    drawnNav,
+    navHidden,
+  } = layout;
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
   const settings = (variant: "rail" | "row") => (
     <SettingsLink variant={variant} route={route} />
   );
+  /* a change of how the sidebar shows moves its column, the icons in it
+     and the page together */
+  const shell = useMorphCard();
+  useSidebarMorph(shell.morph);
   return (
-    <PaneBarSlotContext.Provider value={paneBar}>
-      <div
-        className="viewport-frame grid min-h-0 overflow-hidden bg-background text-foreground"
-        ref={shellRef}
-        data-testid="app-shell"
-        data-resize-container=""
-        style={{ gridTemplateColumns: columns, gridTemplateRows: "auto minmax(0,1fr)" }}
-      >
-        <WindowBar
-          route={route}
-          history={history}
-          layout={layout}
-          settings={settings("row")}
-          onPaneBar={setPaneBar}
-        />
-        {wide && (
-          <div className="col-start-1 row-start-2 min-h-0">
-            <RailFlyout route={route} mode={shownNav} settings={settings("row")}>
-              <Rail route={route} settings={settings("rail")} />
-            </RailFlyout>
-          </div>
-        )}
-        <section
-          className={cn(
-            "flex min-h-0 min-w-0 flex-col",
-            "md:col-start-2 md:row-start-2 md:mt-2 md:mr-2 md:mb-2 md:overflow-hidden md:rounded-2xl md:border md:border-border/60",
-          )}
-          data-testid="pane"
+    <MorphProvider value={shell}>
+      <PaneBarSlotContext.Provider value={paneBar}>
+        <div
+          className="viewport-frame grid min-h-0 overflow-hidden bg-background text-foreground"
+          ref={shellRef}
+          data-testid="app-shell"
+          data-resize-container=""
+          style={{
+            gridTemplateColumns: columns,
+            gridTemplateRows: "auto minmax(0,1fr)",
+          }}
         >
-          <main
-            className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            style={
-              paneWidth !== null
-                ? { width: Math.max(360, paneWidth - 10) }
-                : docked && dockVisible && paneCol - 8 < 360
-                  ? { width: 360 }
-                  : undefined
-            }
+          <WindowBar
+            route={route}
+            history={history}
+            layout={layout}
+            settings={settings("row")}
+            onPaneBar={setPaneBar}
+          />
+          {wide && !navHidden && (
+            <div
+              ref={shell.part("sidebar")}
+              className="relative col-start-1 row-start-2 min-h-0 [view-transition-class:morph-column_morph-sidebar]"
+            >
+              <RailFlyout
+                route={route}
+                mode={drawnNav}
+                width={layout.navResize.width}
+                settings={settings("row")}
+              >
+                <Rail route={route} settings={settings("rail")} />
+              </RailFlyout>
+              <NavResizeHandle layout={layout} />
+            </div>
+          )}
+          {navHidden && (
+            <SidebarPeek
+              route={route}
+              width={layout.navResize.width}
+              settings={settings("row")}
+            />
+          )}
+          <section
+            ref={shell.part("pane")}
+            className={cn(
+              "flex min-h-0 min-w-0 flex-col [view-transition-class:morph-column_morph-pane]",
+              "md:col-start-2 md:row-start-2 md:mt-2 md:me-2 md:mb-2 md:overflow-hidden md:rounded-2xl md:border md:border-border/60",
+              navHidden && "md:ms-2",
+            )}
+            data-testid="pane"
           >
-            <SwipeHandles />
-            <ErrorBanner />
-            {children}
-          </main>
-        </section>
-        {docked && <DockColumn route={route} layout={layout} />}
-        <DockSheet route={route} layout={layout} />
-        <CustomizeNavDialog />
-      </div>
-    </PaneBarSlotContext.Provider>
+            <main
+              className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+              style={
+                paneWidth !== null
+                  ? { width: Math.max(360, paneWidth - paneInset) }
+                  : docked && dockVisible && paneCol - 8 < 360
+                    ? { width: 360 }
+                    : undefined
+              }
+            >
+              <SwipeHandles />
+              <ErrorBanner />
+              {children}
+            </main>
+          </section>
+          {docked && <DockColumn route={route} layout={layout} />}
+          <DockSheet route={route} layout={layout} />
+          <CustomizeNavDialog />
+          <PanelPicker route={route} />
+        </div>
+      </PaneBarSlotContext.Provider>
+    </MorphProvider>
   );
 }

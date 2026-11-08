@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// Optional sampling overrides shared by inference profiles; unsupported
 /// explicit settings must be rejected, not ignored.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct InferenceSampling {
@@ -43,6 +43,7 @@ pub struct InferenceSampling {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

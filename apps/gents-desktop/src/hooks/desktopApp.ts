@@ -28,6 +28,7 @@ import { observeMailboxAnswerRetirement } from "./mailboxAnswerRetirement";
 import { seenMarks } from "../ui/app/sessionViews";
 import { mailboxSeen } from "../ui/app/mailboxSeen";
 import { seenMarkOf } from "../ui/lib/seen";
+import { watchNotifications } from "../ui/lib/notify/watch";
 import { listedSession, sessionKeyOf } from "./fleetStore";
 
 export type DesktopBridge = {
@@ -102,6 +103,7 @@ export function createDesktopApp({
   const drafts = createDraftStore();
   reconcileSelection(stores, actions.selectNode, drafts);
   keepSeen(stores);
+  watchNotifications(stores);
   return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };
 }
 

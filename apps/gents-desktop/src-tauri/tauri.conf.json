@@ -29,7 +29,8 @@
         "default",
         "desktop-runtime-admin",
         "native-windows",
-        "open-links"
+        "open-links",
+        "plugin-window"
       ]
     }
   },
