@@ -13,6 +13,8 @@ use tokio::sync::{mpsc, watch, Notify};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
+use crate::documents::automation::{ResolvedEventTrigger, ResolvedSchedule, ResolvedTask};
+use crate::documents::{ConcurrencyMode, ScheduleCadence};
 use crate::ensure_runtime_schemas;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
 use crate::lean_vocab_test::{
@@ -20,10 +22,7 @@ use crate::lean_vocab_test::{
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
     LeanVocabulary,
 };
-use crate::runtime::snapshot::{
-    ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
-    ResolvedSchedule, ResolvedTask, ScheduleCadence,
-};
+use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
@@ -84,12 +83,14 @@ const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Triggers/Types
 
 #[test]
 fn durable_fire_keys_are_unambiguous_across_component_delimiters() {
-    let left = crate::triggers::engine::durable_fire_key("event-document", &["trigger:a", "doc"]);
-    let right = crate::triggers::engine::durable_fire_key("event-document", &["trigger", "a:doc"]);
+    let left =
+        gents_protocol::trigger_delivery::durable_fire_key("event-document", &["trigger:a", "doc"]);
+    let right =
+        gents_protocol::trigger_delivery::durable_fire_key("event-document", &["trigger", "a:doc"]);
     assert_ne!(left, right);
     assert_ne!(
         left,
-        crate::triggers::engine::durable_fire_key("event-group", &["trigger:a", "doc"])
+        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["trigger:a", "doc"])
     );
 }
 
@@ -496,7 +497,7 @@ fn resolved_event_trigger_with_concurrency(
         filter: None,
         enabled: true,
         concurrency,
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -553,7 +554,7 @@ fn snapshot_from_trigger_contract(
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         schedules: active_schedules,
         event_triggers: active_event_triggers,
         ..Default::default()
@@ -683,7 +684,7 @@ pub(super) async fn apply_user_config(
             let plan = &plan;
             let owner = &owner;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                crate::documents::apply_desired_state_plan(txn, plan).await?;
                 let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Trigger,
@@ -712,7 +713,7 @@ pub(super) fn snapshot_with_agent_and_schedules(
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         schedules,
         ..Default::default()
     })

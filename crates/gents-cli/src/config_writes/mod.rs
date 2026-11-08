@@ -1,1 +1,2 @@
-pub(crate) use gents::store::config_client::{write_agent_document, ConfigAccess, ConfigApplyTxn};
+pub(crate) use gents::documents::write_agent_document;
+pub(crate) use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};

@@ -1,10 +1,10 @@
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::Node as EmbeddedNode;
+#[cfg(test)]
+use gents::documents::apply_desired_state_plan;
 use gents::documents::SkillDocument;
 use gents::store::collection::Collection;
-#[cfg(test)]
-use gents::store::config_client::apply_desired_state_plan;
 use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 #[cfg(test)]
 use std::sync::Arc;

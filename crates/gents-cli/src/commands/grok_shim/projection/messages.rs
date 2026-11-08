@@ -134,15 +134,15 @@ async fn project_messages_with_sink<S>(
 where
     S: QuerySink,
 {
-    use gents::session::canonical_rows::{
-        decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
-        AGENT_OUTPUT_SEGMENT_FIELDS,
-    };
     use gents_protocol::output::live::{
         observed_request_execution_owner, project_live, select_live_target, LiveObservation,
         LiveTarget, LiveTargetSelection, LiveView, OwnerLiveness,
     };
     use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
+    use gents_protocol::output::rows::{
+        decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
+        AGENT_OUTPUT_SEGMENT_FIELDS,
+    };
     use gents_protocol::output::{MessageRole, StreamPayload};
     let physical = request
         .doc_id
@@ -159,8 +159,11 @@ where
         .as_deref()
         .and_then(nonempty)
         .ok_or_else(|| anyhow!("message request session missing"))?;
-    let scope =
-        gents::session::session_scope_filter(owner, session, request.requester_did.as_deref());
+    let scope = gents_protocol::session::session_scope_filter(
+        owner,
+        session,
+        request.requester_did.as_deref(),
+    );
     let query = format!(
         r#"{{
         AgentMessage(filter:{{{scope},request_doc_id:{{_eq:"{}"}}}},order:{{sequence:ASC}},limit:256){{{AGENT_MESSAGE_FIELDS}}}
@@ -188,11 +191,11 @@ where
     );
     let headers = header_values
         .iter()
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let segments = segment_values
         .iter()
-        .map(decode_output_segment_row)
+        .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let observed = segments
         .iter()

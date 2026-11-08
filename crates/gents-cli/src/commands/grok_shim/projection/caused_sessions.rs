@@ -555,7 +555,7 @@ async fn load_activity(
         .map(|(scope, doc_id)| {
             format!(
                 r#"{{{}, request_doc_id: {{_eq: "{}"}}}}"#,
-                gents::session::session_scope_filter(
+                gents_protocol::session::session_scope_filter(
                     &scope.node_did,
                     &scope.session_id,
                     scope.requester_did.as_deref()

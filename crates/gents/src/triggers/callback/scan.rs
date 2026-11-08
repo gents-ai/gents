@@ -8,14 +8,14 @@ use gents_protocol::event_delivery::EventConsumer;
 use serde_json::Value;
 use tokio::time::MissedTickBehavior;
 
-use crate::store::config_client::{event_source_cursor, ConfigAccess};
+use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{document_composite_version, escape_graphql_string};
 use crate::UpdateSubscriptionSource;
 
 use super::claim::invocation_is_claimable;
 use super::documents::{
-    create_pending_invocation, idempotency_key, list_enabled_bindings, load_event_source,
-    strip_secret_fields, validate_callback_binding, CallbackBindingDoc, CallbackInvocationDoc,
+    create_pending_invocation, list_enabled_bindings, load_event_source, strip_secret_fields,
+    validate_callback_binding, CallbackBindingDoc, CallbackInvocationDoc,
 };
 use super::{CallbackEngine, LIFECYCLE_PENDING};
 
@@ -283,7 +283,7 @@ impl CallbackEngine {
             .transact_write("callback.seed_arrival_cursor", |txn| {
                 let consumer = &consumer;
                 Box::pin(async move {
-                    event_source_cursor::load_or_seed_for_source(
+                    crate::documents::event_consumer::load_or_seed_for_source(
                         txn,
                         &binding.node_did,
                         consumer,
@@ -322,7 +322,7 @@ impl CallbackEngine {
             .transact_write("callback.advance_arrival", |txn| {
                 let consumer = &consumer;
                 Box::pin(async move {
-                    event_source_cursor::checkpoint_prefix(
+                    crate::documents::event_consumer::checkpoint_prefix(
                         txn,
                         &binding.node_did,
                         consumer,
@@ -617,7 +617,11 @@ impl CallbackEngine {
             )
             .await?;
             (
-                idempotency_key(&binding.binding_id, collection, doc_id),
+                gents_protocol::trigger_delivery::idempotency_key(
+                    &binding.binding_id,
+                    collection,
+                    doc_id,
+                ),
                 input,
                 crate::documents::CallbackInvocationOrigin::Event {
                     binding_id: binding.binding_id.clone(),

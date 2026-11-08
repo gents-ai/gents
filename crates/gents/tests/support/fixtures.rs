@@ -317,7 +317,7 @@ pub async fn configure_agent_tools_as(
                         })
                         .collect(),
                 )?;
-                gents::store::config_client::apply_desired_state_plan(txn, &plan)
+                gents::documents::apply_desired_state_plan(txn, &plan)
                     .await
                     .map(|_| ())
             })
@@ -463,9 +463,9 @@ pub async fn bind_selected_managed_agent_backend(
     endpoint: &str,
     model_name: &str,
 ) {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     use gents::Collection;
 
@@ -602,9 +602,7 @@ async fn bind_agent_backend_chain(
         access
             .transact_write("test.bind_backend.node", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    gents::store::config_client::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await
             .expect("install fixture Node as its User");
@@ -702,9 +700,9 @@ pub async fn set_backend_auth_as(
     backend_id: &str,
     auth: serde_json::Value,
 ) {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access
         .transact_write("test.set_backend_auth", |txn| {

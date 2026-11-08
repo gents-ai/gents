@@ -65,7 +65,7 @@ pub(super) fn session_filter(
                 escape_graphql_string(requester)
             )
         } else {
-            crate::session::session_scope_filter(
+            gents_protocol::session::session_scope_filter(
                 &scope.node_did,
                 &scope.session_id,
                 Some(requester),

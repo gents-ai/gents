@@ -7,7 +7,6 @@ use std::thread;
 use std::thread::JoinHandle;
 
 pub(super) use crate::documents::Tools;
-pub(super) use crate::request::watcher::AgentRequest;
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
 pub(super) use crate::store::graphql::escape_graphql_string;
 pub(super) use crate::tools::surface::ToolCeiling;
@@ -15,6 +14,7 @@ pub(super) use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessProcessState,
     NodeReadinessSnapshot,
 };
+pub(super) use gents_protocol::row::AgentRequest;
 pub(super) use serde_json::Value;
 
 pub(super) fn test_identity(name: &str) -> KeyIdentity {
@@ -66,9 +66,7 @@ pub(super) async fn plugin_runtime_fixture(
     user_access
         .transact_write("test.plugin.node", |txn| {
             let plan = &node_plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let binding = crate::store::identity::provision_agent_identity_authorized(
@@ -93,9 +91,7 @@ pub(super) async fn plugin_runtime_fixture(
     user_access
         .transact_write("test.plugin.configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
@@ -123,9 +119,7 @@ pub(super) async fn plugin_runtime_fixture(
     user_access
         .transact_write("test.plugin.default", |txn| {
             let plan = &default_plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let agent_access = ConfigAccess::local_managed_agent(
@@ -189,7 +183,7 @@ pub(super) async fn merge_fixture_document(
                         update: document,
                     },
                 ])?;
-                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                crate::documents::apply_desired_state_plan(txn, &plan).await
             })
         })
         .await
@@ -345,9 +339,7 @@ pub(super) async fn held_runtime_fixture_with_status(
     user_access
         .transact_write("test.runtime.inference", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();

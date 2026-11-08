@@ -3,9 +3,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 #[cfg(test)]
 use defra_node::Node as EmbeddedNode;
+use gents::documents::apply_desired_state_plan;
 use gents::documents::{EventSource, Schedule, Task, Trigger};
 use gents::store::collection::Collection;
-use gents::store::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
+use gents::store::config_client::read_desired_state_record_in_txn;
 use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::task_session_title;
 use serde::de::DeserializeOwned;
@@ -447,7 +448,7 @@ fn render_task_invocation(
         session_id: session_id.clone(),
         goal_id: goal_objective
             .as_ref()
-            .map(|_| gents::goal::deterministic_goal_id(node_did, &session_id)),
+            .map(|_| gents_protocol::goal::deterministic_goal_id(node_did, &session_id)),
         goal_objective: goal_objective.clone(),
         goal_token_budget: task.goal_token_budget,
         goal_assignment_applied: false,

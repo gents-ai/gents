@@ -141,7 +141,7 @@ where
     /// The Claude request context a compaction summary call carries, when the backend is Claude's.
     pub(in crate::runtime::agent) async fn compaction_provider_params(
         &self,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
     ) -> Result<Option<serde_json::Value>> {
         let context = crate::claude_request_context::for_request(
             &crate::store::config_client::ConfigAccess::local_as(

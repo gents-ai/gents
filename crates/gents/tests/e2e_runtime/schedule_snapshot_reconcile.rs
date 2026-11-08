@@ -32,9 +32,7 @@ async fn apply_documents(
     access
         .transact_write("test.automation_configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                gents::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();

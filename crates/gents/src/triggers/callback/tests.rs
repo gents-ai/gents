@@ -1764,9 +1764,9 @@ impl Backlog {
         }
     }
     async fn registered() -> Self {
+        use crate::documents::apply_desired_state_plan;
         use crate::store::config_client::{
-            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
-            DesiredStateApplyPlan,
+            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         use crate::Collection;
         let home = tempfile::tempdir().unwrap();
@@ -1827,9 +1827,8 @@ impl Backlog {
     }
 
     async fn add_binding(&self, binding_id: &str) {
-        use crate::store::config_client::{
-            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use crate::documents::apply_desired_state_plan;
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let value = json!({"binding_id":binding_id,"agent_did":crate::triggers::callback::test_agent_did(),"event_source_id":"backlog","callback_id":"cb-backlog",
             "input_fields":["label"],"enabled":true,"node_did":BACKLOG_OWNER});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -1899,7 +1898,7 @@ impl Backlog {
             .transact_write("test.backlog_cursor", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        crate::store::config_client::event_source_cursor::load_or_seed(
+                        crate::documents::event_consumer::load_or_seed(
                             txn,
                             BACKLOG_OWNER,
                             &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
@@ -2699,9 +2698,8 @@ async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
 
 #[tokio::test]
 async fn callback_module_plan_commits_only_with_modeled_native_authority() {
-    use crate::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use crate::documents::apply_desired_state_plan;
+    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let backlog = Backlog::registered().await;
     let access = super::test_agent_access(&backlog.node);
     let make = |collection, value: serde_json::Value| DesiredStateApplyDocument {
@@ -2893,7 +2891,7 @@ async fn callback_cursor_waits_for_a_successful_claim() {
         access
             .transact_write("test.callback_claim_checkpoint", |txn| {
                 Box::pin(async move {
-                    crate::store::config_client::event_source_cursor::checkpoint_prefix(
+                    crate::documents::event_consumer::checkpoint_prefix(
                         txn,
                         BACKLOG_OWNER,
                         &gents_protocol::event_delivery::EventConsumer::CallbackBinding {
@@ -2972,7 +2970,11 @@ async fn callback_cursor_waits_for_a_successful_claim() {
             source_version: None,
         },
         input: json!({}),
-        idempotency_key: super::idempotency_key(&binding.binding_id, "BacklogWork", &doc_id),
+        idempotency_key: gents_protocol::trigger_delivery::idempotency_key(
+            &binding.binding_id,
+            "BacklogWork",
+            &doc_id,
+        ),
         caused_by_correlation: None,
         lifecycle_state: LIFECYCLE_PENDING.into(),
         attempts: Some(0),

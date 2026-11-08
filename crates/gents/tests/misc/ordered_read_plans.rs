@@ -406,7 +406,8 @@ fn inventory(root: &Path) -> BTreeSet<Read> {
 }
 
 fn binding_value(value: &str) -> String {
-    let session = |requester| gents::session::session_scope_filter("probe", "probe", requester);
+    let session =
+        |requester| gents_protocol::session::session_scope_filter("probe", "probe", requester);
     match value {
         "@session" => session(Some("probe")),
         "@session-absent" => session(None),

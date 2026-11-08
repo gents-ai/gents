@@ -200,9 +200,7 @@ pub(in crate::pack) async fn fixture() -> (
     access
         .transact_write("test.pack_identity.seed", |txn| {
             let seed = &seed;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, seed).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, seed).await })
         })
         .await
         .unwrap();

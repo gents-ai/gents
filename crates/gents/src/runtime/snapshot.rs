@@ -7,13 +7,13 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use tokio::sync::mpsc;
 
-use crate::documents::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
+use crate::documents::automation::{
+    ResolvedAutomation, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
+};
 pub use crate::documents::ConcurrencyMode;
 pub use crate::documents::ScheduleCadence;
-use crate::documents::TaskHook;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
-use crate::request::watcher::AgentRequest;
 use crate::store::identity::RuntimeNode;
 use crate::tools::surface::ToolSurface;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
@@ -23,6 +23,7 @@ use gents_protocol::node_readiness::{
 
 pub type DispatcherMap = RapidHashMap<String, mpsc::Sender<AgentRequest>>;
 
+use gents_protocol::row::AgentRequest;
 #[derive(Clone)]
 pub(crate) struct ResolvedWatcherIdentity(pub(crate) Arc<dyn crate::store::identity::NodeIdentity>);
 
@@ -103,124 +104,6 @@ pub(crate) fn effective_agent_admission<'a>(
             }
         }
         EffectiveAgentReadinessAdmission::Unassigned => EffectiveAgentAdmission::Unassigned,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedTask {
-    pub emit_outcome: bool,
-    pub task_id: String,
-    pub name: Option<String>,
-    pub agent_did: String,
-    pub prompt_template: String,
-    pub goal_objective_template: Option<String>,
-    pub goal_token_budget: Option<i64>,
-    #[allow(dead_code)]
-    pub output_schema_ref: Option<String>,
-    pub hooks: Vec<TaskHook>,
-}
-
-impl ResolvedTask {
-    pub(crate) fn display_label(&self) -> &str {
-        self.name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&self.task_id)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedSchedule {
-    pub session_id_template: Option<String>,
-    pub trigger_doc_id: String,
-    pub schedule_doc_id: String,
-    pub schedule_id: String,
-    #[allow(dead_code)]
-    pub task_id: String,
-    pub task: ResolvedTask,
-    pub cadence: ScheduleCadence,
-    #[allow(dead_code)]
-    pub enabled: bool,
-    pub concurrency: ConcurrencyMode,
-}
-
-pub const MAX_EVENT_TRIGGER_GROUP_DOCS: usize = 256;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EventTriggerFireMode {
-    PerDocument,
-    PerGroup,
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedEventTrigger {
-    pub event_source_id: String,
-    pub event_source_doc_id: String,
-    pub task_doc_id: String,
-    pub session_id_template: Option<String>,
-    pub trigger_doc_id: String,
-    pub trigger_id: String,
-    #[allow(dead_code)]
-    pub task_id: String,
-    pub task: ResolvedTask,
-    pub source_collection: String,
-    pub event_kind: String,
-    pub filter: Option<String>,
-    #[allow(dead_code)]
-    pub enabled: bool,
-    pub concurrency: ConcurrencyMode,
-    pub fire_mode: EventTriggerFireMode,
-    pub correlation_field: Option<String>,
-    pub expected_count: Option<usize>,
-    pub expected_count_field: Option<String>,
-    pub group_timeout_secs: Option<u64>,
-    pub group_min_count: usize,
-    pub workspace_authority: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ResolvedAutomation {
-    pub(crate) tasks: RapidHashMap<String, ResolvedTask>,
-    pub(crate) schedules: RapidHashMap<String, ResolvedSchedule>,
-    pub(crate) unavailable_schedules: RapidHashSet<String>,
-    pub(crate) event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
-    pub(crate) unavailable_event_triggers: RapidHashSet<String>,
-}
-
-pub(crate) fn seed_schedule_next_run_at(
-    cadence: &ScheduleCadence,
-    now: DateTime<Utc>,
-) -> Result<DateTime<Utc>> {
-    match cadence {
-        ScheduleCadence::Interval { .. } => Ok(now),
-        ScheduleCadence::Cron {
-            expression,
-            timezone,
-            ..
-        } => next_cron_run_after(expression, timezone, now),
-    }
-}
-
-pub(crate) fn advance_schedule_next_run_at(
-    cadence: &ScheduleCadence,
-    parsed_next_run_at: DateTime<Utc>,
-    now: DateTime<Utc>,
-) -> Result<DateTime<Utc>> {
-    match cadence {
-        ScheduleCadence::Interval { interval_secs } => {
-            Ok(parsed_next_run_at + ChronoDuration::seconds(*interval_secs))
-        }
-        ScheduleCadence::Cron {
-            expression,
-            timezone,
-            missed_run_policy,
-        } => match missed_run_policy {
-            None | Some(CronMissedRunPolicy::LatestOnly) => {
-                next_cron_run_after(expression, timezone, now)
-            }
-        },
     }
 }
 

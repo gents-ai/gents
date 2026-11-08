@@ -8,10 +8,11 @@ use tokio::sync::watch;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
+use crate::documents::automation::ResolvedTask;
 use crate::request::lifecycle::{
     task_goal_session_title, task_session_title, ExecutionOrigin, TriggerLineage, WorkspaceLineage,
 };
-use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
+use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::graphql::{escape_graphql_string, rows};
 use crate::triggers::engine::{MaterializerHandle, TriggerKind};
 
@@ -413,7 +414,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 )?;
                 spec.input.goal_assignment =
                     Some(gents_protocol::request_input::GoalAssignmentInput {
-                        goal_id: crate::goal::deterministic_goal_id(
+                        goal_id: gents_protocol::goal::deterministic_goal_id(
                             &node_did,
                             &identity.session_id,
                         ),

@@ -39,7 +39,7 @@ use gents::tools::background::job::settings::{
     job_block_admissible, policy_valid, wire_targets_from,
 };
 use gents::tools::background::status::ProcessControlScope;
-use gents::tools::call::lifecycle::{AwaitMode, ToolCallState, ToolRowKind};
+use gents::tools::call::lifecycle::{ToolCallState, ToolRowKind};
 use gents::tools::surface::EndpointScope;
 use gents_protocol::job::keys::{
     decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
@@ -53,6 +53,7 @@ use gents_protocol::job::{
     JobState, JobStepInput, JobStepOutput, JobSuspend, JobView, PluginDataDeclaration,
     PluginJobDeclaration, PluginJobSettings, RoundResult, StampedField,
 };
+use gents_protocol::tool_call::AwaitMode;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1304,7 +1305,7 @@ fn generated_plugin_job_lineage_cases_decode_strictly() {
 }
 
 /// `strip_secret_fields` drops a field whose upper-cased name contains one of
-/// these (`tools::native::shared::command::is_secret_env_name`), so no job field may.
+/// these (`documents::callback::is_secret_env_name`), so no job field may.
 const SECRET_SUBSTRINGS: [&str; 4] = ["KEY", "SECRET", "TOKEN", "PASSWORD"];
 
 fn collect_field_names(value: &serde_json::Value, names: &mut BTreeSet<String>) {

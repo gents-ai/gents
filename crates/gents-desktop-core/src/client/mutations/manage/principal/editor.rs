@@ -228,7 +228,8 @@ pub async fn save_config_editor_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+    use gents::documents::apply_desired_state_plan;
+    use gents::store::config_client::DesiredStateApplyPlan;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -428,7 +429,7 @@ mod tests {
             "provider_kind":"ClaudeCliSubscription","endpoint":"claude-cli://subscription",
             "auth":{"kind":"node_oauth"}
         }))?;
-        gents::store::config_client::write_inference_backend_document(access, &backend).await?;
+        gents::documents::write_inference_backend_document(access, &backend).await?;
         Ok(())
     }
 

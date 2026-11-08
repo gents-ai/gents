@@ -5,114 +5,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::event_source::SourceSchemaCache;
+use crate::documents::automation::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
 use crate::documents::{CallbackBinding, EventGroupCount, EventSource};
-use crate::runtime::snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
 use crate::store::graphql::escape_graphql_string;
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
-
-pub(crate) fn event_source_generation(source: &EventSource) -> Result<Value> {
-    source.validate()?;
-    let (expected_count, expected_field, timeout, minimum) = source.group_projection();
-    Ok(json!({
-        "collection": source.source_collection,
-        "event_kind": source.event_kind.as_deref().map(str::trim).filter(|value| !value.is_empty()).unwrap_or("created"),
-        "filter": source.filter,
-        "correlation": source.correlation_field.as_deref().filter(|value| !value.trim().is_empty()),
-        "grouped": source.group.is_some(),
-        "expected_count": expected_count,
-        "expected_field": expected_field,
-        "timeout": timeout,
-        "minimum": minimum,
-        "workspace_authority": source.workspace_authority.as_ref().map(|authority| authority.as_str()),
-    }))
-}
-
-pub(crate) fn resolved_event_source_generation(trigger: &ResolvedEventTrigger) -> Value {
-    json!({
-        "collection": trigger.source_collection,
-        "event_kind": trigger.event_kind,
-        "filter": trigger.filter,
-        "correlation": trigger.correlation_field,
-        "grouped": trigger.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
-        "expected_count": trigger.expected_count,
-        "expected_field": trigger.expected_count_field,
-        "timeout": trigger.group_timeout_secs,
-        "minimum": trigger.group_min_count,
-        "workspace_authority": trigger.workspace_authority,
-    })
-}
-
-pub(crate) struct EventConfigDocIds<'a> {
-    pub trigger: &'a str,
-    pub source: &'a str,
-    pub task: &'a str,
-}
-
-fn execution_generation(
-    task: &crate::runtime::snapshot::ResolvedTask,
-    source_id: &str,
-    session_template: Option<&str>,
-    concurrency: crate::documents::ConcurrencyMode,
-    ids: &EventConfigDocIds<'_>,
-) -> Value {
-    json!({
-        "task_id": task.task_id, "agent": task.agent_did, "name": task.name,
-        "prompt": task.prompt_template, "objective": task.goal_objective_template,
-        "budget": task.goal_token_budget, "output": task.output_schema_ref,
-        "hooks": serde_json::to_string(&task.hooks).expect("Task hooks contain serializable fields"),
-        "emit": task.emit_outcome,
-        "source_id": source_id, "trigger_doc": ids.trigger, "source_doc": ids.source,
-        "task_doc": ids.task, "session_template": session_template,
-        "concurrency": concurrency,
-    })
-}
-
-pub(crate) fn event_execution_generation(
-    trigger: &crate::documents::Trigger,
-    task: &crate::documents::Task,
-    ids: &EventConfigDocIds<'_>,
-) -> Result<Value> {
-    let crate::documents::TriggerSource::Event { event_source_id } = &trigger.source else {
-        anyhow::bail!("event execution requires an event trigger");
-    };
-    Ok(execution_generation(
-        &crate::runtime::agent::document_view::resolved_task_from(task),
-        event_source_id,
-        trigger.session_id_template.as_deref(),
-        trigger.concurrency.unwrap_or_default(),
-        ids,
-    ))
-}
-
-pub(crate) fn resolved_event_execution_generation(trigger: &ResolvedEventTrigger) -> Value {
-    execution_generation(
-        &trigger.task,
-        &trigger.event_source_id,
-        trigger.session_id_template.as_deref(),
-        trigger.concurrency,
-        &EventConfigDocIds {
-            trigger: &trigger.trigger_doc_id,
-            source: &trigger.event_source_doc_id,
-            task: &trigger.task_doc_id,
-        },
-    )
-}
-
-pub(crate) fn event_admission_generation(
-    source: &EventSource,
-    trigger: &crate::documents::Trigger,
-    task: &crate::documents::Task,
-    ids: &EventConfigDocIds<'_>,
-) -> Result<Value> {
-    Ok(json!({"source":event_source_generation(source)?,
-        "execution":event_execution_generation(trigger, task, ids)?}))
-}
-
-pub(crate) fn resolved_event_admission_generation(trigger: &ResolvedEventTrigger) -> Value {
-    json!({"source":resolved_event_source_generation(trigger),
-        "execution":resolved_event_execution_generation(trigger)})
-}
 
 #[cfg(test)]
 #[path = "event_delivery/ownership_tests.rs"]
@@ -304,29 +201,6 @@ fn digest(value: &Value) -> String {
     )
 }
 
-pub(crate) fn selection_filter(
-    filter: Option<&str>,
-    equality: Option<(&str, &str)>,
-) -> Result<String> {
-    let mut clauses = Vec::new();
-    if let Some(filter) = filter.map(str::trim).filter(|s| !s.is_empty()) {
-        crate::store::graphql::validate_graphql_filter_fragment(filter)?;
-        clauses.push(filter.to_owned());
-    }
-    if let Some((field, value)) = equality {
-        crate::store::graphql::validate_graphql_name(field)?;
-        clauses.push(format!(
-            "{{ {field}: {{_eq:\"{}\"}} }}",
-            escape_graphql_string(value)
-        ));
-    }
-    Ok(match clauses.as_slice() {
-        [] => "{}".into(),
-        [only] => only.clone(),
-        _ => format!("{{_and:[{}]}}", clauses.join(",")),
-    })
-}
-
 pub(crate) async fn probe_document(
     node: &std::sync::Arc<defra_node::Node>,
     collection: &str,
@@ -335,7 +209,7 @@ pub(crate) async fn probe_document(
     actor: Option<identity::Did>,
 ) -> Result<Option<String>> {
     crate::store::graphql::validate_collection_identifier(collection)?;
-    let filter = selection_filter(filter, Some(("_docID", id)))?;
+    let filter = crate::store::graphql::selection_filter(filter, Some(("_docID", id)))?;
     let query = format!(
         "{{{collection}(filter:{filter},limit:1){{_docID _version{{cid height fieldName}}}}}}"
     );
@@ -498,7 +372,7 @@ pub(crate) async fn evaluate_group(
     delivery.validate_group()?;
     crate::store::graphql::validate_collection_identifier(delivery.collection())?;
     let fields = cache.fields_for(delivery.collection(), node).await?;
-    let filter = selection_filter(
+    let filter = crate::store::graphql::selection_filter(
         delivery.filter(),
         Some((
             delivery
@@ -627,7 +501,7 @@ pub(crate) async fn group_correlation_page(
         .correlation_field()
         .context("group correlation field missing")?;
     crate::store::graphql::validate_collection_identifier(delivery.collection())?;
-    let base = selection_filter(delivery.filter(), None)?;
+    let base = crate::store::graphql::selection_filter(delivery.filter(), None)?;
     let filter = cursor.map_or(base.clone(), |cursor| {
         format!(
             "{{_and:[{base},{{_docID:{{_gt:\"{}\"}}}}]}}",
@@ -666,11 +540,11 @@ pub(crate) fn group_candidate_eligible(
 ) -> bool {
     well_formed
         && actual_count > 0
-        && actual_count <= crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
+        && actual_count <= crate::documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS
         && match expected_count {
             Some(expected) => {
                 expected > 0
-                    && expected <= crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
+                    && expected <= crate::documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS
                     && actual_count <= expected
                     && (actual_count == expected || (timed_out && minimum_count <= actual_count))
             }
@@ -732,7 +606,7 @@ mod tests {
             }
             .group_key("batch-a")
         );
-        let trigger = crate::runtime::snapshot::ResolvedEventTrigger {
+        let trigger = crate::documents::automation::ResolvedEventTrigger {
             event_source_id: "source".into(),
             event_source_doc_id: "source-doc".into(),
             task_doc_id: "task-doc".into(),
@@ -740,7 +614,7 @@ mod tests {
             trigger_doc_id: "physical".into(),
             trigger_id: binding.binding_id.clone(),
             task_id: "task".into(),
-            task: crate::runtime::snapshot::ResolvedTask {
+            task: crate::documents::automation::ResolvedTask {
                 emit_outcome: false,
                 task_id: "task".into(),
                 name: None,
@@ -756,7 +630,7 @@ mod tests {
             filter: None,
             enabled: true,
             concurrency: crate::documents::ConcurrencyMode::Parallel,
-            fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+            fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
             correlation_field: source.correlation_field.clone(),
             expected_count: None,
             expected_count_field: Some("expected".into()),

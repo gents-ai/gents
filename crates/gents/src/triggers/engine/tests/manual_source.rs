@@ -25,7 +25,7 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         tasks,
         ..Default::default()
     })
@@ -237,11 +237,11 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         replace_prior: false,
         receipt: fire.clone(),
         target_existing: true,
-        event_source_generation: Some(crate::triggers::engine::event_delivery::event_admission_generation(
+        event_source_generation: Some(crate::documents::automation::event_admission_generation(
             &serde_json::from_value(serde_json::json!({"node_did":owner,"event_source_id":"outcomes", "source_collection":"AgentRequest", "event_kind":"created"})).unwrap(),
             &serde_json::from_value(serde_json::json!({"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"})).unwrap(),
             &serde_json::from_value(serde_json::json!({"node_did":owner,"task_id":"task-lead","agent_did":agent_did,"prompt_template":"continue the lead"})).unwrap(),
-            &crate::triggers::engine::event_delivery::EventConfigDocIds {
+            &crate::documents::automation::EventConfigDocIds {
                 trigger:&trigger_doc_id,
                 source:config_docs["data"]["EventSource"][0]["_docID"].as_str().unwrap(),
                 task:config_docs["data"]["Task"][0]["_docID"].as_str().unwrap(),

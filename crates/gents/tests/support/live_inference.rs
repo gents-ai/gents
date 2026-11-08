@@ -47,9 +47,9 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
     fixture
         .access
         .transact_write("test.bind_live_backend", |txn| {
+            use gents::documents::apply_desired_state_plan;
             use gents::store::config_client::{
-                apply_desired_state_plan, read_desired_state_record_in_txn as read,
-                DesiredStateApplyDocument,
+                read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             };
             let node_did = &node_did;
             let agent_did = &agent_did;
@@ -391,7 +391,8 @@ impl LiveUser {
         operation: &'static str,
         documents: Vec<(Collection, serde_json::Value)>,
     ) {
-        use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyDocument};
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::DesiredStateApplyDocument;
         let plan = DesiredStateApplyPlan::new(
             documents
                 .into_iter()

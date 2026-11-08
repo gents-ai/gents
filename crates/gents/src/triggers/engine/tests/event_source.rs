@@ -44,7 +44,7 @@ async fn event_source_reads_seed_and_group_as_selected_agent() {
         "hello"
     );
 
-    trigger.fire_mode = crate::runtime::snapshot::EventTriggerFireMode::PerGroup;
+    trigger.fire_mode = crate::documents::automation::EventTriggerFireMode::PerGroup;
     trigger.correlation_field = Some("kind".to_owned());
     trigger.expected_count = Some(1);
     let delivery = event_delivery::Delivery::Trigger {
@@ -426,7 +426,7 @@ fn resolved_event_trigger(
         filter: None,
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -456,7 +456,7 @@ fn resolved_event_trigger_with_filter(
         filter: Some(filter.to_string()),
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -515,7 +515,7 @@ fn snapshot_with_event_triggers(
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         event_triggers: triggers,
         ..Default::default()
     })
@@ -575,7 +575,8 @@ async fn configured_event_snapshot(
     let mut configured = RapidHashMap::with_capacity(triggers.len());
     for (id, mut trigger) in triggers {
         trigger.task.agent_did = agent.agent_did.clone();
-        let group = (trigger.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerGroup)
+        let group = (trigger.fire_mode
+            == crate::documents::automation::EventTriggerFireMode::PerGroup)
             .then(|| {
                 let mut group = serde_json::json!({});
                 if let Some(count) = trigger.expected_count {
@@ -635,7 +636,7 @@ async fn configured_event_snapshot(
     )
     .with_node(agent.node.clone())
     .with_local_did(crate::request::lifecycle::test_support::PIN_FIXED_DID.into())
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         event_triggers: configured,
         ..Default::default()
     });
@@ -917,7 +918,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     );
     assert_eq!(
         intent.durable_fire_key,
-        crate::triggers::engine::durable_fire_key(
+        gents_protocol::trigger_delivery::durable_fire_key(
             "event-document",
             &["trigger-webhook", ev["source_doc_id"].as_str().unwrap()]
         )
@@ -981,7 +982,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     )
     .with_node(principal)
     .with_local_did(owner.clone())
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         event_triggers: RapidHashMap::from_iter([("trigger-after-callback".to_string(), trigger)]),
         ..Default::default()
     });
@@ -1075,7 +1076,7 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
         event_source_id: "source".into(),
         event_source_doc_id: "source-doc".into(),
         task_doc_id: "task-doc".into(),
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count_field: Some("expected_total".into()),
         filter: Some(r#"{ kind: { _eq: "include" } }"#.into()),
@@ -1135,7 +1136,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 
     let task = resolved_task("{{ group.correlation_value }} {{ group.complete }}");
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         group_timeout_secs: Some(60),
@@ -1515,7 +1516,7 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     }
 
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(1),
         ..resolved_event_trigger(
@@ -1571,7 +1572,7 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
 fn group_state_identity_changes_only_with_membership_definition() {
     let task = resolved_task("first prompt");
     let mut trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
@@ -1610,7 +1611,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
 
     let task = resolved_task("first prompt");
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         ..resolved_event_trigger("fingerprint-trigger", "RecoveryFingerprintMember", task)

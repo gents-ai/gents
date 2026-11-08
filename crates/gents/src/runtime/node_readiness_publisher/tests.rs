@@ -888,7 +888,12 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
             let actual = runtime_access
                 .transact_readonly("test.readiness.observe_owner", |txn| {
                     let actor = &actor;
-                    Box::pin(async move { observe_published_readiness(txn, actor).await })
+                    Box::pin(async move {
+                        crate::store::config_client::node_readiness::observe_published_readiness(
+                            txn, actor,
+                        )
+                        .await
+                    })
                 })
                 .await
                 .unwrap();

@@ -90,8 +90,13 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
         ConfigAccess::transact_local_readonly(&node, None, "test.inventory.session", |txn| {
             let (did, session_id, requester) = (&fixture.node_did, &session_id, &requester);
             Box::pin(async move {
-                crate::session::load_agent_session_row_in_txn(txn, did, session_id, Some(requester))
-                    .await
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                    txn,
+                    did,
+                    session_id,
+                    Some(requester),
+                )
+                .await
             })
         })
         .await
@@ -137,7 +142,7 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
         ConfigAccess::transact_local_readonly(&node, None, "test.inventory.empty_session", |txn| {
             let admission = &admission;
             Box::pin(async move {
-                crate::session::load_agent_session_row_in_txn(
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
                     txn,
                     &admission.request.node_did,
                     &admission.request.session_id,
@@ -220,7 +225,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             |txn| {
                 let scope = &scope;
                 Box::pin(async move {
-                    crate::session::load_agent_session_row_in_txn(
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
                         txn,
                         &scope.node_did,
                         &scope.session_id,
@@ -468,7 +473,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                     crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
                         node.clone(), &mut request_owner, &scope.node_did, 1, "write_file",
                         "later-inventory-tool", json!({"path": "later.rs"}),
-                        crate::tools::call::lifecycle::AwaitMode::Foreground, true,
+                        gents_protocol::tool_call::AwaitMode::Foreground, true,
                     ).await.unwrap();
                     let changed = FileInventorySnapshot::load(&node, &admission)
                         .await
@@ -595,7 +600,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         let headers = ConfigAccess::local(node.clone())
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ {} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
-                crate::session::session_scope_filter(&did, &parent, Some(&requester)),
+                gents_protocol::session::session_scope_filter(&did, &parent, Some(&requester)),
             ))
             .await
             .unwrap();
@@ -635,7 +640,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
                     |txn| {
                         let (did, requester, session_id) = (&did, &requester, &session_id);
                         Box::pin(async move {
-                            crate::session::load_agent_session_row_in_txn(
+                            crate::store::config_client::agent_session::load_agent_session_row_in_txn(
                                 txn,
                                 did,
                                 session_id,
@@ -706,7 +711,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             "write_file",
             "later-parent-tool",
             serde_json::json!({"path": "selected.rs"}),
-            crate::tools::call::lifecycle::AwaitMode::Foreground,
+            gents_protocol::tool_call::AwaitMode::Foreground,
             true,
         )
         .await
@@ -790,7 +795,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         let headers = ConfigAccess::local(node.clone())
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ {} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
-                crate::session::session_scope_filter(&did, &parent, Some(&requester)),
+                gents_protocol::session::session_scope_filter(&did, &parent, Some(&requester)),
             ))
             .await
             .unwrap();
@@ -857,7 +862,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             "external_tool",
             "uncaptured-tool",
             serde_json::json!({}),
-            crate::tools::call::lifecycle::AwaitMode::Foreground,
+            gents_protocol::tool_call::AwaitMode::Foreground,
             true,
         )
         .await
@@ -1027,9 +1032,9 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         name: "inventory-terminal-chronology".into(),
         real_identity: true,
         await_mode: if background {
-            crate::tools::call::lifecycle::AwaitMode::Background
+            gents_protocol::tool_call::AwaitMode::Background
         } else {
-            crate::tools::call::lifecycle::AwaitMode::Foreground
+            gents_protocol::tool_call::AwaitMode::Foreground
         },
         ..Default::default()
     })
@@ -1062,7 +1067,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
             "completed",
             "first retained output",
             None,
-            crate::request::lifecycle::RequestHopCause::Continuation,
+            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         )
         .await
         .unwrap();
@@ -1076,7 +1081,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         "write_file",
         "second-chronology-tool",
         serde_json::json!({"path":"repeated.rs"}),
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
         true,
     )
     .await
@@ -1091,8 +1096,13 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         |txn| {
             let (did, session, requester) = (&fixture.node_did, first.session_id(), &requester);
             Box::pin(async move {
-                crate::session::load_agent_session_row_in_txn(txn, did, session, Some(requester))
-                    .await
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                    txn,
+                    did,
+                    session,
+                    Some(requester),
+                )
+                .await
             })
         },
     )

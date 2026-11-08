@@ -311,9 +311,8 @@ mod tests {
         // An identity-only init publishes no inference profile; the home's
         // client configures the one the worker slot names.
         {
-            use gents::store::config_client::{
-                apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-            };
+            use gents::documents::apply_desired_state_plan;
+            use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
             let (access, _) = crate::resolve_config_access(Some(home.path()), None)
                 .await
                 .unwrap();

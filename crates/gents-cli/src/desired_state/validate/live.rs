@@ -99,7 +99,9 @@ pub(crate) async fn validate_manifest_against_live(
         }
 
         let introspect =
-            match gents::tools::builtin::defra_query::introspection_query(source_collection) {
+            match gents::store::config_client::schema_introspection::introspection_query(
+                source_collection,
+            ) {
                 Ok(introspect) => introspect,
                 Err(err) => {
                     errors.push(format!(
@@ -120,7 +122,9 @@ pub(crate) async fn validate_manifest_against_live(
             }
         };
         let Some(schema) =
-            gents::tools::builtin::defra_query::parse_collection_schema(response.get("data"))
+            gents::store::config_client::schema_introspection::parse_collection_schema(
+                response.get("data"),
+            )
         else {
             errors.push(format!(
                 "event source {} references unknown source_collection {}",
@@ -128,7 +132,10 @@ pub(crate) async fn validate_manifest_against_live(
             ));
             continue;
         };
-        let declared: BTreeMap<String, gents::tools::builtin::defra_query::SchemaField> = schema
+        let declared: BTreeMap<
+            String,
+            gents::store::config_client::schema_introspection::SchemaField,
+        > = schema
             .fields
             .into_iter()
             .map(|field| (field.name.clone(), field))

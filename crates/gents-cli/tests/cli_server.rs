@@ -1039,7 +1039,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .context("seeding self-view fixtures")?;
     }
 
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -2446,7 +2446,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     .await
     .context("seeding trace tool call")?;
 
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };

@@ -91,9 +91,9 @@ async fn publish_default_agent(
     home: &crate::shared::test_support::ClientHome,
     agent_did: &str,
 ) -> Result<()> {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let node_did = home.node_did().to_owned();
     home.access

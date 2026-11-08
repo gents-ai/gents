@@ -12,9 +12,10 @@ use crate::inference::admission::AdmissionRegistry;
 use crate::inference::backends::registry;
 use crate::runtime::agent::reconcile::GenerationSupervisor;
 use crate::runtime::agent::{Gents, ProcessLifecycleState};
-use crate::runtime::status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::runtime::status::RuntimeStatusHandle;
 use crate::tools::mcp::health::{spawn_health_checker, ServiceHealthMap};
 use crate::tools::surface::ToolRuntimeContext;
+use gents_protocol::node_readiness::ReconcilePhase;
 
 mod lifecycle_coordinator;
 mod recovery;

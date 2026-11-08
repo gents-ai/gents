@@ -13,8 +13,8 @@ use crate::request::lifecycle::{
     ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
 use crate::request::streaming::DefraStreamWriter;
-use crate::request::watcher::AgentRequest;
 use crate::session;
+use gents_protocol::row::AgentRequest;
 
 pub(super) mod review;
 
@@ -619,7 +619,7 @@ async fn load_auxiliary_parent(
     let escaped = crate::store::graphql::escape_graphql_string(parent_doc_id);
     let query = format!(
         "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{escaped}\" }} }}, limit: 1) {{ {} }} }}",
-        crate::request::admission::SIGNED_REQUEST_FIELDS
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
     );
     let response = access
         .execute(&query)
@@ -631,7 +631,7 @@ async fn load_auxiliary_parent(
         .context("request parent request disappeared")?;
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(value).context("decode auxiliary parent receipt")?;
-    crate::request::admission::verify_request_receipt_signature(&row)?;
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let parent = AgentRequest::try_from(row)?;
     anyhow::ensure!(
         parent.purpose == RequestPurpose::Normal

@@ -182,13 +182,6 @@ pub(super) struct CallbackResultInvocationRow {
     pub parent_linked: bool,
 }
 
-/// One per-document event invocation per binding and arrival; an edit after
-/// admission is not another arrival. Keys use `:` separators, unambiguous
-/// because collection and document IDs carry none.
-pub fn idempotency_key(binding_id: &str, source_collection: &str, source_doc_id: &str) -> String {
-    format!("{binding_id}:{source_collection}:{source_doc_id}")
-}
-
 pub fn parse_string_list(raw: Option<&str>) -> Vec<String> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Vec::new();
@@ -237,7 +230,7 @@ pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
             "duplicate callback input field {field}"
         );
         anyhow::ensure!(
-            !crate::tools::native::is_secret_env_name(field),
+            !crate::documents::callback::is_secret_env_name(field),
             "CallbackBinding {} source field `{field}` is secret-bearing",
             binding.binding_id
         );
@@ -258,7 +251,7 @@ pub fn reject_secret_bearing_callback_fields(
     }
     for field in parse_string_list(source_fields) {
         crate::store::graphql::validate_graphql_name(&field)?;
-        if crate::tools::native::is_secret_env_name(&field) {
+        if crate::documents::callback::is_secret_env_name(&field) {
             anyhow::bail!("CallbackBinding {binding_id} source field `{field}` is secret-bearing");
         }
     }
@@ -285,7 +278,7 @@ fn secret_ident(ident: &str) -> Option<String> {
     if ident.is_empty() || ident.starts_with('_') {
         return None;
     }
-    crate::tools::native::is_secret_env_name(ident).then(|| ident.to_string())
+    crate::documents::callback::is_secret_env_name(ident).then(|| ident.to_string())
 }
 
 fn strip_graphql_string_literals(input: &str) -> String {
@@ -313,7 +306,7 @@ pub fn strip_secret_fields(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .filter(|(key, _)| !crate::tools::native::is_secret_env_name(key))
+                .filter(|(key, _)| !crate::documents::callback::is_secret_env_name(key))
                 .map(|(key, child)| (key, strip_secret_fields(child)))
                 .collect(),
         ),

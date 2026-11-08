@@ -18,9 +18,9 @@ fn request_turn(request: &AgentRequestRow) -> Option<crate::types::RequestTurnVi
 }
 
 fn project_message_with_dependencies(
-    row: &gents::session::canonical_rows::TranscriptMessageRow,
+    row: &gents_protocol::output::rows::TranscriptMessageRow,
     observed_messages: &[gents_protocol::output::origin::ObservedMessage<'_>],
-    output_segments: &[gents::session::canonical_rows::OutputSegmentRow],
+    output_segments: &[gents_protocol::output::rows::OutputSegmentRow],
     denied_headers: &[String],
     denied_segments: &[String],
     dependency_denials: &[gents_protocol::output::reconstruction::DependencyDenial],
@@ -53,7 +53,7 @@ fn project_message_with_dependencies(
     }
     match origin {
         Ok(origin) => match project_canonical_message(
-            &gents::session::canonical_rows::TranscriptMessageRow {
+            &gents_protocol::output::rows::TranscriptMessageRow {
                 doc_id: origin.doc_id.to_string(),
                 message: origin.message.clone(),
             },
@@ -87,9 +87,9 @@ fn project_message_with_dependencies(
 /// key or provider-native id.
 fn canonical_tool_payload(
     tool: &AgentToolCallRow,
-    messages: &[&gents::session::canonical_rows::TranscriptMessageRow],
+    messages: &[&gents_protocol::output::rows::TranscriptMessageRow],
     observed_messages: &[gents_protocol::output::origin::ObservedMessage<'_>],
-    output_segments: &[gents::session::canonical_rows::OutputSegmentRow],
+    output_segments: &[gents_protocol::output::rows::OutputSegmentRow],
     denied_headers: &[String],
     denied_segments: &[String],
     dependency_denials: &[gents_protocol::output::reconstruction::DependencyDenial],
@@ -259,8 +259,8 @@ fn canonical_tool_payload(
 fn canonical_live_tool_output(
     tool: &AgentToolCallRow,
     request: Option<&AgentRequestRow>,
-    messages: &[&gents::session::canonical_rows::TranscriptMessageRow],
-    output_segments: &[gents::session::canonical_rows::OutputSegmentRow],
+    messages: &[&gents_protocol::output::rows::TranscriptMessageRow],
+    output_segments: &[gents_protocol::output::rows::OutputSegmentRow],
     denied_headers: &[String],
     denied_segments: &[String],
     dependency_denials: &[gents_protocol::output::reconstruction::DependencyDenial],
@@ -780,7 +780,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
 #[cfg(test)]
 mod canonical_projection_tests {
     use super::*;
-    use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
+    use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
     use gents_protocol::output::{
         MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
         SegmentRun, StreamDeclaration, StreamPayload, TerminalOutput, TranscriptMessage,
@@ -1816,7 +1816,7 @@ pub(super) fn project_transcript_rows(
     canonical_dependencies: Option<&gents_desktop_core::client::CanonicalTranscriptDependencies>,
     requests: &[&AgentRequestRow],
     requests_by_doc_id: &RapidHashMap<&str, &AgentRequestRow>,
-    result_messages: &[&gents::session::canonical_rows::TranscriptMessageRow],
+    result_messages: &[&gents_protocol::output::rows::TranscriptMessageRow],
 ) -> (Vec<MessageView>, Vec<ToolCallView>) {
     /* messages a tool's arguments or result are read from: the rows and any
     deliveries outside them */

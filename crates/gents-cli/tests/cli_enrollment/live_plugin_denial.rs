@@ -1,8 +1,8 @@
 use super::*;
+use gents::documents::apply_desired_state_plan;
 use gents::documents::{IntegrationTools, PluginToolRef, Tools};
 use gents::store::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    NodePermission,
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
 };
 use gents::{Collection, NodeIdentity};
 use serde_json::json;

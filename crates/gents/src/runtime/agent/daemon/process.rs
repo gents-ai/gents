@@ -15,8 +15,8 @@ use crate::observe::runtime_trace::{
 };
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
 use crate::request::streaming::DefraStreamWriter;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::worker_capacity::{RequestGuard, WorkerTicket};
+use gents_protocol::row::AgentRequest;
 
 impl<M> AgentDaemon<M>
 where

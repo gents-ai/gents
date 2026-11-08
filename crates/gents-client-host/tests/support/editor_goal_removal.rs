@@ -72,7 +72,7 @@ pub async fn verify(
     let query = format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_literal}"}}, purpose: {{_eq: "normal"}}}}) {{ {} interrupt_requested_at }} Goal(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ intent_json }} }}"#,
         gents::SIGNED_REQUEST_FIELDS,
-        gents::goal::GOAL_FIELDS,
+        gents_protocol::goal::GOAL_FIELDS,
     );
     let value = access.execute(&query).await?;
     let goals = value["data"]["Goal"].as_array().context("goal rows")?;

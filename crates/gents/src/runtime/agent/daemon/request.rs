@@ -69,7 +69,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn estimate_initial_provider_input(
         &self,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         preamble: String,
         history: &[TaggedMessage],
         skill_reminders: &[crate::inference::llm::message::Message],

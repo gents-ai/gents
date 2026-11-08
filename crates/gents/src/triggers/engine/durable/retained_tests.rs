@@ -81,12 +81,13 @@ async fn goal_document(access: &ConfigAccess, input: Value) -> String {
         .transact_write("test.retained_fire_goal", |txn| {
             let mut input = input.clone();
             Box::pin(async move {
-                if let Some(session) = crate::session::load_agent_session_owner_in_txn(
-                    txn,
-                    input["node_did"].as_str().unwrap(),
-                    input["session_id"].as_str().unwrap(),
-                )
-                .await?
+                if let Some(session) =
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        input["node_did"].as_str().unwrap(),
+                        input["session_id"].as_str().unwrap(),
+                    )
+                    .await?
                 {
                     input["session_doc_id"] = session.doc_id.into();
                 }

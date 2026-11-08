@@ -3,7 +3,6 @@
 //! reconstructed afterwards.
 
 use super::*;
-use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_loop::provider_audit::{
     AuxiliaryOutputEvent, AuxiliaryOutputObservation, ClaudeAuditEvent, ClaudeBlockKind,
     ProviderAuditObservation,
@@ -11,6 +10,7 @@ use gents_loop::provider_audit::{
 use gents_loop::stream_processor::AssistantTurnAccumulator;
 use gents_protocol::output::live::reconstruct_dense_prefix;
 use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_protocol::output::{OutputSource, OutputWriter, StreamPayload};
 use gents_protocol::rendered_request::CaptureScope;
 

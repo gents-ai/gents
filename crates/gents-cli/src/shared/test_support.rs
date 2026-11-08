@@ -64,8 +64,9 @@ pub(crate) async fn publish_test_node(node: &std::sync::Arc<defra_node::Node>) -
 /// [`publish_test_node`] for a fixture that names its Node's DID; the DID
 /// must be the node's runtime.
 pub(crate) async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>, node_did: &str) {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 
     assert_eq!(
@@ -145,7 +146,7 @@ pub(crate) async fn seed_unsent_xai_effort() -> (gents::store::config_client::Co
     let catalogs = value.as_object_mut().unwrap().remove("catalogs").unwrap();
     value.as_object_mut().unwrap().remove("probe_status");
     let backend: gents::InferenceBackend = serde_json::from_value(value).unwrap();
-    gents::store::config_client::write_inference_backend_document(&access, &backend)
+    gents::documents::write_inference_backend_document(&access, &backend)
         .await
         .unwrap();
     let input = gents_protocol::graphql::graphql_input_literal(&xai_effort_profile(owner)).unwrap();
@@ -213,7 +214,7 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
         "auth":{"kind":"unauthenticated"}
     }))?;
     let access = gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner)?);
-    gents::store::config_client::write_inference_backend_document(&access, &backend).await?;
+    gents::documents::write_inference_backend_document(&access, &backend).await?;
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
         let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
@@ -257,9 +258,8 @@ pub(crate) struct ClientHome {
 
 impl ClientHome {
     pub(crate) async fn new() -> Self {
-        use gents::store::config_client::{
-            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::NodeIdentity as _;
 
         let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("cli-client-home")
@@ -327,9 +327,8 @@ impl ClientHome {
         &self,
         display_name: &str,
     ) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        use gents::store::config_client::{
-            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-        };
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents::NodeIdentity as _;
 
         let runtime = self.home.identity.as_ref();

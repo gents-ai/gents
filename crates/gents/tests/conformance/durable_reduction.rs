@@ -7,9 +7,10 @@ use gents::inference::llm::message::{
 };
 use gents::turn::provider_context_reduction::{
     load_for_request, persist, reduction_key, rendered_capture_cites_reduction,
-    NewProviderContextReduction, SourceBoundary,
+    NewProviderContextReduction,
 };
 use gents_protocol::rendered_request::{AssemblyBuildPath, AssemblyTrace, ProvenanceManifest};
+use gents_protocol::transcript::SourceBoundary;
 use serde_json::Value;
 
 fn unassociated(prefix: &[Message], suffix: &[Message]) -> ReplayAssociations {

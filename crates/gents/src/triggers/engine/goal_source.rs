@@ -9,6 +9,8 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
+use crate::documents::automation::ResolvedTask;
+use crate::documents::ConcurrencyMode;
 use crate::goal::blocked_turn::last_failed_call_in_txn;
 use crate::goal::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
@@ -21,11 +23,11 @@ use crate::goal::{
     ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::goal::{publish_claimed_continuation_with_identity, resume_at_reset};
-use crate::request::watcher::AgentRequest;
-use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
+use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::UpdateSubscriptionSource;
+use gents_protocol::row::AgentRequest;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
@@ -267,7 +269,7 @@ impl GoalSource {
                     {goal_fields}
                 }}
             }}"#,
-            goal_fields = crate::goal::GOAL_FIELDS,
+            goal_fields = gents_protocol::goal::GOAL_FIELDS,
         );
         let response = ConfigAccess::local_as(self.node.clone(), actor.clone())
             .execute(&query)
@@ -789,7 +791,7 @@ impl GoalSource {
             group_vars: None,
             trigger_context: parent.caused_by_trigger_context.clone(),
             args_vars: None,
-            durable_fire_key: crate::triggers::engine::durable_fire_key(
+            durable_fire_key: gents_protocol::trigger_delivery::durable_fire_key(
                 "goal-continuation",
                 &[&child.request_id],
             ),
@@ -926,7 +928,7 @@ impl GoalSource {
                 .as_deref()
                 .context("Goal activity session missing")?,
         );
-        let segment_fields = crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
+        let segment_fields = gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS;
         let query = format!(
             r#"{{
                 InferenceCall(
@@ -960,7 +962,10 @@ impl GoalSource {
             .and_then(|value| value.as_array())
             .context("goal activity query omitted canonical output records")?
             .iter()
-            .map(crate::session::canonical_rows::decode_output_segment_row)
+            .map(|row| {
+                gents_protocol::output::rows::decode_output_segment_row(row)
+                    .map_err(anyhow::Error::from)
+            })
             .collect::<Result<Vec<_>>>()?;
         let provider_output = segments.iter().any(|row| {
             row.segment.request_doc_id == physical_id

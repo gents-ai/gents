@@ -19,6 +19,7 @@ mod workers;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use documents::load_invocation_with_access;
 pub use documents::reject_secret_bearing_callback_fields;
 #[cfg(test)]
 pub(crate) use documents::strip_secret_fields;
@@ -27,7 +28,6 @@ pub(crate) use documents::{
     create_callback_result, create_pending_invocation, flush_workspace_docs, update_invocation,
     CallbackInvocationDoc, CallbackResultDoc,
 };
-pub(crate) use documents::{idempotency_key, load_invocation_with_access};
 pub(crate) use run::recover_local_invocations;
 
 pub(crate) const LIFECYCLE_PENDING: &str = "pending";
@@ -290,9 +290,8 @@ pub(crate) async fn seed_test_configuration(
     owner: &str,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
-    use crate::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use crate::documents::apply_desired_state_plan;
+    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let documents = documents
         .into_iter()
         .map(|(collection, mut value)| {

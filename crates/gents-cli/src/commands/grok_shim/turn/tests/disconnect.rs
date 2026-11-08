@@ -291,7 +291,7 @@ async fn second_prompt_for_live_session_is_rejected() {
     let did_for_terminalize = node_did.clone();
     let terminalize_handle = tokio::spawn(async move {
         loop {
-            let scope = gents::session::session_scope_filter(
+            let scope = gents_protocol::session::session_scope_filter(
                 &did_for_terminalize,
                 "session-1",
                 Some(&did_for_terminalize),

@@ -1510,7 +1510,7 @@ mod provider_account_tests {
                 }),
             ),
         ] {
-            gents::store::config_client::write_inference_backend_document(&access, &backend)
+            gents::documents::write_inference_backend_document(&access, &backend)
                 .await
                 .expect("store backend");
         }

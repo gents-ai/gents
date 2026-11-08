@@ -58,7 +58,7 @@ pub(crate) async fn process_owned_request_with_model_for_test<M>(
     tool_surface: Arc<crate::tools::surface::ToolSurface>,
     tool_runtime: &crate::tools::surface::ToolRuntimeContext,
     model: M,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
 ) -> anyhow::Result<()>
 where
     M: crate::inference::llm::rig_compat::ProviderModel,

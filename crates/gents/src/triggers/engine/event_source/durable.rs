@@ -152,7 +152,7 @@ impl EventSource {
             let advanced = access
                 .transact_write("trigger.advance_arrival", |txn| {
                     Box::pin(async {
-                        crate::store::config_client::event_source_cursor::checkpoint_prefix(
+                        crate::documents::event_consumer::checkpoint_prefix(
                             txn,
                             &pending.owner,
                             &EventConsumer::Trigger {
@@ -253,7 +253,8 @@ impl EventSource {
             .filter(|t| {
                 t.enabled
                     && t.event_kind == "created"
-                    && t.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerDocument
+                    && t.fire_mode
+                        == crate::documents::automation::EventTriggerFireMode::PerDocument
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -293,7 +294,7 @@ impl EventSource {
     async fn next_trigger_arrival(
         &mut self,
         snapshot: &ActiveRuntimeSnapshot,
-        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
+        trigger: &crate::documents::automation::ResolvedEventTrigger,
     ) -> anyhow::Result<Option<FireIntent>> {
         let owner = Self::delivery(snapshot, trigger)?.owner().to_owned();
         let selected = snapshot
@@ -322,19 +323,21 @@ impl EventSource {
             .await?;
         let record = match record {
             Some(record) => record,
-            None => access
-                .transact_write("trigger.seed_arrival_cursor", |txn| {
-                    Box::pin(async {
-                        crate::store::config_client::event_source_cursor::load_or_seed_for_source(
-                            txn,
-                            &owner,
-                            &consumer,
-                            &trigger.source_collection,
-                        )
-                        .await
+            None => {
+                access
+                    .transact_write("trigger.seed_arrival_cursor", |txn| {
+                        Box::pin(async {
+                            crate::documents::event_consumer::load_or_seed_for_source(
+                                txn,
+                                &owner,
+                                &consumer,
+                                &trigger.source_collection,
+                            )
+                            .await
+                        })
                     })
-                })
-                .await?,
+                    .await?
+            }
         };
         let response = access.execute(&format!(
             "{{ _documentArrivals(collection: \"{}\", after: \"{}\", limit: 128) {{ head next entries {{ cursor docID }} }} }}",
@@ -420,13 +423,13 @@ impl EventSource {
         &self,
         access: &ConfigAccess,
         owner: &str,
-        trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
+        trigger: &crate::documents::automation::ResolvedEventTrigger,
         position: &str,
     ) -> anyhow::Result<()> {
         access
             .transact_write("trigger.exclude_arrival", |txn| {
                 Box::pin(async {
-                    crate::store::config_client::event_source_cursor::exclude_arrival(
+                    crate::documents::event_consumer::exclude_arrival(
                         txn,
                         owner,
                         &EventConsumer::Trigger {

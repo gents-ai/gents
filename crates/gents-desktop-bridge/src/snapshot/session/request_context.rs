@@ -392,8 +392,7 @@ fn decode_reduction_row(row: &serde_json::Value) -> anyhow::Result<LoadedReducti
         .ok_or_else(|| anyhow::anyhow!("ProviderContextReduction row has no reduction_key"))?;
     let anchor_sequence = string("source_boundary_json")
         .and_then(|json| {
-            serde_json::from_str::<gents::turn::provider_context_reduction::SourceBoundary>(&json)
-                .ok()
+            serde_json::from_str::<gents_protocol::transcript::SourceBoundary>(&json).ok()
         })
         .and_then(|boundary| boundary.canonical_through)
         .map(|fact| fact.sequence);

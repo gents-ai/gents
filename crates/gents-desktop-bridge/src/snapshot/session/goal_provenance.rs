@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
-use gents::session::canonical_rows::TranscriptMessageRow;
 use gents::store::config_client::{ConfigRead, TransactionFailure};
 use gents_desktop_core::client::CanonicalTranscriptDependencies;
+use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::output::{
     origin::{resolve_origin, ObservedMessage},
     MessagePublication, MessageRole,

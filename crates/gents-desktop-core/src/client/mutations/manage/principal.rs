@@ -3,11 +3,10 @@ mod editor;
 #[cfg(test)]
 use defra_node::Node as EmbeddedNode;
 pub use editor::*;
+use gents::documents::apply_desired_state_plan;
 use gents::documents::Node;
 use gents::store::collection::Collection;
-use gents::store::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 #[cfg(test)]
 use std::sync::Arc;
 

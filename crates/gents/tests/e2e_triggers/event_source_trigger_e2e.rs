@@ -55,9 +55,7 @@ async fn apply_documents(access: &ConfigAccess, documents: Vec<(gents::Collectio
     access
         .transact_write("test.event_trigger_configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                gents::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .expect("install event trigger configuration as held user");

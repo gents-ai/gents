@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::documents::apply_desired_state_plan;
 use crate::eval::optimization::driver::verified_checkpoint;
 use crate::eval::optimization::job::{
     append, append_in_txn, checkpoint, derive_state, load_job, DriftedRef, JobOrigin, JobRecord,
@@ -11,8 +12,7 @@ use crate::eval::optimization::target::{
     Closure, FrozenDocument,
 };
 use crate::store::config_client::{
-    apply_desired_state_plan, stale_expectation, ConfigAccess, DesiredStateApplyPlan,
-    TransactionFailure,
+    stale_expectation, ConfigAccess, DesiredStateApplyPlan, TransactionFailure,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

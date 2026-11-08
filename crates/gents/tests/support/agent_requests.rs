@@ -5,13 +5,13 @@
 use std::sync::Arc;
 
 use gents::request::lifecycle::ExecutionOrigin;
-use gents::request::watcher::AgentRequest;
 use gents::store::graphql::escape_graphql_string;
 use gents::{ConfigAccess, NodeIdentity, RequestLifecycle};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequest;
 
 use super::{ManagedAgentFixture, TestDb};
 
@@ -491,7 +491,7 @@ impl RequestActors {
         content: &str,
         created_at: &str,
     ) {
-        use gents::session::canonical_rows::{
+        use gents_protocol::output::rows::{
             output_segment_create_variables, transcript_message_create_variables,
             CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
         };

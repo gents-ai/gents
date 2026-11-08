@@ -8,13 +8,14 @@ use tracing::Instrument;
 
 use crate::inference::admission::AdmissionRegistry;
 use crate::inference::resolved::ResolvedAgent;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::runtime::snapshot::ResolvedRuntimeSnapshot;
-use crate::runtime::status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::runtime::status::RuntimeStatusHandle;
 use crate::tools::surface::ToolSurface;
+use gents_protocol::node_readiness::ReconcilePhase;
+use gents_protocol::row::AgentRequest;
 
 mod diff;
 mod slot;

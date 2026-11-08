@@ -860,10 +860,10 @@ mod tests {
         agent_did: &str,
         skill_id: &str,
     ) -> Result<()> {
+        use gents::documents::apply_desired_state_plan;
         use gents::store::collection::Collection;
         use gents::store::config_client::{
-            apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-            DesiredStateApplyPlan,
+            read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         fixture
             .desktop_core()

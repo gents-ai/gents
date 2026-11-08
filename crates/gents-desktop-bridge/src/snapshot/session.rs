@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gents::session::canonical_rows::TranscriptMessageRow;
 use gents::store::config_client::{ConfigAccess, TransactionFailure};
 use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents_desktop_core::client::{
@@ -10,6 +9,7 @@ use gents_desktop_core::client::{
 };
 use gents_protocol::job::{JobOutcome, JobState};
 use gents_protocol::message::Message;
+use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use gents_protocol::transcript::present_message;

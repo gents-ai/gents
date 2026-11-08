@@ -1,5 +1,5 @@
 use crate::client::{ClientStore, ClientStoreRows};
-use gents::session::canonical_rows::TranscriptMessageRow;
+use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::output::{MessagePublication, MessageRole, OutputOutcome, TranscriptMessage};
 
 fn header(id: &str) -> TranscriptMessageRow {

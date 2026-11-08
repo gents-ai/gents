@@ -74,9 +74,9 @@ async fn configure_session_chain(
     access
         .transact_write("test.session_limit.node", |txn| {
             let node_plan = &node_plan;
-            Box::pin(async move {
-                gents::store::config_client::apply_desired_state_plan(txn, node_plan).await
-            })
+            Box::pin(
+                async move { gents::documents::apply_desired_state_plan(txn, node_plan).await },
+            )
         })
         .await
         .expect("create user-owned node");
@@ -161,9 +161,7 @@ async fn configure_session_chain(
     access
         .transact_write("test.session_limit.configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                gents::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .expect("create user-owned agent configuration");

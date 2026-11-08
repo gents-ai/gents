@@ -4719,7 +4719,7 @@ async fn publish_owned_terminal_activity(
     request_doc_id: &str,
     content: &str,
 ) {
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -5028,9 +5028,7 @@ async fn create_visible_foreign_collision(
     client
         .transact_write("test.foreign_collision.configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                gents::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();

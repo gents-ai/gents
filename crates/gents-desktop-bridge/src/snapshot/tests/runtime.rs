@@ -766,7 +766,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
         row["_docID"] = "physical-session".into();
         row["started_by_node_did"] = source.node_did.clone().into();
         row["started_by_session_id"] = source.session_id.clone().into();
-        let scope = gents::session::origin::SessionScope::from(&session);
+        let scope = gents_protocol::session::SessionScope::from(&session);
         let candidate = |name: &str| {
             let mut row = row.clone();
             match name {

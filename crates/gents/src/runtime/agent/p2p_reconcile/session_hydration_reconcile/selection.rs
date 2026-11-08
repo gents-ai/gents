@@ -1,9 +1,9 @@
 use super::*;
-use crate::session::origin::SessionScope;
 #[cfg(test)]
 use crate::store::config_client::ConfigAccess;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::required_rows;
+use gents_protocol::session::SessionScope;
 
 #[cfg(test)]
 pub(super) async fn load_hydration_selection(
@@ -47,7 +47,7 @@ pub(super) async fn load_canonical_selection_in_txn(
 
     let mut root_headers = required_rows::<serde_json::Value>(&response, "AgentMessage")?
         .iter()
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let mut root_header_ids = root_headers
         .iter()
@@ -98,7 +98,7 @@ pub(super) async fn load_canonical_selection_in_txn(
     root_header_ids.dedup();
     let mut output_segments = required_rows::<serde_json::Value>(&response, "AgentOutputSegment")?
         .iter()
-        .map(decode_output_segment_row)
+        .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let copied = copied_fork_headers(&root_headers, &output_segments);
     load_origin_headers(
@@ -246,8 +246,8 @@ struct CopiedForks {
 }
 
 fn copied_fork_headers(
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
-    segments: &[crate::session::canonical_rows::OutputSegmentRow],
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
+    segments: &[gents_protocol::output::rows::OutputSegmentRow],
 ) -> CopiedForks {
     let observed = segments
         .iter()
@@ -287,7 +287,7 @@ fn copied_fork_headers(
 
 async fn load_origin_headers(
     txn: &ConfigApplyTxn<'_>,
-    headers: &mut Vec<crate::session::canonical_rows::TranscriptMessageRow>,
+    headers: &mut Vec<gents_protocol::output::rows::TranscriptMessageRow>,
     copied: &CopiedForks,
     node_did: &str,
     requester_did: &str,
@@ -320,7 +320,7 @@ async fn load_origin_headers(
         )).await?;
         let decoded = required_rows::<serde_json::Value>(&response, "AgentMessage")?
             .iter()
-            .map(decode_transcript_message_row)
+            .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
             .collect::<Result<Vec<_>>>()?;
         anyhow::ensure!(
             decoded.len() == 1,
@@ -333,8 +333,8 @@ async fn load_origin_headers(
 
 async fn load_referenced_segments(
     txn: &ConfigApplyTxn<'_>,
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
-    segments: &mut Vec<crate::session::canonical_rows::OutputSegmentRow>,
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
+    segments: &mut Vec<gents_protocol::output::rows::OutputSegmentRow>,
     node_did: &str,
     requester_did: &str,
 ) -> Result<()> {
@@ -359,19 +359,19 @@ async fn load_referenced_segments(
 async fn load_request_segments(
     txn: &ConfigApplyTxn<'_>,
     request_ids: BTreeSet<String>,
-    segments: &mut Vec<crate::session::canonical_rows::OutputSegmentRow>,
+    segments: &mut Vec<gents_protocol::output::rows::OutputSegmentRow>,
     node_did: &str,
     requester_did: &str,
 ) -> Result<()> {
     for request_id in request_ids {
-        let filter = crate::session::canonical_rows::request_output_segments_filter(&request_id);
+        let filter = gents_protocol::output::rows::request_output_segments_filter(&request_id);
         let values = pages::load_rows(
             txn,
             gents_protocol::session_hydration::SessionHydrationCollection::AgentOutputSegment,
             &filter,
         )
         .await?;
-        for row in crate::session::canonical_rows::decode_scoped_request_output_segments(
+        for row in gents_protocol::output::rows::decode_scoped_request_output_segments(
             &values,
             node_did,
             None,
@@ -388,9 +388,9 @@ async fn load_request_segments(
 /// The selected headers and segments whose referenced bases and effects the
 /// caller loads at one read snapshot.
 struct ReferencedBasesInput<'a> {
-    headers: &'a [crate::session::canonical_rows::TranscriptMessageRow],
+    headers: &'a [gents_protocol::output::rows::TranscriptMessageRow],
     copied: &'a CopiedForks,
-    segments: &'a [crate::session::canonical_rows::OutputSegmentRow],
+    segments: &'a [gents_protocol::output::rows::OutputSegmentRow],
     node_did: &'a str,
     requester_did: &'a str,
 }

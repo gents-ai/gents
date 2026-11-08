@@ -2,11 +2,12 @@ use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
 use crate::{resolve_node_did, BackendResolutionMode};
 use anyhow::{Context, Result};
+use gents::documents::apply_desired_state_plan;
 use gents::documents::{BackendAuth, InferenceBackend};
 use gents::inference::backends::rotation::{set_backend_rotation, BackendRotation};
 use gents::store::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
+    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
 use gents::{discover_backend_models, Collection};
 use serde_json::json;
@@ -326,7 +327,7 @@ mod tests {
                 "provider_kind": kind, "endpoint": endpoint, "auth": auth,
             }))
             .unwrap();
-            gents::store::config_client::write_inference_backend_document(&access, &backend)
+            gents::documents::write_inference_backend_document(&access, &backend)
                 .await
                 .unwrap();
         }
@@ -394,7 +395,7 @@ mod tests {
             "auth": {"kind": "node_oauth", "account_ref": "pinned"},
         }))
         .unwrap();
-        gents::store::config_client::write_inference_backend_document(&access, &pinned)
+        gents::documents::write_inference_backend_document(&access, &pinned)
             .await
             .unwrap();
         pool_output(&access, DID, "claude", BackendRotation::Single)

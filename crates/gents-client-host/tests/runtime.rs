@@ -1196,9 +1196,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         signing_access
             .transact_write("seed_editor_speech_service", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    gents::store::config_client::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await?;
         let services = client

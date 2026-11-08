@@ -32,7 +32,7 @@ async fn signed_trigger_materializer(
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+        .with_automation(crate::documents::automation::ResolvedAutomation {
             event_triggers: triggers,
             ..Default::default()
         })
@@ -98,9 +98,11 @@ async fn create_session_fire(
                 let created = txn.execute(&mutation).await?;
                 let doc = crate::store::graphql::created_doc_id(&created, "TriggerFire")?;
                 let session =
-                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("fire session is visible to its Agent"))?;
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("fire session is visible to its Agent"))?;
                 crate::triggers::engine::durable::stage_session_child_relationships(
                     txn,
                     "TriggerFire",
@@ -183,14 +185,14 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     let rows = access
         .execute(&format!(
             "{{AgentRequest {{{}}}}}",
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
     let request = crate::AgentRequest::try_from(row).unwrap();
-    let scope = crate::session::origin::SessionScope::of_request(&request);
+    let scope = gents_protocol::session::SessionScope::of_request(&request);
     // Delivery opens the Task session with its verified provenance in the
     // same transaction as the request; replaying the opening creates nothing.
     assert!(
@@ -226,7 +228,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             .await
             .unwrap()
     );
-    let caller = crate::session::origin::SessionScope {
+    let caller = gents_protocol::session::SessionScope {
         session_id: "caller".into(),
         ..scope.clone()
     };
@@ -269,7 +271,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         .find(|entry| entry["session_id"] == scope.session_id)
         .unwrap();
     assert_eq!(entry["can_interrupt"], true);
-    let wrong_requester = crate::session::origin::SessionScope {
+    let wrong_requester = gents_protocol::session::SessionScope {
         requester_did: Some("did:wrong:requester".into()),
         ..scope.clone()
     };
@@ -278,7 +280,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             .await
             .unwrap()
     );
-    let foreign = crate::session::origin::SessionScope {
+    let foreign = gents_protocol::session::SessionScope {
         node_did: "did:other".into(),
         ..caller
     };
@@ -371,11 +373,10 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                 )
                 .await
             })
-        },
-    )
-    .await
-    .unwrap();
-    let wrong_requester_scope = crate::session::origin::SessionScope {
+        })
+        .await
+        .unwrap();
+    let wrong_requester_scope = gents_protocol::session::SessionScope {
         requester_did: Some("did:wrong:requester".into()),
         ..scope.clone()
     };
@@ -417,15 +418,18 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     let forged_rows = access
         .execute(&format!(
         "{{AgentRequest(filter: {{request_id: {{_eq: \"forged-authority-request\"}}}}) {{{}}}}}",
-        crate::request::admission::SIGNED_REQUEST_FIELDS,
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
     ))
         .await
         .unwrap();
     let forged_row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(forged_rows["data"]["AgentRequest"][0].clone()).unwrap();
-    assert!(crate::request::admission::verify_request_receipt_signature(&forged_row).is_err());
+    assert!(
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&forged_row)
+            .is_err()
+    );
     let forged_request = crate::AgentRequest::try_from(forged_row).unwrap();
-    let forged_scope = crate::session::origin::SessionScope::of_request(&forged_request);
+    let forged_scope = gents_protocol::session::SessionScope::of_request(&forged_request);
     access.write("test.forged_fire", &format!(
         r#"mutation {{create_TriggerFire(input: {{fire_key: "forged-fire", owner_did: "{}", request_id: "forged-authority-request", session_id: "forged-authority-session", trigger_id: "authority-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
         escape_graphql_string(&owner)
@@ -475,11 +479,10 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                     )
                     .await
                 })
-            },
-        )
-        .await
-        .unwrap();
-        let bad_scope = crate::session::origin::SessionScope {
+            })
+            .await
+            .unwrap();
+        let bad_scope = gents_protocol::session::SessionScope {
             node_did: owner.clone(),
             session_id: test_session.into(),
             requester_did: if test_session == "wrong-requester-session" {
@@ -696,7 +699,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
             }}
         }}"#,
         escape_graphql_string(&identity.retry_key),
-        escape_graphql_string(&crate::goal::deterministic_goal_creation_key(
+        escape_graphql_string(&gents_protocol::goal::deterministic_goal_creation_key(
             &node_did,
             &identity.session_id,
         )),
@@ -894,14 +897,14 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         })
         .await
         .unwrap();
-    let initial = crate::goal::deterministic_goal_id(&owner, session);
+    let initial = gents_protocol::goal::deterministic_goal_id(&owner, session);
     let selected = crate::goal::replacement_goal_identity(&owner, session, "first-replacement");
     access.transact_write("test.replay_current_goal", |txn| {
         let selected = &selected;
         let agent_did = &agent_did;
         let owner = &owner;
         Box::pin(async move {
-            let existing = crate::session::load_agent_session_owner_in_txn(txn, owner, session)
+            let existing = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, owner, session)
                 .await?.expect("existing task session");
             let input = serde_json::json!({
                 "node_did": owner, "session_id": session, "session_doc_id": existing.doc_id,
@@ -971,10 +974,10 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
     assert_eq!(publish().await.unwrap(), prepared.receipt.request_id);
     let query = format!(
         "{{AgentRequest {{{}}} TriggerFire {{_docID goal_id request_id}}}}",
-        crate::request::admission::SIGNED_REQUEST_FIELDS
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
     );
     let admitted = access.execute(&query).await.unwrap();
-    let existing_scope = crate::session::origin::SessionScope {
+    let existing_scope = gents_protocol::session::SessionScope {
         node_did: owner.clone(),
         session_id: session.to_owned(),
         requester_did: Some(agent_did.clone()),
@@ -1314,7 +1317,7 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+        .with_automation(crate::documents::automation::ResolvedAutomation {
             event_triggers: triggers,
             ..Default::default()
         })
@@ -1324,8 +1327,10 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(db.node.clone(), rx);
-    let key = super::super::durable_fire_key("event-group", &["generation-one"]);
-    let next = super::super::durable_fire_key("event-group", &["generation-two"]);
+    let key =
+        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["generation-one"]);
+    let next =
+        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["generation-two"]);
     let request_id = materializer
         .materialize(
             &task,
@@ -1383,7 +1388,7 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     grouped_source.source_collection = "AgentRequest".into();
     grouped_source.correlation_field = Some("caused_by_correlation".into());
     grouped_source.expected_count = Some(1);
-    grouped_source.fire_mode = crate::runtime::snapshot::EventTriggerFireMode::PerGroup;
+    grouped_source.fire_mode = crate::documents::automation::EventTriggerFireMode::PerGroup;
     let delivery = crate::triggers::engine::event_delivery::Delivery::Trigger {
         node_did: agent.node_did(),
         trigger: &grouped_source,
@@ -1434,7 +1439,7 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+        .with_automation(crate::documents::automation::ResolvedAutomation {
             event_triggers: RapidHashMap::from_iter([(
                 trigger_id.to_owned(),
                 resolved_event_trigger_with_concurrency(
@@ -1472,8 +1477,10 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
         signed_trigger_materializer("durable-group-marker", &[trigger, "other-trigger"]).await;
     let owner = agent.node_did();
     let correlation = "run-\"42";
-    let old = crate::triggers::engine::durable_fire_key("event-group", &["old-membership"]);
-    let next = crate::triggers::engine::durable_fire_key("event-group", &["new-membership"]);
+    let old =
+        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["old-membership"]);
+    let next =
+        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["new-membership"]);
     create_request(
         &access,
         &old,
@@ -1521,7 +1528,8 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
             .unwrap(),
         "goal task still marks the same delivery after task rename or goal-mode switch"
     );
-    let later = crate::triggers::engine::durable_fire_key("event-group", &["third-membership"]);
+    let later =
+        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["third-membership"]);
     assert!(!materializer
         .has_materialized_group_request(owner, trigger, &later)
         .await
@@ -2130,7 +2138,7 @@ async fn claimed_trigger_request(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
             escape_graphql_string(request_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
@@ -2157,9 +2165,9 @@ async fn canonical_partial_streams(
     access: &crate::ConfigAccess,
     row: &gents_protocol::row::AgentRequestRow,
 ) -> (String, String) {
-    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::live::reconstruct_dense_prefix;
     use gents_protocol::output::reconstruction::ObservedSegment;
+    use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::StreamPayload;
 
     let doc_id = row.doc_id.as_deref().unwrap();
@@ -2175,7 +2183,7 @@ async fn canonical_partial_streams(
         .as_array()
         .unwrap()
         .iter()
-        .map(decode_output_segment_row)
+        .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
         .collect::<anyhow::Result<Vec<_>>>()
         .unwrap();
     let observed = segments
@@ -2548,7 +2556,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
             let response = access
                 .execute(&format!(
                     "{{ AgentRequest {{ {} }} }}",
-                    crate::request::watcher::AGENT_REQUEST_FIELDS
+                    gents_protocol::row::AGENT_REQUEST_FIELDS
                 ))
                 .await
                 .unwrap();
@@ -2565,7 +2573,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                     .find(|row| row.request_id == request_id)
                     .unwrap()
                     .clone();
-                let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+                let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
                 let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                     node.clone(),
                     &held_agent,

@@ -642,10 +642,11 @@ mod tests {
         use crate::tools::call::lifecycle::admission_fixture::{
             pending_client_fixture_request, publish_accepted_on_claimed_request,
         };
-        use crate::tools::call::lifecycle::{AwaitMode, FailureClass};
+        use crate::tools::call::lifecycle::FailureClass;
         use crate::NodeIdentity;
         use gents_protocol::message::{AssistantContent, Message, Text};
         use gents_protocol::output::TerminalOutput;
+        use gents_protocol::tool_call::AwaitMode;
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
         let db = crate::support::test_db_from_home(home);
         let (db, user, client, binding) =

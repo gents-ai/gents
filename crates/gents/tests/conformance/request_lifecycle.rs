@@ -154,11 +154,12 @@ async fn claim_atomically_projects_the_request_owned_session() {
         .execute(&format!(
             "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} }} }}",
             escape_graphql_string(&session_doc),
-            gents::session::AGENT_SESSION_FIELDS,
+            gents_protocol::session::AGENT_SESSION_FIELDS,
         ))
         .await
         .unwrap();
-    let session = gents::session::decode_session_row(&response["data"]["AgentSession"][0]).unwrap();
+    let session =
+        gents_protocol::session::decode_session_row(&response["data"]["AgentSession"][0]).unwrap();
     assert_eq!(session.session.session_id, session_id);
     assert_eq!(session.session.node_did, db.node_identity.did());
     assert_eq!(session.session.agent_did, fixture.agent.did());
@@ -224,7 +225,7 @@ async fn admission_rejection_persists_despite_an_undecodable_session_row_under_i
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&session_id),
-            gents::session::AGENT_SESSION_FIELDS,
+            gents_protocol::session::AGENT_SESSION_FIELDS,
         ))
         .await
         .unwrap();
@@ -234,7 +235,7 @@ async fn admission_rejection_persists_despite_an_undecodable_session_row_under_i
         .unwrap();
     assert_eq!(rows.len(), 1, "the refusal must not mint beside the row");
     assert!(
-        gents::session::decode_session_row(&rows[0]).is_err(),
+        gents_protocol::session::decode_session_row(&rows[0]).is_err(),
         "the refusal must leave the undecodable row untouched"
     );
 }
@@ -2193,13 +2194,13 @@ async fn assert_session_observes_request_with_access(
         .execute(&format!(
             r#"{{ AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{ {} }} }}"#,
             escape_graphql_string(session_id),
-            gents::session::AGENT_SESSION_FIELDS,
+            gents_protocol::session::AGENT_SESSION_FIELDS,
         ))
         .await
         .unwrap();
     let rows = response["data"]["AgentSession"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "exact session must be unambiguous");
-    let session = gents::session::decode_session_row(&rows[0])
+    let session = gents_protocol::session::decode_session_row(&rows[0])
         .unwrap()
         .session;
     assert_eq!(session.session_id, session_id);

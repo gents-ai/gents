@@ -135,7 +135,7 @@ impl ClientCore {
             let goal_id = if expected.is_some() {
                 gents::goal::replacement_goal_identity(node_did, session_id, &command_id).goal_id
             } else {
-                gents::goal::deterministic_goal_id(node_did, session_id)
+                gents_protocol::goal::deterministic_goal_id(node_did, session_id)
             };
             input.goal_assignment = Some(GoalAssignmentInput {
                 goal_id,
@@ -190,7 +190,7 @@ impl ClientCore {
             .transact_readonly("goal.command.selected_session", |txn| {
                 Box::pin(async move {
                     let session =
-                        gents::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                        gents::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
                             .await?
                             .ok_or_else(|| anyhow::anyhow!("selected session is not available"))?;
                     let (agent_doc_id, _) =

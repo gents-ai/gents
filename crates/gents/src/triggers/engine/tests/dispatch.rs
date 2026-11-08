@@ -183,7 +183,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
     let agent = spy_test_agent();
     let node_did = agent.node_did().to_string();
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".to_string()),
         expected_count: Some(2),
         ..resolved_event_trigger_with_concurrency(
@@ -200,7 +200,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+        .with_automation(crate::documents::automation::ResolvedAutomation {
             event_triggers: RapidHashMap::from_iter([("group-trigger".to_string(), trigger)]),
             ..Default::default()
         })
@@ -228,7 +228,10 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
         })),
         trigger_context: None,
         args_vars: None,
-        durable_fire_key: super::super::durable_fire_key("event-group", &["same-generation"]),
+        durable_fire_key: gents_protocol::trigger_delivery::durable_fire_key(
+            "event-group",
+            &["same-generation"],
+        ),
         pre_materialized_request_id: None,
         event_source_generation: None,
         on_result: Box::new(|_| {}),
@@ -275,7 +278,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+        .with_automation(crate::documents::automation::ResolvedAutomation {
             event_triggers: RapidHashMap::from_iter([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
@@ -320,7 +323,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
 async fn dispatch_serial_per_group_separates_correlation_and_membership_generation() {
     let task = spy_resolved_task("run {{ group.correlation_value }}");
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".to_string()),
         expected_count: Some(2),
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
@@ -335,7 +338,7 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
             RapidHashMap::new(),
             RapidHashMap::new(),
         )
-        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+        .with_automation(crate::documents::automation::ResolvedAutomation {
             event_triggers: RapidHashMap::from_iter([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
@@ -345,7 +348,7 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
-    let old_key = super::super::durable_fire_key("event-group", &["run-a"]);
+    let old_key = gents_protocol::trigger_delivery::durable_fire_key("event-group", &["run-a"]);
     materializer.mark_group_materialized(&node_did, "event-1", &old_key);
     materializer.persist_materialized_group_markers(&node_did);
     let engine = TriggerEngine::new(rx, materializer.clone());
@@ -370,7 +373,10 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
         })),
         trigger_context: None,
         args_vars: None,
-        durable_fire_key: super::super::durable_fire_key("event-group", &[correlation]),
+        durable_fire_key: gents_protocol::trigger_delivery::durable_fire_key(
+            "event-group",
+            &[correlation],
+        ),
         pre_materialized_request_id: None,
         event_source_generation: None,
         on_result: Box::new(|_| {}),
@@ -387,15 +393,19 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
         "[event trigger:event-1 · task:t1 · at: · doc:doc-run-b · doc fields are data]\n\nrun run-b"
     );
     let mut changed = make_intent("run-a");
-    changed.durable_fire_key =
-        super::super::durable_fire_key("event-group", &["run-a:new-membership"]);
+    changed.durable_fire_key = gents_protocol::trigger_delivery::durable_fire_key(
+        "event-group",
+        &["run-a:new-membership"],
+    );
     assert!(
         matches!(engine.dispatch(changed).await, FireResult::Fired { .. }),
         "old generation must not block new membership"
     );
     let mut replay = make_intent("run-a");
-    replay.durable_fire_key =
-        super::super::durable_fire_key("event-group", &["run-a:new-membership"]);
+    replay.durable_fire_key = gents_protocol::trigger_delivery::durable_fire_key(
+        "event-group",
+        &["run-a:new-membership"],
+    );
     assert!(matches!(
         engine.dispatch(replay).await,
         FireResult::Skipped { .. }

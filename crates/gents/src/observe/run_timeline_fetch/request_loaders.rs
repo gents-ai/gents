@@ -69,7 +69,7 @@ pub(super) async fn load_timeline_requests_for_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineRequestRow>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentRequest(

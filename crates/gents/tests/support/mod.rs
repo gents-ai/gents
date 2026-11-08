@@ -6,7 +6,8 @@ use anyhow::Context;
 use gents::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::store::graphql::escape_graphql_string;
-use gents::{request::watcher::AgentRequest, NodeIdentity};
+use gents::NodeIdentity;
+use gents_protocol::row::AgentRequest;
 use serde::Deserialize;
 
 pub mod accepted_turn;
@@ -161,9 +162,8 @@ pub async fn load_managed_fixture_user(db: &TestDb) -> gents::KeyIdentity {
 }
 
 pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
-    use gents::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use gents::documents::apply_desired_state_plan;
+    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
     let user = managed_fixture_user(db).await;
     let user_did = identity::Did::new(user.did()).expect("valid user DID");
@@ -266,9 +266,8 @@ pub async fn install_managed_agent(
     Arc<dyn NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    use gents::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use gents::documents::apply_desired_state_plan;
+    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let runtime = db.node_identity.as_ref();
     let user_did = identity::Did::new(user.did()).expect("valid user DID");
     let binding =
@@ -404,9 +403,8 @@ pub async fn test_p2p_db_without_node(name: &str, admission: TestP2pAdmission) -
 /// visible local Node before they publish, and later fixture configuration by
 /// the same User updates this document instead of racing a second owner.
 async fn install_runtime_node(db: &TestDb) {
-    use gents::store::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use gents::documents::apply_desired_state_plan;
+    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
     let runtime = db.node_identity.as_ref();
     let admin = gents::ConfigAccess::local_as(
@@ -954,7 +952,7 @@ pub async fn create_agent_message_in_scope(
     timestamp: &str,
 ) {
     use gents::defra_node::QueryRequest;
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };

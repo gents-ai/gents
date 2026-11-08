@@ -615,12 +615,12 @@ mod tests {
     #[tokio::test]
     async fn model_driven_held_client_eval_and_optimization_records_are_private(
     ) -> anyhow::Result<()> {
+        use crate::documents::apply_desired_state_plan;
         use crate::eval::optimization::job::{self, Budgets, JobOrigin, JournalEntry};
         use crate::eval::optimization::policy::PolicyV2;
         use crate::eval::optimization::target::{Target, TargetField};
         use crate::store::config_client::{
-            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-            GraphqlEndpoint,
+            DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
         };
         use crate::store::identity::NodeIdentity;
         use acp::nac::NodePermission;

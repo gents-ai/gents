@@ -93,7 +93,7 @@ async fn outbound_close_after_submission_interrupts_and_drains() {
     let did_for_terminalize = node_did.clone();
     let terminalize_handle = tokio::spawn(async move {
         loop {
-            let scope = gents::session::session_scope_filter(
+            let scope = gents_protocol::session::session_scope_filter(
                 &did_for_terminalize,
                 "session-1",
                 Some(&did_for_terminalize),
@@ -210,7 +210,7 @@ async fn cancel_before_request_id_resolves_cancelled_and_permits_reuse() {
     let did_for_terminalize = node_did.clone();
     let terminalize_handle = tokio::spawn(async move {
         loop {
-            let scope = gents::session::session_scope_filter(
+            let scope = gents_protocol::session::session_scope_filter(
                 &did_for_terminalize,
                 "session-1",
                 Some(&did_for_terminalize),

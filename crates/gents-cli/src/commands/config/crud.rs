@@ -416,7 +416,8 @@ fn print_table_row(cells: &[&str; 3], widths: &[usize; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+    use gents::documents::apply_desired_state_plan;
+    use gents::store::config_client::DesiredStateApplyPlan;
     use std::sync::Arc;
 
     #[tokio::test]

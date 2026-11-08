@@ -205,16 +205,15 @@ pub(crate) async fn stage_fire_request(
     Ok(true)
 }
 
-pub(crate) fn outcome_source_allowed(source_collection: &str, emit_outcome: bool) -> bool {
-    source_collection != "FireOutcome" || !emit_outcome
-}
-
 pub(crate) async fn stage_fire_receipt(
     txn: &ConfigApplyTxn<'_>,
     fire: &TriggerFire,
 ) -> Result<bool> {
     ensure!(
-        outcome_source_allowed(&fire.identity.source_collection, fire.emit_outcome),
+        crate::documents::event_trigger::outcome_source_allowed(
+            &fire.identity.source_collection,
+            fire.emit_outcome,
+        ),
         "a Task sourced from FireOutcome cannot emit another FireOutcome"
     );
     ensure!(
@@ -341,7 +340,7 @@ pub(crate) async fn stage_outcome(
         gents_protocol::schemas::FIRE_OUTCOME,
     ).await?;
     let doc_id = crate::store::graphql::created_doc_id(&response, "FireOutcome")?;
-    let session = crate::session::load_agent_session_owner_in_txn(
+    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn,
         &fire.identity.owner_did,
         &fire.session_id,

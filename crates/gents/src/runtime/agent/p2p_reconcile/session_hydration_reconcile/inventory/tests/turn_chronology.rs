@@ -190,7 +190,7 @@ async fn check_turn_chronology(retry: bool) {
         "write_file",
         "successor-edit",
         serde_json::json!({"path":"repeated.rs"}),
-        crate::tools::call::lifecycle::AwaitMode::Foreground,
+        gents_protocol::tool_call::AwaitMode::Foreground,
         true,
     )
     .await
@@ -211,7 +211,7 @@ async fn check_turn_chronology(retry: bool) {
         |txn| {
             let original = &original;
             Box::pin(async move {
-                crate::session::load_agent_session_row_in_txn(
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
                     txn,
                     &original.node_did,
                     &original.session_id,

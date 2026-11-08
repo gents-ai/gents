@@ -67,9 +67,9 @@ fn receipt(fire: &Fire, index: usize) -> TriggerFire {
         task_id: "contract-task".into(),
         request_id: fire.identity.request_id(),
         session_id: fire.session.clone(),
-        goal_id: fire
-            .goal_backed
-            .then(|| crate::goal::deterministic_goal_id(&fire.identity.owner_did, &fire.session)),
+        goal_id: fire.goal_backed.then(|| {
+            gents_protocol::goal::deterministic_goal_id(&fire.identity.owner_did, &fire.session)
+        }),
         goal_objective: fire.goal_backed.then(|| "contract objective".into()),
         goal_token_budget: None,
         goal_assignment_applied: false,
@@ -458,7 +458,7 @@ async fn persisted_outcome_requests(
     let response = access
         .execute(&format!(
             "{{AgentRequest {{{} lifecycle_state}}}}",
-            crate::request::watcher::AGENT_REQUEST_FIELDS
+            gents_protocol::row::AGENT_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -526,8 +526,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         .iter()
                         .find(|row| row.request_id == identity.request_id())
                         .unwrap();
-                    let request =
-                        crate::request::watcher::AgentRequest::try_from(row.clone()).unwrap();
+                    let request = gents_protocol::row::AgentRequest::try_from(row.clone()).unwrap();
                     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                         node.clone(),
                         agent.did(),
@@ -735,14 +734,10 @@ async fn saved_arrival_cursor(
         .transact_write("test.read_arrival_cursor", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    crate::store::config_client::event_source_cursor::load_or_seed(
-                        txn,
-                        owner,
-                        &handoff_consumer(),
-                    )
-                    .await?
-                    .cursor
-                    .after,
+                    crate::documents::event_consumer::load_or_seed(txn, owner, &handoff_consumer())
+                        .await?
+                        .cursor
+                        .after,
                 )
             })
         })
@@ -752,9 +747,9 @@ async fn saved_arrival_cursor(
 
 #[tokio::test]
 async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashes() {
+    use crate::documents::apply_desired_state_plan;
     use crate::store::config_client::{
-        apply_desired_state_plan, event_source_cursor, ConfigAccess, DesiredStateApplyDocument,
-        DesiredStateApplyPlan, NodePermission,
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
     };
     use crate::store::identity::NodeIdentity as _;
     for case in contract()["cursors"].as_array().unwrap() {
@@ -859,8 +854,14 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         agent
             .transact_write("test.prior_checkpoint", |txn| {
                 Box::pin(async move {
-                    event_source_cursor::advance(txn, owner, &handoff_consumer(), "Work", pre_after)
-                        .await
+                    crate::documents::event_consumer::advance(
+                        txn,
+                        owner,
+                        &handoff_consumer(),
+                        "Work",
+                        pre_after,
+                    )
+                    .await
                 })
             })
             .await
@@ -917,7 +918,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 .transact_write("test.arrival_checkpoint_crash", |txn| {
                     let entry = &entry;
                     Box::pin(async move {
-                        let accepted = event_source_cursor::checkpoint_prefix(
+                        let accepted = crate::documents::event_consumer::checkpoint_prefix(
                             txn,
                             owner,
                             &handoff_consumer(),
@@ -1035,7 +1036,9 @@ async fn admit_callback_arrival(
                 source_doc_id: doc_id.into(),
                 source_version: Some(version.into()),
             },
-            idempotency_key: crate::triggers::callback::idempotency_key("handoff", "Work", doc_id),
+            idempotency_key: gents_protocol::trigger_delivery::idempotency_key(
+                "handoff", "Work", doc_id,
+            ),
             caused_by_correlation: None,
             lifecycle_state: crate::triggers::callback::LIFECYCLE_PENDING.into(),
             attempts: Some(0),
@@ -1070,9 +1073,9 @@ async fn admit_callback_arrival(
 
 #[tokio::test]
 async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
+    use crate::documents::apply_desired_state_plan;
     use crate::store::config_client::{
-        apply_desired_state_plan, event_source_cursor, ConfigAccess, DesiredStateApplyDocument,
-        DesiredStateApplyPlan, NodePermission,
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
     };
     for case in contract()["callback_cursors"].as_array().unwrap() {
         let name = &case["name"];
@@ -1145,7 +1148,8 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    event_source_cursor::load_or_seed(txn, owner, &handoff_binding()).await?;
+                    crate::documents::event_consumer::load_or_seed(txn, owner, &handoff_binding())
+                        .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -1158,10 +1162,14 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     .transact_write("test.read_callback_cursor", |txn| {
                         Box::pin(async move {
                             Ok::<_, anyhow::Error>(
-                                event_source_cursor::load_or_seed(txn, owner, &handoff_binding())
-                                    .await?
-                                    .cursor
-                                    .after,
+                                crate::documents::event_consumer::load_or_seed(
+                                    txn,
+                                    owner,
+                                    &handoff_binding(),
+                                )
+                                .await?
+                                .cursor
+                                .after,
                             )
                         })
                     })
@@ -1181,8 +1189,14 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         agent_access
             .transact_write("test.prior_callback_checkpoint", |txn| {
                 Box::pin(async move {
-                    event_source_cursor::advance(txn, owner, &handoff_binding(), "Work", pre_after)
-                        .await
+                    crate::documents::event_consumer::advance(
+                        txn,
+                        owner,
+                        &handoff_binding(),
+                        "Work",
+                        pre_after,
+                    )
+                    .await
                 })
             })
             .await
@@ -1240,7 +1254,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 .transact_write("test.callback_checkpoint_crash", |txn| {
                     let entry = &entry;
                     Box::pin(async move {
-                        let accepted = event_source_cursor::checkpoint_prefix(
+                        let accepted = crate::documents::event_consumer::checkpoint_prefix(
                             txn,
                             owner,
                             &handoff_binding(),

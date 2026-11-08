@@ -1,16 +1,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gents::session::origin::{
-    group_caused, lineage, single_caused, starting_request, SessionLink, SessionScope,
-};
-use gents::session::{public_request_filter, session_scope_filter};
+use gents::session::origin::{group_caused, lineage, single_caused, starting_request, SessionLink};
+use gents::session::public_request_filter;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::graphql_string_list_literal;
 use gents::tools::native::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::session::session_scope_filter;
+use gents_protocol::session::SessionScope;
 use serde_json::Value;
 
 use crate::types::{
@@ -277,12 +277,14 @@ async fn related_session_metadata<'a>(
             let query = format!(
                 "{{ AgentSession(filter: {{_or: [{}]}}) {{ {} }} }}",
                 filters.join(","),
-                gents::session::AGENT_SESSION_FIELDS
+                gents_protocol::session::AGENT_SESSION_FIELDS
             );
             let sessions: Vec<_> = rows(&access, &query, "AgentSession")
                 .await?
                 .iter()
-                .map(gents::session::decode_session_row)
+                .map(|row| {
+                    gents_protocol::session::decode_session_row(row).map_err(anyhow::Error::from)
+                })
                 .collect::<anyhow::Result<Vec<_>>>()?
                 .into_iter()
                 .map(|row| row.session)

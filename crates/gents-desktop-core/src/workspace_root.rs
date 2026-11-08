@@ -7,8 +7,9 @@
 //! this returns: `gents serve` refuses a configured root that is not published.
 
 use anyhow::{Context, Result};
+use gents::documents::write_tools_document;
 use gents::documents::{load_agent_context_and_tools_in_txn, Tools};
-use gents::store::config_client::{write_tools_document, ConfigAccess};
+use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use serde::Serialize;
 use ts_rs::TS;

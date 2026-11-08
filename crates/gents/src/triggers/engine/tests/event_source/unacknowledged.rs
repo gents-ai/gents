@@ -52,7 +52,7 @@ async fn ping_snapshot(
     )
     .with_node(runtime_node)
     .with_local_did(crate::request::lifecycle::test_support::PIN_FIXED_DID.into())
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         event_triggers: RapidHashMap::from_iter([("ping-trigger".to_string(), trigger)]),
         ..Default::default()
     });
@@ -187,7 +187,7 @@ impl Delivery {
                 let owner = &owner;
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        crate::store::config_client::event_source_cursor::load_or_seed_for_source(
+                        crate::documents::event_consumer::load_or_seed_for_source(
                             txn,
                             owner,
                             &gents_protocol::event_delivery::EventConsumer::Trigger {
@@ -474,7 +474,7 @@ struct PanicMaterializer;
 impl MaterializerHandle for PanicMaterializer {
     fn materialize(
         &self,
-        _task: &crate::runtime::snapshot::ResolvedTask,
+        _task: &crate::documents::automation::ResolvedTask,
         _trigger_id: Option<&str>,
         _trigger_kind: TriggerKind,
         _trigger_doc_id: Option<&str>,
@@ -510,7 +510,7 @@ impl MaterializerHandle for PanicMaterializer {
 
     fn recover_goal_task_fire(
         &self,
-        _task: &crate::runtime::snapshot::ResolvedTask,
+        _task: &crate::documents::automation::ResolvedTask,
         _durable_fire_key: &str,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send + '_>> {
         Box::pin(async { Ok(None) })

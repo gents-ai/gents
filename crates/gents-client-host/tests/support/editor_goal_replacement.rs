@@ -175,7 +175,7 @@ pub async fn verify(
         AgentSession(filter: {{{scope}}}) {{_docID session_id node_did requester_did agent_did}}
     }}"#,
         gents::SIGNED_REQUEST_FIELDS,
-        gents::goal::GOAL_FIELDS
+        gents_protocol::goal::GOAL_FIELDS
     );
     let value = tokio::time::timeout(Duration::from_secs(30), async {
         loop {

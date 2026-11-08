@@ -8,8 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{AgentDaemon, AuxiliaryResult, AuxiliaryTask};
 use crate::inference::admission::{self, CallKind};
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::loop_stream::AggregateTokenBudget;
+use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
 mod context_tests;

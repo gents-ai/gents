@@ -85,7 +85,7 @@ pub struct SessionTranscriptQueryPage {
     pub requests: Vec<AgentRequestRow>,
     /// Delivery messages outside the page that carry results for its tool
     /// calls: sources for those results, never rows of their own.
-    pub result_messages: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
+    pub result_messages: Vec<gents_protocol::output::rows::TranscriptMessageRow>,
 }
 
 /// The message numbers a transcript read proves, inclusive. Every message in
@@ -99,10 +99,10 @@ pub struct TranscriptSpan {
 
 #[derive(Debug, Default)]
 pub struct CanonicalTranscriptDependencies {
-    pub origin_headers: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
+    pub origin_headers: Vec<gents_protocol::output::rows::TranscriptMessageRow>,
     /// Exact source request metadata supplies attribution, never child turn membership.
     pub origin_requests: Vec<AgentRequestRow>,
-    pub output_segments: Vec<gents::session::canonical_rows::OutputSegmentRow>,
+    pub output_segments: Vec<gents_protocol::output::rows::OutputSegmentRow>,
     pub denied_header_doc_ids: Vec<String>,
     pub denied_segment_doc_ids: Vec<String>,
     pub dependency_denials: Vec<DependencyDenial>,

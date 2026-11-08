@@ -398,7 +398,10 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     assert!(intent.args_vars.is_none());
     assert_eq!(
         intent.durable_fire_key,
-        crate::triggers::engine::durable_fire_key("schedule", &["sched-1", &persisted_next_run_at])
+        gents_protocol::trigger_delivery::durable_fire_key(
+            "schedule",
+            &["sched-1", &persisted_next_run_at]
+        )
     );
 
     let ev = &intent.event_vars;
@@ -704,9 +707,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     user_access
         .transact_write("test.schedule.install", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();

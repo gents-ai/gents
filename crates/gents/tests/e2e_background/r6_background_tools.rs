@@ -140,7 +140,7 @@ async fn boot_background_turn_with_bounds(
                             update: execution,
                         },
                     ])?;
-                    gents::store::config_client::apply_desired_state_plan(txn, &plan)
+                    gents::documents::apply_desired_state_plan(txn, &plan)
                         .await
                         .map(|_| ())
                 })

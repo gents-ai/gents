@@ -15,10 +15,10 @@ use crate::inference::compaction::ReductionOptions;
 use crate::inference::llm::message::Message;
 use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent};
 use crate::request::streaming::StreamWriter;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::runtime::agent::stream_processor::{processor_failure, RuntimeSeamError};
 use crate::tools::call::hook::DefraSessionHook;
+use gents_protocol::row::AgentRequest;
 
 type RequestDeadline = Option<DateTime<Utc>>;
 
@@ -185,7 +185,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         doc_id: &str,
         history: &[TaggedMessage],
         wake_notifications: &[TaggedMessage],
@@ -1076,7 +1076,6 @@ pub(super) mod tests {
     use crate::inference::backends::provider::BackendProviderKind;
     use crate::inference::llm::tool::ToolDyn;
     use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
-    use crate::request::watcher::AgentRequest;
     use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
     use crate::runtime::agent::daemon::AgentDaemonInit;
     use crate::runtime::agent::runtime::StartupBarrier;
@@ -1088,6 +1087,7 @@ pub(super) mod tests {
     use crate::turn::prompt::LayeredPromptBuilder;
     use anyhow::Context;
     use futures::stream;
+    use gents_protocol::row::AgentRequest;
     use rig::completion::{
         CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
     };
@@ -1793,7 +1793,7 @@ pub(super) mod tests {
                 row["request_doc_id"] == request.doc_id
                     && row["requester_did"] == requester_did
                     && row["message_key"]
-                        == crate::session::canonical_rows::authored_message_key(
+                        == gents_protocol::output::rows::authored_message_key(
                             &request.doc_id,
                             "prompt",
                         )

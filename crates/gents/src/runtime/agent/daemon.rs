@@ -41,9 +41,9 @@ use super::runtime::StartupBarrier;
 use crate::inference::compaction::{ReductionEngine, ReductionOptions};
 use crate::inference::resolved::ResolvedAgent;
 use crate::observe::runtime_trace::{record_current_claim_outcome, record_current_request_outcome};
-use crate::request::watcher::AgentRequest;
 use crate::tools::call::hook::FailurePolicy;
 use crate::turn::prompt::LayeredPromptBuilder;
+use gents_protocol::row::AgentRequest;
 
 /// Task hooks and workspace write/integration effects must finish before their
 /// request terminalizes; only requests without such effects may finish inside

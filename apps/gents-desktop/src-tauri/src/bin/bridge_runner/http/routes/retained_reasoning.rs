@@ -15,7 +15,7 @@ pub(super) async fn retained_provider_reasoning(
     session_id: &str,
     request_id: &str,
 ) -> Result<RetainedProviderReasoning> {
-    use gents::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+    use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
     use gents_protocol::output::{
         reconstruction::{reconstruct_stream, ObservedSegment},
         OutputSource, PayloadRef, SourceClose, StreamPayload,
@@ -47,7 +47,7 @@ pub(super) async fn retained_provider_reasoning(
         .context("retained reasoning segment lookup returned no rows")?;
     let rows = values
         .iter()
-        .map(decode_output_segment_row)
+        .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let mut sources = Vec::new();
     for row in &rows {

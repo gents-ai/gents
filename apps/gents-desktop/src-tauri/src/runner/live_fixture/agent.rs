@@ -103,10 +103,11 @@ async fn seed_live_agent_documents(
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
 ) -> Result<LiveAgentDocs> {
+    use gents::documents::apply_desired_state_plan;
     use gents::documents::PackConfig;
     use gents::store::config_client::{
-        apply_desired_state_plan, load_inference_backend_in_txn, ConfigAccess,
-        DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint, NodePermission,
+        load_inference_backend_in_txn, ConfigAccess, DesiredStateApplyDocument,
+        DesiredStateApplyPlan, GraphqlEndpoint, NodePermission,
     };
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;

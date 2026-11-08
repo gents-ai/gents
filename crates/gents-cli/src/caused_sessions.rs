@@ -4,13 +4,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents::defra_node::Node as EmbeddedNode;
 use gents::session::load_latest_request_in_txn;
-pub(crate) use gents::session::origin::SessionScope;
 use gents::session::origin::{
     lineage, load_session, started_by, starting_request, SessionLink, REQUEST_FIELDS,
 };
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
+pub(crate) use gents_protocol::session::SessionScope;
 use serde_json::Value;
 
 #[derive(Clone, Debug)]

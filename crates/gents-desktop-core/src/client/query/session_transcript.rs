@@ -1,5 +1,5 @@
 use super::*;
-use gents::session::canonical_rows::{
+use gents_protocol::output::rows::{
     decode_output_segment_row, decode_transcript_message_row, output_source_discriminator,
     OutputSegmentRow, TranscriptMessageRow, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };

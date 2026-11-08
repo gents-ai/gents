@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use gents::documents::apply_desired_state_plan;
 use gents::documents::{load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin, Tools};
 use gents::pack::home_install::recorded_provenance;
 use gents::pack::{installed_pack_documents, read_home_install, PackKind};
@@ -13,10 +14,9 @@ use gents::plugin::authority::describe_plugin_authority;
 use gents::plugin::store::read_record;
 use gents::store::collection::Collection;
 use gents::store::config_client::{
-    apply_desired_state_plan, read_desired_state_records_in_txn, ClientSigningCapability,
-    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    PackApprovalError, PackApprovalScope, PackEffectApprover, PackEvidence, PackMutation,
-    PackRelationship, PackRelationshipEvidence,
+    read_desired_state_records_in_txn, ClientSigningCapability, ConfigAccess, ConfigApplyTxn,
+    DesiredStateApplyDocument, DesiredStateApplyPlan, PackApprovalError, PackApprovalScope,
+    PackEffectApprover, PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence,
 };
 use serde_json::{json, Value};
 

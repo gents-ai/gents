@@ -5,12 +5,13 @@ use anyhow::{anyhow, Context, Result};
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
 use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle};
-use crate::request::watcher::{AgentRequest, DefraWatcher, Watcher};
+use crate::request::watcher::{DefraWatcher, Watcher};
 use crate::runtime::agent::RuntimeSnapshotObserver;
 use crate::runtime::snapshot::{
     effective_agent_admission, ActiveRuntimeSnapshot, EffectiveAgentAdmission,
 };
 use crate::runtime::status::RuntimeStatusHandle;
+use gents_protocol::row::AgentRequest;
 
 use super::context::AgentResolution;
 

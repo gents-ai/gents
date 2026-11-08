@@ -1,9 +1,9 @@
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::Node as EmbeddedNode;
-use gents::store::collection::Collection;
 #[cfg(test)]
-use gents::store::config_client::apply_desired_state_plan;
+use gents::documents::apply_desired_state_plan;
+use gents::store::collection::Collection;
 use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::InferenceBackend;
 #[cfg(test)]
@@ -129,7 +129,7 @@ mod tests {
         let profile: InferenceProfile = serde_json::from_value(json!({
             "node_did":backend.node_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
         }))?;
-        gents::store::config_client::write_inference_profile_document(
+        gents::documents::write_inference_profile_document(
             &ConfigAccess::local(node.clone()),
             &profile,
         )

@@ -152,7 +152,7 @@ async fn observed_session_owner(
 struct CopiedFactsInput<'a> {
     reader: Option<&'a identity::Did>,
     owner: &'a str,
-    scope: &'a crate::session::origin::SessionScope,
+    scope: &'a gents_protocol::session::SessionScope,
     selected: &'a HydrationSelection,
     native: &'a [ToolFact],
 }
@@ -426,7 +426,7 @@ impl FileInventorySnapshot {
         native_reader: bool,
     ) -> Result<Self> {
         let request = &admission.request;
-        let session = crate::session::load_agent_session_owner_in_txn(
+        let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
             txn,
             &request.node_did,
             &request.session_id,
@@ -437,7 +437,7 @@ impl FileInventorySnapshot {
             session.doc_id == admission.session_doc_id,
             InventoryRejection("file inventory session identity changed")
         );
-        let scope = crate::session::origin::SessionScope::from(&session.session);
+        let scope = gents_protocol::session::SessionScope::from(&session.session);
         let reader: Option<identity::Did> = if native_reader
             || scope.requester_did.as_deref() == Some(request.requester_did.as_str())
         {
@@ -495,13 +495,14 @@ impl FileInventorySnapshot {
             )
             .await?;
             let request_doc_id = tool.request_doc_id.clone();
-            let source_session = crate::session::load_agent_session_owner_in_txn(
-                txn,
-                &document.node_did,
-                &document.session_id,
-            )
-            .await?
-            .context("file inventory source session is unavailable")?;
+            let source_session =
+                crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    &document.node_did,
+                    &document.session_id,
+                )
+                .await?
+                .context("file inventory source session is unavailable")?;
             anyhow::ensure!(
                 source_session.session.requester_did.as_deref()
                     == Some(document.requester_did.as_str()),

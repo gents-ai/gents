@@ -446,7 +446,7 @@ pub(crate) async fn create_goal_backed_agent_request(
     );
     let retry_key = format!(
         "goal-submit:{}",
-        gents::goal::deterministic_goal_creation_key(node_did, session_id)
+        gents_protocol::goal::deterministic_goal_creation_key(node_did, session_id)
     );
     let prepared = prepare_agent_request_with_input(
         graphql,
@@ -584,7 +584,7 @@ async fn read_submitted_receipt(
     graphql: &GraphqlEndpoint,
     create: &AgentRequestCreate,
 ) -> Result<Option<AgentRequestRow>> {
-    let scope = gents::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &create.node_did,
         &create.session_id,
         (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
@@ -636,7 +636,7 @@ async fn resolve_request_agent_did(
             .transact_readonly("cli.request.session_agent", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                        gents::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
                             .await?
                             .map(|row| row.session.agent_did),
                     )

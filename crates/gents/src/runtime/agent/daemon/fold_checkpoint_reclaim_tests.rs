@@ -338,7 +338,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             input
                 .iter()
                 .map(|(key, content)| (
-                    crate::session::canonical_rows::authored_message_key(&head.doc_id, key),
+                    gents_protocol::output::rows::authored_message_key(&head.doc_id, key),
                     crate::inference::llm::message::Message::user(content.clone()),
                 ))
                 .collect::<Vec<_>>(),
@@ -543,7 +543,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         );
         let answered = !case.answered.is_empty();
         assert_eq!(
-            retry_keys.contains(&crate::session::canonical_rows::authored_message_key(
+            retry_keys.contains(&gents_protocol::output::rows::authored_message_key(
                 &retry.doc_id,
                 &queued_key
             )),

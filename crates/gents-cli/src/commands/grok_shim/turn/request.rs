@@ -135,7 +135,7 @@ impl TurnManager {
             .unwrap_or_default();
         let query = format!(
             "{{AgentRequest(filter: {{{physical_filter} {}, request_id: {{_eq: \"{}\"}}}},limit:2) {{{}}}}}",
-            gents::session::public_request_filter(&gents::session::session_scope_filter(agent, session, requester)),
+            gents::session::public_request_filter(&gents_protocol::session::session_scope_filter(agent, session, requester)),
             escape_graphql_string(request),
             gents::SIGNED_REQUEST_FIELDS
         );
@@ -329,7 +329,7 @@ impl TurnManager {
             .doc_id
             .as_deref()
             .context("terminal projection physical request missing")?;
-        let scope = gents::session::session_scope_filter(
+        let scope = gents_protocol::session::session_scope_filter(
             request
                 .node_did
                 .as_deref()

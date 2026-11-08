@@ -3,9 +3,8 @@
 mod support;
 
 use anyhow::{ensure, Context, Result};
-use gents::store::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use gents::documents::apply_desired_state_plan;
+use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};

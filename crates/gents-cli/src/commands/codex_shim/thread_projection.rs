@@ -325,9 +325,11 @@ async fn assemble_caused_record_parts(
             let requester = link.requester_did.as_deref();
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::session::load_agent_session_row_in_txn(txn, owner, id, requester)
-                        .await?
-                        .map(|row| row.session),
+                    gents::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn, owner, id, requester,
+                    )
+                    .await?
+                    .map(|row| row.session),
                 )
             })
         })

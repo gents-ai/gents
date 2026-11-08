@@ -87,7 +87,10 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
         ConfigAccess::transact_local_readonly(&node, None, "test.inventory.shared_root", |txn| {
             let (did, session_id, reader_did) = (&fixture.node_did, &session_id, &reader_did);
             Box::pin(async move {
-                let session = crate::session::load_agent_session_owner_in_txn(txn, did, session_id)
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, did, session_id,
+                    )
                     .await?
                     .unwrap();
                 let observed = txn
@@ -267,7 +270,7 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
             let request = &admission.request;
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    crate::session::load_agent_session_owner_in_txn(
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn,
                         &request.node_did,
                         &request.session_id,

@@ -1614,7 +1614,7 @@ async fn seed_canonical_trace_tool(
     result: Option<&str>,
     failure_class: Option<&str>,
 ) -> Result<String> {
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -1800,7 +1800,7 @@ async fn seed_canonical_terminal_text(
     sequence: u32,
     text: &str,
 ) -> Result<()> {
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };

@@ -16,10 +16,10 @@ fn bind_test_evaluator(spec: &mut TrialSpec, home: &mut EmbeddedHome) {
 
 #[tokio::test]
 async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_arrivals() {
+    use crate::documents::event_consumer::checkpoint_prefix;
     use crate::request::lifecycle::{
         build_signed_request, task_fire_key, ExecutionOrigin, RequestSigner, TriggerLineage,
     };
-    use crate::store::config_client::event_source_cursor::checkpoint_prefix;
     use gents_protocol::event_delivery::EventConsumer;
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 
@@ -152,11 +152,11 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         let create = build_signed_request(spec, RequestSigner::Identity(agent))
             .await
             .unwrap();
-        let generation = crate::triggers::engine::event_delivery::event_admission_generation(
+        let generation = crate::documents::automation::event_admission_generation(
             &serde_json::from_value(json!({"node_did":owner, "event_source_id":"source", "source_collection":"CheckpointWork", "event_kind":"created"})).unwrap(),
             &serde_json::from_value(json!({"node_did":owner, "trigger_id":"trigger", "task_id":"task", "enabled":true, "concurrency":"queued_serial", "source":{"kind":"event", "event_source_id":"source"}})).unwrap(),
             &serde_json::from_value(json!({"node_did":owner, "task_id":"task", "agent_did":agent.did(), "prompt_template":"work"})).unwrap(),
-            &crate::triggers::engine::event_delivery::EventConfigDocIds {
+            &crate::documents::automation::EventConfigDocIds {
                 trigger: trigger_doc,
                 source: source_doc_id,
                 task: task_doc_id,

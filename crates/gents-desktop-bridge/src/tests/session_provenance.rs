@@ -1,5 +1,5 @@
-use gents::session::origin::SessionScope;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::session::SessionScope;
 
 use crate::provenance::session_provenance;
 use crate::tests::support::{create_request, create_tool_call, seed_provenance_fixture, OPERATOR};

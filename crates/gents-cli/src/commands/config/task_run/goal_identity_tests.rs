@@ -99,7 +99,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
     let access = ConfigAccess::local(node.clone());
     for case in cases {
         let session = format!("manual-task:{}", case["name"].as_str().unwrap());
-        let initial = gents::goal::deterministic_goal_id(signer.did(), &session);
+        let initial = gents_protocol::goal::deterministic_goal_id(signer.did(), &session);
         let goal_id = |value: &str| {
             if value == "initial-goal" {
                 initial.clone()

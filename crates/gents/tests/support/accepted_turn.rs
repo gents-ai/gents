@@ -423,9 +423,9 @@ pub async fn boot_managed_accepted_turn_with_backend_capacity(
     runtime_options: DocumentRuntimeOptions,
     max_concurrent: usize,
 ) -> AcceptedTurnRuntime {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     assert!(max_concurrent > 0);
     let backend_id = spec.backend_id.to_owned();
@@ -498,9 +498,9 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
     if let Some(marker) = dynamic_marker {
         prepared.backend.enable_dynamic_followups(marker);
     }
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
-        DesiredStateApplyPlan,
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let did = db.node_identity.did();
     gents::ConfigAccess::transact_local_write(

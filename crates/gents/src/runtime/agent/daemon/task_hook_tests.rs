@@ -12,7 +12,6 @@ use super::inference::tests::InterruptionCapture;
 use super::{AgentDaemon, AgentDaemonInit};
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::ResolvedAgent;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::runtime::StartupBarrier;
 use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::tools::call::hook::{
@@ -20,6 +19,7 @@ use crate::tools::call::hook::{
 };
 use crate::turn::prompt::LayeredPromptBuilder;
 use crate::Collection;
+use gents_protocol::row::AgentRequest;
 use tracing::instrument::WithSubscriber;
 
 const TASK_ID: &str = "hook-task";
@@ -163,9 +163,7 @@ impl Harness {
         self.user_access
             .transact_write("test.task_hooks", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await
             .unwrap();

@@ -62,7 +62,7 @@ async fn canonical_session_output(
     actors: &support::agent_requests::RequestActors,
     session_id: &str,
 ) -> serde_json::Value {
-    use gents::session::canonical_rows::{AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS};
+    use gents_protocol::output::rows::{AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS};
     let session_id = escape_graphql_string(session_id);
     let response = actors
         .query(&format!(

@@ -410,9 +410,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         user_access
             .transact_write("test.oneshot.select_surface", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await
             .unwrap();

@@ -283,6 +283,7 @@ mod tests {
 
     use chrono::Utc;
     use gents::defra_node::Node as EmbeddedNode;
+    use gents::documents::{write_inference_backend_document, write_inference_profile_document};
     use gents::documents::{AdvertisedModel, BackendAuth, BackendModelCatalog};
     use gents::inference::auth::credential::{
         oauth_credential_id, upsert_oauth_credential, OAuthCredential,
@@ -291,9 +292,6 @@ mod tests {
         UsageReport, UsageSource, UsageWindow,
     };
     use gents::inference::usage_observation::{load_usage, record_usage, UsageAccount};
-    use gents::store::config_client::{
-        write_inference_backend_document, write_inference_profile_document,
-    };
     use gents::{
         record_model_catalog_in_txn, BackendProviderKind, InferenceBackend, InferenceProfile,
     };

@@ -38,7 +38,7 @@ impl Fixture {
                 "enabled": enabled, "auth": {"kind":"api_key", "key":format!("TOKEN-SECRET-{id}")},
             }))
             .unwrap();
-            gents::store::config_client::write_inference_backend_document(&access, &backend)
+            gents::documents::write_inference_backend_document(&access, &backend)
                 .await
                 .unwrap();
             access
@@ -70,12 +70,12 @@ impl Fixture {
         let profile = serde_json::from_value(json!({
             "node_did":identity.did(), "profile_id":"profile-a", "backend_id":"main", "model_name":"model-a",
         })).unwrap();
-        gents::store::config_client::write_inference_profile_document(&access, &profile)
+        gents::documents::write_inference_profile_document(&access, &profile)
             .await
             .unwrap();
         for name in ["engineer", "reviewer"] {
             let agent = serde_json::from_value(json!({"node_did":identity.did(), "agent_did":name, "inference_profile_id":"profile-a"})).unwrap();
-            gents::store::config_client::write_agent_document(&access, &agent)
+            gents::documents::write_agent_document(&access, &agent)
                 .await
                 .unwrap();
         }

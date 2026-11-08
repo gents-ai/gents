@@ -386,9 +386,10 @@ async fn documents_install_rolls_back_its_record_on_failure() {
             .transact_write("test.edit_pack_document", |txn| {
                 let node_did = &node_did;
                 Box::pin(async move {
+                    use gents::documents::apply_desired_state_plan;
                     use gents::store::config_client::{
-                        apply_desired_state_plan, read_desired_state_record_in_txn,
-                        DesiredStateApplyDocument, DesiredStateApplyPlan,
+                        read_desired_state_record_in_txn, DesiredStateApplyDocument,
+                        DesiredStateApplyPlan,
                     };
                     let (_, mut tools) = read_desired_state_record_in_txn(
                         txn,

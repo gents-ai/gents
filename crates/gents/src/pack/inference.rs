@@ -467,7 +467,7 @@ mod tests {
             .transact_write("test.inference.preview", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan)
+                    crate::documents::apply_desired_state_plan(txn, plan)
                         .await
                         .map(|_| ())
                 })
@@ -514,7 +514,7 @@ mod tests {
             .transact_write("test.inference.disable", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan)
+                    crate::documents::apply_desired_state_plan(txn, plan)
                         .await
                         .map(|_| ())
                 })

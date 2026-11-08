@@ -7,11 +7,10 @@ use std::collections::BTreeSet;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
+use gents_protocol::plugin::WRITE_TOOL_NAME;
 
 mod plugin_writes;
 pub use plugin_writes::apply_plugin_writes_in_txn;
-
-pub const WRITE_TOOL_NAME: &str = "write";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

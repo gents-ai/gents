@@ -1,9 +1,10 @@
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::Node as EmbeddedNode;
-use gents::store::collection::Collection;
 #[cfg(test)]
-use gents::store::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
+use gents::documents::apply_desired_state_plan;
+use gents::store::collection::Collection;
+use gents::store::config_client::read_desired_state_record_in_txn;
 use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::AgentDocument;
 #[cfg(test)]
@@ -39,7 +40,7 @@ pub(crate) async fn upsert_agent_with_publication_on(
         .transact_write_with_agent_publication("desktop.agent.save", observer, |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                gents::documents::apply_desired_state_plan(txn, plan).await?;
                 Ok(())
             })
         })
@@ -166,8 +167,7 @@ mod tests {
                 "node_did":owner, "backend_id":"backend", "name":"Backend",
                 "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}
             }))?;
-            gents::store::config_client::write_inference_backend_document(&access, &backend)
-                .await?;
+            gents::documents::write_inference_backend_document(&access, &backend).await?;
             let profile = serde_json::from_value(json!({
                 "node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"
             }))?;

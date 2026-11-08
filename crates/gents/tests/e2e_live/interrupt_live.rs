@@ -4,10 +4,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::documents::{AgentContext, InferenceProfile};
 use gents::request::interrupt::interrupt_request_by_doc_id_with_access;
-use gents::session::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
-    AGENT_OUTPUT_SEGMENT_FIELDS,
-};
 use gents::session::load_canonical_message;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
@@ -20,6 +16,10 @@ use gents_protocol::output::live::{
     project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
 };
 use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::rows::{
+    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
+    AGENT_OUTPUT_SEGMENT_FIELDS,
+};
 use gents_protocol::output::{
     MessageRole, OutputOutcome, OutputSource, OutputWriter, StreamPayload, TerminalOutput,
 };
@@ -255,8 +255,11 @@ async fn observe_request(
         .context("request row omitted session_id")?;
 
     let physical = escape_graphql_string(request_doc_id);
-    let scope =
-        gents::session::session_scope_filter(node_did, session_id, row.requester_did.as_deref());
+    let scope = gents_protocol::session::session_scope_filter(
+        node_did,
+        session_id,
+        row.requester_did.as_deref(),
+    );
     let response = reader
         .execute(&format!(
             r#"{{
@@ -272,14 +275,14 @@ async fn observe_request(
         .and_then(Value::as_array)
         .context("canonical output facts query omitted segments")?
         .iter()
-        .map(decode_output_segment_row)
+        .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let headers = data
         .get("AgentMessage")
         .and_then(Value::as_array)
         .context("canonical output facts query omitted headers")?
         .iter()
-        .map(decode_transcript_message_row)
+        .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
 
     let observed = segments
@@ -473,9 +476,9 @@ async fn boot_interrupt_agent(
 /// The node's client key gives the bound Agent a high-effort live sampling
 /// profile and a streaming system prompt.
 async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarget) {
+    use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn as read,
-        DesiredStateApplyDocument, DesiredStateApplyPlan,
+        read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let node_did = actors.node_did();
     let agent_did = actors.agent_did();

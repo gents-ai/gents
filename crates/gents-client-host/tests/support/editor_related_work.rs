@@ -1,9 +1,8 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{Context, Result};
+use gents::documents::apply_desired_state_plan;
 use gents::documents::{load_agent_context_and_tools_in_txn, AgentTools};
-use gents::store::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::{Collection, ConfigAccess};
 use serde_json::{json, Value};
 use std::{path::Path, sync::Arc, time::Duration};

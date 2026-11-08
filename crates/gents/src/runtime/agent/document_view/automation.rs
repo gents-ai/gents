@@ -1,8 +1,10 @@
 use super::DocumentRuntimeView;
-use crate::runtime::snapshot::{
-    ConcurrencyMode, EventTriggerFireMode, ResolvedAutomation, ResolvedEventTrigger,
-    ResolvedSchedule, ResolvedTask, UnavailableAgent,
+use crate::documents::automation::{
+    resolved_task_from, EventTriggerFireMode, ResolvedAutomation, ResolvedEventTrigger,
+    ResolvedSchedule, ResolvedTask,
 };
+use crate::documents::ConcurrencyMode;
+use crate::runtime::snapshot::UnavailableAgent;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 pub(super) fn resolve_automation(
@@ -116,20 +118,6 @@ pub(super) fn resolve_automation(
         unavailable_schedules,
         event_triggers,
         unavailable_event_triggers,
-    }
-}
-
-pub(crate) fn resolved_task_from(task: &crate::documents::Task) -> ResolvedTask {
-    ResolvedTask {
-        emit_outcome: task.emit_outcome,
-        task_id: task.task_id.clone(),
-        name: task.display_name.clone(),
-        agent_did: task.agent_did.clone(),
-        prompt_template: task.prompt_template.clone(),
-        goal_objective_template: task.goal_objective_template.clone(),
-        goal_token_budget: task.goal_token_budget,
-        output_schema_ref: task.output_schema_ref.clone(),
-        hooks: task.hooks.clone(),
     }
 }
 
