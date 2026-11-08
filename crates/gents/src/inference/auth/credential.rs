@@ -6,6 +6,7 @@ mod document;
 mod labels;
 mod resolve;
 mod rows;
+mod runtime_account;
 mod serving;
 mod serving_accounts;
 mod sign_in;
@@ -51,6 +52,8 @@ pub(crate) use resolve::{
     runtime_account_query, RuntimeAccountSelection,
 };
 pub(crate) use rows::runtime_credential_access;
+use runtime_account::runtime_default_oauth_account_ref;
+pub(crate) use runtime_account::runtime_oauth_account_served_before;
 pub use rows::{
     list_oauth_credentials, list_oauth_credentials_on, lookup_oauth_credential_by_doc_id,
     lookup_oauth_credential_by_id, upsert_oauth_credential, upsert_oauth_credential_on,

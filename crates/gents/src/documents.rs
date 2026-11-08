@@ -16,6 +16,8 @@ pub use projection_acp::parse_projection_resource_map;
 mod agent_target;
 pub mod automation;
 pub(crate) mod backend_credential;
+pub(crate) mod desired_state;
+pub(crate) mod event_consumer;
 mod pack_config;
 mod principal;
 mod references;
@@ -40,6 +42,11 @@ pub use callback::{
     CallbackModule, PortCardinality, PortSpec, WorkspaceAgentSelection, WorkspaceReaderSelection,
 };
 pub use compaction::CompactionConfig;
+pub use desired_state::apply_desired_state_plan;
+#[allow(unused_imports)]
+pub(crate) use desired_state::{
+    apply_desired_state_plan_with_node_binding, validate_desired_state_plan,
+};
 pub use context::AgentContext;
 pub use eval_definition::{
     EvalCapture, EvalCase, EvalCheckRef, EvalContinuation, EvalDefinition, EvalFixtureDocument,
