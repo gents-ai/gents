@@ -104,7 +104,7 @@ def clientTranscriptCollections : List String :=
   transcriptCollections ++ ["MailboxItem"]
 
 def clientOwnerProjectionCollections : List String :=
-  ["NodeReadiness", "GoalObservation"]
+  ["NodeReadiness", "GoalObservation", "ProviderReductionDisplay"]
 
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++

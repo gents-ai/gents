@@ -219,7 +219,11 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "Trigger",
         "EventSource",
     ];
-    const OWNER_PROJECTION: &[&str] = &["NodeReadiness", "GoalObservation"];
+    const OWNER_PROJECTION: &[&str] = &[
+        "NodeReadiness",
+        "GoalObservation",
+        "ProviderReductionDisplay",
+    ];
     let runtime_to_client = client_to_runtime
         .iter()
         .copied()

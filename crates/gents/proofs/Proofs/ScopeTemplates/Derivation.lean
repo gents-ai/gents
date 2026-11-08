@@ -128,6 +128,10 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
         , { collection := "GoalObservation"
           , clauses :=
               [ { field := "requester_did", value := requesterDid }
+              , { field := "node_did", value := ownerDid } ] }
+        , { collection := "ProviderReductionDisplay"
+          , clauses :=
+              [ { field := "requester_did", value := requesterDid }
               , { field := "node_did", value := ownerDid } ] } ]
 
 def directionalScopeFilters (template : Template) (direction : RouteDirection)

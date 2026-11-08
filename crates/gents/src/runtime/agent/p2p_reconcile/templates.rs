@@ -235,7 +235,6 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentOutputSegment",
     "AgentSession",
     "CompactionEntry",
-    "ProviderReductionDisplay",
     "MailboxItem",
     "PeerEndpoint",
     "SessionHydrationRequest",
@@ -263,6 +262,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "EventSource",
     "NodeReadiness",
     "GoalObservation",
+    "ProviderReductionDisplay",
 ];
 
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
