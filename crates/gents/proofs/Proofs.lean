@@ -94,7 +94,6 @@ import Proofs.Conformance.Contracts
 import Proofs.ApplyReconcile
 import Proofs.SelfConfig
 import Proofs.SelfConfig.Selection
-import Proofs.ReversePairingHandlers
 import Proofs.Identity
 import Proofs.Skills
 import Proofs.EditMatch

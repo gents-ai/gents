@@ -14,9 +14,9 @@ namespace ScopeTemplates
 abbrev TemplateId := String
 abbrev Did := String
 
+/-- Every protocol route pushes; no surviving template subscribes or replicates. -/
 inductive Delivery where
   | push
-  | replicate
   deriving DecidableEq, Repr
 
 inductive RouteDirection where
@@ -26,7 +26,6 @@ inductive RouteDirection where
 
 inductive DidSource where
   | localDid
-  | peerDid
   | homeDid
   deriving DecidableEq, Repr
 
@@ -37,8 +36,6 @@ structure CollectionRule where
   deriving DecidableEq, Repr
 
 inductive Scope where
-  | peerDid (field : String)
-  | unscoped
   | perCollection (rules : List CollectionRule)
   | clientRoute
   deriving DecidableEq, Repr
@@ -86,7 +83,6 @@ def clientRouteCollections : RouteDirection → List String
   | .runtimeToClient => clientCollections
 
 def machineCollections : List String := ["NodeDirectoryEntry"]
-def clientIndexCollections : List String := []
 
 def machineRules : List CollectionRule :=
   [{ collection := "NodeDirectoryEntry", field := "source_did", source := .homeDid }]
@@ -99,14 +95,8 @@ def clientTemplate : Template :=
   { id := "client", collections := clientCollections,
     scope := .clientRoute, delivery := .push }
 
-/-- Application collection replication is not a supported route. -/
-def admitAppCollections (_protocolCatalog _requested : Finset String) : Option (Finset String) :=
-  none
-
+/-- Application collection replication is not a supported route: the catalog
+holds only the discovery templates. -/
 def builtinCatalog : Catalog := [machineTemplate, clientTemplate]
-
-def removedTemplateIds : List String :=
-  ["conversation", "agent-config", "backup", "agent-target-caller",
-   "agent-target-host", "app-collections", "client-index"]
 
 end ScopeTemplates

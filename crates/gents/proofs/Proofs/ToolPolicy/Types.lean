@@ -70,7 +70,6 @@ structure Surface where
   cliTools : EndpointScope ToolId (Finset String)
   mcpServices : EndpointScope ToolId Unit
   defraCollections : EndpointScope ToolId Unit
-  p2pCollections : EndpointScope ToolId Unit
   selfConfigCategories : EndpointScope ToolId Unit
   agentTargets : EndpointScope (String × String) Unit
   backgroundTools : EndpointScope ToolId Unit

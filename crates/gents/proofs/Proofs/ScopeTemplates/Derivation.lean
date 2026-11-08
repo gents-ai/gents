@@ -52,10 +52,6 @@ theorem resolveTemplate_isSome_iff {cat : Catalog} {id : TemplateId} :
 def scopeFilter (scope : Scope) (collections : List String)
     (peerDid localDid : Did) : List CollectionScopeFilter :=
   match scope with
-  | .peerDid field =>
-      collections.map
-        (fun c => { collection := c, field := field, value := peerDid })
-  | .unscoped => []
   | .perCollection rules =>
       rules.map
         (fun r =>
@@ -64,18 +60,8 @@ def scopeFilter (scope : Scope) (collections : List String)
           , value :=
               match r.source with
               | .localDid => localDid
-              | .peerDid => peerDid
               | .homeDid => localDid })
   | .clientRoute => []
-
-theorem scopeFilter_peerDid (f : String) (collections : List String)
-    (peerDid localDid : Did) :
-    scopeFilter (.peerDid f) collections peerDid localDid =
-      collections.map
-        (fun c => { collection := c, field := f, value := peerDid }) := rfl
-
-theorem scopeFilter_unscoped (collections : List String) (peerDid localDid : Did) :
-    scopeFilter .unscoped collections peerDid localDid = [] := rfl
 
 def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did) :
     List CollectionPredicate :=
@@ -112,16 +98,5 @@ theorem builtin_routes_are_protocol_only (template : Template)
 theorem client_route_carries_only_registry (direction : RouteDirection) :
     clientRouteCollections direction = ["PeerRegistry"] := by
   cases direction <;> rfl
-
-theorem no_application_replication (protocol requested : Finset String) :
-    admitAppCollections protocol requested = none := rfl
-
-theorem no_replica_session_index : clientIndexCollections = [] := rfl
-
-theorem removed_templates_do_not_resolve :
-    (["conversation", "agent-config", "backup", "agent-target-caller",
-      "agent-target-host", "app-collections", "client-index"].map
-      (resolveTemplate builtinCatalog)) = List.replicate 7 none := by
-  native_decide
 
 end ScopeTemplates

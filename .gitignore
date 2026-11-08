@@ -9,8 +9,6 @@
 # TLA+ tooling and TLC state output
 /crates/gents/proofs/tla/.tools/
 /crates/gents/proofs/tla/states/
-/crates/gents/proofs/tla/MCReversePairing_TTrace_*.tla
-/crates/gents/proofs/tla/MCReversePairing_TTrace_*.bin
 
 # Standalone third_party package builds
 /third_party/*/target/

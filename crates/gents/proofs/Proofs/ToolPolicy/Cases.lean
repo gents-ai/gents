@@ -20,9 +20,6 @@ structure SurfaceView where
   p2pRead : Bool
   p2pMutate : Bool
   p2pMutationAllowed : Bool
-  p2pOverlayBefore : List String
-  p2pOverlayAfter : List String
-  p2pOverlayAllowed : Bool
   sessionHistory : Bool
   contextBudget : Bool
   sessionMessages : Bool
@@ -44,8 +41,6 @@ structure SurfaceView where
   mcpPermits : Bool
   defraCollectionsScopeKind : String
   defraCollectionsKeys : List String
-  p2pCollectionsScopeKind : String
-  p2pCollectionsKeys : List String
   selfConfigCategoriesScopeKind : String
   selfConfigCategoriesKeys : List String
   agentTargetsScopeKind : String
@@ -227,7 +222,6 @@ def surface (file : FileCap) (bash : BashPolicy)
   , cliTools := .all
   , mcpServices := mcp
   , defraCollections := .all
-  , p2pCollections := .all
   , selfConfigCategories := .all
   , agentTargets := .all
   , backgroundTools := .all
@@ -235,8 +229,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , queryTools := .all
   , pluginTools := .none }
 
-def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
-    (p2pBefore p2pAfter : List String) : SurfaceView :=
+def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : SurfaceView :=
   { fileRank := s.file.rank
   , goalTools := s.goalTools
   , goalCreate := s.goalCreate
@@ -246,9 +239,6 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
   , p2pRead := s.p2pRead
   , p2pMutate := s.p2pMutate
   , p2pMutationAllowed := permitsP2pMutation s
-  , p2pOverlayBefore := p2pBefore
-  , p2pOverlayAfter := p2pAfter
-  , p2pOverlayAllowed := permitsP2pOverlayMutation s p2pBefore p2pAfter
   , sessionHistory := s.sessionHistory
   , contextBudget := s.contextBudget
   , sessionMessages := s.sessionMessages
@@ -270,8 +260,6 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
   , mcpPermits := decide (s.mcpServices.permits mcpProbe)
   , defraCollectionsScopeKind := scopeKind s.defraCollections
   , defraCollectionsKeys := toolScopeKeys s.defraCollections
-  , p2pCollectionsScopeKind := scopeKind s.p2pCollections
-  , p2pCollectionsKeys := toolScopeKeys s.p2pCollections
   , selfConfigCategoriesScopeKind := scopeKind s.selfConfigCategories
   , selfConfigCategoriesKeys := selfConfigScopeKeys s.selfConfigCategories
   , agentTargetsScopeKind := scopeKind s.agentTargets
@@ -464,13 +452,12 @@ def agentWithoutGoals : Surface :=
   { wideOpen with goalTools := false, goalCreate := false }
 
 def mkCase (name : String) (b c : Surface) (r : Avail)
-    (mcpProbe : String) (writeProbe : String × String)
-    (p2pBefore : List String := ["PrivateNote"]) (p2pAfter : List String := ["DeploymentNote"]) : Case :=
+    (mcpProbe : String) (writeProbe : String × String) : Case :=
   { name := name
-  , agent := view b mcpProbe writeProbe p2pBefore p2pAfter
-  , ceiling := view c mcpProbe writeProbe p2pBefore p2pAfter
-  , runtime := view r mcpProbe writeProbe p2pBefore p2pAfter
-  , expected := view (effective b c r) mcpProbe writeProbe p2pBefore p2pAfter }
+  , agent := view b mcpProbe writeProbe
+  , ceiling := view c mcpProbe writeProbe
+  , runtime := view r mcpProbe writeProbe
+  , expected := view (effective b c r) mcpProbe writeProbe }
 
 def cases : List Case :=
   [ mkCase "wide_open_clamped_by_secure_ceiling"
@@ -523,15 +510,6 @@ def cases : List Case :=
       wideOpen { wideOpen with p2pRead := false } wideOpen "svc-a" probeWrite
   , mkCase "p2p_mutation_requires_authored_grant"
       { wideOpen with p2pMutate := false } wideOpen wideOpen "svc-a" probeWrite
-  , mkCase "p2p_collections_intersect"
-      { wideOpen with p2pCollections := toolsOnly ["DeploymentNote", "PrivateNote"] }
-      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen "svc-a" probeWrite
-  , mkCase "p2p_overlay_create_in_scope"
-      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen wideOpen "svc-a" probeWrite [] ["DeploymentNote"]
-  , mkCase "p2p_overlay_replace_requires_existing_scope"
-      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen wideOpen "svc-a" probeWrite ["PrivateNote"] ["DeploymentNote"]
-  , mkCase "p2p_overlay_revoke_requires_existing_scope"
-      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen wideOpen "svc-a" probeWrite ["DeploymentNote", "PrivateNote"] []
   , mkCase "application_write_exact_collection_grant"
       { secureMinimal with writeTools := writeOnly ("write", "Shipment") ["*"] }
       wideOpen wideOpen "svc-a" ("write", "Shipment")

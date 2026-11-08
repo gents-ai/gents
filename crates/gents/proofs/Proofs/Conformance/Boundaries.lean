@@ -200,10 +200,10 @@ def boundaries : List Boundary :=
         "within an epoch, Watcher release returns an overtaken session " ++
         "request to the unprocessed set; " ++
         "its ttl_cooldown metadata does not imply permanent processed-set " ++
-        "membership or lifetime at-most-once delivery. The substrate model " ++
-        "lives in tla/ReversePairing.tla."
+        "membership or lifetime at-most-once delivery. Substrate scheduling " ++
+        "fairness is an external premise that no model here proves."
     , acceptedFollowUp :=
-        some "Substrate fairness is proved separately in tla/ReversePairing.tla; see also #162."
+        some "Substrate scheduling fairness is not modeled; see #162."
     }
   , { id := boundaryPromptAssemblyProviderInputSanitizationId
     , domain := "PromptAssembly"

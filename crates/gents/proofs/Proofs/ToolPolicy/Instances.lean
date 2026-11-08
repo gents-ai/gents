@@ -29,7 +29,6 @@ def Surface.meet (a b : Surface) : Surface :=
   , cliTools := a.cliTools.meet rootVM b.cliTools
   , mcpServices := a.mcpServices.meet unitVM b.mcpServices
   , defraCollections := a.defraCollections.meet unitVM b.defraCollections
-  , p2pCollections := a.p2pCollections.meet unitVM b.p2pCollections
   , selfConfigCategories := a.selfConfigCategories.meet unitVM b.selfConfigCategories
   , agentTargets := a.agentTargets.meet unitVM b.agentTargets
   , backgroundTools := a.backgroundTools.meet unitVM b.backgroundTools
@@ -124,27 +123,6 @@ theorem effective_p2pMutate_le_ceiling :
 
 def permitsP2pMutation (surface : Surface) : Bool := surface.p2pRead && surface.p2pMutate
 
-def permitsP2pOverlayMutation (surface : Surface) (before after : List ToolId) : Bool :=
-  permitsP2pMutation surface && (before ++ after).all (fun key => decide (surface.p2pCollections.permits key))
-
-theorem permitsP2pOverlayMutation_requires_authority (surface : Surface) (before after : List ToolId) :
-    permitsP2pOverlayMutation surface before after = true → permitsP2pMutation surface = true := by
-  exact bool_and_left
-
-theorem permitsP2pOverlayMutation_covers_before (surface : Surface) (before after : List ToolId)
-    (key : ToolId) (member : key ∈ before) :
-    permitsP2pOverlayMutation surface before after = true → surface.p2pCollections.permits key := by
-  intro allowed
-  have all := List.all_eq_true.mp (bool_and_right allowed)
-  exact of_decide_eq_true (all key (List.mem_append.mpr (Or.inl member)))
-
-theorem permitsP2pOverlayMutation_covers_after (surface : Surface) (before after : List ToolId)
-    (key : ToolId) (member : key ∈ after) :
-    permitsP2pOverlayMutation surface before after = true → surface.p2pCollections.permits key := by
-  intro allowed
-  have all := List.all_eq_true.mp (bool_and_right allowed)
-  exact of_decide_eq_true (all key (List.mem_append.mpr (Or.inr member)))
-
 theorem permitsP2pMutation_requires_read (surface : Surface) :
     permitsP2pMutation surface = true → surface.p2pRead = true := by
   exact bool_and_left
@@ -156,16 +134,6 @@ theorem effective_p2pMutation_le_ceiling :
   have read := effective_p2pRead_le_ceiling agent ceiling runtime (bool_and_left h)
   have mutate := effective_p2pMutate_le_ceiling agent ceiling runtime (bool_and_right h)
   simp [permitsP2pMutation, read, mutate]
-
-theorem effective_p2pCollections_subset_ceiling (collection : ToolId) :
-    (effective agent ceiling runtime).p2pCollections.permits collection →
-      ceiling.p2pCollections.permits collection := by
-  intro h
-  have inner := EndpointScope.meet_permits_left unitVM
-    (agent.p2pCollections.meet unitVM ceiling.p2pCollections)
-    runtime.p2pCollections collection h
-  exact EndpointScope.meet_permits_right unitVM agent.p2pCollections
-    ceiling.p2pCollections collection inner
 
 theorem effective_sessionHistory_le_ceiling :
     (effective agent ceiling runtime).sessionHistory = true → ceiling.sessionHistory = true := by

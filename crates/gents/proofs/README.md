@@ -571,7 +571,6 @@ The proof boundary matters:
 The `tla/` sibling directory contains TLA+ specifications for cross-node properties beyond per-node Lean coverage. See `tla/README.md`.
 
 Currently:
-- `ReversePairing` — control-plane convergence of reverse-pairing subscriptions; first concrete artifact under issue #155's cross-boundary verification strategy.
 - `PairingTransport` — connection/install liveness for one directed pairing edge.
 - `BackgroundAdmissionContention` — optimistic-transaction writers of one request's `AgentRequest` row and session documents: dispatch start, background admission, receipt, running children and the execution lease renewal. Checks the owned loop's call order, the admission sequence fence, the renewal owner's re-drive of a poll that admission bumps exhaust (without it the lease lapses), the renewal cadence premise (`RequestExecutionLease.consecutive_renewals_obey_cadence`) and the `Background.receiptContentionAttempts` bound, whose second extra attempt absorbs one renewal (#3592).
 - `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness obligations for issue #630 (obligation model; not a fleet stability proof).

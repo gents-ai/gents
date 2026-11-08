@@ -158,10 +158,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             WorkspaceTest("crates/gents/src/triggers/engine/tests/dispatch_contract.rs"),
         ),
         ("Workspace", Gap("Canonical binding/admission fixtures await the workspace runtime owner; the removed test-local predicate mirror was not implementation coverage.")),
-        (
-            "ReversePairingHandlers",
-            Module("conformance/pairing_reconcile.rs"),
-        ),
     ])
 }
 

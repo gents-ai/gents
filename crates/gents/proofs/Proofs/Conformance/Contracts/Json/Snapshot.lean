@@ -163,7 +163,7 @@ def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
     "{\"collection\":" ++ jsonString rule.collection
       ++ ",\"field\":" ++ jsonString rule.field
       ++ ",\"source\":" ++ jsonString (match rule.source with
-          | .localDid => "localDid" | .peerDid => "peerDid" | .homeDid => "homeDid") ++ "}")
+          | .localDid => "localDid" | .homeDid => "homeDid") ++ "}")
 
 def nodeRouteCasesJson : String :=
   jsonArray (([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
@@ -183,11 +183,6 @@ def scopePredicateJson (predicate : ScopeTemplates.CollectionPredicate) : String
     "{\"field\":" ++ jsonString clause.field ++ ",\"operator\":" ++ jsonString clause.operator ++
     ",\"value\":" ++ jsonString clause.value ++ "}") ++ "}"
 
-def scopeResolutionCasesJson : String :=
-  jsonArray (((ScopeTemplates.builtinCatalog.map (·.id)) ++ ScopeTemplates.removedTemplateIds).map fun id =>
-    "{\"id\":" ++ jsonString id ++ ",\"supported\":" ++
-      boolJson (ScopeTemplates.resolveTemplate ScopeTemplates.builtinCatalog id).isSome ++ "}")
-
 def scopeTemplateCasesJson : String :=
   jsonArray (ScopeTemplates.builtinCatalog.flatMap fun template =>
     [ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient].map fun direction =>
@@ -195,7 +190,7 @@ def scopeTemplateCasesJson : String :=
       ",\"direction\":" ++ jsonString (match direction with
         | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
       ",\"collections\":" ++ jsonArray (template.collections.map jsonString) ++
-      ",\"delivery\":" ++ jsonString (match template.delivery with | .push => "push" | .replicate => "replicate") ++
+      ",\"delivery\":" ++ jsonString (match template.delivery with | .push => "push") ++
       ",\"filters\":" ++ jsonArray ((ScopeTemplates.directionalScopeFilters template direction
         "did:key:reader" "did:key:owner").map scopePredicateJson) ++ "}")
 
@@ -1028,7 +1023,6 @@ def snapshotPluginCasesJson : String :=
       ++ "},"
     ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
     ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
-    ++ "\"scope_resolution_cases\":" ++ scopeResolutionCasesJson ++ ","
     ++ "\"causal_hop_contract\":"
       ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"
