@@ -109,7 +109,7 @@ jsonschema = { version = "0.46.5", default-features = false }
 # behind the `bin` feature. Pinned to the same rev as the afterburner-*
 # crates in crates/gents/Cargo.toml so all of them agree on the
 # `.afb`/`Manifold` wire shapes.
-afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2", default-features = false, features = [
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
     "bin",
 ] }
 # The package loader `dispatch_compile` expects (`pkg::LocalPackage`):
@@ -119,7 +119,7 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 # Pinned to the same rev as `afterburner` above: `dispatch_compile` takes a
 # `pkg::LocalPackage` from this crate, and two instances of it at different
 # revs are different types to the compiler.
-afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2" }
+afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }

@@ -335,6 +335,7 @@ impl PluginRunner {
                 failure: None,
             }))
         });
+        let _wasi = wasi_runtime::enter()?;
         let output = match &session {
             None => run_afb_bytes(&self.afb_bytes, request).map_err(anyhow::Error::from),
             Some(session) => {
@@ -659,6 +660,7 @@ pub mod store;
 pub mod tool;
 pub mod tool_calls;
 pub mod ux;
+mod wasi_runtime;
 
 pub use afterburner_core::manifold::Manifold;
 

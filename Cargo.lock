@@ -127,8 +127,8 @@ dependencies = [
 
 [[package]]
 name = "afterburner"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "afterburner-adaptive",
  "afterburner-afb",
@@ -145,19 +145,19 @@ dependencies = [
  "dialoguer",
  "kovan-channel",
  "libc",
+ "nuclei",
  "oxc",
  "rustyline",
  "semver",
  "serde_json",
  "thiserror 2.0.18",
- "tokio",
  "toml 1.1.6+spec-1.1.0",
 ]
 
 [[package]]
 name = "afterburner-adaptive"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "afterburner-core",
  "afterburner-ignite",
@@ -170,8 +170,8 @@ dependencies = [
 
 [[package]]
 name = "afterburner-afb"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "afterburner-core",
  "semver",
@@ -186,8 +186,8 @@ dependencies = [
 
 [[package]]
 name = "afterburner-cloud"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "afterburner-afb",
  "afterburner-core",
@@ -211,8 +211,8 @@ dependencies = [
 
 [[package]]
 name = "afterburner-core"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "blake3",
  "fastrace",
@@ -226,9 +226,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "afterburner-h2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-io",
+ "futures-sink",
+ "futures-util",
+ "http",
+ "indexmap 2.14.0",
+ "slab",
+ "tracing",
+]
+
+[[package]]
 name = "afterburner-ignite"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "afterburner-core",
  "afterburner-node-compat",
@@ -241,13 +259,14 @@ dependencies = [
 
 [[package]]
 name = "afterburner-node-compat"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
  "aes-kw",
  "afterburner-core",
+ "async-trait",
  "base64 0.23.1",
  "brotli 9.0.0",
  "cbc",
@@ -261,6 +280,7 @@ dependencies = [
  "kovan-channel",
  "kovan-map",
  "md-5",
+ "nuclei",
  "num-bigint-dig",
  "num-integer",
  "num-traits",
@@ -277,7 +297,6 @@ dependencies = [
  "sha2 0.10.9",
  "sha3 0.10.9",
  "spki 0.7.3",
- "tokio",
  "ureq",
  "uuid",
  "x25519-dalek",
@@ -286,8 +305,8 @@ dependencies = [
 
 [[package]]
 name = "afterburner-thrust"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "afterburner-core",
  "afterburner-wasi",
@@ -300,45 +319,69 @@ dependencies = [
 
 [[package]]
 name = "afterburner-wasi"
-version = "0.2.12"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2#bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
 dependencies = [
  "afterburner-afb",
  "afterburner-core",
+ "afterburner-h2",
  "afterburner-node-compat",
+ "afterburner-wasi-host",
  "anyhow",
  "atomic-wait",
- "axum",
  "base64 0.23.1",
  "bytes",
  "fastrace",
  "fd-lock",
  "flate2",
- "futures-util",
+ "futures",
  "getrandom 0.2.17",
  "hex",
- "http-body-util",
- "hyper",
- "hyper-util",
+ "http",
+ "httparse",
+ "httpdate",
  "kovan-channel",
  "kovan-map",
  "libc",
  "memmap2",
+ "nuclei",
  "rustls",
  "rustls-pemfile",
  "serde",
  "serde_json",
+ "sha1 0.10.6",
  "sha2 0.10.9",
  "socket2",
  "tar",
  "tempfile",
- "tokio",
- "tokio-rustls",
  "ureq",
  "wasmparser 0.260.0",
  "wasmtime",
- "wasmtime-wasi",
  "webpki-roots 1.0.10",
+]
+
+[[package]]
+name = "afterburner-wasi-host"
+version = "0.3.0"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1#f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1"
+dependencies = [
+ "async-trait",
+ "bitflags 2.11.0",
+ "bytes",
+ "cap-primitives",
+ "futures",
+ "nuclei",
+ "rand 0.10.1",
+ "rustix",
+ "rustix-linux-procfs",
+ "thiserror 2.0.18",
+ "tracing",
+ "url",
+ "wasmtime",
+ "wasmtime-wasi-io",
+ "wiggle",
+ "windows-sys 0.61.2",
+ "winx",
 ]
 
 [[package]]
@@ -473,7 +516,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -484,7 +527,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1412,7 +1455,7 @@ dependencies = [
  "maybe-owned",
  "rustix",
  "rustix-linux-procfs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "winx",
 ]
 
@@ -3040,7 +3083,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3475,7 +3518,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4156,6 +4199,7 @@ dependencies = [
  "libc",
  "memmap2",
  "minijinja",
+ "nuclei",
  "opentelemetry",
  "oxc_allocator",
  "oxc_ast",
@@ -5143,7 +5187,6 @@ dependencies = [
  "rand 0.10.1",
  "thiserror 2.0.18",
  "tinyvec",
- "tokio",
  "tracing",
  "url",
 ]
@@ -5190,7 +5233,6 @@ dependencies = [
  "smallvec",
  "system-configuration 0.7.0",
  "thiserror 2.0.18",
- "tokio",
  "tracing",
 ]
 
@@ -5380,7 +5422,7 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry 0.5.3",
+ "windows-registry 0.6.1",
 ]
 
 [[package]]
@@ -7466,14 +7508,14 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "nuclei"
-version = "0.5.5"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "207ad3a6e71e173329e081b56c01aa6b0fac4f53bbbbf0b0d2b06354e0cc3b8d"
+checksum = "c2639d9b23dd5f30b5911a563c0b5d5e3c3b349763f2b4a88d33775475ff2e4a"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -7488,9 +7530,9 @@ dependencies = [
 
 [[package]]
 name = "nuclei-macros"
-version = "0.5.5"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "704ff8c43ecf352c8fa7b93d4a041ba8004fc73a7edd5c75bf722f7e647090a2"
+checksum = "ecbaecdcaaa41e1eac7f65c51e778920dbf5ed814bf083442787cbfdc2c1d3e0"
 
 [[package]]
 name = "num"
@@ -9388,7 +9430,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -10293,7 +10335,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10371,7 +10413,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10392,7 +10434,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10659,7 +10701,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b55fb86dfd3a2f5f76ea78310a88f96c4ea21a3031f8d212443d56123fd0521"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11219,7 +11261,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12080,7 +12122,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12876,7 +12918,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -13675,31 +13717,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmtime-wasi"
-version = "49.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "821e45765c35555d3b0bdf9277cb99478f7d1f29a17b3315ba76e01220f02a38"
-dependencies = [
- "async-trait",
- "bitflags 2.11.0",
- "bytes",
- "cap-primitives",
- "futures",
- "rand 0.10.1",
- "rustix",
- "rustix-linux-procfs",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "url",
- "wasmtime",
- "wasmtime-wasi-io",
- "wiggle",
- "windows-sys 0.61.2",
- "winx",
-]
-
-[[package]]
 name = "wasmtime-wasi-io"
 version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13966,7 +13983,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

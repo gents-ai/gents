@@ -40,6 +40,7 @@ pub(crate) fn eval(
     budget: &PluginBudget,
 ) -> Result<PluginOutcome> {
     let engine = engine()?;
+    let _wasi = super::wasi_runtime::enter()?;
     let started = Instant::now();
     let outcome = |verdict, output, diagnostics: String| PluginOutcome {
         verdict,
