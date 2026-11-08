@@ -1152,9 +1152,11 @@ def DestructiveRefusal.name : DestructiveRefusal → String
 
 /-- A destructive admin decision (one that drops state because a document is
 taken to be absent) is allowed only to the native admin of a node whose NAC is
-enabled, reading a complete inventory. With NAC disabled no actor is admin for
-these decisions; without a complete inventory the decision fails closed for
-every actor. `none` is allowed. -/
+enabled, reading a complete inventory. The runtime starts only with NAC enabled
+(`NodeProvisioning.runtimeMayStart`); NAC disabled later is refused here again
+as defence in depth, so no actor is admin for these decisions. Without a
+complete inventory the decision fails closed for every actor. `none` is
+allowed. -/
 def destructiveAdminDecision (authority : DestructiveAuthority) : Option DestructiveRefusal :=
   if !authority.nacEnabled then some .nacDisabled
   else if !authority.admin then some .notAdmin

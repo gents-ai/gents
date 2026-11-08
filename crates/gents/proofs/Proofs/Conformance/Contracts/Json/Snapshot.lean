@@ -677,6 +677,8 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.NodeProvisioningConformance.reservationCasesJson ++ ","
     ++ "\"identity_bootstrap_startup_cases\":"
       ++ Identity.NodeProvisioningConformance.startupCasesJson ++ ","
+    ++ "\"identity_runtime_nac_cases\":"
+      ++ Identity.NodeProvisioningConformance.runtimeNacCasesJson ++ ","
     ++ "\"identity_parent_publication_cases\":"
       ++ Identity.PublicationConformance.parentCasesJson ++ ","
     ++ "\"identity_eval_record_cases\":"
