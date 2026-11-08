@@ -2,6 +2,8 @@ mod support;
 
 #[path = "e2e_runtime/adapter_projection_external_fixtures.rs"]
 mod adapter_projection_external_fixtures;
+#[path = "e2e_runtime/client_submission_contention.rs"]
+mod client_submission_contention;
 #[path = "e2e_runtime/completion_retry_tape.rs"]
 mod completion_retry_tape;
 #[path = "e2e_runtime/defradb_time_travel.rs"]
@@ -26,6 +28,8 @@ mod queued_user_messages;
 mod rendered_request_capture;
 #[path = "e2e_runtime/runtime_observability.rs"]
 mod runtime_observability;
+#[path = "e2e_runtime/workspace_binding_recovery.rs"]
+mod workspace_binding_recovery;
 #[path = "e2e_runtime/schedule_snapshot_reconcile.rs"]
 mod schedule_snapshot_reconcile;
 #[path = "e2e_runtime/self_config_tools.rs"]

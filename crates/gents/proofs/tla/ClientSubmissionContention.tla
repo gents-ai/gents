@@ -1,17 +1,22 @@
 ---- MODULE ClientSubmissionContention ----
 \* A User's signed client submission racing its session's active turn.
 \*
-\* The client submission (`request.client.submit`, `submit_client_request`)
-\* is one DefraDB transaction run by the User through the signed client
-\* endpoint: it reads the target `AgentSession` document (requester, selected
-\* Agent, `relationships_pending`) and the selected `Agent`, then creates the
-\* User-signed `AgentRequest` and stages its relationships. While the
+\* A submission is two DefraDB transactions run by the User through the
+\* signed client endpoint. The reservation (`request.client.reserve_session`,
+\* `reserve_client_targets`) reads the target `AgentSession` document and the
+\* selected `Agent` to bind the physical targets the User then signs. The
+\* submission (`request.client.submit`, `submit_client_request`) reads the
+\* same documents (requester, selected Agent, `relationships_pending`), then
+\* creates the User-signed `AgentRequest` and stages its relationships. While the
 \* session's turn runs, its working Agent publishes each message
 \* (`tool_call.complete_delivery`, assistant publication) in a transaction
 \* that also refreshes the `AgentSession` observation (`patch_session_in_txn`,
 \* `last_activity_at`). That refresh changes the document the submission
 \* read, so the submission's commit aborts with a DefraDB transaction
-\* conflict (traced in the `mailbox_tool_turn` busy-session test).
+\* conflict (traced in the `mailbox_tool_turn` busy-session test). The
+\* reservation's read of that document aborts the same way ("a partial read
+\* lost to a newer merge" in `live_standard_backgrounding_uses_real_inference`
+\* while the runtime wrote the session).
 \*
 \* Keys: "sess" is the `AgentSession` document; the submission's other reads
 \* (the Agent document) have no concurrent writer during a turn. DefraDB is
@@ -23,34 +28,40 @@
 \* .clientSignedWriteMayRetry`). The rebuild re-reads the session, re-plans
 \* and signs a fresh graph; the User's request admission signature covers the
 \* request content, not the graph, so it is reused. `Redrive` selects that
-\* opt-in mode: FALSE is the code before the fix, which surfaced the first
-\* confirmed conflict as a rejected submission. A lost commit response is
-\* unconfirmed and never rebuilt (`LostResponse`).
+\* opt-in mode for the submission and `ReserveRedrive` for the reservation:
+\* FALSE is the code before each fix, which surfaced the first confirmed
+\* conflict as a rejected submission. The reservation is idempotent on an
+\* existing session, so its rebuild binds the same targets. A lost commit
+\* response is unconfirmed and never rebuilt (`LostResponse`).
 \*
 \* `Publications` bounds the Agent's session refreshes that land inside one
 \* submission's attempt series: the owned loop refreshes the observation once
 \* per published message, and the series spans the bounded
 \* `transaction_backoff` (100 + 200 + 400 ms). An abort consumes one such
-\* refresh, so the series outlasts them only when `Publications < Attempts`.
+\* refresh, so either phase's series outlasts them only when
+\* `Publications < Attempts`.
 EXTENDS Naturals
 
 CONSTANTS
   Publications,  \* Agent session refreshes landing in one attempt series
   Attempts,      \* bounded attempts (TRANSACT_CONFLICT_MAX_RETRIES + 1)
   Redrive,       \* signed-conflict rebuild of the submission
+  ReserveRedrive,\* signed-conflict rebuild of the target reservation
   LostResponse   \* a commit response may be lost (unconfirmed)
 
 ASSUME /\ Publications \in Nat
        /\ Attempts \in Nat \ {0}
        /\ Redrive \in BOOLEAN
+       /\ ReserveRedrive \in BOOLEAN
        /\ LostResponse \in BOOLEAN
 
 VARIABLES
   sessVer,   \* committed version of the AgentSession document
   agentLeft, \* Agent session refreshes still to land
-  client,    \* "idle" | "open" | "admitted" | "unconfirmed" | "lost"
+  client,    \* "idle" | "reserving" | "reserved" | "open" | "admitted"
+             \* | "unconfirmed" | "lost"
   snap,      \* the session version the open attempt read
-  tries,     \* attempts begun
+  tries,     \* attempts begun in the current phase
   created    \* committed AgentRequest documents for this submission
 
 vars == <<sessVer, agentLeft, client, snap, tries, created>>
@@ -70,9 +81,42 @@ AgentPublish ==
   /\ agentLeft' = agentLeft - 1
   /\ UNCHANGED <<client, snap, tries, created>>
 
+\* The reservation opens its first attempt and reads the session.
+ReserveBegin ==
+  /\ client = "idle"
+  /\ client' = "reserving"
+  /\ snap' = sessVer
+  /\ tries' = 1
+  /\ UNCHANGED <<sessVer, agentLeft, created>>
+
+\* Reservation commit: the targets are bound when the read session is
+\* unchanged; a confirmed abort is rebuilt by re-reading while attempts remain.
+ReserveCommit ==
+  /\ client = "reserving"
+  /\ IF snap = sessVer
+       THEN /\ client' = "reserved"
+            /\ tries' = 0
+            /\ UNCHANGED snap
+       ELSE IF ReserveRedrive /\ tries < Attempts
+              THEN /\ snap' = sessVer
+                   /\ tries' = tries + 1
+                   /\ UNCHANGED client
+              ELSE /\ client' = "lost"
+                   /\ UNCHANGED <<snap, tries>>
+  /\ UNCHANGED <<sessVer, agentLeft, created>>
+
+\* The reservation commits but its response is lost: it is reported, and the
+\* caller repeats it against the same existing session.
+ReserveCommitUnconfirmed ==
+  /\ LostResponse
+  /\ client = "reserving"
+  /\ snap = sessVer
+  /\ client' = "unconfirmed"
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, created>>
+
 \* The submission opens its first attempt and reads the session.
 ClientBegin ==
-  /\ client = "idle"
+  /\ client = "reserved"
   /\ client' = "open"
   /\ snap' = sessVer
   /\ tries' = 1
@@ -106,6 +150,9 @@ ClientCommitUnconfirmed ==
 
 Next ==
   \/ AgentPublish
+  \/ ReserveBegin
+  \/ ReserveCommit
+  \/ ReserveCommitUnconfirmed
   \/ ClientBegin
   \/ ClientCommit
   \/ ClientCommitUnconfirmed
@@ -113,13 +160,16 @@ Next ==
 Spec ==
   /\ Init
   /\ [][Next]_vars
+  /\ WF_vars(ReserveBegin)
+  /\ WF_vars(ReserveCommit)
   /\ WF_vars(ClientBegin)
   /\ WF_vars(ClientCommit)
 
 TypeOK ==
   /\ sessVer \in 0..Publications
   /\ agentLeft \in 0..Publications
-  /\ client \in {"idle", "open", "admitted", "unconfirmed", "lost"}
+  /\ client \in {"idle", "reserving", "reserved", "open", "admitted",
+                 "unconfirmed", "lost"}
   /\ tries \in 0..Attempts
   /\ created \in 0..1
 

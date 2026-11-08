@@ -160,7 +160,7 @@ oxc_ast = "=0.127.0"
 oxc_ast_visit = "=0.127.0"
 oxc_parser = "=0.127.0"
 oxc_span = "=0.127.0"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 defra-node.workspace = true
 proptest = "1"
 shlex = "1.3"

@@ -1,7 +1,9 @@
 use crate::support::{
-    accepted_turn::{boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec},
-    fixtures::configure_agent_tools,
+    accepted_turn::{boot_prepared_accepted_turn, prepare_managed_accepted_turn, AcceptedTurnSpec},
+    fixtures::configure_agent_tools_as,
+    grant_household_owner,
     live_inference::wait_for_request_terminal,
+    managed_agent_fixture,
     streaming_backend::StreamChunk,
     test_db,
 };
@@ -15,21 +17,25 @@ use std::{sync::Arc, time::Duration};
 async fn writer_recovers_complete_large_task_contract_in_provider_input() {
     let db = test_db("field-recovery-writer").await;
     let did = db.node_identity.did().to_owned();
-    let access = gents::store::config_client::ConfigAccess::local(db.node.clone());
-    access
-        .add_collection("type ReaderWork { instructions: String owned_files: String }")
-        .await
-        .unwrap();
+    // The enrolled User owns the household: it installs the work collection
+    // and writes the contract its managed Agent reads.
+    let fixture = managed_agent_fixture(&db).await;
+    grant_household_owner(&db, &fixture.user).await;
+    let access = fixture.access.clone();
+    const READER_WORK_SDL: &str = "type ReaderWork { instructions: String owned_files: String }";
+    access.add_collection(READER_WORK_SDL).await.unwrap();
     let instructions = "é".repeat(2436);
     let owned_files = format!("[\"{}\"]", "x".repeat(2920));
-    let mutation=format!("mutation {{add_ReaderWork(input: {{instructions: \"{}\", owned_files: \"{}\"}}) {{_docID}}}}", gents::store::graphql::escape_graphql_string(&instructions),gents::store::graphql::escape_graphql_string(&owned_files));
-    let response = access
-        .write("test.field_recovery.work", &mutation)
-        .await
-        .unwrap();
-    let doc = response["data"]["add_ReaderWork"][0]["_docID"]
-        .as_str()
-        .unwrap();
+    let doc = gents::store::config_client::create_authored_document(
+        &access,
+        "ReaderWork",
+        &json!({"instructions": instructions, "owned_files": owned_files}),
+        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        READER_WORK_SDL,
+    )
+    .await
+    .expect("write the User-signed work contract");
+    let doc = doc.as_str();
     let mut chunks = vec![StreamChunk::tool_call(
         "contract-summary",
         "read_work",
@@ -52,9 +58,11 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
             ));
         }
     }
-    let behavior = "contract-writer";
-    let prepared = prepare_accepted_turn(
+    let behavior = fixture.binding.agent_did.clone();
+    let behavior = behavior.as_str();
+    let prepared = prepare_managed_accepted_turn(
         &db,
+        &fixture,
         AcceptedTurnSpec {
             backend_id: "field-recovery",
             model: "field-recovery-model",
@@ -71,8 +79,8 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
         },
     )
     .await;
-    configure_agent_tools(
-        &db,
+    configure_agent_tools_as(
+        &fixture.access,
         &did,
         behavior,
         None,
@@ -119,8 +127,12 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
     .unwrap();
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
     assert_eq!(
-        wait_for_request_terminal(&db.node, "field-recovery-request", Duration::from_secs(60))
-            .await,
+        wait_for_request_terminal(
+            &fixture.access,
+            "field-recovery-request",
+            Duration::from_secs(60)
+        )
+        .await,
         "completed"
     );
     let bodies = runtime.backend.observed_completion_bodies();

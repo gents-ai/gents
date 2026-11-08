@@ -1,0 +1,4 @@
+---- MODULE MCClientSubmissionContentionReserveSingleAttempt ----
+EXTENDS ClientSubmissionContention
+
+====
