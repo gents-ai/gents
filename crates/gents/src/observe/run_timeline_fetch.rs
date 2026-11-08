@@ -359,52 +359,6 @@ pub async fn load_run_timeline_rows(
     }
 
     let request_bindings = timeline_request_bindings(&requests, &request)?;
-    let in_scope_ids = request_bindings
-        .values()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let legacy_logical_only_rows = tool_calls
-        .iter()
-        .filter(|row| {
-            nonempty(row.request_id.as_deref()).is_some_and(|id| in_scope_ids.contains(&id))
-                && nonempty(row.request_doc_id.as_deref()).is_none()
-        })
-        .count()
-        + inference_calls
-            .iter()
-            .filter(|row| {
-                in_scope_ids.contains(row.request_id.as_str())
-                    && nonempty(row.request_doc_id.as_deref()).is_none()
-            })
-            .count()
-        + compactions
-            .iter()
-            .filter(|row| {
-                nonempty(row.request_id.as_deref()).is_some_and(|id| in_scope_ids.contains(&id))
-                    && nonempty(row.request_doc_id.as_deref()).is_none()
-            })
-            .count()
-        + provider_context_reductions
-            .iter()
-            .filter(|row| {
-                in_scope_ids.contains(row.request_id.as_str())
-                    && nonempty(Some(row.request_doc_id.as_str())).is_none()
-            })
-            .count()
-        + rendered_requests
-            .iter()
-            .filter(|row| {
-                nonempty(row.request_id.as_deref()).is_some_and(|id| in_scope_ids.contains(&id))
-                    && nonempty(row.request_doc_id.as_deref()).is_none()
-            })
-            .count();
-    if legacy_logical_only_rows > 0 {
-        tracing::warn!(
-            request_id = %request.request_id,
-            legacy_logical_only_rows,
-            "timeline omitted rows without physical AgentRequest provenance",
-        );
-    }
     messages.retain(|row| {
         request_scoped_row_is_in_timeline(&request_bindings, None, row.request_doc_id.as_deref())
     });
@@ -519,7 +473,7 @@ use request_loaders::{
     load_timeline_child_requests, load_timeline_request_by_id, load_timeline_requests_for_session,
 };
 use validation::{
-    ensure_unique_timeline_request_ids, merge_timeline_request, nonempty,
+    ensure_unique_timeline_request_ids, merge_timeline_request,
     request_scoped_row_is_in_timeline, timeline_request_bindings, timeline_request_doc_ids,
     timeline_session_ids, validate_child_tool_bridges, validate_request_scoped_rows,
 };
