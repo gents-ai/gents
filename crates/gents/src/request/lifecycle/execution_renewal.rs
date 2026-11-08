@@ -178,6 +178,15 @@ fn renewal_recheck_time(fixture_now: Option<DateTime<Utc>>) -> DateTime<Utc> {
     fixture_now.unwrap_or_else(Utc::now)
 }
 
+/// One due poll. Every admission and background dispatch start writes the
+/// request document, and DefraDB aborts a renewal when any write of that
+/// document commits first, so a burst of sibling admissions can exhaust a
+/// poll's attempts. After the poll that renewed it a lease period has one
+/// due poll with margin (the next lands at the deadline), so an exhausted
+/// poll is re-driven at once rather than at the next poll. Each re-drive
+/// rereads the request and ends as `Lost` once the lease is no longer live,
+/// so it never outlasts the lease (`tla/BackgroundAdmissionContention`,
+/// `RedriveLostPoll`).
 async fn renew_once_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: Option<identity::Did>,
@@ -187,24 +196,36 @@ async fn renew_once_with_time(
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
-    match crate::store::config_client::ConfigAccess::renew_execution_lease_with_signer(
-        node,
-        actor,
-        signer,
-        move |txn| {
-            Box::pin(renew_in_transaction(
-                txn,
-                request_doc_id,
-                generation,
-                expected_deadline,
-                fixture_now,
-            ))
-        },
-    )
-    .await
-    {
-        Err(error) if error.is::<RenewalAdmissionExpired>() => Ok(RenewalAttemptOutcome::Lost),
-        result => result,
+    loop {
+        match crate::store::config_client::ConfigAccess::renew_execution_lease_with_signer(
+            node,
+            actor.clone(),
+            signer.clone(),
+            move |txn| {
+                Box::pin(renew_in_transaction(
+                    txn,
+                    request_doc_id,
+                    generation,
+                    expected_deadline,
+                    fixture_now,
+                ))
+            },
+        )
+        .await
+        {
+            Err(error) if error.is::<RenewalAdmissionExpired>() => {
+                return Ok(RenewalAttemptOutcome::Lost)
+            }
+            Err(error)
+                if crate::store::config_client::is_classified_transaction_conflict(&error) =>
+            {
+                tracing::warn!(
+                    %error, %request_doc_id, %generation,
+                    "execution lease renewal poll lost every attempt to concurrent request writes; re-driving"
+                );
+            }
+            result => return result,
+        }
     }
 }
 

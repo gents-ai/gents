@@ -1589,6 +1589,7 @@ async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
     }
 }
 
+mod request_row_writers;
 mod workspace_recovery;
 
 #[tokio::test]
