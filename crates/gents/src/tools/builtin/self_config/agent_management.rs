@@ -559,12 +559,8 @@ async fn agent_apply_in_txn(
         );
     }
     if !preview {
-        crate::documents::apply_desired_state_plan_with_node_binding(
-            txn,
-            &plan,
-            node_binding,
-        )
-        .await?;
+        crate::documents::apply_desired_state_plan_with_node_binding(txn, &plan, node_binding)
+            .await?;
     }
     ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_did":id,"host_root_access":root_access,"agent":doc,"make_default":args.make_default}.pretty()
 }

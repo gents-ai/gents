@@ -407,7 +407,11 @@ impl ConfigApplyTxn<'_> {
         installed: &[crate::store::local::ProjectedPlugin],
     ) -> Result<()> {
         use crate::store::local::plugin_delete_source as source;
-        if !previous.iter().chain(installed).any(|record| record.deletes) {
+        if !previous
+            .iter()
+            .chain(installed)
+            .any(|record| record.deletes)
+        {
             return Ok(());
         }
         let TxnBackend::Embedded {

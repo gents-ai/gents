@@ -22,14 +22,18 @@ pub(crate) struct ResolvedConsumerBinding {
 
 fn cursor_key(owner: &str, consumer: &EventConsumer, collection: &str) -> String {
     match consumer {
-        EventConsumer::Trigger { trigger_id } => gents_protocol::trigger_delivery::durable_fire_key(
-            "arrival-cursor",
-            &[owner, trigger_id, collection],
-        ),
-        EventConsumer::CallbackBinding { binding_id } => gents_protocol::trigger_delivery::durable_fire_key(
-            "callback-arrival-cursor",
-            &[owner, binding_id, collection],
-        ),
+        EventConsumer::Trigger { trigger_id } => {
+            gents_protocol::trigger_delivery::durable_fire_key(
+                "arrival-cursor",
+                &[owner, trigger_id, collection],
+            )
+        }
+        EventConsumer::CallbackBinding { binding_id } => {
+            gents_protocol::trigger_delivery::durable_fire_key(
+                "callback-arrival-cursor",
+                &[owner, binding_id, collection],
+            )
+        }
     }
 }
 
@@ -80,12 +84,12 @@ pub(crate) async fn seed_for_source(
 ) -> Result<CursorRecord> {
     let key = cursor_key(owner, consumer, collection);
     let schema = txn
-        .execute(&super::schema_introspection::introspection_query(collection)?)
+        .execute(&super::schema_introspection::introspection_query(
+            collection,
+        )?)
         .await?;
     let after =
-        if super::schema_introspection::parse_collection_schema(schema.get("data"))
-            .is_some()
-        {
+        if super::schema_introspection::parse_collection_schema(schema.get("data")).is_some() {
             let response = txn
                 .execute(&format!(
             "{{ _documentArrivals(collection: \"{}\", after: \"0\", limit: 1) {{ head }} }}",
@@ -130,7 +134,15 @@ pub(crate) async fn load_or_seed_for_source_as(
     if let Some(record) = load_for_source(txn, owner, consumer, collection).await? {
         return Ok(record);
     }
-    seed_for_source(txn, owner, consumer, collection, writer_agent_did, node_binding).await
+    seed_for_source(
+        txn,
+        owner,
+        consumer,
+        collection,
+        writer_agent_did,
+        node_binding,
+    )
+    .await
 }
 
 pub(crate) async fn persist_checkpoint(
@@ -346,8 +358,11 @@ async fn admitted_callback_arrival(
     source_collection: &str,
     source_doc_id: &str,
 ) -> Result<bool> {
-    let key =
-        gents_protocol::trigger_delivery::idempotency_key(binding_id, source_collection, source_doc_id);
+    let key = gents_protocol::trigger_delivery::idempotency_key(
+        binding_id,
+        source_collection,
+        source_doc_id,
+    );
     let response = txn
         .execute(&format!(
             "{{ CallbackInvocation(filter: {{owner_node_did: {{_eq: \"{}\"}}, idempotency_key: {{_eq: \"{}\"}}}}, limit: 2) {{ origin claimed_at claimed_callback }} }}",

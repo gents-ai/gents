@@ -8,8 +8,8 @@ use super::inference_backend::{
 };
 use super::InferenceBackend;
 use crate::store::config_client::{
-    PendingEventGrants, ConfigApplyTxn, ConfigurationNodeBinding, DesiredStateApplyCounts,
-    DesiredStateApplyPlan, DesiredStateSemantics,
+    ConfigApplyTxn, ConfigurationNodeBinding, DesiredStateApplyCounts, DesiredStateApplyPlan,
+    DesiredStateSemantics, PendingEventGrants,
 };
 use crate::Collection;
 

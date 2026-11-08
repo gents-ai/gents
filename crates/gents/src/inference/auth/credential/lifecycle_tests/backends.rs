@@ -156,9 +156,7 @@ async fn a_lost_backend_comes_back_at_the_next_sign_in() {
         access
             .transact_write("test.backend_rm", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await
             .unwrap();
@@ -194,9 +192,9 @@ async fn an_unrelated_invalid_profile_does_not_block_an_account_backend() {
     let profiles = || async {
         access
             .transact_readonly("test.invalid_profile", |txn| {
-                Box::pin(async move {
-                    crate::documents::list_inference_profiles_in_txn(txn, did).await
-                })
+                Box::pin(
+                    async move { crate::documents::list_inference_profiles_in_txn(txn, did).await },
+                )
             })
             .await
             .unwrap()

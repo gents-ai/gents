@@ -13,8 +13,8 @@ use super::{
 };
 use crate::documents::apply_desired_state_plan;
 use crate::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
+    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
 use crate::Collection;
 

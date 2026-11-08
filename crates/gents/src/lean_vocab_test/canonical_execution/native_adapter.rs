@@ -1291,7 +1291,9 @@ impl NativeCanonicalExecution {
             let parent: AgentRequestRow =
                 crate::store::graphql::first_row(&response, "AgentRequest")?
                     .context("title parent disappeared")?;
-            crate::store::identity::request_receipt::verify_historical_auxiliary_receipt(&row, &parent)?;
+            crate::store::identity::request_receipt::verify_historical_auxiliary_receipt(
+                &row, &parent,
+            )?;
             anyhow::ensure!(
                 parent.lifecycle_state == Some(RequestLifecycleState::Completed),
                 "title execution changed its terminal parent"

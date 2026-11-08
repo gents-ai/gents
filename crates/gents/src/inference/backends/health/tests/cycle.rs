@@ -283,9 +283,7 @@ async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() 
         .user
         .transact_write("test.backend.remove", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();

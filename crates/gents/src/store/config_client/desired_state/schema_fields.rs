@@ -92,18 +92,15 @@ pub(super) async fn prefetch_declared_fields(
         .into_iter()
         .filter(|collection| {
             !introspected.contains_key(collection)
-                && schema_introspection::introspection_query(collection)
-                    .is_ok()
+                && schema_introspection::introspection_query(collection).is_ok()
         })
         .collect();
     for page in wanted.chunks(INTROSPECTION_PAGE) {
         let names: Vec<&str> = page.iter().map(String::as_str).collect();
         let query = schema_introspection::introspection_query_many(&names)?;
         let response = txn.execute(&query).await?;
-        let schemas = schema_introspection::parse_collection_schemas(
-            response.get("data"),
-            names.len(),
-        );
+        let schemas =
+            schema_introspection::parse_collection_schemas(response.get("data"), names.len());
         for (name, schema) in names.into_iter().zip(schemas) {
             introspected.insert(
                 name.to_owned(),
@@ -126,20 +123,16 @@ pub(super) async fn declared_fields<'a>(
     introspected: &'a mut IntrospectedFields,
 ) -> Result<Option<&'a BTreeMap<String, SchemaField>>> {
     if !introspected.contains_key(collection) {
-        if let Ok(query) =
-            schema_introspection::introspection_query(collection)
-        {
+        if let Ok(query) = schema_introspection::introspection_query(collection) {
             let response = txn.execute(&query).await?;
-            let fields = schema_introspection::parse_collection_schema(
-                response.get("data"),
-            )
-            .map(|schema| {
-                schema
-                    .fields
-                    .into_iter()
-                    .map(|field| (field.name.clone(), field))
-                    .collect::<BTreeMap<_, _>>()
-            });
+            let fields =
+                schema_introspection::parse_collection_schema(response.get("data")).map(|schema| {
+                    schema
+                        .fields
+                        .into_iter()
+                        .map(|field| (field.name.clone(), field))
+                        .collect::<BTreeMap<_, _>>()
+                });
             introspected.insert(collection.to_owned(), fields);
         }
     }
@@ -224,9 +217,7 @@ pub(super) async fn validate_event_source_live_fields(
     if let Some(field) = count_field {
         match fields.get(field) {
             Some(declared)
-                if schema_introspection::can_hold_canonical_count(
-                    declared.named_type(),
-                ) => {}
+                if schema_introspection::can_hold_canonical_count(declared.named_type()) => {}
             Some(declared) => anyhow::bail!(
                 "EventSource {} expected_count_field {:?} names a {} field of {}, which cannot \
                  carry the count; the runtime parses an integer or its canonical decimal spelling \

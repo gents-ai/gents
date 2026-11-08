@@ -6,7 +6,9 @@ use crate::documents::{
     Callback, CallbackBinding, ConcurrencyMode, EventSource, MissingReference, Task, Trigger,
     TriggerSource,
 };
-use crate::store::config_client::event_source_cursor::{self, CursorRecord, ResolvedConsumerBinding};
+use crate::store::config_client::event_source_cursor::{
+    self, CursorRecord, ResolvedConsumerBinding,
+};
 use crate::store::config_client::{
     read_desired_state_document_in_txn, read_desired_state_record_in_txn, ConfigApplyTxn,
     ConfigurationNodeBinding,

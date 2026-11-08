@@ -277,9 +277,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
     owner
         .transact_write("test.plugin_job_target", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();
@@ -356,7 +354,9 @@ async fn step0(output: Value, options: Options) -> Step0 {
             agent_executor_queue_capacities: Default::default(),
         });
         let (_sender, receiver) = tokio::sync::watch::channel(snapshot);
-        runtime.bind_snapshot(crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(receiver)).unwrap();
+        runtime
+            .bind_snapshot(crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(receiver))
+            .unwrap();
         let admission = crate::runtime::service::RuntimeServiceAdmission::default();
         if !options.kicks {
             admission

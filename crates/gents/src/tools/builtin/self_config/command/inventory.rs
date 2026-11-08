@@ -22,10 +22,7 @@ impl ConfigCommandTool {
                                 txn, node_did,
                             )
                             .await?,
-                            crate::documents::list_inference_profiles_in_txn(
-                                txn, node_did,
-                            )
-                            .await?,
+                            crate::documents::list_inference_profiles_in_txn(txn, node_did).await?,
                         ))
                     })
                 },

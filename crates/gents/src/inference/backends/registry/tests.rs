@@ -467,8 +467,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     backend.discovery_timeout_secs = Some(9);
     backend.enabled = false;
     backend.tags = vec!["old".into()];
-    let doc_id =
-        crate::documents::write_inference_backend_document(&access, &backend).await?;
+    let doc_id = crate::documents::write_inference_backend_document(&access, &backend).await?;
     let catalogs = serde_json::json!([
         {"node_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
         {"node_did":other_did,"observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
@@ -500,8 +499,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     replacement.node_did = owner.to_owned();
     replacement.backend_id = backend.backend_id.clone();
     let replaced_id =
-        crate::documents::write_inference_backend_document(&access, &replacement)
-            .await?;
+        crate::documents::write_inference_backend_document(&access, &replacement).await?;
     assert_eq!(replaced_id, doc_id);
     let loaded = backend_for_user(&access, owner, &backend.backend_id)
         .await?

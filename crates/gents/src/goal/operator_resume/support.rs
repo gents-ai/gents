@@ -1,7 +1,7 @@
 use super::*;
+use crate::documents::{apply_desired_state_plan, write_inference_backend_document};
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::auth::credential::{preset_account_backend, store_sign_in};
-use crate::documents::{apply_desired_state_plan, write_inference_backend_document};
 use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::store::identity::request_receipt::verify_request_receipt_signature;
 use crate::store::identity::KeyIdentity;

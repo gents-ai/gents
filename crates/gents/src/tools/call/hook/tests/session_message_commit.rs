@@ -27,9 +27,7 @@ where
     )
     .transact_write("test.write_config", |txn| {
         let plan = &plan;
-        Box::pin(
-            async move { crate::documents::apply_desired_state_plan(txn, plan).await },
-        )
+        Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
     })
     .await
     .unwrap();

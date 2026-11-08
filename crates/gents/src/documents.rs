@@ -42,12 +42,12 @@ pub use callback::{
     CallbackModule, PortCardinality, PortSpec, WorkspaceAgentSelection, WorkspaceReaderSelection,
 };
 pub use compaction::CompactionConfig;
+pub use context::AgentContext;
 pub use desired_state::apply_desired_state_plan;
 #[allow(unused_imports)]
 pub(crate) use desired_state::{
     apply_desired_state_plan_with_node_binding, validate_desired_state_plan,
 };
-pub use context::AgentContext;
 pub use eval_definition::{
     EvalCapture, EvalCase, EvalCheckRef, EvalContinuation, EvalDefinition, EvalFixtureDocument,
     EvalFixtureFile, EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind,
@@ -65,13 +65,13 @@ pub(crate) use unattended_admission::observe_unattended_agent_in_txn;
 pub(crate) use behavior::{list_agent_records, load_agent_record};
 pub use behavior::{list_agents, load_agent, upsert_agent, write_agent_document, Agent};
 
+pub use inference_backend::write_inference_backend_document;
+pub(crate) use inference_backend::{backend_metadata_fields, write_inference_backend_in_txn};
 pub use inference_backend::{
     AdvertisedModel, BackendAuth, BackendAuthSelection, BackendAuthSelectionFields,
     BackendModelCatalog, ClaudePlatform, InferenceBackend, InferenceBackendMetadata,
     InferenceBackendObservation, InvalidBackendAuthSelection,
 };
-pub use inference_backend::write_inference_backend_document;
-pub(crate) use inference_backend::{backend_metadata_fields, write_inference_backend_in_txn};
 pub use inference_execution::{
     InferenceExecution, InferenceRetryPolicy, MAX_DEADLINE_DURATION_SECS,
 };

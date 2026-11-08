@@ -67,8 +67,8 @@ mod tests {
 
     use crate::documents::apply_desired_state_plan;
     use crate::store::config_client::{
-        read_desired_state_record_in_txn, ConfigAccess,
-        DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+        read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
+        DesiredStateApplyPlan, NodePermission,
     };
     use crate::store::identity::NodeIdentity;
 

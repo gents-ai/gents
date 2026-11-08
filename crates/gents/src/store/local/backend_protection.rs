@@ -199,9 +199,8 @@ impl PreflightProtectedBackendStore<'_> {
         policy: Arc<dyn super::ToolSourcePolicy>,
         plugins: Vec<super::ProjectedPlugin>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
-        let projection =
-            super::document_projector_with_installed_plugins(runtime, policy, plugins)
-                .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+        let projection = super::document_projector_with_installed_plugins(runtime, policy, plugins)
+            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         let mut builder = super::store_key::persistent_builder(&self.store.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?
             .with_document_projector(projection)

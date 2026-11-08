@@ -243,16 +243,15 @@ async fn load_pending(
                     else {
                         continue;
                     };
-                    let binding =
-                        super::session_child_binding_for_request_in_txn(
-                            txn,
-                            &child.node_did,
-                            &child.session_id,
-                            child.requester_did.as_deref(),
-                            request_doc,
-                            super::SessionChildSource::Output(source),
-                        )
-                        .await;
+                    let binding = super::session_child_binding_for_request_in_txn(
+                        txn,
+                        &child.node_did,
+                        &child.session_id,
+                        child.requester_did.as_deref(),
+                        request_doc,
+                        super::SessionChildSource::Output(source),
+                    )
+                    .await;
                     if !matches!(binding, Ok((ref physical, ref selected)) if physical == &child.session_doc_id && selected == agent)
                     {
                         continue;

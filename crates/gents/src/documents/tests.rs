@@ -853,9 +853,7 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
     access
         .transact_write("test.agent.description", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .expect("upsert should persist description fields");
@@ -942,9 +940,7 @@ async fn inference_retry_policy_fields_round_trip() {
     access
         .transact_write("test.retry_chain.write", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .expect("apply should persist the retry chain");

@@ -34,10 +34,10 @@ pub use client_signed_agent::ClientSigningCapability;
 pub(crate) use client_signed_agent::{
     prepare_goal_delete_evidence, verify_goal_delete_evidence, verify_request_evidence,
 };
+pub mod agent_session;
 #[cfg(test)]
 mod client_signed_agent_conformance;
 mod common;
-pub mod agent_session;
 pub(crate) mod desired_state;
 #[cfg(test)]
 mod dormant_file_request_conformance;
@@ -50,16 +50,16 @@ mod inference_backend;
 mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
+pub(crate) mod node_readiness;
 mod pack_effect;
 mod pairing_reader;
 #[cfg(test)]
 mod query_tests;
-pub(crate) mod node_readiness;
 mod relationships;
 mod retry;
 mod schema_contract;
-pub mod schema_introspection;
 mod schema_install;
+pub mod schema_introspection;
 mod schema_management;
 mod self_config_permission;
 pub(crate) mod session_children;
@@ -105,22 +105,22 @@ pub use client_agent_publication::{
 };
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub use desired_state::grant_selected_self_configuration;
+pub(crate) use desired_state::plan::document_identity;
 pub use desired_state::plan::{
     stale_expectation, DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
     DesiredStateExpectation, DriftedDocument, StaleExpectation,
 };
-pub(crate) use desired_state::plan::document_identity;
 pub(crate) use desired_state::projection::canonical_struct_fields;
 pub use desired_state::projection::{config_projection, desired_state_document_digest};
 pub(crate) use desired_state::read::read_desired_state_document_in_txn;
 pub use desired_state::read::read_record as read_desired_state_record_in_txn;
 pub use desired_state::read::read_records as read_desired_state_records_in_txn;
 pub(crate) use desired_state::schema_fields::collection_is_installed;
+pub(crate) use desired_state::semantics::{DesiredStateSemantics, PendingEventGrants};
 pub use desired_state::validate::{
     event_trigger_document_field_names, validate_event_trigger_document_fields,
 };
 pub(crate) use desired_state::validate::{validate_desired_state_plan, OutcomeSourceSchemaError};
-pub(crate) use desired_state::semantics::{DesiredStateSemantics, PendingEventGrants};
 pub(crate) use desired_state::{
     apply_desired_state_plan_with_semantics, configuration_node_doc, ConfigurationNodeBinding,
 };

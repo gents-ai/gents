@@ -21,10 +21,7 @@ impl RuntimeDocumentProjector {
         })
     }
 
-    pub(super) fn with_startup_plugins(
-        mut self,
-        plugins: Vec<super::ProjectedPlugin>,
-    ) -> Self {
+    pub(super) fn with_startup_plugins(mut self, plugins: Vec<super::ProjectedPlugin>) -> Self {
         self.startup_plugins = Some(plugins);
         self
     }

@@ -221,9 +221,7 @@ mod tests {
         access
             .transact_write("test.workspace_selection.callback", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await?;
         let rows = access.execute("{Callback {_docID callback_id}}").await?;
@@ -277,9 +275,7 @@ mod tests {
         access
             .transact_write("test.workspace_selection.repeat", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await?;
         for case in cases {

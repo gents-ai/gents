@@ -3,11 +3,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::inference::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
 use crate::documents::apply_desired_state_plan;
+use crate::inference::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
 use crate::store::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    GraphqlEndpoint,
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
 };
 use crate::store::identity::NodeIdentity;
 use crate::Collection;

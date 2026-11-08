@@ -119,7 +119,9 @@ pub(crate) async fn session_child_binding_for_request_in_txn(
     let parent = request_row(txn, parent_doc)
         .await
         .context("load auxiliary parent request")?;
-    crate::store::identity::request_receipt::verify_historical_auxiliary_receipt(&auxiliary, &parent)?;
+    crate::store::identity::request_receipt::verify_historical_auxiliary_receipt(
+        &auxiliary, &parent,
+    )?;
     let (session_doc, agent) = agent_session_child_binding_in_txn(
         txn,
         node_did,

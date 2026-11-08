@@ -83,11 +83,21 @@ mod tests {
     fn binds_only_a_unique_observation_of_the_current_metadata() {
         assert_eq!(bind::<u8, _>("n", "b", "m", []), Ok(None));
         assert_eq!(
-            bind("n", "b", "m", [(key("n", "b", Some("m")), 1), (key("o", "b", Some("m")), 2)]),
+            bind(
+                "n",
+                "b",
+                "m",
+                [(key("n", "b", Some("m")), 1), (key("o", "b", Some("m")), 2)]
+            ),
             Ok(Some(1))
         );
         assert_eq!(
-            bind("n", "b", "m", [(key("n", "b", Some("m")), 1), (key("n", "b", Some("m")), 2)]),
+            bind(
+                "n",
+                "b",
+                "m",
+                [(key("n", "b", Some("m")), 1), (key("n", "b", Some("m")), 2)]
+            ),
             Err(ObservationBindingError::Ambiguous)
         );
         assert_eq!(

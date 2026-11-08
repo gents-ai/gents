@@ -182,10 +182,8 @@ pub fn validate_event_trigger_document_fields(
             else {
                 continue;
             };
-            let own_field = |name: &String| {
-                !name.starts_with('_')
-                    && !is_aggregate_pseudo_field(name)
-            };
+            let own_field =
+                |name: &String| !name.starts_with('_') && !is_aggregate_pseudo_field(name);
             let resolved_native_route_field = task.emit_outcome
                 && source.group.is_none()
                 && matches!(

@@ -112,7 +112,8 @@ pub fn decode_session_row(row: &Value) -> Result<SessionOwnerRow, SessionRowErro
         .as_object_mut()
         .ok_or(SessionRowError::NotAnObject)?
         .remove("_docID");
-    let session: AgentSession = serde_json::from_value(document).map_err(SessionRowError::Decode)?;
+    let session: AgentSession =
+        serde_json::from_value(document).map_err(SessionRowError::Decode)?;
     validate_agent_session(&session)?;
     Ok(SessionOwnerRow { doc_id, session })
 }
