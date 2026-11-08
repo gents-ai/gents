@@ -729,25 +729,6 @@ impl TerminalRepairReport {
     }
 }
 
-pub const TERMINAL_REDRIVE_CAP: u32 = 3;
-
-pub const TERMINAL_REDRIVE_BATCH_LIMIT: usize = 64;
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct TerminalRedriveReport {
-    pub reasserted: usize,
-    /// Requests retired because every requester replicator acknowledged them.
-    pub acknowledged: usize,
-    pub scanned: usize,
-    pub failed: usize,
-}
-
-impl TerminalRedriveReport {
-    pub fn is_noop(&self) -> bool {
-        self.reasserted == 0 && self.acknowledged == 0
-    }
-}
-
 #[async_trait::async_trait]
 impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
     type Error = crate::runtime::agent::stream_processor::RuntimeSeamError;

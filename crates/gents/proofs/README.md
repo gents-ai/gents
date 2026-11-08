@@ -575,10 +575,6 @@ Currently:
 - `PairingTransport` — connection/install liveness for one directed pairing edge.
 - `BackgroundAdmissionContention` — optimistic-transaction writers of one request's `AgentRequest` row and session documents: dispatch start, background admission, receipt, running children and the execution lease renewal. Checks the owned loop's call order, the admission sequence fence, the renewal owner's re-drive of a poll that admission bumps exhaust (without it the lease lapses), the renewal cadence premise (`RequestExecutionLease.consecutive_renewals_obey_cadence`) and the `Background.receiptContentionAttempts` bound, whose second extra attempt absorbs one renewal (#3592).
 - `P2PBackpressure` — bounded hub fan-in/fan-out admission and push-worker liveness obligations for issue #630 (obligation model; not a fleet stability proof).
-- `ReplicatedRequestConvergence` — replicated terminal-state convergence under
-  persisted bounded owner re-drive of unacknowledged requests plus bounded
-  full replay when an unacknowledged configured peer reconnects after a longer
-  partition.
 
 ## Why This Matters
 
@@ -1355,9 +1351,7 @@ otherwise the pairing decides `delivering` or `notConnected`
 and the result depends on the signals alone
 (`deriveSessionDelivery_determined_by_signals`). `client_session_delivery_cases`
 emits the classification over every signal and lifecycle combination for the
-`gents_protocol::client_protocol` consumer. `tla/ReplicatedRequestConvergence`
-carries the cross-node side: the desktop's legs, event-driven reads and
-eventual visibility.
+`gents_protocol::client_protocol` consumer.
 
 `client-state-machine.md` and external fixtures still need migration to this
 target contract.

@@ -706,8 +706,7 @@ pub use request::lifecycle::{
     build_signed_request, enqueue_local_steering_request, task_session_title,
     write_manual_agent_request, write_manual_agent_request_with_conversation_title,
     BackgroundWakeRedriveReport, ParentLink, RecoveryReport, RequestIdentity, RequestLifecycle,
-    RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport, TerminalRepairReport,
-    TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+    RequestSigner, RequestSpec, RetryLink, TerminalRepairReport,
 };
 pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use gents_protocol::row::AgentRequest;
