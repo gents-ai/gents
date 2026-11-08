@@ -2061,16 +2061,6 @@ def caseCoverage : List CoverageEntry :=
       "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "operator_job_control_cases"
-      "OperatorJobControlCases"
-      "plugin_job::operator_control_conformance::generated_operator_controls_stay_on_the_owning_runtime")
-      "plugin-jobs" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "operator_process_control_cases"
-      "OperatorProcessControlCases"
-      "tool_control::tests::operator_process_control_matches_executable_model")
-      "process-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
       "client_process_claim_cases"
       "ClientProcessClaimCases"
       "request::lifecycle::client::tests::claim_tests::client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim")

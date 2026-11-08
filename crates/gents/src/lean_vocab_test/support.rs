@@ -187,8 +187,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_first_request_binding_cases: Vec<serde_json::Value>,
     pub(crate) goal_continuation_assignment_cases: Vec<serde_json::Value>,
     pub(crate) plugin_job_commit_kill_cases: Vec<serde_json::Value>,
-    pub(crate) operator_job_control_cases: Vec<serde_json::Value>,
-    pub(crate) operator_process_control_cases: Vec<serde_json::Value>,
     pub(crate) client_process_claim_cases: Vec<serde_json::Value>,
     pub(crate) client_process_receipt_cases: Vec<serde_json::Value>,
     pub(crate) client_control_grant_cases: Vec<serde_json::Value>,

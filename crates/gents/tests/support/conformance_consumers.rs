@@ -455,20 +455,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "kill_reads_children_that_committed_after_the_recovery_snapshot",
         },
         ConformanceConsumer::RustTest {
-            id: "plugin_job::operator_control_conformance::generated_operator_controls_stay_on_the_owning_runtime",
-            package: "gents",
-            source_path: "crates/gents/src/tools/background/job/operator_control_conformance.rs",
-            module_path: "plugin_job::operator_control_conformance",
-            function: "generated_operator_controls_stay_on_the_owning_runtime",
-        },
-        ConformanceConsumer::RustTest {
-            id: "tool_control::tests::operator_process_control_matches_executable_model",
-            package: "gents",
-            source_path: "crates/gents/src/tools/call/control.rs",
-            module_path: "tool_control::tests",
-            function: "operator_process_control_matches_executable_model",
-        },
-        ConformanceConsumer::RustTest {
             id: "request::lifecycle::client::tests::claim_tests::client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim",
             package: "gents",
             source_path: "crates/gents/src/request/lifecycle/client/tests/claim_tests.rs",

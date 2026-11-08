@@ -15,93 +15,6 @@ pub mod client;
 
 pub use gents_protocol::process_control::ProcessControlOutcome as CancelBackgroundToolCallOutcome;
 
-/// Native adapter for `Background.ProcessControl.operatorProcessAuthorized`.
-#[cfg(test)]
-pub fn operator_process_authorized(
-    executing: &str,
-    requested: &str,
-    owner: &str,
-    actor: Option<&str>,
-    requested_invocation: (&str, &str),
-    owned_invocation: (&str, &str),
-    eligibility: (bool, bool),
-) -> bool {
-    crate::tools::background::job::control::operator_control_authorized(
-        executing, requested, owner, actor,
-    ) && requested_invocation == owned_invocation
-        && eligibility.0
-        && eligibility.1
-}
-
-/// The transport authenticates `actor` through DefraDB. The process owner then
-/// revalidates the displayed invocation before signalling its existing guard.
-#[cfg(test)]
-pub async fn operator_process_control(
-    agent: &ConfigAccess,
-    executions: &BackgroundExecutionRegistry,
-    actor: Option<&str>,
-    request: &gents_protocol::process_control::OperatorProcessControlRequest,
-) -> Result<CancelBackgroundToolCallOutcome> {
-    let (node, agent_did, signer) = managed_agent_parts(agent)?;
-    let executing = node
-        .node_identity_did()
-        .context("runtime has no node identity")?;
-    anyhow::ensure!(
-        crate::tools::background::job::control::operator_control_authorized(
-            executing,
-            &request.node_did,
-            executing,
-            actor,
-        ),
-        "runtime operator authorization is required"
-    );
-    let response = agent.execute(&format!(
-        "{{AgentToolCall(filter: {{_docID: {{_eq: \"{}\"}}, node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, tool_call_id: {{_eq: \"{}\"}}}}, limit: 2) {{requester_did}}}}",
-        crate::store::graphql::escape_graphql_string(&request.tool_call_doc_id),
-        crate::store::graphql::escape_graphql_string(&request.node_did),
-        crate::store::graphql::escape_graphql_string(&request.session_id),
-        crate::store::graphql::escape_graphql_string(&request.tool_call_id),
-    )).await?;
-    #[derive(serde::Deserialize)]
-    struct Scope {
-        requester_did: Option<String>,
-    }
-    let scopes: Vec<Scope> = serde_json::from_value(response["data"]["AgentToolCall"].clone())
-        .context("reading the native invocation scope")?;
-    let [scope] = scopes.as_slice() else {
-        return Ok(CancelBackgroundToolCallOutcome::NotFound);
-    };
-    let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id_as(
-        node.clone(),
-        agent_did,
-        &request.tool_call_doc_id,
-        &request.node_did,
-        &request.session_id,
-        scope.requester_did.as_deref(),
-    )
-    .await?
-    else {
-        return Ok(CancelBackgroundToolCallOutcome::NotFound);
-    };
-    lifecycle.bind_agent_signer(Some(signer))?;
-    let native = matches!(lifecycle.kind(), ToolRowKind::Native);
-    let physical = lifecycle
-        .doc_id()
-        .context("native invocation lacks physical identity")?;
-    if !operator_process_authorized(
-        executing,
-        &request.node_did,
-        lifecycle.node_did(),
-        actor,
-        (&request.tool_call_id, &request.tool_call_doc_id),
-        (lifecycle.tool_call_id(), physical),
-        (lifecycle.await_mode() == AwaitMode::Background, native),
-    ) {
-        return Ok(CancelBackgroundToolCallOutcome::NotBackground);
-    }
-    cancel_loaded_background_tool_call(node, executions, lifecycle, "explicit_cancel").await
-}
-
 /// `agent` is the owning Agent's managed access: ACP hides the Agent's tool
 /// calls from every other actor and their writes require its signer.
 pub async fn cancel_session_background_process(
@@ -738,32 +651,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&fixture.path);
     }
 
-    #[test]
-    fn operator_process_control_matches_executable_model() {
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().operator_process_control_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let string = |key: &str| case[key].as_str().unwrap();
-            assert_eq!(
-                operator_process_authorized(
-                    string("executing"),
-                    string("requested"),
-                    string("owner"),
-                    case["actor"].as_str(),
-                    (string("requested_id"), string("requested_doc")),
-                    (string("owned_id"), string("owned_doc")),
-                    (
-                        case["background"].as_bool().unwrap(),
-                        case["native"].as_bool().unwrap()
-                    ),
-                ),
-                case["expected"].as_bool().unwrap(),
-                "{case}",
-            );
-        }
-    }
-
     #[cfg(unix)]
     #[tokio::test]
     async fn cancel_background_tool_call_terminalizes_row_and_token() {
@@ -915,31 +802,50 @@ mod tests {
             "unauthorized UI cancellation must not signal the worker"
         );
 
-        let command = gents_protocol::process_control::OperatorProcessControlRequest {
-            node_did: owner.clone(),
-            session_id: "session-1".into(),
-            tool_call_id: "cancel-native-tool".into(),
-            tool_call_doc_id: physical,
+        let requester_did = request.request().requester_did.clone();
+        let stop = |session_id: &'static str, tool_call_id: &'static str, doc: String| {
+            let agent_access = agent_access.clone();
+            let registry = registry.clone();
+            let node = node.clone();
+            let agent = agent.clone();
+            let requester_did = requester_did.clone();
+            async move {
+                let outcome = client::apply_claimed(
+                    &node,
+                    &agent_access,
+                    &registry,
+                    &agent,
+                    client::ClaimedTarget {
+                        node_did,
+                        session_id,
+                        requester_did: requester_did.as_deref(),
+                        tool_call_id,
+                        tool_call_doc_id: &doc,
+                        action: "process_stop",
+                    },
+                )
+                .await?;
+                match outcome {
+                    gents_protocol::process_control::ToolControlReceiptOutcome::Process(
+                        outcome,
+                    ) => Ok(outcome),
+                    other => anyhow::bail!("process stop produced {other:?}"),
+                }
+            }
         };
-        assert!(
-            operator_process_control(&agent_access, &registry, Some("foreign"), &command)
-                .await
-                .is_err()
-        );
-        let mut mismatches = [command.clone(), command.clone(), command.clone()];
-        mismatches[0].tool_call_id = "sibling-native-tool".into();
-        mismatches[1].session_id = "another-session".into();
-        mismatches[2].tool_call_doc_id = "missing-physical-row".into();
-        for wrong in mismatches {
-            assert_eq!(
-                operator_process_control(&agent_access, &registry, Some(node_did), &wrong)
-                    .await
-                    .unwrap(),
-                CancelBackgroundToolCallOutcome::NotFound
-            );
+        for (session, call, doc) in [
+            ("session-1", "sibling-native-tool", physical.clone()),
+            ("another-session", "cancel-native-tool", physical.clone()),
+            (
+                "session-1",
+                "cancel-native-tool",
+                "missing-physical-row".to_owned(),
+            ),
+        ] {
+            assert!(stop(session, call, doc).await.is_err());
         }
         assert!(!token.is_cancelled());
-        let outcome = operator_process_control(&agent_access, &registry, Some(node_did), &command)
+        let outcome = stop("session-1", "cancel-native-tool", physical.clone())
             .await
             .unwrap();
 
@@ -963,7 +869,7 @@ mod tests {
         .expect("tool row");
         assert!(row.is_cancelled());
         assert!(matches!(
-            operator_process_control(&agent_access, &registry, Some(node_did), &command)
+            stop("session-1", "cancel-native-tool", physical.clone())
                 .await
                 .unwrap(),
             CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }

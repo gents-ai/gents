@@ -1208,16 +1208,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "plugin_job_commit_kill_cases".into(),
         "PluginJobCommitKillCases".into(),
     ));
-    assert!(!snapshot.operator_job_control_cases.is_empty());
-    emitted.insert((
-        "operator_job_control_cases".into(),
-        "OperatorJobControlCases".into(),
-    ));
-    assert!(!snapshot.operator_process_control_cases.is_empty());
-    emitted.insert((
-        "operator_process_control_cases".into(),
-        "OperatorProcessControlCases".into(),
-    ));
     assert!(!snapshot.process_stop_action_cases.is_empty());
     emitted.insert((
         "process_stop_action_cases".into(),
