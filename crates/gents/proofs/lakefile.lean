@@ -22,6 +22,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.RenewalCleanup,
   `Proofs.Conformance.RenewalRetry,
   `Proofs.Conformance.DocumentPackUx,
+  `Proofs.Conformance.PackSourceSelection,
   `Proofs.Conformance.PluginDelete,
   `Proofs.Conformance.ClientOptimisticSend,
   `Proofs.Conformance.GoalClientDelivery,
