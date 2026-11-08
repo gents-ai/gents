@@ -14,7 +14,14 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
         ClientCoreOptions::local_only(),
     )
     .await?;
-    let node_did = "did:test:amy";
+    // The desktop's client key is the runtime's User: it creates the Node,
+    // provisions the Agent and saves every document over its signed endpoint.
+    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+        Arc::new(core.node_identity().clone()),
+    )
+    .await;
+    runtime.connect(&core).await;
+    let node_did = runtime.node_did();
 
     let mut node: Node = serde_json::from_value(json!({
         "node_did": node_did,
@@ -71,22 +78,25 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     }))?;
     core.save_skill(&skill).await?;
 
+    let amy = core.provision_agent_identity(node_did).await?;
+    let amy_default = amy.agent_did.as_str();
     let agent: Agent = serde_json::from_value(json!({
         "node_did": node_did,
-        "agent_did": "amy-default",
+        "agent_did": amy_default,
+        "creation_nonce": amy.creation_nonce,
         "display_name": "Amy Default",
         "inference_profile_id": "profile-amy",
         "tags": ["managed"]
     }))?;
     core.save_agent(&agent).await?;
-    node.default_agent_did = Some("amy-default".into());
+    node.default_agent_did = Some(amy_default.into());
     core.save_node(&node).await?;
 
     let task: Task = serde_json::from_value(json!({
         "node_did": node_did,
         "task_id": "task-amy-daily",
         "display_name": "Daily Amy",
-        "agent_did": "amy-default",
+        "agent_did": amy_default,
         "prompt_template": "Check the daily queue.",
         "tags": ["managed"]
     }))?;
@@ -133,13 +143,11 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     }));
     assert!(snapshot.agents.iter().any(|row| {
         row.node_did == node_did
-            && row.agent_did == "amy-default"
+            && row.agent_did == amy_default
             && row.inference_profile_id == "profile-amy"
     }));
     assert!(snapshot.tasks.iter().any(|row| {
-        row.node_did == node_did
-            && row.task_id == "task-amy-daily"
-            && row.agent_did == "amy-default"
+        row.node_did == node_did && row.task_id == "task-amy-daily" && row.agent_did == amy_default
     }));
     assert!(snapshot
         .schedules
@@ -159,5 +167,6 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
         .iter()
         .any(|row| row.node_did == node_did && row.skill_id == "amy-skill"));
     Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
