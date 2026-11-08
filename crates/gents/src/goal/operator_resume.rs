@@ -52,8 +52,10 @@ async fn resume_goal_request_inner<'a>(
         access.actor_did().as_deref() == Some(identity.did()),
         "goal resume signer must match the authenticated client actor"
     );
+    // Concurrent resumes of one predecessor conflict on the Goal; the loser
+    // rebuilds, re-reads and returns the winner's receipt instead of failing.
     let receipt = access
-        .transact_write("goal.resume_request", move |txn| {
+        .transact_signed_conflict_rebuild("goal.resume_request", move |txn| {
             Box::pin(async move {
                 stage_resume_inner(
                     txn,

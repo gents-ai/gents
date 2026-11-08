@@ -412,15 +412,8 @@ async fn held_history_for(
         .as_array()
         .expect("message headers")
     {
-        let (_, message) = gents::session::load_canonical_message(
-            &fixture.access,
-            header["_docID"].as_str().expect("message document ID"),
-            db.node_identity.did(),
-            Some(fixture.user.did()),
-        )
-        .await
-        .expect("read held-user canonical message");
-        messages.push(message);
+        let header = header["_docID"].as_str().expect("message document ID");
+        messages.push(crate::support::fixtures::held_canonical_message(db, fixture, header).await.1);
     }
     messages
 }
@@ -1375,12 +1368,21 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         }
     }).await.expect("caller deadline did not terminalize the owned request");
     let history = held_history(&turn, &turn.session_id).await;
-    assert!(
-        history.iter().all(|message| !matches!(message,
+    let late = history
+        .iter()
+        .filter(|message| matches!(message,
             Message::User { content }
                 if content.iter().any(|item| matches!(item,
-                    UserContent::ToolResult(result) if result.id == "meta-wait-deadline")))),
-        "an expired caller must not publish a successful late wait result"
+                    UserContent::ToolResult(result) if result.id == "meta-wait-deadline"))))
+        .collect::<Vec<_>>();
+    // The timed-out wait settles with its deadline failure; a late success
+    // envelope from the background job must never replace it.
+    assert!(
+        late.iter().all(|message| matches!(message,
+            Message::User { content } if content.iter().all(|item| matches!(item,
+                UserContent::ToolResult(result) if result.content.iter().all(|part| matches!(part,
+                    ToolResultContent::Text(text) if text.text.starts_with("tool call deadline exceeded"))))))),
+        "an expired caller must not publish a successful late wait result: {late:?}"
     );
 
     let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;

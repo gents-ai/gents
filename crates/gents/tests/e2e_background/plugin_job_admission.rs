@@ -195,10 +195,13 @@ async fn settle(h: &JobHarness, tool_call_id: &str, refusal: &str) -> Settled {
             }
             Ok(_) | Err(JobReadError::NotYetObservable) => {}
             Err(JobReadError::NotAJob) => {
+                // The failed row commits before its tool result joins the
+                // caller's history; settle once both are observable.
                 if let Some(row) = failed_row(h, tool_call_id).await {
-                    let code = terminal_code(h, tool_call_id).await;
-                    assert_eq!(code.as_deref(), Some(refusal), "{tool_call_id}");
-                    return Settled::Refused(row);
+                    if let Some(code) = terminal_code(h, tool_call_id).await {
+                        assert_eq!(code, refusal, "{tool_call_id}");
+                        return Settled::Refused(row);
+                    }
                 }
             }
             Err(error) => panic!("job {tool_call_id} is unreadable: {error:?}"),

@@ -369,6 +369,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     let _guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-multifield").await;
     let fixture = managed_agent_fixture(&db).await;
+    crate::support::grant_household_owner(&db, &fixture.user).await;
     register_action_request_schema(&fixture.access).await;
 
     let task_id = "task-b6-multifield";
@@ -396,6 +397,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
     let _guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-tooldriven").await;
     let fixture = managed_agent_fixture(&db).await;
+    crate::support::grant_household_owner(&db, &fixture.user).await;
     register_action_request_schema(&fixture.access).await;
 
     let task_id = "task-b6-tooldriven";

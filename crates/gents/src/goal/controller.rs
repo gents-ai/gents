@@ -1,22 +1,6 @@
 use super::*;
 
-pub async fn update_goal_fields_if_status(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: &identity::Did,
-    goal: &GoalDocument,
-    expected_status: GoalStatus,
-    fields: &str,
-) -> Result<bool> {
-    update_goal_fields_if_status_from_access(
-        &crate::ConfigAccess::local_as(node.clone(), actor.clone()),
-        goal,
-        expected_status,
-        fields,
-    )
-    .await
-}
-
-pub(crate) async fn update_goal_fields_if_status_from_access(
+pub async fn update_goal_fields_if_status_from_access(
     access: &crate::ConfigAccess,
     goal: &GoalDocument,
     expected_status: GoalStatus,
@@ -76,21 +60,7 @@ pub(crate) async fn update_goal_fields_if_status_from_access(
         .await
 }
 
-pub async fn claim_continuation(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: &identity::Did,
-    goal: &GoalDocument,
-    parent_request_id: &str,
-) -> Result<bool> {
-    claim_continuation_from_access(
-        &crate::ConfigAccess::local_as(node.clone(), actor.clone()),
-        goal,
-        parent_request_id,
-    )
-    .await
-}
-
-pub(crate) async fn claim_continuation_from_access(
+pub async fn claim_continuation_from_access(
     access: &crate::ConfigAccess,
     goal: &GoalDocument,
     parent_request_id: &str,
@@ -130,25 +100,7 @@ pub(crate) async fn claim_continuation_from_access(
         .is_some_and(mutation_returned_rows))
 }
 
-pub async fn claim_retry_continuation(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: &identity::Did,
-    goal: &GoalDocument,
-    parent_request_id: &str,
-    retry_count: i64,
-    failure: &str,
-) -> Result<bool> {
-    claim_retry_continuation_from_access(
-        &crate::ConfigAccess::local_as(node.clone(), actor.clone()),
-        goal,
-        parent_request_id,
-        retry_count,
-        failure,
-    )
-    .await
-}
-
-pub(crate) async fn claim_retry_continuation_from_access(
+pub async fn claim_retry_continuation_from_access(
     access: &crate::ConfigAccess,
     goal: &GoalDocument,
     parent_request_id: &str,

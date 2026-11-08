@@ -152,29 +152,13 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     )
     .await;
 
-    let escaped_backend_id = escape_graphql_string("backend-559");
-    let mutation = format!(
-        r#"mutation {{
-            update_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ auth: {{
-                    kind: "environment",
-                    variable: "GENTS_TEST_559_UNSET_KEY"
-                }} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = fixture
-        .access
-        .write("test.startup_readiness.backend_auth", &mutation)
-        .await?;
-    assert_eq!(
-        response["data"]["update_InferenceBackend"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    crate::support::fixtures::set_backend_auth_as(
+        &fixture.access,
+        db.node_identity.did(),
+        "backend-559",
+        serde_json::json!({"kind": "environment", "variable": "GENTS_TEST_559_UNSET_KEY"}),
+    )
+    .await;
     assert!(
         std::env::var_os("GENTS_TEST_559_UNSET_KEY").is_none(),
         "the poison env var must not be set for this test to be honest"
@@ -186,6 +170,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
             startup_build_failure_observer: Some(build_failure_observer.clone()),
@@ -294,27 +279,13 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         "default",
     )
     .await;
-    let escaped_backend_id = escape_graphql_string("backend-559-late");
-    let escaped_variable = escape_graphql_string(VAR);
-    let mutation = format!(
-        r#"mutation {{
-            update_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ auth: {{ kind: "environment", variable: "{escaped_variable}" }} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = fixture
-        .access
-        .write("test.startup_readiness.backend_auth", &mutation)
-        .await?;
-    assert_eq!(
-        response["data"]["update_InferenceBackend"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    crate::support::fixtures::set_backend_auth_as(
+        &fixture.access,
+        db.node_identity.did(),
+        "backend-559-late",
+        serde_json::json!({"kind": "environment", "variable": VAR}),
+    )
+    .await;
 
     let observer = Arc::new(RecordingProcessObserver::default());
     let build_failure_observer = Arc::new(RecordingBuildFailureObserver::default());
@@ -322,6 +293,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             retry_policy: gents::runtime::agent::retry::RetryPolicy {
                 max_retries: 3,

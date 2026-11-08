@@ -33,11 +33,7 @@ const QUIET_ITEM_SDL: &str = "type QuietItem {\n  label: String\n}\n";
 async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripted_model() {
     let backend = MockStreamingBackend::start_with_plans(MODEL, answering_plans()).unwrap();
     let (canary, request) = canary_request(backend.endpoint(), "run-canary").await;
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        canary.runs_dir(),
-        support::runtime_handle(),
-    );
+    let executor = canary.executor();
 
     let outcome = run(
         &canary.access,
@@ -137,11 +133,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
     assert_eq!(view.trials.len(), 2);
     assert_eq!(view.report.cells[0].counts.pass, 2);
     let (again, repeat) = canary_request(backend.endpoint(), "run-canary").await;
-    let repeat_executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        again.runs_dir(),
-        support::runtime_handle(),
-    );
+    let repeat_executor = again.executor();
     run(
         &again.access,
         &repeat,
@@ -207,11 +199,7 @@ async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_tri
             (Collection::InferenceProfile, profile),
         ])
         .await;
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        canary.runs_dir(),
-        support::runtime_handle(),
-    );
+    let executor = canary.executor();
 
     let outcome = run(
         &canary.access,
@@ -294,11 +282,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         source
     });
     request.cells[0].agent_slot = "seeded".into();
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        canary.runs_dir(),
-        support::runtime_handle(),
-    );
+    let executor = canary.executor();
 
     let outcome = run(
         &canary.access,
@@ -359,16 +343,18 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         .join(locator(seeded).home_hint.expect("a retained home"))
         .join("home");
     let home = EmbeddedHome::open_retained(&home_dir).await.unwrap();
-    let fired = gents::store::graphql::graphql_with_transaction_retry(
-        &home.node,
-        r#"{ AgentRequest(filter: { caused_by_trigger_id: { _eq: "seed-trigger" } }) { content } }"#,
-        "canary fired request content",
-    )
-    .await
-    .unwrap();
+    // The trial's rows are document-owned; read them as the evaluator, the
+    // trial's enrolled User, not as an anonymous node caller.
+    let evaluator = ConfigAccess::local_as(
+        home.node.clone(),
+        ::identity::Did::new(&request.evaluator_did).unwrap(),
+    );
+    let fired = evaluator
+        .execute(r#"{ AgentRequest(filter: { caused_by_trigger_id: { _eq: "seed-trigger" } }) { content } }"#)
+        .await
+        .unwrap();
     let fired_content = fired
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data["AgentRequest"].as_array())
         .filter(|requests| requests.len() == 1)
         .and_then(|requests| requests[0]["content"].as_str())
@@ -379,13 +365,11 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         "the fired request carries the trigger source header and the seed body: {fired_content:?}"
     );
     if existing_session {
-        let routed = gents::store::graphql::graphql_with_transaction_retry(
-            &home.node,
-            r#"{ AgentRequest(filter: { caused_by_trigger_id: { _eq: "seed-trigger" } }) { session_id } AgentSession { node_did session_id created_at } }"#,
-            "canary supplied destination",
-        ).await.unwrap();
-        assert!(routed.errors.is_empty(), "{routed:#?}");
-        let data = routed.data.as_ref().unwrap();
+        let routed = evaluator
+            .execute(r#"{ AgentRequest(filter: { caused_by_trigger_id: { _eq: "seed-trigger" } }) { session_id } AgentSession { node_did session_id created_at } }"#)
+            .await
+            .unwrap();
+        let data = &routed["data"];
         assert_eq!(
             data["AgentRequest"],
             json!([{"session_id":"supplied-destination"}])
@@ -420,11 +404,7 @@ async fn a_seed_stage_no_trigger_fires_for_ends_unsubmitted_at_its_deadline() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_runner/trigger_pack"),
     );
     request.cells[0].agent_slot = "seeded".into();
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        canary.runs_dir(),
-        support::runtime_handle(),
-    );
+    let executor = canary.executor();
 
     let outcome = run(
         &canary.access,
@@ -473,11 +453,7 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_runner/trigger_pack"),
     );
     request.cells[0].agent_slot = "seeded".into();
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        canary.runs_dir(),
-        support::runtime_handle(),
-    );
+    let executor = canary.executor();
 
     let outcome = run(
         &canary.access,
@@ -538,11 +514,7 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
     );
     let backend = MockStreamingBackend::start_with_plans(MODEL, plans).unwrap();
     let (canary, request) = canary_request(backend.endpoint(), "run-provider-down").await;
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        canary.runs_dir(),
-        support::runtime_handle(),
-    );
+    let executor = canary.executor();
 
     let outcome = run(
         &canary.access,
@@ -613,11 +585,7 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
 #[tokio::test]
 async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_any_home() {
     let (canary, base) = canary_request("http://127.0.0.1:1/v1", "run-refused").await;
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        canary.runs_dir(),
-        support::runtime_handle(),
-    );
+    let executor = canary.executor();
     let registry = CheckRegistry::builtin();
 
     let unrestricted = canary.dirs.path().join("unrestricted-pack");
@@ -735,11 +703,7 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
     };
     request.cells.push(candidate);
 
-    let executor = EmbeddedExecutor::new(
-        DocumentRuntimeOptions::default(),
-        canary.runs_dir(),
-        support::runtime_handle(),
-    );
+    let executor = canary.executor();
     run(
         &canary.access,
         &request,
@@ -793,6 +757,7 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
 }
 struct Canary {
     _home: EmbeddedHome,
+    evaluator: Arc<gents::KeyIdentity>,
     access: ConfigAccess,
     dirs: TempDir,
     owner: String,
@@ -800,6 +765,19 @@ struct Canary {
 }
 
 impl Canary {
+    /// Trial homes act as the held evaluator, the User that froze the run.
+    fn executor(&self) -> EmbeddedExecutor {
+        EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            self.runs_dir(),
+            support::runtime_handle(),
+        )
+        .with_evaluator_identity(
+            self.evaluator.clone(),
+            self.evaluator.client_signing_capability().unwrap(),
+        )
+    }
+
     fn runs_dir(&self) -> PathBuf {
         self.dirs.path().join("eval/runs")
     }
@@ -826,9 +804,9 @@ impl Canary {
     }
 }
 async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
-    use gents::store::config_client::NodePermission;
     use gents::NodeIdentity;
 
+    support::init_test_tracing();
     let mut home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
     let dirs = tempfile::tempdir().unwrap();
     let evaluator_path = dirs.path().join("evaluator.key");
@@ -842,23 +820,15 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     );
     let evaluator_did = evaluator.did().to_owned();
     let capability = evaluator.client_signing_capability().unwrap();
-    home.set_evaluator(evaluator, capability);
+    home.set_evaluator(evaluator.clone(), capability);
     let admin =
         ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did()).unwrap());
     let evaluator_actor = ::identity::Did::new(&evaluator_did).unwrap();
-    for permission in [
-        NodePermission::CollectionGet,
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DocumentDelete,
-        NodePermission::DacRelationAdd,
-        NodePermission::DacRelationDelete,
-    ] {
-        admin
-            .grant_node_permission(&evaluator_actor, permission)
-            .await
-            .unwrap();
-    }
+    // The evaluator is an enrolled User of the controller home.
+    gents::store::identity::GrantSet::OperatorUser
+        .grant(&admin, &evaluator_actor)
+        .await
+        .unwrap();
     let access = home.client_access(&evaluator_did).unwrap();
     let owner = home.did().to_string();
     let canary = Canary {
@@ -867,6 +837,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
         pack_dir: Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/eval_runner/canary_pack"),
         dirs,
+        evaluator,
         _home: home,
     };
     canary

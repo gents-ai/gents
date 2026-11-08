@@ -390,8 +390,11 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
     db
 }
 
-/// Writes the runtime's Node document as the runtime owner. Publication and
-/// enrollment owners require exactly one visible local Node before they publish.
+/// Enrols the fixture User and writes the runtime's Node document as that
+/// User, as `gents init` does: the Node is User-configured, never authored by the
+/// runtime it describes. Publication and enrollment owners require exactly one
+/// visible local Node before they publish, and later fixture configuration by
+/// the same User updates this document instead of racing a second owner.
 async fn install_runtime_node(db: &TestDb) {
     use gents::store::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -402,6 +405,14 @@ async fn install_runtime_node(db: &TestDb) {
         db.node.clone(),
         identity::Did::new(runtime.did()).expect("valid runtime DID"),
     );
+    let user = managed_fixture_user(db).await;
+    gents::store::identity::GrantSet::OperatorUser
+        .grant(
+            &admin,
+            &identity::Did::new(user.did()).expect("valid user DID"),
+        )
+        .await
+        .expect("grant fixture User operator access");
     let node = serde_json::json!({"node_did": runtime.did()});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: gents::Collection::Node,
@@ -409,13 +420,13 @@ async fn install_runtime_node(db: &TestDb) {
         update: node,
     }])
     .expect("render runtime Node");
-    admin
+    db.client_access(&user)
         .transact_write("test.p2p.runtime_node", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await
-        .expect("install runtime Node");
+        .expect("install runtime Node as its User");
 }
 
 pub fn test_p2p_config(admission: &TestP2pAdmission, data_path: &std::path::Path) -> P2PConfig {

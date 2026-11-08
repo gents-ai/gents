@@ -688,3 +688,18 @@ where
     let data = node.read_data(&query).await;
     serde_json::from_value(data["CompactionEntry"].clone()).expect("parse CompactionEntrySnapshot")
 }
+
+/// The verified signer of `cid`, read under document ACP as `reader`: a
+/// private row's block is visible only to an actor its policy admits, so an
+/// anonymous node read of it fails closed.
+pub async fn verified_block_signer_as(node: &EmbeddedNode, reader: &str, cid: &str) -> String {
+    let (block, signature) = node
+        .authorized_signed_block_bytes(cid, Some(reader))
+        .await
+        .unwrap_or_else(|error| panic!("read {cid} as {reader}: {error:#}"));
+    let block = defra_core::block::Block::from_dag_cbor(&block).expect("decode signed block");
+    let signature =
+        defra_core::block::Signature::from_dag_cbor(&signature).expect("decode block signature");
+    db::block::verify::verified_signature_signer_did(&block, &signature)
+        .unwrap_or_else(|error| panic!("verify {cid}: {error}"))
+}

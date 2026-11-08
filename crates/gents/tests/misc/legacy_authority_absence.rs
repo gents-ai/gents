@@ -229,8 +229,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             );
         }
         assert!(
-            production.contains("build_signed_request("),
-            "{name} lost the shared builder"
+            production.contains("gents::request::lifecycle::build_signed_client_request"),
+            "{name} lost the shared client request builder"
         );
     }
     assert_eq!(

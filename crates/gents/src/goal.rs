@@ -95,11 +95,11 @@ pub(crate) use backed_request::{
 pub use backed_request::{
     submit_goal_backed_request, submit_goal_backed_request_local, GoalBackedRequestDisposition,
 };
-pub use controller::{claim_continuation, claim_retry_continuation, update_goal_fields_if_status};
-pub(crate) use controller::{
+pub use controller::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
-    fence_goal_continuation_claim_in_txn, update_goal_fields_if_status_from_access, GoalClaimFence,
+    update_goal_fields_if_status_from_access,
 };
+pub(crate) use controller::{fence_goal_continuation_claim_in_txn, GoalClaimFence};
 use creation::stage_goal_and_claim;
 pub(crate) use creation::{
     create_goal_for_request_from_access, load_goal_creation_claim_fingerprint_in_txn,

@@ -8,10 +8,12 @@ use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
 use gents::inference::llm::message::{AssistantContent, Message, UserContent};
 use gents::tools::background::job::control::control;
 use gents::tools::background::job::job::{
-    JobChildState, JobControlKind, JobControlOutcome, JobControlRequest, JobSpawn, JobState,
-    PluginJobSettings,
+    JobChildState, JobControlKind, JobControlOutcome, JobControlRequest, JobReadError, JobSpawn,
+    JobState, PluginJobSettings,
 };
+use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents::tools::background::status::ProcessControlScope;
+use gents::store::graphql::escape_graphql_string;
 use gents::tools::call::control::{
     cancel_background_tool_call, cancel_session_background_process, CancelBackgroundToolCallOutcome,
 };
@@ -455,10 +457,20 @@ const PEER_CHILD: &str = "peer-child";
 const NETWORK_ID: &str = "net-plugin-job-kill";
 const NETWORK_NAME: &str = "Plugin Job Kill Net";
 
-/// Node A runs a job whose slot `a` is a local child and whose slot `b` is a
-/// child on node B, with both nodes paired. Returns A's harness, B's runtime
-/// and B's store.
-async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::TempDir) {
+/// Node A's parent asks for a job whose slot `a` is a local child and whose
+/// slot `b` is an Agent on paired node B. Returns A's harness, B's runtime,
+/// store and backend, and the two child prompts.
+async fn paired_job(
+    name: &str,
+) -> (
+    JobHarness,
+    BootedAgent,
+    TestDb,
+    tempfile::TempDir,
+    MockStreamingBackend,
+    String,
+    String,
+) {
     let session_id = format!("{name}-session");
     let prompt_a = format!("{name} child a");
     let prompt_b = format!("{name} child b");
@@ -637,69 +649,67 @@ async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::T
         runtime,
         session_id,
     };
-    wait_job(
-        &h,
-        TOOL_CALL,
-        |view| {
-            view.children.len() == 2
-                && view
-                    .children
-                    .iter()
-                    .all(|child| child.state == JobChildState::Live)
-        },
-        Duration::from_secs(30),
-    )
-    .await;
-    (h, runtime_b, db_b, plugin_home)
+    (h, runtime_b, db_b, plugin_home, backend_b, prompt_a, prompt_b)
 }
 
-/// Stops the job and checks that the row ends now with both children
-/// interrupted: the local one and the one addressed to node B.
-async fn stop_paired_job(name: &str, peer_reachable: bool) {
-    let (h, runtime_b, db_b, _plugin_home) = paired_job(name).await;
-    let did_a = h.db.node_identity.did().to_string();
-    let did_b = db_b.node_identity.did().to_string();
-    let row_doc_id = job_row(&h, TOOL_CALL).await;
-    if !peer_reachable {
-        runtime_b.shutdown().await;
-        drop(db_b);
+/// A job stages requests only on its own runtime (Lean Recovery.observeCaused):
+/// a plan addressed to a peer's Agent is refused when the job call is
+/// persisted, so no job row exists and neither child is ever served.
+async fn refuse_peer_addressed_job(name: &str) {
+    let (h, runtime_b, _db_b, _plugin_home, backend_b, prompt_a, prompt_b) =
+        paired_job(name).await;
+    let parent = escape_graphql_string(&format!("{}-parent", h.session_id));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = h
+            .actors
+            .fixture
+            .access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{parent}" }} }}) {{ lifecycle_state }} }}"#
+            ))
+            .await
+            .expect("read the parent request");
+        let state = response["data"]["AgentRequest"][0]["lifecycle_state"]
+            .as_str()
+            .and_then(|state| gents_protocol::request_lifecycle::RequestLifecycleState::parse(state).ok());
+        if state.is_some_and(|state| state.is_terminal()) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{name}: the parent turn did not settle after the refused job: {response}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-
-    let outcome = control(
-        &h.agent_access(),
-        &parent_scope(&h),
-        TOOL_CALL,
-        JobControlKind::Stop,
+    let view = load_job_view(
+        &h.actors.fixture.access,
+        None,
+        JobKey::Address {
+            session_id: h.session_id.clone(),
+            tool_call_id: TOOL_CALL.into(),
+        },
     )
     .await;
     assert!(
-        matches!(
-            outcome,
-            Ok(JobControlOutcome::Applied {
-                killed_children: 2,
-                ..
-            })
-        ),
-        "{name}: {outcome:?}"
+        matches!(view, Err(JobReadError::NotAJob)),
+        "{name}: a refused job leaves no job row: {view:?}"
     );
-    assert_eq!(row_state(&h, &row_doc_id).await, "cancelled", "{name}");
-    let mut children = children(&h, &row_doc_id).await;
-    children.sort();
-    let owners: Vec<&str> = children.iter().map(|(node, _)| node.as_str()).collect();
-    let mut expected = vec![did_a.as_str(), did_b.as_str()];
-    expected.sort();
-    assert_eq!(owners, expected, "{name}: {children:?}");
-    assert!(
-        children
-            .iter()
-            .all(|(_, interrupted)| interrupted.is_some()),
-        "{name}: the local and the peer child are both interrupted: {children:?}"
+    assert_eq!(
+        h.runtime.backend.observed_requests(&prompt_a),
+        0,
+        "{name}: no local child"
     );
+    assert_eq!(
+        backend_b.observed_requests(&prompt_b),
+        0,
+        "{name}: no peer child"
+    );
+    runtime_b.shutdown().await;
     h.runtime.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stop_with_local_and_peer_children_interrupts_both_and_ends_the_row_now() {
-    stop_paired_job("plugin-job-kill-peer", true).await;
-    stop_paired_job("plugin-job-kill-peer-down", false).await;
+async fn job_plan_addressed_to_a_peer_agent_is_refused_before_any_child() {
+    refuse_peer_addressed_job("plugin-job-kill-peer").await;
 }
