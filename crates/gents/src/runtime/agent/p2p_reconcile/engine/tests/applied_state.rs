@@ -208,6 +208,11 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
                 .await?;
         }
     }
+    // A User holds `get-collection` (GrantSets.operatorUser), which native
+    // checks before a relationship change outside a transaction.
+    runtime_access
+        .grant_node_permission(&identity::Did::new(user.did())?, NodePermission::CollectionGet)
+        .await?;
     let http = |actor: &crate::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
