@@ -58,9 +58,10 @@ pub async fn desktop_pack_installed(
         let home = home(&state)?;
         if let Some(core) = current_core(&state) {
             let node_did = packs::ux_installing_node(&home).map_err(failed)?;
-            let access = core
-                .local_home_operator_access(&node_did, &home)
-                .map_err(failed)?;
+            let access = gents::ConfigAccess::Graphql(
+                core.local_home_operator_endpoint(&node_did, &home)
+                    .map_err(|error| failed(error.into()))?,
+            );
             run(move || packs::installed_with_access(home, registry, access, node_did)).await
         } else {
             run(move || packs::installed(home, registry)).await

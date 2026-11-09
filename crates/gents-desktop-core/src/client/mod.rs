@@ -18,6 +18,7 @@ pub use core::{
     ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
     ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
     EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
+    LocalHomeAccessError,
     InferenceTarget, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
     RefreshedRequestProjection, RetainedGoalSubmission, RuntimeSchemaObservation,
     STUCK_THRESHOLD_ATTEMPTS,

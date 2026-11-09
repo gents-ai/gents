@@ -1,10 +1,10 @@
 /-!
 # Pack UX data watch
 
-A pack page's live observation of one datastore tool: the desktop bridge's
-task behind `desktop_ux_data_watch` (`gents-desktop-bridge::ux_watch::run`)
-reading the runtime's `POST /packs/ux/watch` server-sent events
-(`gents-cli::http::pack_watch::watch`).
+A pack page's live observation of one datastore tool: the shared desktop
+client's task (`gents_desktop_core::pack_watch::run`, spawned by the bridge's
+`desktop_ux_data_watch`) reading the runtime's `POST /packs/ux/watch`
+server-sent events (`gents-cli::http::pack_watch::watch`).
 -/
 
 namespace ClientShell.PackWatch
