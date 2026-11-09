@@ -982,14 +982,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// The instant a Lean `ClientChatReadiness` case offset names.
-    pub(crate) fn chat_case_instant(offset: i64) -> DateTime<Utc> {
-        chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
-            + chrono::Duration::seconds(offset)
-    }
-
     /// Materializes a Lean `ClientChatReadiness.Route` as the record the
     /// native directory holds; `null` is no route.
     pub(crate) fn chat_case_record(route: &serde_json::Value) -> Option<PeerRecord> {
@@ -1005,71 +997,68 @@ pub(crate) mod tests {
             (false, false) => None,
         };
         peer.local_node_home = flag("managed").then(|| "/runtime/home".into());
-        peer.pairing_ready = flag("pairing_ready");
-        peer.pairing_network_id = flag("network_id").then(|| "network".into());
-        peer.enrollment_request_digest = flag("request_digest").then(|| "digest".into());
-        peer.enrollment_authorization_sequence = Some(u64::from(flag("sequence_positive")));
-        let lease = &route["lease"];
-        peer.enrollment_authorization_expires_at = match lease["kind"].as_str().unwrap() {
-            "absent" => None,
-            "malformed" => Some("not-a-timestamp".into()),
-            "at" => Some(
-                chat_case_instant(lease["offset"].as_i64().unwrap())
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            ),
-            other => panic!("unknown lease kind {other}"),
-        };
         assert_eq!(peer.operator_graphql().is_some(), flag("operator_endpoint"));
         assert_eq!(peer.is_managed_runtime(), flag("managed"));
         Some(peer)
     }
 
-    /// Every Lean `ClientChatReadiness` fence case as (record, now, refusal).
-    pub(crate) fn chat_readiness_cases() -> Vec<(Option<PeerRecord>, DateTime<Utc>, Option<String>)>
-    {
+    /// The P2P route observations the Lean route does not carry. Each Lean
+    /// case is materialized under every combination: the fence must not read
+    /// them.
+    pub(crate) fn with_route_observations(record: &PeerRecord) -> Vec<PeerRecord> {
+        let mut observed = Vec::new();
+        for pairing in [false, true] {
+            for lease in [None, Some("not-a-timestamp"), Some("2000-01-01T00:00:00Z"), Some("2999-01-01T00:00:00Z")] {
+                let mut peer = record.clone();
+                peer.pairing_ready = pairing;
+                peer.pairing_network_id = pairing.then(|| "network".into());
+                peer.enrollment_request_digest = pairing.then(|| "digest".into());
+                peer.enrollment_authorization_sequence = Some(u64::from(pairing));
+                peer.enrollment_authorization_expires_at = lease.map(str::to_owned);
+                observed.push(peer);
+            }
+        }
+        observed
+    }
+
+    /// Every Lean `ClientChatReadiness` fence case as (record, refusal), each
+    /// record under every route observation.
+    pub(crate) fn chat_readiness_cases() -> Vec<(Option<PeerRecord>, Option<String>)> {
         let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
         snapshot["client_chat_readiness_cases"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|case| {
-                (
-                    chat_case_record(&case["route"]),
-                    chat_case_instant(case["now_offset"].as_i64().unwrap()),
-                    case["refusal"].as_str().map(str::to_owned),
-                )
+            .flat_map(|case| {
+                let refusal = case["refusal"].as_str().map(str::to_owned);
+                match chat_case_record(&case["route"]) {
+                    None => vec![(None, refusal)],
+                    Some(record) => with_route_observations(&record)
+                        .into_iter()
+                        .map(|peer| (Some(peer), refusal.clone()))
+                        .collect(),
+                }
             })
             .collect()
     }
 
     #[test]
     fn chat_readiness_matches_lean() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["client_chat_readiness_cases"].as_array().unwrap();
-        assert!(cases.len() > 1000, "{}", cases.len());
+        let cases = chat_readiness_cases();
+        assert!(cases.len() > 100, "{}", cases.len());
         let mut sources = std::collections::BTreeSet::new();
-        for case in cases {
-            let Some(record) = chat_case_record(&case["route"]) else {
-                assert_eq!(case["refusal"], "no_route");
+        for (record, refusal) in cases {
+            let Some(record) = record else {
+                assert_eq!(refusal.as_deref(), Some("no_route"));
                 continue;
             };
             sources.insert(record.source.clone());
-            let now = chat_case_instant(case["now_offset"].as_i64().unwrap());
-            let refusal = case["refusal"].as_str();
             assert_eq!(
                 record.chat_refusal().map(ChatRouteCause::token),
-                refusal,
+                refusal.as_deref(),
                 "{record:?}"
             );
             assert_eq!(record.is_chat_ready(), refusal.is_none(), "{record:?}");
-            assert_eq!(
-                record
-                    .enrollment_authorization_expires_at
-                    .as_deref()
-                    .is_some_and(|expires_at| authorization_lease_is_fresh_at(expires_at, now)),
-                case["lease_fresh"].as_bool().unwrap(),
-                "{record:?}"
-            );
         }
         assert_eq!(sources.len(), 4, "{sources:?}");
     }
@@ -1087,8 +1076,6 @@ pub(crate) mod tests {
         for (case, cause) in causes.iter().zip(native) {
             assert_eq!(case["cause"], cause.token());
             assert_eq!(case["next_action"], cause.next_action().token());
-            assert_eq!(case["recovery_cause"], cause.token());
-            assert_eq!(case["settled_recovery_reads_fence"], false);
         }
     }
 

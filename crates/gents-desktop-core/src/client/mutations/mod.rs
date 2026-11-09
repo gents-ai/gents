@@ -1,13 +1,9 @@
 mod chat;
 mod graphql;
+mod journal;
 mod manage;
 mod setup;
 
-pub use chat::{
-    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionAttemptError, SubmissionCleanupIncomplete, SubmissionError, SubmissionIntent,
-    SubmissionNotDelivered, SubmissionOutcomeUnknown, SubmissionReference, UnresolvedSubmission,
-};
 pub use chat::{
     rename_session, resend_request, retry_request, submit_request, submit_task_request,
     SubmitRequestOptions, SubmittedRequest,
@@ -26,12 +22,9 @@ pub use manage::{
 };
 pub use setup::PeerMutationResult;
 
-pub(crate) use chat::goal_delivery;
 pub(crate) use chat::prepare_request_submission;
-pub(crate) use chat::report_submission_cleanup;
-pub(crate) use chat::report_submission_rejection;
-pub(crate) use chat::submission_delivery;
-pub(crate) use chat::submission_journal;
+pub(crate) use journal::goal_delivery;
+pub(crate) use journal::records as submission_journal;
 pub(crate) use manage::{
     apply_config_components_with_publication_on, upsert_agent_with_publication_on,
 };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import setupSelfConfig from "../../../crates/gents-protocol/presets/engineer-self-config.json";
 import { deployment } from "./config-panel-wiring/fixtures";
 import {
   ENGINEER_AGENT_TAG,
@@ -9,7 +10,7 @@ import {
 } from "../src/ui/lib/engineer";
 
 describe("engineer setup patches", () => {
-  it("wires the default agent, context prompt, and self-config tools", () => {
+  it("wires the default agent, context prompt, and passes the self-config preset through", () => {
     const withContext = {
       ...deployment,
       contexts: [
@@ -48,25 +49,12 @@ describe("engineer setup patches", () => {
       id: "context-a",
       changes: { system_prompt: ENGINEER_PROMPT },
     });
+    // Pass-through only: the patch carries the bundled preset unchanged. The
+    // category set is checked against the executed Lean engineerGroup in
+    // tests/lean-conformance/engineer-self-config.test.ts.
     expect(tools).toMatchObject({
       id: "tools-a",
-      changes: {
-        self_config: {
-          enable_self_config: true,
-          self_config_categories: [
-            "node",
-            "agent",
-            "tools",
-            "profile",
-            "backend",
-            "mcp_service",
-            "automation",
-          ],
-          self_config_no_lockout: true,
-          self_config_preview: true,
-          enable_pack_install: true,
-        },
-      },
+      changes: { self_config: setupSelfConfig },
     });
   });
 

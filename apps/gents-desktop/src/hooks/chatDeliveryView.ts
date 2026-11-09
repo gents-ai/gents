@@ -1,65 +1,63 @@
 import type { ChatDraft } from "./chatDrafts";
 
-/** What this client knows about one saved send (Lean `ClientSubmissionReceipt.Saved`). */
-export type SavedDelivery =
-  | "sending"
-  | "unsent"
-  | "delivered"
-  | "notDelivered"
-  | "unknownRetained"
-  | "unknownUnretained";
+/** One authored message's send state (Lean `ClientOptimisticSend.Status`).
+ * A kept draft is pending until its saved send deadline, confirmed once the
+ * runtime holds it, and failed otherwise: a refused send, or one whose reply
+ * did not arrive by its deadline (a lost reply, a hung send, a restart, a
+ * closed window). Every window derives it from the shared saved draft. */
+export type SendStatus = "pending" | "confirmed" | "failed" | "discarded";
 
-export type DeliveryView =
-  "sending" | "delivered" | "notDelivered" | "awaiting" | "unprovable";
+export type DeliveryView = "sending" | "delivered" | "failed" | "hidden";
 
 export type DeliveryAffordances = {
   view: DeliveryView;
-  check: boolean;
-  resume: boolean;
-  dismiss: boolean;
-  setAside: boolean;
+  retry: boolean;
+  discard: boolean;
   blocksComposer: boolean;
 };
 
-export function savedDelivery(draft: ChatDraft, inFlight: boolean): SavedDelivery {
-  if (!draft.result) return inFlight ? "sending" : "unsent";
-  switch (draft.result.outcome) {
-    case "notDelivered":
-      return "notDelivered";
-    case "deliveryUnknown":
-      return draft.unretained ? "unknownUnretained" : "unknownRetained";
-    default:
-      return "delivered";
-  }
+export function sendStatus(draft: ChatDraft, now: number): SendStatus {
+  if (draft.confirmed) return "confirmed";
+  return draft.pendingUntil !== undefined && now < draft.pendingUntil
+    ? "pending"
+    : "failed";
 }
 
-/** The view and actions for a saved send, bound to Lean `affordances`. */
+/** The earliest saved deadline still ahead, when a view must re-derive. */
+export function nextSendDeadline(
+  drafts: readonly ChatDraft[],
+  now: number,
+): number | null {
+  let next: number | null = null;
+  for (const draft of drafts)
+    if (
+      !draft.confirmed &&
+      draft.pendingUntil !== undefined &&
+      draft.pendingUntil > now &&
+      (next === null || draft.pendingUntil < next)
+    )
+      next = draft.pendingUntil;
+  return next;
+}
+
+/** The view and actions for one message, bound to Lean `view`. */
 export function deliveryAffordances(
-  saved: SavedDelivery,
+  status: SendStatus,
   mailbox: boolean,
 ): DeliveryAffordances {
-  const shown = (
-    view: DeliveryView,
-    check: boolean,
-    resume: boolean,
-    dismiss: boolean,
-    setAside: boolean,
-    blocksComposer: boolean,
-  ) => ({ view, check, resume, dismiss, setAside, blocksComposer });
-  switch (saved) {
-    case "sending":
-      return shown("sending", false, false, false, false, true);
-    case "unsent":
-    case "unknownRetained":
-      return shown("awaiting", true, true, false, false, true);
-    case "delivered":
-      return shown("delivered", true, false, false, false, mailbox);
-    case "notDelivered":
-      return shown("notDelivered", true, false, true, false, false);
-    case "unknownUnretained":
-      return shown("unprovable", true, false, false, true, true);
+  switch (status) {
+    case "pending":
+      return { view: "sending", retry: false, discard: false, blocksComposer: mailbox };
+    case "confirmed":
+      return {
+        view: "delivered",
+        retry: false,
+        discard: false,
+        blocksComposer: mailbox,
+      };
+    case "failed":
+      return { view: "failed", retry: true, discard: true, blocksComposer: mailbox };
+    case "discarded":
+      return { view: "hidden", retry: false, discard: false, blocksComposer: false };
   }
 }
-
-/** Only a proven non-delivery authorizes a replacement send. */
-export const mayResendNewIdentity = (view: DeliveryView) => view === "notDelivered";

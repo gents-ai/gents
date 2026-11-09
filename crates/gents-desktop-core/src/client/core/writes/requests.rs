@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
 use gents_protocol::row::AgentRequestRow;
 
 use super::{
     agent_did_for_write, ensure_peer_chat_ready, find_request_in_scope,
     observe_submitted_request, ClientCore,
 };
-use crate::client::mutations::{self, SubmissionError, SubmitRequestOptions, SubmittedRequest};
+use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
 
 fn request_in_scope(
     rows: &[AgentRequestRow],
@@ -33,9 +32,11 @@ impl ClientCore {
             SubmitRequestOptions::default(),
         )
         .await
-        .map_err(Into::into)
     }
 
+    /// The optimistic send's one signed create (Lean `ClientOptimisticSend`):
+    /// `options.request_id` is the identity the client picked, and a retry
+    /// with the same identity is the same request.
     pub async fn submit_request_with_options(
         &self,
         session_id: &str,
@@ -43,19 +44,10 @@ impl ClientCore {
         content: &str,
         agent_did: Option<&str>,
         mut options: SubmitRequestOptions,
-    ) -> std::result::Result<SubmittedRequest, SubmissionError> {
-        if let Some(intent) = options.caller_intent.as_ref() {
-            if intent.node_did != node_did {
-                return Err(anyhow::anyhow!("caller submission belongs to another node").into());
-            }
-            if let Some(receipt) = self.recover_caller_submission(intent).await? {
-                return Ok(receipt);
-            }
-        }
+    ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let peer_record = self
-            .peer_record_for_chat_write(node_did, Utc::now())
-            .await?;
+            .peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let (signer, admission, requester_did) = self
             .request_authority(node_did, peer_record.as_ref())
@@ -78,7 +70,6 @@ impl ClientCore {
             .await?;
         let agent_did = agent_did_for_write(agent_did);
         match mutations::submit_request(
-            &self.node,
             snapshot.as_ref(),
             &self.session_queue_access(node_did)?,
             session_id,
@@ -93,8 +84,10 @@ impl ClientCore {
         .await
         {
             Ok(result) => {
+                let node = result.node_did.clone();
                 let result =
-                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
+                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
+                        .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -104,14 +97,8 @@ impl ClientCore {
                 );
                 Ok(result)
             }
-            Err(error) => Err(self.submit_failure(error)),
+            Err(error) => Err(self.record_mutation_error("submit request", error)),
         }
-    }
-
-    pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {
-        let selected_node_did = self.selected_node_did();
-        self.resend_request_in_scope(stale_request_id, selected_node_did.as_deref())
-            .await
     }
 
     pub fn request_in_scope(
@@ -134,8 +121,7 @@ impl ClientCore {
             .as_deref()
             .context("stale request has no node_did")?;
         let peer_record = self
-            .peer_record_for_chat_write(node_did, Utc::now())
-            .await?;
+            .peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let (signer, admission, _) = self
             .request_authority(node_did, peer_record.as_ref())
@@ -145,7 +131,6 @@ impl ClientCore {
             .as_deref()
             .context("stale request has no session requester provenance")?;
         let result = mutations::resend_request(
-            &self.node,
             snapshot.as_ref(),
             &self.session_queue_access(node_did)?,
             stale_request_id,
@@ -157,8 +142,10 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
+                let node = result.node_did.clone();
                 let result =
-                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
+                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
+                        .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -173,59 +160,6 @@ impl ClientCore {
         }
     }
 
-    pub async fn interrupt_request(&self, request_id: &str) -> Result<()> {
-        let snapshot = self.store.snapshot();
-        let selected_node_did = self.selected_node_did();
-        let mut requests = snapshot
-            .requests
-            .iter()
-            .filter(|request| request.request_id == request_id)
-            .filter(|request| {
-                selected_node_did
-                    .as_deref()
-                    .is_none_or(|selected| request.node_did.as_deref() == Some(selected))
-            });
-        let request = requests
-            .next()
-            .with_context(|| format!("request {request_id} is absent from the selected node"))?;
-        anyhow::ensure!(
-            requests.next().is_none(),
-            "request {request_id} is ambiguous across the selected node scope"
-        );
-        let node_did = request
-            .node_did
-            .as_deref()
-            .context("request has no node_did")?;
-        let peer_record = self
-            .peer_record_for_chat_write(node_did, Utc::now())
-            .await?;
-        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
-        let request_doc_id = request
-            .doc_id
-            .as_deref()
-            .context("request has no physical identity")?;
-        match gents::request::interrupt::interrupt_request_by_doc_id_with_access(
-            &self.session_queue_access(node_did)?,
-            request_doc_id,
-            node_did,
-            request.requester_did.as_deref(),
-        )
-        .await
-        {
-            Ok(()) => {
-                self.clear_mutation_error();
-                tracing::info!(
-                    target: "gents_desktop_core::writes",
-                    action = "chat_interrupt",
-                    row_id = %request_id,
-                    "desktop write saved"
-                );
-                Ok(())
-            }
-            Err(error) => Err(self.record_mutation_error("interrupt request", error)),
-        }
-    }
-
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let node_did = parent
@@ -233,8 +167,7 @@ impl ClientCore {
             .as_deref()
             .context("retry parent has no node_did")?;
         let peer_record = self
-            .peer_record_for_chat_write(node_did, Utc::now())
-            .await?;
+            .peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         crate::local_runtime::ensure_request_input_supported(
             peer_record.as_ref(),
@@ -259,8 +192,10 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
+                let node = result.node_did.clone();
                 let result =
-                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
+                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
+                        .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

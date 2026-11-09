@@ -2,7 +2,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::row::AgentRequestRow;
@@ -19,7 +18,6 @@ mod config_save;
 mod manual_runs;
 mod operator;
 mod pending_queue;
-mod pending_submissions;
 mod request_patch;
 mod requests;
 mod sessions;
@@ -190,29 +188,14 @@ impl ClientCore {
             .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))
     }
 
-    pub(super) async fn peer_record_for_chat_write(
-        &self,
-        node_did: &str,
-        now: DateTime<Utc>,
-    ) -> Result<Option<PeerRecord>> {
+    pub(super) fn peer_record_for_chat_write(&self, node_did: &str) -> Result<Option<PeerRecord>> {
         let records = self.sync_state.records();
         let record = peer_record_owning_node(&records, node_did.trim());
         if record.is_some() {
             return Ok(record);
         }
-
-        let stale = records
-            .iter()
-            .find(|record| record.node_did == node_did.trim())
-            .cloned();
-        if let Some(stale) = stale {
-            if stale.is_enrollment() && stale.pairing_ready && !stale.is_enrollment_ready_at(now) {
-                self.sync_state
-                    .set_pairing_ready(&stale, false)
-                    .await
-                    .context("persisting expired enrollment write fence")?;
-            }
-            ensure_peer_chat_ready(node_did, Some(&stale))?;
+        if let Some(stale) = records.iter().find(|record| record.node_did == node_did.trim()) {
+            ensure_peer_chat_ready(node_did, Some(stale))?;
         }
         Ok(None)
     }

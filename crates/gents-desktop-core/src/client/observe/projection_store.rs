@@ -20,6 +20,8 @@ pub struct ObserverMetrics {
     pub transcript_invalidations: AtomicU64,
     pub transport_failures: AtomicU64,
     pub subscription_renewals: AtomicU64,
+    /// Sources ended and scheduled to reconnect.
+    pub reconnects: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,7 @@ pub struct ObserverMetricsSnapshot {
     pub transcript_invalidations: u64,
     pub transport_failures: u64,
     pub subscription_renewals: u64,
+    pub reconnects: u64,
 }
 
 impl ObserverMetrics {
@@ -55,6 +58,7 @@ impl ObserverMetrics {
             transcript_invalidations: self.transcript_invalidations.load(Ordering::Relaxed),
             transport_failures: self.transport_failures.load(Ordering::Relaxed),
             subscription_renewals: self.subscription_renewals.load(Ordering::Relaxed),
+            reconnects: self.reconnects.load(Ordering::Relaxed),
         }
     }
 }
@@ -214,7 +218,9 @@ pub enum RuntimeConnectionStatus {
     Connecting,
     Connected,
     Disconnected,
-    Denied,
+    /// The runtime refused this client's credentials; its source keeps
+    /// reconnecting on the backoff.
+    Refused,
     /// The peer has no operator GraphQL endpoint to observe.
     NoEndpoint,
 }
@@ -225,7 +231,9 @@ pub(crate) enum RuntimeConnectionEvent {
     SubscriptionsReady,
     SnapshotSucceeded,
     TransportFailed,
-    PermissionDenied,
+    /// The access owner refused the source's request or read; it reconnects
+    /// and the status names the refusal.
+    Refused,
     Renewed,
     EndpointMissing,
 }
@@ -234,10 +242,14 @@ impl RuntimeConnectionEvent {
     /// `RuntimeConnectionObservation.observe`.
     fn observe(self, status: Option<RuntimeConnectionStatus>) -> Option<RuntimeConnectionStatus> {
         Some(match self {
-            Self::SourceStarted | Self::SubscriptionsReady => RuntimeConnectionStatus::Connecting,
+            Self::SourceStarted => RuntimeConnectionStatus::Connecting,
+            Self::SubscriptionsReady => match status {
+                Some(RuntimeConnectionStatus::Refused) => RuntimeConnectionStatus::Refused,
+                _ => RuntimeConnectionStatus::Connecting,
+            },
+            Self::Refused => RuntimeConnectionStatus::Refused,
             Self::SnapshotSucceeded => RuntimeConnectionStatus::Connected,
             Self::TransportFailed => RuntimeConnectionStatus::Disconnected,
-            Self::PermissionDenied => RuntimeConnectionStatus::Denied,
             Self::Renewed => return status,
             Self::EndpointMissing => RuntimeConnectionStatus::NoEndpoint,
         })
@@ -250,7 +262,7 @@ impl RuntimeConnectionStatus {
             Self::Connecting => "connecting",
             Self::Connected => "connected",
             Self::Disconnected => "disconnected",
-            Self::Denied => "denied",
+            Self::Refused => "refused",
             Self::NoEndpoint => "noEndpoint",
         }
     }
@@ -381,9 +393,10 @@ impl ObservedStore {
         self.resync_tx.subscribe()
     }
 
-    /// A denied resource read invalidates cached facts without establishing a
-    /// runtime-wide denial. A fresh authenticated snapshot restores visible rows.
-    pub fn invalidate_node_after_denied_read(&self, node_did: &str) {
+    /// A refused read drops the node's cached rows, which this client may no
+    /// longer read, and asks the observer for its own authenticated read,
+    /// which owns the node's connection status.
+    pub fn clear_node_after_refused_read(&self, node_did: &str) {
         let _ = self.update_if(
             None,
             StoreMutation::replace_node(node_did, ClientStore::default()),

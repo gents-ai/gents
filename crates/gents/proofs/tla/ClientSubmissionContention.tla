@@ -1,364 +1,269 @@
 ---- MODULE ClientSubmissionContention ----
-\* A User's signed client submission racing its session's active turn.
+\* A User's optimistic chat send racing its session's active turn.
 \*
-\* A submission is two DefraDB transactions run by the User through the
+\* Client (Lean `ClientOptimisticSend`): the client picks the request
+\* identity when the person sends, shows the message pending and keeps its
+\* payload. A reply confirms it; a refusal, or no reply by the client's
+\* deadline, shows it failed with Retry. Retry resends the same payload under
+\* the same identity. The payload is released once the message is confirmed
+\* or discarded.
+\*
+\* Runtime: each send is two DefraDB transactions run by the User through the
 \* signed client endpoint. The reservation (`request.client.reserve_session`,
 \* `reserve_client_targets`) reads the target `AgentSession` document and the
 \* selected `Agent` to bind the physical targets the User then signs. The
 \* submission (`request.client.submit`, `submit_client_request`) reads the
-\* same documents (requester, selected Agent, `relationships_pending`), then
-\* creates the User-signed `AgentRequest` and stages its relationships. While the
-\* session's turn runs, its working Agent publishes each message
-\* (`tool_call.complete_delivery`, assistant publication) in a transaction
-\* that also refreshes the `AgentSession` observation (`patch_session_in_txn`,
-\* `last_activity_at`). That refresh changes the document the submission
-\* read, so the submission's commit aborts with a DefraDB transaction
-\* conflict (traced in the `mailbox_tool_turn` busy-session test). The
-\* reservation's read of that document aborts the same way ("a partial read
-\* lost to a newer merge" in `live_standard_backgrounding_uses_real_inference`
-\* while the runtime wrote the session).
+\* same documents, then creates the User-signed `AgentRequest`. While the
+\* session's turn runs, its working Agent publishes each message in a
+\* transaction that also refreshes the `AgentSession` observation
+\* (`patch_session_in_txn`, `last_activity_at`), so either transaction's
+\* commit aborts with a DefraDB conflict when that refresh lands after its
+\* read. A client-signed write may be rebuilt only after the native owner
+\* confirms the attempt did not commit (Lean `Identity.Configuration
+\* .clientSignedWriteMayRetry`); `Redrive` and `ReserveRedrive` select that
+\* rebuild, FALSE being the code before each fix.
 \*
-\* Keys: "sess" is the `AgentSession` document; the submission's other reads
-\* (the Agent document) have no concurrent writer during a turn. DefraDB is
-\* optimistic: a commit aborts when a key it read changed after its snapshot.
-\*
-\* A client-signed write may be rebuilt only after the native owner confirms
-\* the attempt did not commit and the caller authorizes replay of a
-\* transaction-only operation (Lean `Identity.Configuration
-\* .clientSignedWriteMayRetry`). The rebuild re-reads the session, re-plans
-\* and signs a fresh graph; the User's request admission signature covers the
-\* request content, not the graph, so it is reused. `Redrive` selects that
-\* opt-in mode for the submission and `ReserveRedrive` for the reservation:
-\* FALSE is the code before each fix, which surfaced the first confirmed
-\* conflict as a rejected submission. The reservation is idempotent on an
-\* existing session, so its rebuild binds the same targets. A lost commit
-\* response is unconfirmed and never rebuilt (`LostResponse`).
-\*
-\* Recovery after an unconfirmed submission (`Recovery`): the caller's
-\* journal retains the signed bytes, and the reconciler reads the owner's
-\* request (`reconcile_client_request`) and replays the identical bytes when
-\* it sees none (`resolve_unresolved_submission`). DefraDB derives the
-\* document identity from its content, so the identical replay and a late
-\* landing of the original commit are one document ("orig"). A lost response
-\* may leave the original commit in flight; it later lands or aborts. The
-\* reconciler reaches the owner only while the owner is reachable
-\* (`OwnerReachable`); otherwise it returns `SubmissionOutcomeUnknown` and the
-\* send stays unconfirmed. An identical replay the owner definitely rejects
-\* (`ReplayRejects`) is reported not delivered and its bytes retired.
-\*
-\* The bytes may be lost first (a restart of an older uncorrelated send, a
-\* reset journal); the caller can then only read the owner's visible request
-\* (`reconcile_unretained_submission`), whose absence proves nothing.
-\* `UnretainedPolicy` reads that absence: "wait" keeps the send unconfirmed
-\* (`DeliveryUnconfirmed`), "refuse" reports it not delivered (the `.refused`
-\* branch of Lean `ClientSubmissionReceipt.result`), and the person may then
-\* resend a new identity ("resend"). `SetAside` is the person's way out of an
-\* unprovable send (Lean `affordances`, `.unknown .unretained`): it never
-\* claims non-delivery and mints no identity, and a late landing of the
-\* original still appears in the session. Lean
-\* `journal_records_never_show_unprovable` shows a journal-written record
-\* never reaches that view; this models the rows the journal did not write.
-\*
-\* A reservation whose commit response is lost (`reserveUnconfirmed`) has sent
-\* no request; the saved message offers Resume, which repeats the idempotent
-\* reservation against the same session (`ReserveRetry`).
+\* The create is idempotent on the request identity (`send_client_request`:
+\* the unique key derived from the identity, the held lookup by
+\* `request_id`, and `stage_client_request_in_txn`'s held check), so `rows`
+\* is a set of identities. Two sends of one identity may be on the wire at
+\* once (a retry after a deadline while the first is still committing). The
+\* runtime refuses only an identity it does not hold: the held lookup runs
+\* before any other admission check (Lean `held_resend_never_refused`). The
+\* transport may fail a send before it reaches the runtime, held or not.
+\* `Timeout` is the client deadline `CHAT_SEND_DEADLINE_MS`.
 \*
 \* `Publications` bounds the Agent's session refreshes that land inside one
-\* submission's attempt series: the owned loop refreshes the observation once
-\* per published message, and the series spans the bounded
-\* `transaction_backoff` (100 + 200 + 400 ms). An abort consumes one such
-\* refresh, so either phase's series outlasts them only when
-\* `Publications < Attempts`.
-EXTENDS Naturals, FiniteSets
+\* attempt series, and `MaxSends` bounds the person's retries.
+\* REDs: `RetryFreshId` retries under a new identity, which duplicates the turn
+\* when the first send landed after its reply was lost; `PayloadLost` lets the
+\* client drop the payload of an unconfirmed message, which leaves a failed
+\* message with no Retry.
+EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
   Publications,  \* Agent session refreshes landing in one attempt series
   Attempts,      \* bounded attempts (TRANSACT_CONFLICT_MAX_RETRIES + 1)
   Redrive,       \* signed-conflict rebuild of the submission
   ReserveRedrive,\* signed-conflict rebuild of the target reservation
-  LostResponse,  \* a commit response may be lost (unconfirmed)
-  Recovery,      \* model recovery and an in-flight original commit
-  BytesLost,     \* the caller may lose the signed bytes first
-  ReplayIdentical, \* recovery replays the retained bytes, not a new identity
-  OwnerReachable,  \* a reconcile of retained bytes can reach the owner
-  ReplayRejects,   \* the owner may definitely reject the identical replay
-  SetAsideOffered, \* the person may set aside an unprovable send
-  UnretainedPolicy \* "wait" | "refuse": an unproven send without bytes
+  LostReply,     \* a reply may be lost on its way back
+  Refusals,      \* the runtime or transport may fail a send before it commits
+  MaxSends,      \* sends of the one authored message (first plus retries)
+  RetryFreshId,  \* RED: retry under a new request identity
+  PayloadLost    \* RED: the client may drop an unconfirmed message's payload
 
 ASSUME /\ Publications \in Nat
        /\ Attempts \in Nat \ {0}
        /\ Redrive \in BOOLEAN
        /\ ReserveRedrive \in BOOLEAN
-       /\ LostResponse \in BOOLEAN
-       /\ Recovery \in BOOLEAN
-       /\ BytesLost \in BOOLEAN
-       /\ ReplayIdentical \in BOOLEAN
-       /\ OwnerReachable \in BOOLEAN
-       /\ ReplayRejects \in BOOLEAN
-       /\ SetAsideOffered \in BOOLEAN
-       /\ UnretainedPolicy \in {"wait", "refuse"}
+       /\ LostReply \in BOOLEAN
+       /\ Refusals \in BOOLEAN
+       /\ MaxSends \in Nat \ {0}
+       /\ RetryFreshId \in BOOLEAN
+       /\ PayloadLost \in BOOLEAN
+
+Ids == 1..MaxSends
 
 VARIABLES
   sessVer,   \* committed version of the AgentSession document
   agentLeft, \* Agent session refreshes still to land
-  client,    \* "idle" | "reserving" | "reserveUnconfirmed" | "reserved"
-             \* | "open" | "admitted" | "unconfirmed" | "lost" | "unretained"
-             \* | "notDelivered" | "setAside"
-  snap,      \* the session version the open attempt read
-  tries,     \* attempts begun in the current phase
-  committed, \* committed AgentRequest identities: "orig" and a "resend"
-  inflight,  \* the original commit is still undecided
-  retained   \* the caller still holds the original signed bytes
+  msg,       \* "none" | "pending" | "confirmed" | "failed" | "discarded"
+  payload,   \* the client still holds the authored payload
+  cur,       \* the request identity the client sends under
+  sends,     \* sends begun for this authored message
+  wire,      \* sends in the runtime: [id, stage, snap, tries]
+  replies,   \* replies on the way back: [id, ok]
+  rows,      \* committed AgentRequest identities
+  conflictLost \* a send was lost to the turn's own writes
 
-vars == <<sessVer, agentLeft, client, snap, tries, committed, inflight, retained>>
-
-\* Committed AgentRequest documents for this authored message.
-created == Cardinality(committed)
+vars == <<sessVer, agentLeft, msg, payload, cur, sends, wire, replies, rows, conflictLost>>
 
 Init ==
   /\ sessVer = 0
   /\ agentLeft = Publications
-  /\ client = "idle"
-  /\ snap = 0
-  /\ tries = 0
-  /\ committed = {}
-  /\ inflight = FALSE
-  /\ retained = TRUE
+  /\ msg = "none"
+  /\ payload = FALSE
+  /\ cur = 1
+  /\ sends = 0
+  /\ wire = <<>>
+  /\ replies = <<>>
+  /\ rows = {}
+  /\ conflictLost = FALSE
+
+Remove(s, i) == SubSeq(s, 1, i - 1) \o SubSeq(s, i + 1, Len(s))
+
+Send(id) ==
+  /\ wire' = Append(wire, [id |-> id, stage |-> "reserving", snap |-> sessVer, tries |-> 1])
+  /\ sends' = sends + 1
 
 \* The working Agent publishes a message and refreshes the observation.
 AgentPublish ==
   /\ agentLeft > 0
   /\ sessVer' = sessVer + 1
   /\ agentLeft' = agentLeft - 1
-  /\ UNCHANGED <<client, snap, tries, committed, inflight, retained>>
+  /\ UNCHANGED <<msg, payload, cur, sends, wire, replies, rows, conflictLost>>
 
-\* The reservation opens its first attempt and reads the session.
-ReserveBegin ==
-  /\ client = "idle"
-  /\ client' = "reserving"
-  /\ snap' = sessVer
-  /\ tries' = 1
-  /\ UNCHANGED <<sessVer, agentLeft, committed, inflight, retained>>
+\* The person sends: pending at once, the payload kept, one signed create.
+Compose ==
+  /\ msg = "none"
+  /\ msg' = "pending"
+  /\ payload' = TRUE
+  /\ Send(cur)
+  /\ UNCHANGED <<sessVer, agentLeft, cur, replies, rows, conflictLost>>
 
-\* Reservation commit: the targets are bound when the read session is
-\* unchanged; a confirmed abort is rebuilt by re-reading while attempts remain.
-ReserveCommit ==
-  /\ client = "reserving"
-  /\ IF snap = sessVer
-       THEN /\ client' = "reserved"
-            /\ tries' = 0
-            /\ UNCHANGED snap
-       ELSE IF ReserveRedrive /\ tries < Attempts
-              THEN /\ snap' = sessVer
-                   /\ tries' = tries + 1
-                   /\ UNCHANGED client
-              ELSE /\ client' = "lost"
-                   /\ UNCHANGED <<snap, tries>>
-  /\ UNCHANGED <<sessVer, agentLeft, committed, inflight, retained>>
+\* A reservation commit binds the targets when the read session is unchanged,
+\* and the submission then reads it; a confirmed abort is rebuilt while
+\* attempts remain, and otherwise the send fails back to the client.
+ReserveCommit(i) ==
+  LET w == wire[i] IN
+  /\ w.stage = "reserving"
+  /\ IF w.snap = sessVer
+       THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.stage = "open", !.snap = sessVer, !.tries = 1]]
+            /\ UNCHANGED <<replies, conflictLost>>
+       ELSE IF ReserveRedrive /\ w.tries < Attempts
+              THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.snap = sessVer, !.tries = w.tries + 1]]
+                   /\ UNCHANGED <<replies, conflictLost>>
+              ELSE /\ wire' = Remove(wire, i)
+                   /\ replies' = Append(replies, [id |-> w.id, ok |-> FALSE])
+                   /\ conflictLost' = TRUE
+  /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, rows>>
 
-\* The reservation commits but its response is lost: it is reported, and no
-\* request was sent.
-ReserveCommitUnconfirmed ==
-  /\ LostResponse
-  /\ client = "reserving"
-  /\ snap = sessVer
-  /\ client' = "reserveUnconfirmed"
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight, retained>>
+\* The submission commits the idempotent create when the read session is
+\* unchanged; a confirmed abort is rebuilt while attempts remain.
+SubmitCommit(i) ==
+  LET w == wire[i] IN
+  /\ w.stage = "open"
+  /\ IF w.snap = sessVer
+       THEN /\ wire' = Remove(wire, i)
+            /\ rows' = rows \cup {w.id}
+            /\ replies' = Append(replies, [id |-> w.id, ok |-> TRUE])
+            /\ UNCHANGED conflictLost
+       ELSE IF Redrive /\ w.tries < Attempts
+              THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.snap = sessVer, !.tries = w.tries + 1]]
+                   /\ UNCHANGED <<rows, replies, conflictLost>>
+              ELSE /\ wire' = Remove(wire, i)
+                   /\ replies' = Append(replies, [id |-> w.id, ok |-> FALSE])
+                   /\ conflictLost' = TRUE
+                   /\ UNCHANGED rows
+  /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends>>
 
-\* Resume repeats the reservation; it binds the session the lost commit made.
-ReserveRetry ==
-  /\ client = "reserveUnconfirmed"
-  /\ client' = "reserving"
-  /\ snap' = sessVer
-  /\ tries' = 1
-  /\ UNCHANGED <<sessVer, agentLeft, committed, inflight, retained>>
+\* The runtime refuses a send of an identity it does not hold.
+Refuse(i) ==
+  /\ Refusals
+  /\ wire[i].id \notin rows
+  /\ wire' = Remove(wire, i)
+  /\ replies' = Append(replies, [id |-> wire[i].id, ok |-> FALSE])
+  /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, rows, conflictLost>>
 
-\* The submission opens its first attempt and reads the session.
-ClientBegin ==
-  /\ client = "reserved"
-  /\ client' = "open"
-  /\ snap' = sessVer
-  /\ tries' = 1
-  /\ UNCHANGED <<sessVer, agentLeft, committed, inflight, retained>>
+\* The transport fails before the send reaches the runtime.
+TransportFail(i) ==
+  /\ Refusals
+  /\ wire' = Remove(wire, i)
+  /\ replies' = Append(replies, [id |-> wire[i].id, ok |-> FALSE])
+  /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, rows, conflictLost>>
 
-\* Commit: success when the read session is unchanged; otherwise a confirmed
-\* abort, which the rebuild re-drives by re-reading while attempts remain.
-ClientCommit ==
-  /\ client = "open"
-  /\ IF snap = sessVer
-       THEN /\ client' = "admitted"
-            /\ committed' = committed \cup {"orig"}
-            /\ UNCHANGED <<snap, tries>>
-       ELSE IF Redrive /\ tries < Attempts
-              THEN /\ snap' = sessVer
-                   /\ tries' = tries + 1
-                   /\ UNCHANGED <<client, committed>>
-              ELSE /\ client' = "lost"
-                   /\ UNCHANGED <<snap, tries, committed>>
-  /\ UNCHANGED <<sessVer, agentLeft, inflight, retained>>
+LoseReply(j) ==
+  /\ LostReply
+  /\ replies' = Remove(replies, j)
+  /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, wire, rows, conflictLost>>
 
-\* The commit lands but its response is lost: finality is unknown, so the
-\* submission reports it and never rebuilds a second graph.
-ClientCommitUnconfirmed ==
-  /\ LostResponse
-  /\ client = "open"
-  /\ snap = sessVer
-  /\ client' = "unconfirmed"
-  /\ committed' = committed \cup {"orig"}
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, inflight, retained>>
+\* A reply is applied even after the deadline: a committed reply confirms.
+Receive(j) ==
+  LET r == replies[j] IN
+  /\ replies' = Remove(replies, j)
+  /\ IF r.ok
+       THEN IF msg = "discarded"
+              THEN UNCHANGED <<msg, payload>>
+              ELSE /\ msg' = "confirmed"
+                   /\ payload' = FALSE
+       ELSE IF msg = "pending"
+              THEN /\ msg' = "failed"
+                   /\ UNCHANGED payload
+              ELSE UNCHANGED <<msg, payload>>
+  /\ UNCHANGED <<sessVer, agentLeft, cur, sends, wire, rows, conflictLost>>
 
-\* The response is lost before the commit is decided: the submission is
-\* reported unconfirmed while the original may still land.
-ClientCommitInFlight ==
-  /\ LostResponse
-  /\ Recovery
-  /\ client = "open"
-  /\ snap = sessVer
-  /\ client' = "unconfirmed"
-  /\ inflight' = TRUE
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, retained>>
+\* The client's deadline passes with no reply.
+Timeout ==
+  /\ msg = "pending"
+  /\ msg' = "failed"
+  /\ UNCHANGED <<sessVer, agentLeft, payload, cur, sends, wire, replies, rows, conflictLost>>
 
-\* The undecided original commit lands, or aborts.
-OriginalLands ==
-  /\ inflight
-  /\ inflight' = FALSE
-  /\ committed' = committed \cup {"orig"}
-  /\ UNCHANGED <<sessVer, agentLeft, client, snap, tries, retained>>
+\* Retry resends the kept payload under the same identity.
+Retry ==
+  /\ msg = "failed"
+  /\ payload
+  /\ sends < MaxSends
+  /\ msg' = "pending"
+  /\ cur' = IF RetryFreshId THEN cur + 1 ELSE cur
+  /\ Send(cur')
+  /\ UNCHANGED <<sessVer, agentLeft, payload, replies, rows, conflictLost>>
 
-OriginalAborts ==
-  /\ inflight
-  /\ inflight' = FALSE
-  /\ UNCHANGED <<sessVer, agentLeft, client, snap, tries, committed, retained>>
+Discard ==
+  /\ msg = "failed"
+  /\ msg' = "discarded"
+  /\ payload' = FALSE
+  /\ UNCHANGED <<sessVer, agentLeft, cur, sends, wire, replies, rows, conflictLost>>
 
-\* The caller loses the signed bytes of an unconfirmed send.
-LoseBytes ==
-  /\ BytesLost
-  /\ client = "unconfirmed"
-  /\ retained
-  /\ retained' = FALSE
-  /\ client' = "unretained"
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight>>
+\* RED: the client drops the payload of an unconfirmed message.
+DropPayload ==
+  /\ PayloadLost
+  /\ msg \in {"pending", "failed"}
+  /\ payload
+  /\ payload' = FALSE
+  /\ UNCHANGED <<sessVer, agentLeft, msg, cur, sends, wire, replies, rows, conflictLost>>
 
-\* With retained bytes, a reachable owner decides: a visible request settles
-\* it; absence replays the identical bytes, which is the same document as the
-\* original. Without `ReplayIdentical` the absence is answered with a freshly
-\* signed request. An unreachable owner leaves the send unconfirmed: no step.
-ReconcileRetained ==
-  /\ Recovery
-  /\ OwnerReachable
-  /\ client = "unconfirmed"
-  /\ retained
-  /\ client' = "admitted"
-  /\ committed' = IF "orig" \in committed \/ ReplayIdentical
-                    THEN committed \cup {"orig"}
-                    ELSE committed \cup {"resend"}
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, inflight, retained>>
-
-\* The owner shows no request and definitely rejects the identical replay
-\* (`SubmissionAttemptError::Rejected`); the journal retires the bytes.
-ReplayRejected ==
-  /\ Recovery
-  /\ OwnerReachable
-  /\ ReplayRejects
-  /\ client = "unconfirmed"
-  /\ retained
-  /\ "orig" \notin committed
-  /\ client' = "notDelivered"
-  /\ retained' = FALSE
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight>>
-
-\* Without bytes only the owner's visible request is evidence.
-CheckUnretained ==
-  /\ client = "unretained"
-  /\ IF "orig" \in committed
-       THEN client' = "admitted"
-       ELSE IF UnretainedPolicy = "refuse"
-              THEN client' = "notDelivered"
-              ELSE UNCHANGED client
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight, retained>>
-
-\* The person sets aside a send that cannot be proven either way.
-SetAside ==
-  /\ SetAsideOffered
-  /\ client = "unretained"
-  /\ client' = "setAside"
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight, retained>>
-
-\* Told it was not delivered, the person sends it again as a new identity.
-Resend ==
-  /\ client = "notDelivered"
-  /\ client' = "admitted"
-  /\ committed' = committed \cup {"resend"}
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, inflight, retained>>
+Runtime ==
+  \/ \E i \in 1..Len(wire) : ReserveCommit(i) \/ SubmitCommit(i)
+  \/ \E i \in 1..Len(wire) : Refuse(i) \/ TransportFail(i)
 
 Next ==
   \/ AgentPublish
-  \/ ReserveBegin
-  \/ ReserveCommit
-  \/ ReserveCommitUnconfirmed
-  \/ ReserveRetry
-  \/ ClientBegin
-  \/ ClientCommit
-  \/ ClientCommitUnconfirmed
-  \/ ClientCommitInFlight
-  \/ OriginalLands
-  \/ OriginalAborts
-  \/ LoseBytes
-  \/ ReconcileRetained
-  \/ ReplayRejected
-  \/ CheckUnretained
-  \/ SetAside
-  \/ Resend
+  \/ Compose
+  \/ Runtime
+  \/ \E j \in 1..Len(replies) : LoseReply(j) \/ Receive(j)
+  \/ Timeout
+  \/ Retry
+  \/ Discard
+  \/ DropPayload
 
 Spec ==
   /\ Init
   /\ [][Next]_vars
-  /\ WF_vars(ReserveBegin)
-  \* A repeated reservation does not lose its response forever.
-  /\ SF_vars(ReserveCommit)
-  /\ WF_vars(ReserveRetry)
-  /\ WF_vars(ClientBegin)
-  /\ WF_vars(ClientCommit)
-  /\ WF_vars(OriginalLands \/ OriginalAborts)
-  /\ WF_vars(ReconcileRetained \/ ReplayRejected)
-  /\ WF_vars(CheckUnretained)
-  /\ WF_vars(SetAside)
-  /\ WF_vars(Resend)
+  /\ WF_vars(Compose)
+  /\ WF_vars(\E i \in 1..Len(wire) : ReserveCommit(i) \/ SubmitCommit(i))
+  /\ WF_vars(\E j \in 1..Len(replies) : Receive(j))
+  /\ WF_vars(Timeout)
 
 TypeOK ==
   /\ sessVer \in 0..Publications
   /\ agentLeft \in 0..Publications
-  /\ client \in {"idle", "reserving", "reserveUnconfirmed", "reserved", "open", "admitted",
-                 "unconfirmed", "lost", "unretained", "notDelivered", "setAside"}
-  /\ tries \in 0..Attempts
-  /\ committed \subseteq {"orig", "resend"}
-  /\ inflight \in BOOLEAN
-  /\ retained \in BOOLEAN
+  /\ msg \in {"none", "pending", "confirmed", "failed", "discarded"}
+  /\ payload \in BOOLEAN
+  /\ cur \in Ids
+  /\ sends \in 0..MaxSends
+  /\ Len(wire) <= MaxSends
+  /\ Len(replies) <= MaxSends
+  /\ rows \subseteq Ids
+  /\ conflictLost \in BOOLEAN
 
-\* A valid submission during a turn is never lost to the turn's own writes.
-NoConflictLoss == client # "lost"
+\* A valid send during a turn is never lost to the turn's own writes.
+NoConflictLoss == ~conflictLost
 
-\* Neither rebuilding nor recovery creates a second request for one
-\* authored message, even after a lost response.
-CreatedOnce == created <= 1
+\* No interleaving of send, lost reply, deadline and retry creates a second
+\* request for one authored message.
+CreatedOnce == Cardinality(rows) <= 1
 
-\* A send is reported not delivered only when it cannot still land.
-NotDeliveredIsProven ==
-  client = "notDelivered" => ("orig" \notin committed /\ ~inflight)
+\* The client keeps the payload of every unconfirmed message.
+RetainedUntilConfirmed == msg \in {"pending", "failed"} => payload
 
-\* An unprovable send never blocks the person: setting it aside is offered.
-NeverBlocked == client = "unretained" => ENABLED SetAside
+\* A failed message always offers Retry: nothing is stuck. `sends = MaxSends`
+\* is the model's bound on the person's retries, not a client state.
+FailedOffersRetry == msg = "failed" => (ENABLED Retry \/ sends = MaxSends)
 
-\* Every submission settles: admitted, or reported unconfirmed or not
-\* delivered. A lost reservation response is not settled; Resume repeats it.
-EverySubmissionSettles ==
-  <>(client \in {"admitted", "unconfirmed", "notDelivered"})
+\* Pending always resolves: confirmed, or failed with Retry.
+PendingResolves == [](msg = "pending" => <>(msg \in {"confirmed", "failed"}))
 
-\* Recovery: an unconfirmed send is eventually shown delivered, not delivered
-\* with a way forward, or set aside by the person; it is never left checking
-\* forever.
-UnconfirmedResolves ==
-  [](client \in {"reserveUnconfirmed", "unconfirmed", "unretained"} =>
-       <>(client \in {"admitted", "notDelivered", "setAside"}))
+\* The authored message leaves pending.
+EverySendSettles == <>(msg \in {"confirmed", "failed", "discarded"})
 
 ====

@@ -417,8 +417,18 @@ function captureSimulatorLog(deviceId, artifactRoot, runIndex) {
     const result = spawnSync(
       "xcrun",
       [
-        "simctl", "spawn", deviceId, "log", "show", "--style", "compact",
-        "--last", "10m", "--info", "--predicate", 'process == "Gents"',
+        "simctl",
+        "spawn",
+        deviceId,
+        "log",
+        "show",
+        "--style",
+        "compact",
+        "--last",
+        "10m",
+        "--info",
+        "--predicate",
+        'process == "Gents"',
       ],
       { stdio: ["ignore", output, "pipe"], encoding: "utf8", timeout: 10_000 },
     );

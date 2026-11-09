@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -30,6 +30,8 @@ pub struct TaskRunResult {
     pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
 }
 
+/// The request the runtime holds for a confirmed send (Lean
+/// `ClientOptimisticSend`); a failed send is the command's error.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendResult {
@@ -37,56 +39,6 @@ pub struct ChatSendResult {
     pub request_id: String,
     pub node_did: String,
     pub agent_did: Option<String>,
-    /// Absent when the owner accepted the request.
-    #[ts(optional = nullable)]
-    pub outcome: Option<ChatSendOutcome>,
-    #[ts(optional = nullable)]
-    pub submission_receipt: Option<ChatSubmissionReceipt>,
-    /// Recovery information does not change the retained request's delivery outcome.
-    #[ts(optional = nullable)]
-    pub delivery_error: Option<crate::error::BridgeError>,
-}
-
-/// Native receipt fields are echoed for acknowledgement; the native owner
-/// verifies their exact binding before retiring any signed replay bytes.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatSubmissionReceipt {
-    pub node_did: String,
-    pub request_id: String,
-    pub session_id: String,
-    pub agent_did: Option<String>,
-    pub envelope_hash: String,
-    pub signed_payload_hash: String,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ChatSubmissionRecovery {
-    /// A missing local preparation is not proof of non-delivery. No resolved
-    /// session is invented when the original call may still be preparing it.
-    Unconfirmed {
-        node_did: String,
-        request_id: String,
-    },
-    Prepared {
-        result: Box<ChatSendResult>,
-    },
-}
-
-/// A send the owner has not confirmed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum ChatSendOutcome {
-    /// The owner may hold the request; resend must reconcile this identity.
-    DeliveryUnknown,
-    /// The owner definitely rejected the retained, byte-identical signed
-    /// request, so it was not delivered.
-    NotDelivered,
 }
 
 impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
@@ -96,21 +48,6 @@ impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
             request_id: receipt.request_id,
             node_did: receipt.node_did,
             agent_did: receipt.agent_did,
-            outcome: None,
-            submission_receipt: None,
-            delivery_error: None,
-        }
-    }
-}
-
-impl ChatSendResult {
-    pub(crate) fn with_outcome(
-        receipt: gents_desktop_core::client::SubmittedRequest,
-        outcome: ChatSendOutcome,
-    ) -> Self {
-        Self {
-            outcome: Some(outcome),
-            ..receipt.into()
         }
     }
 }

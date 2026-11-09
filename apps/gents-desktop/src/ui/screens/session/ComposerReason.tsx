@@ -7,13 +7,15 @@ import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { href } from "@/lib/router";
 
 /** Why nothing typed here could be sent, for as long as that holds: the
-    node has no inference it can use, the node is offline, this app has no
-    endpoint for it, or the session takes no messages from this app. States
+    node has no inference it can use, the node is offline, it refuses this
+    app's credentials, this app has no endpoint for it, or the session takes
+    no messages from this app. States
     that clear by themselves (sending, syncing, waiting to see a request) are
     none of these. */
 export type ComposerReason =
   | { kind: "inference"; nodeDid: string; name: string; title: string }
   | { kind: "offline"; name: string }
+  | { kind: "refused"; name: string }
   | { kind: "noEndpoint"; name: string }
   | { kind: "unsendable"; text: string };
 
@@ -40,6 +42,7 @@ export function composerReason(
   if (!deployment) return null;
   const name = deployment.node.displayName ?? deployment.label;
   if (deployment.runtimeConnection === "disconnected") return { kind: "offline", name };
+  if (deployment.runtimeConnection === "refused") return { kind: "refused", name };
   if (deployment.runtimeConnection === "noEndpoint") return { kind: "noEndpoint", name };
   if (status.reason !== "agentUnavailable") return null;
   const decision = selectedNodeReadinessDecision(deployment, agentDid);
@@ -91,17 +94,21 @@ export function ComposerReasonBox({
       ? reason.title
       : reason.kind === "offline"
         ? `${reason.name} is offline`
-        : reason.kind === "noEndpoint"
-          ? `${reason.name} has no address this app can reach`
-          : reason.text;
+        : reason.kind === "refused"
+          ? `${reason.name} doesn't accept this app`
+          : reason.kind === "noEndpoint"
+            ? `${reason.name} has no address this app can reach`
+            : reason.text;
   const detail =
     reason.kind === "inference"
       ? "Sessions here need a model to answer."
       : reason.kind === "offline"
         ? "Messages can be sent once it's back, or from another node."
-        : reason.kind === "noEndpoint"
-          ? "Messages can be sent once it has a runtime endpoint, or from another node."
-          : null;
+        : reason.kind === "refused"
+          ? "Ask its owner to restore this device's access; it reconnects by itself once they do. Or send from another node."
+          : reason.kind === "noEndpoint"
+            ? "Messages can be sent once it has a runtime endpoint, or from another node."
+            : null;
   return (
     <div className="[grid-area:1/1]" data-testid="composer-reason">
       <div

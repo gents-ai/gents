@@ -6,16 +6,12 @@ import type { RequestAttachment } from "./RequestAttachment.js";
 
 export type ChatSendRequest = {
 /**
- * Allocated and retained by the caller before the first helper call.
+ * The request identity the client picked when the person sent; a retry
+ * sends the same identity (Lean `ClientOptimisticSend`).
  */
 requestId?: string | null,
 /**
- * Existing local client DID captured with the operation, so switching
- * history identities cannot reinterpret an unresolved caller operation.
+ * The local client DID the message was authored under; a send under
+ * another client identity is refused.
  */
-clientDid?: string | null, nodeDid: string, agentDid?: string | null, sessionId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<RequestAttachment> | null, delivery?: QueueDelivery | null, causedBySourceDocId?: string | null, answer?: MailboxQuestionAnswer | null, cwd?: string | null,
-/**
- * Reconcile this earlier send whose delivery is unknown instead of sending
- * a new request; the original signed request is replayed or confirmed.
- */
-resolveRequestId?: string | null, };
+clientDid?: string | null, nodeDid: string, agentDid?: string | null, sessionId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<RequestAttachment> | null, delivery?: QueueDelivery | null, causedBySourceDocId?: string | null, answer?: MailboxQuestionAnswer | null, cwd?: string | null, };

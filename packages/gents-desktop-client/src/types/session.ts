@@ -1,6 +1,4 @@
 export type { ChatSendResult } from "../generated/ChatSendResult.js";
-export type { ChatSubmissionReceipt } from "../generated/ChatSubmissionReceipt.js";
-export type { ChatSubmissionRecovery } from "../generated/ChatSubmissionRecovery.js";
 export type { CommandDenialView } from "../generated/CommandDenialView.js";
 export type { DesktopSessionSnapshot } from "../generated/DesktopSessionSnapshot.js";
 export type { SessionLiveDeltaView } from "../generated/SessionLiveDeltaView.js";
@@ -35,6 +33,5 @@ export type { PendingQueueEntryView } from "../generated/PendingQueueEntryView.j
 
 export type { RequestTurnView } from "../generated/RequestTurnView.js";
 
-export type { ChatSubmissionQuery } from "../generated/ChatSubmissionQuery.js";
 export type { SessionContextDetails } from "../generated/SessionContextDetails.js";
 export type { SessionContextDetailsRequest } from "../generated/SessionContextDetailsRequest.js";

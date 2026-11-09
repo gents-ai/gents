@@ -607,7 +607,7 @@ impl ClientCore {
         let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
             self.node_identity.private_key_bytes(),
         )?;
-        let (snapshot, denied) = match scoped.as_deref() {
+        let (snapshot, refused) = match scoped.as_deref() {
             Some(did) => {
                 match load_node_scoped_snapshot_with_peer_records(did, &records, &capability).await
                 {
@@ -620,7 +620,7 @@ impl ClientCore {
             }
             None => {
                 let snapshots = load_full_snapshot_with_peer_records(&records, &capability).await;
-                (snapshots.store, snapshots.denied)
+                (snapshots.store, snapshots.refused)
             }
         };
         let rows = snapshot.row_count();
@@ -630,8 +630,8 @@ impl ClientCore {
         if !published {
             self.store.request_resync(scoped.as_deref());
         }
-        for node_did in &denied {
-            self.store.invalidate_node_after_denied_read(node_did);
+        for node_did in &refused {
+            self.store.clear_node_after_refused_read(node_did);
         }
         let refresh = StoreRefresh::at(published, self.store.projection_revision().store_version);
         tracing::debug!(
@@ -642,6 +642,16 @@ impl ClientCore {
             "desktop runtime snapshot refreshed"
         );
         Ok(refresh)
+    }
+
+    /// Reads the node a write landed on. A write names its node, so it never
+    /// reads every routed node, which `refresh_store` does while no single
+    /// window selection names one.
+    pub(crate) async fn refresh_written_node(&self, node_did: &str) -> Result<StoreRefresh> {
+        match self.refresh_node(node_did).await? {
+            Some(refresh) => Ok(refresh),
+            None => self.refresh_store().await,
+        }
     }
 
     /// [`Self::refresh_store`] for one node; `None` when `node_did` is blank.
@@ -690,7 +700,7 @@ impl ClientCore {
     /// node's rows and asks it to confirm with its own authenticated read.
     fn observe_refresh_failure(&self, node_did: &str, error: &anyhow::Error) {
         if gents::store::config_client::TransactionFailure::permission_denied(error) {
-            self.store.invalidate_node_after_denied_read(node_did);
+            self.store.clear_node_after_refused_read(node_did);
         } else {
             self.store.request_resync(Some(node_did));
         }

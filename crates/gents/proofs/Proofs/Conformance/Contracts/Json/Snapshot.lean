@@ -5,7 +5,7 @@ import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
-import Proofs.ClientShell.SubmissionReceipt
+import Proofs.ClientShell.OptimisticSend
 import Proofs.Conformance.ClientChatReadinessCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.OperatorPaths
@@ -542,9 +542,7 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.EnrollmentPendingRequests.absentPeerCasesJson ++ ","
     ++ "\"client_chat_readiness_cases\":"
       ++ Conformance.ChatReadinessCases.casesJson ++ ","
-    ++ "\"client_chat_readiness_transitions\":"
-      ++ Conformance.ChatReadinessCases.transitionsJson ++ ","
-    ++ "\"client_chat_readiness_legs\":"
+    ++ "\"client_route_pairing_legs\":"
       ++ Conformance.ChatReadinessCases.legsJson ++ ","
     ++ "\"client_chat_readiness_causes\":"
       ++ Conformance.ChatReadinessCases.causesJson ++ ","
@@ -658,12 +656,8 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
     ++ "\"identity_private_journal_policy\":"
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
-    ++ "\"client_submission_cleanup_cases\":"
-      ++ ClientSubmissionReceipt.cleanupCasesJson ++ ","
-    ++ "\"client_submission_rejection_cases\":"
-      ++ ClientSubmissionReceipt.rejectionCasesJson ++ ","
-    ++ "\"client_submission_uncertain_error_cases\":"
-      ++ ClientSubmissionReceipt.uncertainErrorCasesJson ++ ","
+    ++ "\"client_optimistic_send_cases\":"
+      ++ ClientOptimisticSend.casesJson ++ ","
     ++ "\"identity_client_agent_journal_cases\":"
       ++ Identity.ClientAgentJournal.casesJson ++ ","
     ++ "\"identity_client_agent_recovery_cases\":"

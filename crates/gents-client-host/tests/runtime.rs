@@ -2810,66 +2810,28 @@ async fn exercise_message_edit(
     wait_chat_deployment(&mut client, id, node_did, access)
         .await
         .context("restoring the runtime route after the send helper restart")?;
-    let recovered = client
+    // The reply was discarded and the helper restarted: the client retries
+    // the same identity, which the runtime holds as the same request (Lean
+    // `ClientOptimisticSend`).
+    let sent = client
         .call(
             *id,
-            "desktop_chat_submission_recover",
-            json!({"query": {
-                "clientDid": client_did, "nodeDid": node_did, "requestId": request_id
+            "desktop_chat_send",
+            json!({"request": {
+                "requestId": request_id, "clientDid": client_did,
+                "nodeDid": node_did, "sessionId": child, "agentDid": agent,
+                "content": "Return the edited fixture response."
             }}),
         )
         .await;
-    ensure!(
-        recovered["kind"] == "prepared",
-        "restart lost the caller receipt: {recovered}"
-    );
-    let sent = &recovered["result"];
+    *id += 1;
     ensure!(
         sent["requestId"] == request_id,
-        "recovery replaced the original request"
+        "the retry replaced the original request: {sent}"
     );
     ensure!(
         access.execute(&request_query).await? == admitted,
-        "recovery duplicated or changed the signed request"
-    );
-    *id += 1;
-    ensure!(
-        sent["submissionReceipt"]["nodeDid"] == node_did
-            && sent["submissionReceipt"]["requestId"] == request_id
-            && sent["submissionReceipt"]["sessionId"] == child,
-        "the recovered receipt lost its original scope"
-    );
-    discard_successful_reply(
-        &mut client,
-        *id,
-        "desktop_chat_submission_acknowledge",
-        json!({"receipt": sent["submissionReceipt"].clone()}),
-    )
-    .await?;
-    *id += 1;
-    client.close().await;
-    recovery.restart().await?;
-    client = Attachment::start(paths).await;
-    wait_chat_deployment(&mut client, id, node_did, access)
-        .await
-        .context("restoring the runtime route after the acknowledgement helper restart")?;
-    let acknowledged = client
-        .call(
-            *id,
-            "desktop_chat_submission_recover",
-            json!({"query": {
-                "clientDid": client_did, "nodeDid": node_did, "requestId": request_id
-            }}),
-        )
-        .await;
-    *id += 1;
-    ensure!(
-        acknowledged["result"] == *sent,
-        "a lost acknowledgement reply changed or retired the recoverable outcome"
-    );
-    ensure!(
-        access.execute(&request_query).await? == admitted,
-        "acknowledgement recovery duplicated or changed the signed request"
+        "the retry duplicated or changed the signed request"
     );
     ensure!(
         sent["sessionId"] == child,

@@ -84,8 +84,7 @@ pub async fn run_schedule_config(
     let selected_node_did = request
         .node_did
         .map(|did| require_trimmed("node_did", did))
-        .transpose()?
-        .or_else(|| core.selected_node_did());
+        .transpose()?;
     let schedule = schedule_for_run(&store.schedules, &schedule_id, selected_node_did.as_deref())?;
     let submitted = core
         .fire_schedule_now_for_node(&schedule.node_did, &schedule_id)
@@ -118,8 +117,7 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
     let selected_node_did = request
         .node_did
         .map(|did| require_trimmed("node_did", did))
-        .transpose()?
-        .or_else(|| core.selected_node_did());
+        .transpose()?;
     let task = task_for_run(&store.tasks, &task_id, selected_node_did.as_deref())?;
     let submitted = core
         .fire_task_now_for_node(&task.node_did, &task_id, args)

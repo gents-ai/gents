@@ -556,22 +556,32 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("POST", "/desktop/session-provenance") => {
-            let request = decode::<DesktopSessionProvenanceRequest>(
+            let mut request = decode::<DesktopSessionProvenanceRequest>(
                 &request.body,
                 "decoding session provenance request",
             )?;
+            // The runner serves one frontend, whose selection is the core's.
+            request.node_did = request
+                .node_did
+                .or_else(|| fixture.desktop_core().selected_node_did());
             let view = session_provenance_request(fixture.desktop_core(), request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&view)?))
         }
         ("GET", "/desktop/backend-health") => {
+            // The runner serves one frontend, whose selection is the core's.
+            let core = fixture.desktop_core();
             let rows =
-                list_backends_with_health_for_core(Arc::clone(fixture.desktop_core())).await?;
+                list_backends_with_health_for_core(Arc::clone(core), core.selected_node_did())
+                    .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("GET", "/desktop/mcp-health") => {
-            let rows = load_mcp_services_with_health(fixture.desktop_core().as_ref()).await?;
+            let core = fixture.desktop_core();
+            let rows =
+                load_mcp_services_with_health(core.as_ref(), core.selected_node_did().as_deref())
+                    .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("POST", "/desktop/mcp/probe") => {
@@ -591,32 +601,6 @@ pub(super) async fn handle_request(
             let request = decode::<ChatSendRequest>(&request.body, "decoding chat send request")?;
             let result = send_chat_message(fixture.desktop_core().as_ref(), request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
-        }
-        ("POST", "/desktop/chat/recover") => {
-            let query = decode::<gents_desktop_bridge::types::ChatSubmissionQuery>(
-                &request.body,
-                "decoding chat submission query",
-            )?;
-            let result = gents_desktop_bridge::commands::recover_chat_submission(
-                fixture.desktop_core().as_ref(),
-                query,
-            )
-            .await?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
-        }
-        ("POST", "/desktop/chat/acknowledge") => {
-            let receipt = decode::<gents_desktop_bridge::types::ChatSubmissionReceipt>(
-                &request.body,
-                "decoding chat submission receipt",
-            )?;
-            gents_desktop_bridge::commands::acknowledge_chat_submission(
-                fixture.desktop_core().as_ref(),
-                receipt,
-            )
-            .await?;
-            Ok(HttpResponse::json_ok(
-                serde_json::json!({ "status": "ok" }).to_string(),
-            ))
         }
         ("POST", "/desktop/queue/edit") => {
             let request = decode::<gents_desktop_bridge::types::PendingQueueEditRequest>(
@@ -916,8 +900,12 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         ("POST", "/desktop/interrupt/request") => {
-            let request =
+            let mut request =
                 decode::<DesktopInterruptRequest>(&request.body, "decoding interrupt request")?;
+            // The runner serves one frontend, whose selection is the core's.
+            request.node_did = request
+                .node_did
+                .or_else(|| fixture.desktop_core().selected_node_did());
             let result = interrupt_request(fixture.desktop_core(), &request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;

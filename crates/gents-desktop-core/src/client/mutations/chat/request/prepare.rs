@@ -108,7 +108,11 @@ pub(crate) async fn prepare_request_submission(
                     .or(options.trigger_lineage.source_doc_id),
                 ..options.trigger_lineage
             },
-            retry_key: options.retry_key,
+            // The owner's idempotency key: a resend of this identity is the
+            // same request (Lean `ClientOptimisticSend.create`).
+            retry_key: Some(options.retry_key.unwrap_or_else(|| {
+                gents::request::lifecycle::client_request_key(signer.did(), &request_id)
+            })),
             ..RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {

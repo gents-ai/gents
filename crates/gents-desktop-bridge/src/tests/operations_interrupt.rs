@@ -44,7 +44,7 @@ async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
         "completed",
     )
     .await;
-    let first = interrupt_request(&core, &user_cancel("parent", None))
+    let first = interrupt_request(&core, &user_cancel("parent", Some(node)))
         .await
         .unwrap();
     assert!(first.accepted);
@@ -55,7 +55,7 @@ async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
     );
     assert!(first.interrupt_requested_at.is_some());
     assert!(latch(&core, node, "child").await.is_none());
-    let second = interrupt_request(&core, &user_cancel("parent", None))
+    let second = interrupt_request(&core, &user_cancel("parent", Some(node)))
         .await
         .unwrap();
     assert!(second.already_interrupted);
@@ -71,22 +71,29 @@ async fn interrupt_refuses_ambiguous_terminal_and_non_user_causes() {
     let access = core.operator_access(node).unwrap();
     seed(&access, node, "twins", "one", "processing").await;
     seed(&access, node, "twins", "two", "processing").await;
-    assert!(interrupt_request(&core, &user_cancel("twins", None))
+    assert!(interrupt_request(&core, &user_cancel("twins", Some(node)))
         .await
         .unwrap_err()
         .contains("ambiguous"));
     seed(&access, node, "done", "done-session", "completed").await;
-    assert!(interrupt_request(&core, &user_cancel("done", None))
+    assert!(interrupt_request(&core, &user_cancel("done", Some(node)))
         .await
         .unwrap_err()
         .contains("already terminal"));
     assert!(latch(&core, node, "done").await.is_none());
-    let mut invalid = user_cancel("done", None);
+    let mut invalid = user_cancel("done", Some(node));
     invalid.cause = "deadline".into();
     assert!(interrupt_request(&core, &invalid)
         .await
         .unwrap_err()
         .contains("userCancelled"));
+    assert!(
+        interrupt_request(&core, &user_cancel("done", None))
+            .await
+            .unwrap_err()
+            .contains("Select the hosting runtime"),
+        "the owner never falls back to the core's shared selection"
+    );
     core.shutdown().await.unwrap();
     runtime.shutdown().await.unwrap();
 }

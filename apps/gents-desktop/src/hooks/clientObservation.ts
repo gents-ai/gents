@@ -103,7 +103,7 @@ export function startClientObservation(
           )
             lifecycle.setError(null);
           registrationError = null;
-          void controller.request("full").then(scheduleOperatorRead);
+          void controller.request("full");
         },
         (listenerError: unknown) => {
           if (stopped) return;

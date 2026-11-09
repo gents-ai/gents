@@ -113,20 +113,16 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("keeps pairing preparation distinct from runtime admission", () => {
-    const state = projectDeploymentOperationalState(
-      deployment({ pairingReady: false }),
-    );
-
-    expect(state.transport.kind).toBe("ready");
-    expect(state.admissionBlocker).toBeNull();
-    expect(state.route).toMatchObject({
-      layer: "route",
-      kind: "waiting",
-      reason: "route_not_ready",
-      label: "Preparing peer pairing",
-      shortLabel: "Preparing",
-    });
+  it("reads the route from the native chat fence, never from pairing", () => {
+    for (const pairingReady of [false, true]) {
+      const state = projectDeploymentOperationalState(deployment({ pairingReady }));
+      expect(state.admissionBlocker).toBeNull();
+      expect(state.route).toMatchObject({
+        layer: "route",
+        kind: "ready",
+        reason: "route_ready",
+      });
+    }
   });
 
   it("blocks admission with the native chat refusal and its next action", () => {
@@ -148,6 +144,7 @@ describe("deployment operational state", () => {
       detail: "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
     });
     expect(state.summary).toBe(state.admissionBlocker);
+    expect(state.route).toEqual(state.admissionBlocker);
   });
 
   it("does not wait for a gossiped Node after pairing", () => {
@@ -224,6 +221,19 @@ describe("deployment operational state", () => {
     expect(state.summary).toBe(state.connection);
     expect(state.summary).toMatchObject({ reason: "disconnected", shortLabel: "Reconnecting" });
     expect(state.summary.label).not.toBe("Connecting to runtime");
+  });
+
+  it("names a runtime that refuses this app instead of connecting forever", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({ runtimeConnection: "refused" }),
+    );
+    expect(state.admissionBlocker).toBe(state.connection);
+    expect(state.connection).toMatchObject({
+      kind: "blocked",
+      reason: "refused",
+      shortLabel: "Refused",
+      animated: false,
+    });
   });
 
   it("names a node without a runtime endpoint instead of connecting forever", () => {

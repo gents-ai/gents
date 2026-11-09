@@ -682,12 +682,12 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
 }
 
 /// Every reachable runtime's snapshot merged by node. A runtime that refuses
-/// the read is listed in `denied` and contributes no rows; it does not
+/// the read is listed in `refused` and contributes no rows; it does not
 /// discard another runtime's snapshot.
 #[derive(Default)]
 pub struct PeerSnapshots {
     pub store: ClientStore,
-    pub denied: Vec<String>,
+    pub refused: Vec<String>,
 }
 
 pub async fn load_full_snapshot_with_peer_records(
@@ -707,8 +707,8 @@ pub async fn load_full_snapshot_with_peer_records(
             Err(error) => {
                 tracing::warn!(node_did = %peer.node_did, error = %error,
                     "runtime snapshot unavailable");
-                if error.permission_denied() {
-                    snapshots.denied.push(peer.node_did.clone());
+                if error.refused() {
+                    snapshots.refused.push(peer.node_did.clone());
                 }
             }
         }
@@ -716,8 +716,8 @@ pub async fn load_full_snapshot_with_peer_records(
     snapshots
 }
 
-/// The top-level aliases of [`snapshot_query`]; a served runtime that answers
-/// the query authorizes the reader exactly when every one is present.
+/// The top-level aliases of [`snapshot_query`]; a served runtime omits the
+/// ones the reader may not read.
 pub(crate) const SNAPSHOT_ROOTS: &[&str] = &[
     "nodes",
     "agents",
@@ -745,50 +745,55 @@ pub(crate) const SNAPSHOT_ROOTS: &[&str] = &[
     "datastore_tool_surfaces",
 ];
 
+/// Reads an omitted snapshot root as an empty one.
+///
+/// External premise: the pinned served runtime answers a reader whose grant
+/// was revoked with HTTP 200, no `errors`, and `data` without the roots it
+/// may not read, while rows ACP filters for an authorized reader come back
+/// as an empty list. Both are native ACP hiding what the reader may not
+/// read (`RuntimeConnectionObservation.SnapshotOutcome`): the client shows
+/// nothing there and never infers a denial or reconnects for it.
+fn omitted_roots_read_empty(mut data: Value) -> Value {
+    if let Some(object) = data.as_object_mut() {
+        for root in SNAPSHOT_ROOTS {
+            object.entry(*root).or_insert(Value::Null);
+        }
+    }
+    data
+}
+
 /// How a runtime snapshot read failed
-/// (`RuntimeConnectionObservation.SnapshotOutcome`).
+/// (`RuntimeConnectionObservation.SnapshotOutcome`). The observer reconnects
+/// a refused source and keeps an armed source for any other failure, so the
+/// kind is decided here, by the access owner's classification, and nowhere
+/// else. An omitted root is not a failure (`omitted_roots_read_empty`).
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotReadError {
-    /// The runtime answered without errors but omitted these selected roots.
-    /// The pinned served runtime answers a reader whose grant was revoked this
-    /// way (HTTP 200, no `errors`), while rows ACP filters for an authorized
-    /// reader come back as an empty list, so this is its refusal of the
-    /// collection (`SnapshotOutcome.rootWithheld`).
-    #[error("runtime snapshot withheld the roots {roots:?}")]
-    RootsWithheld { roots: Vec<&'static str> },
+    /// The access owner refused the read (HTTP 401/403 or a
+    /// `PERMISSION_DENIED` envelope): the runtime does not accept this
+    /// client's credentials.
+    #[error("runtime refused the snapshot read: {0}")]
+    Refused(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// Any other failure: the runtime is unreachable, timed out, or answered
+    /// something the reader could not decode.
     #[error("{0}")]
-    Read(#[source] Box<dyn std::error::Error + Send + Sync>),
+    Failed(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl From<anyhow::Error> for SnapshotReadError {
     fn from(error: anyhow::Error) -> Self {
-        Self::Read(error.into())
+        if error.permission_denied() {
+            Self::Refused(error.into())
+        } else {
+            Self::Failed(error.into())
+        }
     }
 }
 
 impl SnapshotReadError {
-    /// The access owner refused the read (HTTP 401/403 or a
-    /// `PERMISSION_DENIED` envelope).
     pub fn refused(&self) -> bool {
-        match self {
-            Self::RootsWithheld { .. } => false,
-            Self::Read(error) => error.permission_denied(),
-        }
+        matches!(self, Self::Refused(_))
     }
-
-    /// The runtime denied this reader, by refusing the read or withholding a
-    /// selected root.
-    pub fn permission_denied(&self) -> bool {
-        matches!(self, Self::RootsWithheld { .. }) || self.refused()
-    }
-}
-
-pub(crate) fn withheld_snapshot_roots(data: &Value) -> Vec<&'static str> {
-    SNAPSHOT_ROOTS
-        .iter()
-        .copied()
-        .filter(|root| data.get(*root).is_none())
-        .collect()
 }
 
 pub async fn load_node_snapshot_on(
@@ -796,11 +801,9 @@ pub async fn load_node_snapshot_on(
     node_did: &str,
 ) -> std::result::Result<ClientStore, SnapshotReadError> {
     let query = snapshot_query(Some(node_did))?;
-    let data = execute_access_graphql_query(access, &query, "runtime desktop snapshot").await?;
-    let roots = withheld_snapshot_roots(&data);
-    if !roots.is_empty() {
-        return Err(SnapshotReadError::RootsWithheld { roots });
-    }
+    let data = omitted_roots_read_empty(
+        execute_access_graphql_query(access, &query, "runtime desktop snapshot").await?,
+    );
     let requests = complete_access_snapshot_requests(access, &data, Some(node_did)).await?;
     Ok(if access.actor_did().is_some() {
         authenticated_node_snapshot_rows(&data, node_did, requests)?
@@ -1048,7 +1051,7 @@ mod remote_failure_tests {
             &client.client_signing_capability().unwrap(),
         )
         .await;
-        assert_eq!(snapshots.denied, vec!["did:test:denied".to_owned()]);
+        assert_eq!(snapshots.refused, vec!["did:test:denied".to_owned()]);
         assert!(snapshots
             .store
             .nodes

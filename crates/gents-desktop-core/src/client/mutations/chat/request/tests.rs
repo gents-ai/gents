@@ -12,16 +12,12 @@ use super::prepare::{
 use super::retry::{retry_request, retry_request_with_request_id};
 use super::*;
 
-fn test_local_admission(core: &ClientCore) -> AgentRequestAdmissionRecord {
-    AgentRequestAdmissionRecord::local_self(core.node_identity().did())
-}
 use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 
 use super::lean_vocab_test::{
     assert_lean_transition_is_legal, lean_contract_snapshot, LeanSessionRecoveryCase,
 };
 
-const RECOVERY_AGENT_DID: &str = "amy-code";
 const FAILED_CLAIM_BACKEND: &str = "old-claim-backend";
 
 #[derive(Debug)]
@@ -1083,20 +1079,16 @@ async fn query_row_count_for_test(node: &ConfigAccess, query: &str, root: &str) 
         .unwrap_or_default())
 }
 
-/// The desktop submits as its User (the client key that is its journal's
-/// node identity) with Client admission; the owner holds the request and the
-/// session it reserved, both scoped to that requester, and the desktop's
-/// journal retires the retained submission once delivery is confirmed.
+/// The desktop submits as its User with Client admission; the owner holds the
+/// request and the session it reserved, both scoped to that requester.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Result<()> {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let agent = home.publish_chat_agent().await;
     let user = home.user().clone();
-    let journal = crate::test_support::client_journal_node(user.did()).await?;
     let session_id = Uuid::new_v4().to_string();
     let result = async {
         let submitted = super::submit_request(
-            &journal,
             &crate::client::ClientStore::default(),
             &home.user_access(),
             &session_id,
@@ -1161,18 +1153,150 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
                 "AgentSession must carry {field}"
             );
         }
-        let retained = ConfigAccess::local_as(journal.clone(), user.did().parse()?)
-            .execute("{ PendingChatSubmission { request_id } }")
-            .await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    home.shutdown().await;
+    result
+}
+
+/// Replays every Lean `ClientOptimisticSend` trace's sends through the
+/// production send against a served runtime: `compose` and `retry` put the
+/// message's identity on the wire, `commit` sends it (re-prepared and
+/// re-signed, as a retry is), and `refuse` drops it unsent. The runtime then
+/// holds exactly the modeled turn count for the identity.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_send_replays_lean_optimistic_send_traces() -> Result<()> {
+    let snapshot = tokio::task::spawn_blocking(
+        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+    )
+    .await??;
+    let traces = snapshot["client_optimistic_send_cases"]["traces"]
+        .as_array()
+        .context("optimistic send traces")?;
+    // The runtime sees only what reaches it: each create the trace commits
+    // or refuses, in order. A dropped create, a lost reply, a deadline, a
+    // retry's client half and a discard never reach it.
+    let mut projections = std::collections::BTreeMap::new();
+    for trace in traces {
+        let actions = trace["actions"].as_array().context("trace actions")?;
+        let runtime: Vec<&str> = actions
+            .iter()
+            .filter_map(|action| action["kind"].as_str())
+            .filter(|kind| matches!(*kind, "commit" | "refuse"))
+            .collect();
+        let turns = trace["after"]
+            .as_array()
+            .and_then(|after| after.last())
+            .and_then(|last| last["turns"].as_u64())
+            .context("trace turns")?;
+        if let Some(previous) = projections.insert(runtime, turns) {
+            assert_eq!(previous, turns, "one runtime history has one turn count");
+        }
+    }
+    for history in [
+        &["commit"][..],
+        &["refuse"],
+        &["refuse", "commit"],
+        &["commit", "commit"],
+        &["refuse", "refuse"],
+    ] {
+        assert!(
+            projections.contains_key(history),
+            "the traces exercise {history:?}: {:?}",
+            projections.keys().collect::<Vec<_>>()
+        );
+    }
+    let home = crate::test_fixtures::ServedRuntimeHome::start().await;
+    let agent = home.publish_chat_agent().await;
+    let user = home.user().clone();
+    let result = async {
+        let send = |request_id: String, session_id: String, cause: Option<&str>| {
+            let access = home.user_access();
+            let user = user.clone();
+            let agent_did = agent.agent_did.clone();
+            let node_did = home.node_did().to_owned();
+            let cause = cause.map(str::to_owned);
+            async move {
+                super::submit_request(
+                    &crate::client::ClientStore::default(),
+                    &access,
+                    &session_id,
+                    &node_did,
+                    user.did(),
+                    user.as_ref(),
+                    AgentRequestAdmissionRecord::client(user.did()),
+                    "optimistic send replay",
+                    Some(&agent_did),
+                    SubmitRequestOptions {
+                        request_id: Some(request_id),
+                        caused_by_source_doc_id: cause,
+                        ..SubmitRequestOptions::default()
+                    },
+                )
+                .await
+            }
+        };
+        // A cause the runtime refuses: no mailbox item has this document ID.
+        let refused_cause = Some("bae-00000000-0000-0000-0000-000000000000");
+        for (index, (history, expected)) in projections.iter().enumerate() {
+            let request_id = format!("optimistic-{index}");
+            let session_id = format!("optimistic-session-{index}");
+            let mut held = false;
+            for kind in history {
+                match *kind {
+                    "commit" => {
+                        let submitted =
+                            send(request_id.clone(), session_id.clone(), None).await?;
+                        assert_eq!(submitted.request_id, request_id, "{history:?}");
+                        held = true;
+                    }
+                    "refuse" => {
+                        // Lean `refuse` never applies to a held identity.
+                        assert!(!held, "{history:?}");
+                        assert!(
+                            send(request_id.clone(), session_id.clone(), refused_cause)
+                                .await
+                                .is_err(),
+                            "{history:?}"
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    request_count_by_id_for_test(&home.user_access(), &request_id).await?,
+                    usize::from(held),
+                    "{history:?}"
+                );
+            }
+            let count = request_count_by_id_for_test(&home.user_access(), &request_id).await?;
+            assert_eq!(count as u64, *expected, "{history:?}");
+            if held {
+                // Lean `held_resend_never_refused`: a resend of a held identity
+                // confirms even when its cause would now be refused.
+                let resent = send(request_id.clone(), session_id.clone(), refused_cause).await?;
+                assert_eq!(resent.request_id, request_id);
+                assert_eq!(
+                    request_count_by_id_for_test(&home.user_access(), &request_id).await?,
+                    1
+                );
+            }
+        }
+        // A retry racing its first send still committing (Lean: two creates of
+        // one identity on the wire) is one request, and both replies confirm.
+        let (left, right) = tokio::join!(
+            send("optimistic-raced".into(), "optimistic-raced-session".into(), None),
+            send("optimistic-raced".into(), "optimistic-raced-session".into(), None),
+        );
+        assert_eq!(left?.request_id, "optimistic-raced");
+        assert_eq!(right?.request_id, "optimistic-raced");
         assert_eq!(
-            retained["data"]["PendingChatSubmission"],
-            serde_json::json!([]),
-            "a confirmed delivery retires the retained submission"
+            request_count_by_id_for_test(&home.user_access(), "optimistic-raced").await?,
+            1
         );
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    journal.shutdown().await.unwrap();
     home.shutdown().await;
     result
 }
@@ -1180,68 +1304,63 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_together(
 ) -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
-    core.add_local_standard_peer_for_test(core.node_identity().did())
-        .await?;
-
+    let home = crate::test_fixtures::ServedRuntimeHome::start().await;
+    let agent = home.publish_chat_agent().await;
+    let user = home.user().clone();
     let session_id = Uuid::new_v4().to_string();
-    let snapshot = core.store().snapshot();
-    let access = ConfigAccess::local(core.node_arc());
-    let submitted = super::submit_goal_backed_request(
-        snapshot.as_ref(),
-        &access,
-        &session_id,
-        core.node_identity().did(),
-        core.node_identity().did(),
-        core.node_identity(),
-        test_local_admission(&core),
-        "finish the task",
-        Some(RECOVERY_AGENT_DID),
-        SubmitRequestOptions::default(),
-        "prove the desktop goal path",
-        Some(2_000),
-    )
-    .await?;
-
-    let session_id = escape_graphql_string(&session_id);
-    let request_id = escape_graphql_string(&submitted.request_id);
-    let response = core
-        .node()
-        .execute(&format!(
-            r#"{{
-                AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
-                    retry_key session_id requester_did
-                }}
-                Goal(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    session_id objective token_budget
-                }}
-                GoalCreationClaim(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    session_id objective token_budget
-                }}
-            }}"#,
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.context("goal-backed submission query data")?;
-    for collection in ["AgentRequest", "Goal", "GoalCreationClaim"] {
+    let result = async {
+        let submitted = super::submit_goal_backed_request(
+            &crate::client::ClientStore::default(),
+            &home.user_access(),
+            &session_id,
+            home.node_did(),
+            user.did(),
+            user.as_ref(),
+            AgentRequestAdmissionRecord::client(user.did()),
+            "finish the task",
+            Some(&agent.agent_did),
+            SubmitRequestOptions::default(),
+            "prove the desktop goal path",
+            Some(2_000),
+        )
+        .await?;
+        let escaped_session = escape_graphql_string(&session_id);
+        let request_id = escape_graphql_string(&submitted.request_id);
+        let data = home
+            .user_access()
+            .execute(&format!(
+                r#"{{
+                    AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
+                        retry_key session_id requester_did
+                    }}
+                    Goal(filter: {{ session_id: {{ _eq: "{escaped_session}" }} }}) {{
+                        session_id objective token_budget
+                    }}
+                    GoalCreationClaim(filter: {{ session_id: {{ _eq: "{escaped_session}" }} }}) {{
+                        session_id objective token_budget
+                    }}
+                }}"#,
+            ))
+            .await?["data"]
+            .clone();
+        for collection in ["AgentRequest", "Goal", "GoalCreationClaim"] {
+            assert_eq!(
+                data[collection].as_array().map(Vec::len),
+                Some(1),
+                "{collection} should commit exactly once: {data}"
+            );
+        }
+        assert_eq!(data["Goal"][0]["objective"], "prove the desktop goal path");
+        assert_eq!(data["GoalCreationClaim"][0]["token_budget"], 2_000);
         assert_eq!(
-            data[collection].as_array().map(Vec::len),
-            Some(1),
-            "{collection} should commit exactly once"
+            data["AgentRequest"][0]["retry_key"],
+            format!("desktop-goal-request:{session_id}")
         );
+        Ok::<(), anyhow::Error>(())
     }
-    assert_eq!(data["Goal"][0]["objective"], "prove the desktop goal path");
-    assert_eq!(data["GoalCreationClaim"][0]["token_budget"], 2_000);
-    assert_eq!(
-        data["AgentRequest"][0]["retry_key"],
-        format!("desktop-goal-request:{session_id}")
-    );
-    Ok(())
+    .await;
+    home.shutdown().await;
+    result
 }
 
 async fn force_request_state_for_test(

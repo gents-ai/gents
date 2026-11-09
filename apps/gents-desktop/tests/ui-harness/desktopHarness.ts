@@ -1964,13 +1964,6 @@ export function createDesktopUiHarness(
         "Goal submission acknowledgement is unavailable in this fixture.",
       );
     },
-    async recoverChatSubmission(query) {
-      const result = chatReplies.get(query.requestId);
-      return result
-        ? { kind: "prepared", result }
-        : { kind: "unconfirmed", nodeDid: query.nodeDid, requestId: query.requestId };
-    },
-    async acknowledgeChatSubmission() {},
     async steerPendingMessage() {
       throw new Error("Steering is unavailable in this fixture.");
     },
@@ -3769,18 +3762,9 @@ export function createDesktopUiHarness(
   adapter.sendChatMessage = async (request) => {
     if (request.requestId && chatReplies.has(request.requestId))
       return chatReplies.get(request.requestId)!;
-    const result = await sendChatMessage(request);
-    const reply: ChatSendResult = {
-      ...result,
-      submissionReceipt: {
-        nodeDid: result.nodeDid,
-        requestId: result.requestId,
-        sessionId: result.sessionId,
-        agentDid: result.agentDid,
-        envelopeHash: "sha256:" + "a".repeat(64),
-        signedPayloadHash: "sha256:" + "b".repeat(64),
-      },
-    };
+    // The runtime's create is idempotent on the request identity: a retry of
+    // one identity is the same request.
+    const reply: ChatSendResult = await sendChatMessage(request);
     chatReplies.set(reply.requestId, reply);
     return reply;
   };
