@@ -112,7 +112,12 @@ async fn snapshot_for_agents_with_node(
     for agent_config in &agents {
         let tool_surface = agent_config
             .tools
-            .resolve(node, node.node_identity_did().expect("fixture node has an identity"), &Default::default())
+            .resolve(
+                node,
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+                &Default::default(),
+            )
             .await
             .unwrap();
         tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
@@ -136,7 +141,12 @@ async fn snapshot_for_agents_with_admission(
     for agent_config in &agents {
         let tool_surface = agent_config
             .tools
-            .resolve(node, node.node_identity_did().expect("fixture node has an identity"), &Default::default())
+            .resolve(
+                node,
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+                &Default::default(),
+            )
             .await
             .unwrap();
         tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
@@ -400,7 +410,12 @@ async fn slot_panic_restarts_agent() {
     let tool_surface = Arc::new(
         agent_config
             .tools
-            .resolve(&node, node.node_identity_did().expect("fixture node has an identity"), &Default::default())
+            .resolve(
+                &node,
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+                &Default::default(),
+            )
             .await
             .unwrap(),
     );
@@ -485,7 +500,12 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     let tool_surface = Arc::new(
         agent_config
             .tools
-            .resolve(&node, node.node_identity_did().expect("fixture node has an identity"), &Default::default())
+            .resolve(
+                &node,
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+                &Default::default(),
+            )
             .await
             .unwrap(),
     );
@@ -669,7 +689,9 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
 async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let mut agent_config = PendingAgent::new("general")
@@ -787,10 +809,8 @@ async fn grant_fixture_agent_call_access(
     signer: &crate::store::identity::ManagedAgentSigner,
 ) {
     use crate::store::config_client::NodePermission;
-    let admin = crate::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(signer.node_did()).unwrap(),
-    );
+    let admin =
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(signer.node_did()).unwrap());
     let actor = identity::Did::new(signer.did()).unwrap();
     for permission in [
         NodePermission::CollectionGet,
@@ -800,7 +820,10 @@ async fn grant_fixture_agent_call_access(
         NodePermission::DacRelationAdd,
         NodePermission::DacRelationDelete,
     ] {
-        admin.grant_node_permission(&actor, permission).await.unwrap();
+        admin
+            .grant_node_permission(&actor, permission)
+            .await
+            .unwrap();
     }
 }
 
@@ -1018,7 +1041,9 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let mut agent_config =
@@ -1219,7 +1244,9 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
     // The NodeRuntime status row publishes under a visible, registered Node parent.
     crate::test_support::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
@@ -1370,7 +1397,9 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
     // The NodeRuntime status row publishes under a visible, registered Node parent.
     crate::test_support::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
@@ -1627,7 +1656,8 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     };
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
-        node.node_identity_did().expect("fixture node has an identity"),
+        node.node_identity_did()
+            .expect("fixture node has an identity"),
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
     );
@@ -1703,7 +1733,8 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
             .await;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
-        node.node_identity_did().expect("fixture node has an identity"),
+        node.node_identity_did()
+            .expect("fixture node has an identity"),
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
     );
@@ -2064,7 +2095,9 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
 async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
     let runtime_status = runtime_status_handle(&node, node_did);
     let identity = Arc::new(test_identity("tool-surface-general"));
     let runtime_node = Arc::new(RuntimeNode {
@@ -2266,7 +2299,8 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let runtime_status = runtime_status_handle(
         &node,
-        node.node_identity_did().expect("fixture node has an identity"),
+        node.node_identity_did()
+            .expect("fixture node has an identity"),
     );
     let agent_config = Arc::new(
         PendingAgent::new("general")
@@ -2394,14 +2428,24 @@ async fn plugin_resolution_surfaces(
     let absent = Arc::new(
         agent_config
             .tools
-            .resolve(node, node.node_identity_did().expect("fixture node has an identity"), &absent_plugins)
+            .resolve(
+                node,
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+                &absent_plugins,
+            )
             .await
             .unwrap(),
     );
     let installed = Arc::new(
         agent_config
             .tools
-            .resolve(node, node.node_identity_did().expect("fixture node has an identity"), &installed_plugins)
+            .resolve(
+                node,
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+                &installed_plugins,
+            )
             .await
             .unwrap(),
     );
@@ -2486,7 +2530,12 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
     let reinstalled_surface = Arc::new(
         agent_config
             .tools
-            .resolve(&node, node.node_identity_did().expect("fixture node has an identity"), &plugins)
+            .resolve(
+                &node,
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+                &plugins,
+            )
             .await
             .unwrap(),
     );

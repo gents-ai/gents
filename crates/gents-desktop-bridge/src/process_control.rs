@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
 use crate::error::BridgeError;
+use gents_desktop_core::client::ClientCore;
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
 
 /// Native processes live in the owning runtime, not in the client's replica.

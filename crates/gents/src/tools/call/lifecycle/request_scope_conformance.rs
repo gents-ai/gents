@@ -16,7 +16,11 @@ async fn exec(access: &crate::ConfigAccess, statement: &str) {
         .expect("GraphQL fixture write");
 }
 
-async fn scope_row(access: &crate::ConfigAccess, collection: &str, doc_id: &str) -> serde_json::Value {
+async fn scope_row(
+    access: &crate::ConfigAccess,
+    collection: &str,
+    doc_id: &str,
+) -> serde_json::Value {
     let fields = match collection {
         "AgentRequest" => "_docID request_id node_did lifecycle_state failure_reason deadline execution_generation execution_lease_expires_at",
         "AgentToolCall" => "_docID request_doc_id node_did tool_call_id lifecycle_state cancel_cause tool_failure_class",
@@ -36,10 +40,7 @@ async fn queue_snapshot(
 ) -> (Vec<String>, usize) {
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id lifecycle_state input }} }}"#)).await.unwrap();
-    let rows = response["data"]["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .clone();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap().clone();
     let pending = rows
         .iter()
         .filter(|row| row["lifecycle_state"] == "pending")

@@ -163,7 +163,10 @@ async fn load_tool_call(access: &gents::ConfigAccess, tool_call_id: &str) -> Too
             }}
         }}"#
     );
-    let response = access.execute(&query).await.expect("read recovered tool call");
+    let response = access
+        .execute(&query)
+        .await
+        .expect("read recovered tool call");
     serde_json::from_value(response["data"]["AgentToolCall"][0].clone())
         .expect("one recovered tool call")
 }
@@ -232,10 +235,7 @@ async fn load_wakes(access: &gents::ConfigAccess, session_id: &str) -> Vec<serde
             ) {{ input }}
         }}"#
     );
-    let response = access
-        .execute(&query)
-        .await
-        .expect("load recovery wakes");
+    let response = access.execute(&query).await.expect("load recovery wakes");
     serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap_or_default()
 }
 

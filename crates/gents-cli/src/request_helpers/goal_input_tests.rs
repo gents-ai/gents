@@ -100,10 +100,14 @@ async fn publish_default_agent(
         .transact_write("test.goal_input.default_agent", |txn| {
             let node_did = &node_did;
             Box::pin(async move {
-                let (_, mut node) =
-                    read_desired_state_record_in_txn(txn, gents::Collection::Node, node_did, node_did)
-                        .await?
-                        .expect("published Node");
+                let (_, mut node) = read_desired_state_record_in_txn(
+                    txn,
+                    gents::Collection::Node,
+                    node_did,
+                    node_did,
+                )
+                .await?
+                .expect("published Node");
                 node["default_agent_did"] = agent_did.into();
                 node["enabled"] = true.into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -127,7 +131,8 @@ async fn publish_observation(
     fault: Option<&str>,
 ) -> Result<()> {
     let node_did = home.node_did().to_owned();
-    let agent = gents::store::identity::resolve_agent_identity(home.home.identity.as_ref(), binding)?;
+    let agent =
+        gents::store::identity::resolve_agent_identity(home.home.identity.as_ref(), binding)?;
     let mut observation = SessionGoalObservation {
         version: SESSION_GOAL_CONTROL_VERSION,
         node_did: node_did.clone(),
@@ -248,7 +253,11 @@ pub(crate) fn authored_input() -> RequestInput {
 async fn signed_by_user(source: &Source, create: &AgentRequestCreate) -> Result<bool> {
     let user = source.user();
     Ok(user
-        .verify(user.did(), &create.signing_payload(), &create.admission.signature)
+        .verify(
+            user.did(),
+            &create.signing_payload(),
+            &create.admission.signature,
+        )
         .await?)
 }
 

@@ -169,9 +169,12 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         .transact_write("test.task_target.select", |txn| {
             let (graph, first) = (&graph, &first);
             Box::pin(async move {
-                apply_selection_changes(txn, graph, |collection| {
-                    collection != Collection::InferenceProfile
-                }, false)
+                apply_selection_changes(
+                    txn,
+                    graph,
+                    |collection| collection != Collection::InferenceProfile,
+                    false,
+                )
                 .await?;
                 apply_task_selections(txn, first).await
             })
@@ -246,9 +249,12 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
                     let (changes, update) = (&changes, &update);
                     Box::pin(async move {
                         txn.execute(update).await?;
-                        apply_selection_changes(txn, changes, |collection| {
-                            collection != Collection::InferenceProfile
-                        }, false)
+                        apply_selection_changes(
+                            txn,
+                            changes,
+                            |collection| collection != Collection::InferenceProfile,
+                            false,
+                        )
                         .await
                     })
                 })
@@ -309,9 +315,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         signed_access
             .transact_write("test.task_target.apply", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await?;
         let agent_access = ConfigAccess::local_as(node.clone(), identity::Did::new(actor)?);
@@ -369,9 +373,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
     signed_access
         .transact_write("test.task_target.apply_rebind", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     for (actor, expected_case) in [(a.did(), "task-old-target"), (b.did(), "task-new-target")] {

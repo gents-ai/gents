@@ -377,7 +377,10 @@ where
     let mut updates = core.store_updates();
     timeout(Duration::from_secs(5), async {
         while !done(core) {
-            updates.changed().await.context("store update channel closed")?;
+            updates
+                .changed()
+                .await
+                .context("store update channel closed")?;
         }
         Ok::<(), anyhow::Error>(())
     })
@@ -420,7 +423,10 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     })
     .await
     .context("timed out waiting for store update")??;
-    until(&core, "the refreshed snapshot", |core| core.store().snapshot().nodes.len() == 1).await?;
+    until(&core, "the refreshed snapshot", |core| {
+        core.store().snapshot().nodes.len() == 1
+    })
+    .await?;
 
     assert_eq!(store.snapshot().nodes[0].node_did, runtime.node_did());
     Arc::new(core).shutdown().await?;
@@ -431,7 +437,9 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     let (_tempdir, core, runtime) = served_core().await?;
-    runtime.publish_node(serde_json::json!({"enabled": true})).await;
+    runtime
+        .publish_node(serde_json::json!({"enabled": true}))
+        .await;
     let node_did = gents::store::graphql::escape_graphql_string(runtime.node_did());
     let requester = gents::store::graphql::escape_graphql_string(core.node_identity().did());
     for i in 0..20usize {
@@ -465,7 +473,9 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Result<()> {
     let (_tempdir, core, runtime) = served_core().await?;
-    runtime.publish_node(serde_json::json!({"enabled": true})).await;
+    runtime
+        .publish_node(serde_json::json!({"enabled": true}))
+        .await;
     until(&core, "the observer's first snapshot", |core| {
         !core.store().snapshot().nodes.is_empty()
     })
@@ -478,7 +488,10 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
     let mut updates = core.store_updates();
     runtime
         .user_graphql_access()
-        .write("test.client_store.transcript", &format!("mutation {{ {messages} }}"))
+        .write(
+            "test.client_store.transcript",
+            &format!("mutation {{ {messages} }}"),
+        )
         .await?;
     timeout(Duration::from_secs(5), async {
         loop {
@@ -489,7 +502,10 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
             {
                 return Ok::<(), anyhow::Error>(());
             }
-            updates.changed().await.context("store update channel closed")?;
+            updates
+                .changed()
+                .await
+                .context("store update channel closed")?;
         }
     })
     .await
@@ -569,7 +585,9 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
     let (_tempdir, core, runtime) = served_core().await?;
-    runtime.publish_node(serde_json::json!({"enabled": true})).await;
+    runtime
+        .publish_node(serde_json::json!({"enabled": true}))
+        .await;
     let alpha = runtime.node_did().to_owned();
     let beta = runtime.publish_foreign_node().await;
     let transcript = [
@@ -579,7 +597,10 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
     .join("\n");
     runtime
         .user_graphql_access()
-        .write("test.client_store.scoped_transcript", &format!("mutation {{ {transcript} }}"))
+        .write(
+            "test.client_store.scoped_transcript",
+            &format!("mutation {{ {transcript} }}"),
+        )
         .await?;
 
     core.set_selected_node_did(Some(alpha.clone()));
@@ -593,10 +614,14 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
     let escaped = gents::store::graphql::escape_graphql_string(&alpha);
     let doc = runtime
         .user_graphql_access()
-        .execute(&format!("{{ Node(filter: {{node_did: {{_eq: \"{escaped}\"}}}}) {{ _docID }} }}"))
+        .execute(&format!(
+            "{{ Node(filter: {{node_did: {{_eq: \"{escaped}\"}}}}) {{ _docID }} }}"
+        ))
         .await?;
     let doc = gents::store::graphql::escape_graphql_string(
-        doc["data"]["Node"][0]["_docID"].as_str().context("routed Node document")?,
+        doc["data"]["Node"][0]["_docID"]
+            .as_str()
+            .context("routed Node document")?,
     );
     runtime
         .user_graphql_access()
@@ -626,7 +651,10 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
     )
     .await?;
     assert_eq!(alpha_page.store.transcript_messages.len(), 1);
-    assert_eq!(alpha_page.store.transcript_messages[0].message.node_did, alpha);
+    assert_eq!(
+        alpha_page.store.transcript_messages[0].message.node_did,
+        alpha
+    );
 
     Arc::new(core).shutdown().await?;
     runtime.shutdown().await;

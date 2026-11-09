@@ -99,15 +99,23 @@ async fn wait_for_arrival_checkpoint(
 ) {
     tokio::time::timeout(WAIT, async {
         loop {
-            let response = access.execute("{ EventSourceCursor { after } }").await.unwrap();
+            let response = access
+                .execute("{ EventSourceCursor { after } }")
+                .await
+                .unwrap();
             let cursors = response["data"]["EventSourceCursor"].as_array().unwrap();
             assert_eq!(cursors.len(), 1);
             if cursors[0]["after"] == *through {
                 return;
             }
-            updates.recv().await.expect("database update stream stays open");
+            updates
+                .recv()
+                .await
+                .expect("database update stream stays open");
         }
-    }).await.expect("source delivery must checkpoint the claimed prefix after the capacity refusal");
+    })
+    .await
+    .expect("source delivery must checkpoint the claimed prefix after the capacity refusal");
 }
 
 fn transition(name: &str) -> &'static Value {

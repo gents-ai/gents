@@ -526,9 +526,10 @@ async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
     );
     assert!(!stopped);
 
-    let evidence = collect_request_evidence_with_access(&ConfigAccess::local(home.node.clone()), request_id)
-        .await
-        .expect("evidence should be gathered after virtual time resumes");
+    let evidence =
+        collect_request_evidence_with_access(&ConfigAccess::local(home.node.clone()), request_id)
+            .await
+            .expect("evidence should be gathered after virtual time resumes");
     assert_eq!(
         stage_failure_kind(Some(&observed), true, stopped, &evidence),
         None

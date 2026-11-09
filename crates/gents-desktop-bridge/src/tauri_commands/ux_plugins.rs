@@ -11,8 +11,8 @@ use tauri::State;
 use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::pack_watch::{WatchAcquireError, WatchDelivery, WatchNotice};
 use crate::state::{current_core, DesktopAppState};
+use gents_desktop_core::pack_watch::{WatchAcquireError, WatchDelivery, WatchNotice};
 use gents_server::packs;
 
 fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
@@ -333,9 +333,10 @@ mod tests {
 
     #[test]
     fn notices_reach_the_page_as_reconnecting_and_error_events() {
-        let reconnecting = UxDataWatchEvent::from(WatchDelivery::Notice(
-            WatchNotice::Reconnecting { delay_ms: 2000 },
-        ));
+        let reconnecting =
+            UxDataWatchEvent::from(WatchDelivery::Notice(WatchNotice::Reconnecting {
+                delay_ms: 2000,
+            }));
         assert_eq!(
             serde_json::to_value(reconnecting).unwrap(),
             serde_json::json!({"kind": "reconnecting", "delay_ms": 2000})

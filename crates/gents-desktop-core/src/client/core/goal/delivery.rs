@@ -48,8 +48,7 @@ impl ClientCore {
                     .prepared
                     .as_ref()
                     .context("Goal signed preparation is unavailable")?;
-                let peer = self
-                    .peer_record_for_chat_write(node_did)?;
+                let peer = self.peer_record_for_chat_write(node_did)?;
                 let (signer, _, _) = self.request_authority(node_did, peer.as_ref()).await?;
                 if let Some(receipt) = gents::goal::recover_session_goal_control(
                     &self.session_queue_access(node_did)?,
@@ -140,8 +139,7 @@ impl ClientCore {
             .prepared
             .as_ref()
             .context("Goal signed preparation is unavailable")?;
-        let peer = self
-            .peer_record_for_chat_write(node_did)?;
+        let peer = self.peer_record_for_chat_write(node_did)?;
         super::ensure_peer_chat_ready(node_did, peer.as_ref())?;
         let (signer, _, _) = self.request_authority(node_did, peer.as_ref()).await?;
         let receipt = gents::goal::submit_prepared_session_goal_control(

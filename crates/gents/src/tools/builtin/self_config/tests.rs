@@ -460,7 +460,9 @@ impl SelfConfigFixture {
 
     async fn grant_pack_install_to(&self, agent_did: &str) {
         use crate::documents::apply_desired_state_plan;
-        use crate::store::config_client::{read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::store::config_client::{
+            read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
         let tools_id = format!("{agent_did}:tools");
         self.user_access
             .transact_write("test.self_config.grant_pack_install", |txn| {
@@ -4279,7 +4281,10 @@ async fn own_agent_edit_needs_the_agent_category_not_the_catalog() {
     )
     .await
     .expect_err("the catalog grant does not edit the invoking Agent's own configuration");
-    assert!(error.contains("agent configuration is not granted"), "{error}");
+    assert!(
+        error.contains("agent configuration is not granted"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -4390,9 +4395,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .user_access()
         .transact_write("test.foreign_tools", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();
@@ -4915,7 +4918,8 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
         .transact_write("test.raw_key.credential", |txn| {
             let secret = &secret;
             Box::pin(async move {
-                crate::documents::backend_credential::put_backend_credential_in_txn(txn, secret).await
+                crate::documents::backend_credential::put_backend_credential_in_txn(txn, secret)
+                    .await
             })
         })
         .await
@@ -5139,12 +5143,9 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
                 "auth": {"kind":"node_oauth", "account_ref": account},
             }))
             .unwrap();
-            crate::documents::write_inference_backend_document(
-                fixture.user_access(),
-                &backend,
-            )
-            .await
-            .unwrap();
+            crate::documents::write_inference_backend_document(fixture.user_access(), &backend)
+                .await
+                .unwrap();
         }
         let result = access
             .transact_readonly("test.account_choice.runtime_default", |txn| {
@@ -5257,9 +5258,7 @@ async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) 
     access
         .transact_write("test.compaction", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();
@@ -5573,8 +5572,16 @@ async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
             &core,
             fixture.agent.as_ref(),
             &create(&[
-                "--display-name", "Scout", "--system-prompt", "Find.", "--preset", "readonly",
-                "--root", root.as_str(), "--profile", "p-grok",
+                "--display-name",
+                "Scout",
+                "--system-prompt",
+                "Find.",
+                "--preset",
+                "readonly",
+                "--root",
+                root.as_str(),
+                "--profile",
+                "p-grok",
             ]),
         )
         .await
@@ -5590,38 +5597,56 @@ async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
         "{hosted}"
     );
     assert!(
-        !access["how_to_proceed"].as_str().unwrap().contains("policy grant"),
+        !access["how_to_proceed"]
+            .as_str()
+            .unwrap()
+            .contains("policy grant"),
         "{hosted}"
     );
-    let ceiled = core
-        .clone()
-        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
-            file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-            bash_mode: crate::tools::surface::BashMode::ReadOnly,
-            root: Some(std::path::PathBuf::from(&root)),
-        });
+    let ceiled =
+        core.clone()
+            .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+                file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+                bash_mode: crate::tools::surface::BashMode::ReadOnly,
+                root: Some(std::path::PathBuf::from(&root)),
+            });
     let inspected: Value =
         serde_json::from_str(&agent_inspect(&ceiled, created).await.unwrap()).unwrap();
     let observed = &inspected["effective_config"]["runtime_effective"]["root_access"];
     assert_eq!(observed["state"], "requires_user_grant", "{inspected}");
-    assert_eq!(observed["user_command"], access["user_command"], "{inspected}");
+    assert_eq!(
+        observed["user_command"], access["user_command"],
+        "{inspected}"
+    );
     let own: Value =
         serde_json::from_str(&agent_inspect(&ceiled, fixture.agent_did()).await.unwrap()).unwrap();
     assert!(
-        own["effective_config"]["runtime_effective"].get("root_access").is_none(),
+        own["effective_config"]["runtime_effective"]
+            .get("root_access")
+            .is_none(),
         "{own}"
     );
     let conversational: Value = serde_json::from_str(
         &model_agent_mutate(
             &core,
             fixture.agent.as_ref(),
-            &create(&["--display-name", "Planner", "--system-prompt", "Plan.", "--profile", "p-grok"]),
+            &create(&[
+                "--display-name",
+                "Planner",
+                "--system-prompt",
+                "Plan.",
+                "--profile",
+                "p-grok",
+            ]),
         )
         .await
         .unwrap(),
     )
     .unwrap();
-    assert!(conversational.get("host_root_access").is_none(), "{conversational}");
+    assert!(
+        conversational.get("host_root_access").is_none(),
+        "{conversational}"
+    );
 }
 
 #[tokio::test]
@@ -6496,9 +6521,9 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
         .user_access()
         .transact_write("test.read_exposure.task", |txn| {
             let task_plan = &task_plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, task_plan).await
-            })
+            Box::pin(
+                async move { crate::documents::apply_desired_state_plan(txn, task_plan).await },
+            )
         })
         .await
         .unwrap();
@@ -6582,9 +6607,7 @@ async fn automation_read_preserves_native_selected_agent_visibility() {
         .user_access()
         .transact_write("test.automation_read.other_task", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .unwrap();
@@ -7598,24 +7621,24 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             identity::Did::new(&node_did).unwrap(),
         )
         .transact_readonly("test.job_policy.native_update", |txn| {
-                let actor = actor.clone();
-                let doc_id = doc_id.clone();
-                Box::pin(async move {
-                    txn.observe_document_access(
-                        &actor,
-                        "Tools",
-                        &[doc_id],
-                        defra_node::DocumentAccessMode::Named {
-                            permission: "update".into(),
-                            node_permission:
-                                crate::store::config_client::NodePermission::DocumentUpdate,
-                        },
-                    )
-                    .await
-                })
+            let actor = actor.clone();
+            let doc_id = doc_id.clone();
+            Box::pin(async move {
+                txn.observe_document_access(
+                    &actor,
+                    "Tools",
+                    &[doc_id],
+                    defra_node::DocumentAccessMode::Named {
+                        permission: "update".into(),
+                        node_permission:
+                            crate::store::config_client::NodePermission::DocumentUpdate,
+                    },
+                )
+                .await
             })
-            .await
-            .unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(
             decisions == [defra_node::DocumentAccessDecision::Allowed],
             case.native_authorized,
@@ -8471,7 +8494,11 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     fixture.grant_node_reader().await;
     fixture
         .grant_account_fixture_selections(&[
-            (crate::Collection::InferenceProfile, "p-default".into(), false),
+            (
+                crate::Collection::InferenceProfile,
+                "p-default".into(),
+                false,
+            ),
             (crate::Collection::InferenceProfile, "p-other".into(), false),
         ])
         .await;

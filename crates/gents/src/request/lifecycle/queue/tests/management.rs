@@ -345,10 +345,13 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 bound.insert(replacement.request_id, id.clone());
             }
             for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
-                let row = crate::request::binding::load_agent_request_by_doc_id_with_access(&db.agent_access, id)
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let row = crate::request::binding::load_agent_request_by_doc_id_with_access(
+                    &db.agent_access,
+                    id,
+                )
+                .await
+                .unwrap()
+                .unwrap();
                 assert_eq!(
                     row.content,
                     format!("message {}", replacement.request_id),

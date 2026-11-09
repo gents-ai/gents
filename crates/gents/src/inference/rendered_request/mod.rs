@@ -15,9 +15,9 @@ pub use gents_loop::rendered_request::{
     RenderedRequestContext, RenderedRequestSource, ThreadedToolResult, ASSEMBLY_TRACE_VERSION,
     CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
 };
+pub(crate) use sink::defra_rendered_request_capture_factory_for_agent;
 #[cfg(test)]
 pub(crate) use sink::defra_rendered_request_capture_factory_for_signer;
-pub(crate) use sink::defra_rendered_request_capture_factory_for_agent;
 pub use sink::DefraRenderedRequestSink;
 
 /// The kind guard keeps the task-local admission join honest if a caller wires

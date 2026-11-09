@@ -764,11 +764,8 @@ async fn racing_owned_begins_commit_one_processing_transition_without_renewal() 
     let access = agent_access(&node, &identity, &agent);
     let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
     let before = request_row(&access, &lifecycle.request.doc_id).await;
-    let mut competitor = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        lifecycle.request().clone(),
-        60,
-    );
+    let mut competitor =
+        RequestLifecycle::new_with_node_did(node.clone(), lifecycle.request().clone(), 60);
     competitor
         .bind_managed_agent(
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)

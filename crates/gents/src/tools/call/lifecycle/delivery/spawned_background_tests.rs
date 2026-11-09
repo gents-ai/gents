@@ -1,9 +1,5 @@
 use super::presentation::{diagnostic_replay_matches, terminal_diagnostic_presentation};
 use super::*;
-use gents_protocol::output::rows::{
-    AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS, decode_output_segment_row,
-    decode_transcript_message_row,
-};
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, published_background_bridge, published_spawn_parent,
@@ -13,6 +9,10 @@ use crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::Result;
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+use gents_protocol::output::rows::{
+    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
+    AGENT_OUTPUT_SEGMENT_FIELDS,
+};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSource, SourceClose,
 };
@@ -145,15 +145,9 @@ async fn spawn_receipt_survives_modeled_publication_contention() {
     assert!(tool.complete_owned("receipt", None).await.unwrap());
     assert!(!terminal_failure_pending_for_test(&doc_id));
     assert_eq!(tool.state, ToolCallState::Completed);
-    assert_eq!(
-        tool_delivery_rows(&tool).await.len(),
-        before + 1
-    );
+    assert_eq!(tool_delivery_rows(&tool).await.len(), before + 1);
     assert!(tool.complete_owned("receipt", None).await.is_err());
-    assert_eq!(
-        tool_delivery_rows(&tool).await.len(),
-        before + 1
-    );
+    assert_eq!(tool_delivery_rows(&tool).await.len(), before + 1);
     node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
@@ -168,18 +162,20 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
         let doc_id = escape_graphql_string(tool.doc_id().unwrap());
         let before = tool_delivery_rows(&tool).await.len();
         let escaped_value = escape_graphql_string(changed_value);
-        tool.access().unwrap().write(
-            "test.change_tool_compare",
-            &format!(
-                r#"mutation {{ update_AgentToolCall(docID: "{doc_id}", input: {{
+        tool.access()
+            .unwrap()
+            .write(
+                "test.change_tool_compare",
+                &format!(
+                    r#"mutation {{ update_AgentToolCall(docID: "{doc_id}", input: {{
                     {changed_field}: "{escaped_value}", started_at: "{}", deadline_at: "{}"
                 }}) {{ _docID }} }}"#,
-                tool.started_at.unwrap().to_rfc3339(),
-                tool.deadline_at.to_rfc3339(),
-            ),
-        )
-        .await
-        .unwrap();
+                    tool.started_at.unwrap().to_rfc3339(),
+                    tool.deadline_at.to_rfc3339(),
+                ),
+            )
+            .await
+            .unwrap();
 
         let result = tool
             .fail_owned("late failure", FailureClass::External, None)
@@ -188,7 +184,9 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
             !matches!(result, Ok(true)),
             "changed comparison must not publish"
         );
-        let row = tool.access().unwrap()
+        let row = tool
+            .access()
+            .unwrap()
             .execute(&format!(
                 r#"{{ AgentToolCall(docID: "{doc_id}") {{ lifecycle_state tool_name }} }}"#,
             ))
@@ -199,10 +197,7 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
             changed_value
         );
         assert_ne!(row["data"]["AgentToolCall"][0]["lifecycle_state"], "failed");
-        assert_eq!(
-            tool_delivery_rows(&tool).await.len(),
-            before
-        );
+        assert_eq!(tool_delivery_rows(&tool).await.len(), before);
         node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
@@ -268,12 +263,15 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
     .unwrap();
     assert_eq!(observed.result.unwrap().as_bytes(), rendered);
 
-    let segments = observe(&tool, &format!(
+    let segments = observe(
+        &tool,
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&request_doc_id),
             AGENT_OUTPUT_SEGMENT_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!segments.has_errors(), "{:#?}", segments.errors);
     let rows = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
@@ -529,12 +527,13 @@ async fn configure_bash_output_budget(
     }])
     .unwrap();
     // Tools are configuration: the owning User who wrote them signs the edit.
-    author.transact_write("test.output_budget", |txn| {
-        let plan = &plan;
-        Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-    })
-    .await
-    .unwrap();
+    author
+        .transact_write("test.output_budget", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
 }
 
 async fn interrupted_presentation(tool: &ToolCallLifecycle) -> String {
@@ -770,12 +769,15 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
         MessagePublication::ToolDelivery { ref tool_call_doc_id } if tool_call_doc_id == &child_doc_id
     )), "spawned work must not invent a direct ToolResult header");
 
-    let segments = observe(&parent, &format!(
+    let segments = observe(
+        &parent,
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(child.request_doc_id.as_deref().unwrap()),
             AGENT_OUTPUT_SEGMENT_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!segments.has_errors(), "{:#?}", segments.errors);
     let child_segments = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
@@ -831,7 +833,12 @@ async fn spawned_background_admission_rejects_a_stale_parent_generation() {
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "stale-generation" }}) {{ _docID }} }}"#,
         crate::store::graphql::escape_graphql_string(&request_doc_id),
     )).await.unwrap();
-    assert_eq!(changed["data"]["update_AgentRequest"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        changed["data"]["update_AgentRequest"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
     assert!(parent
         .admit_spawned_background(admission(deadline), "receipt")
         .await
@@ -869,11 +876,14 @@ async fn background_bridge_receipt_is_authored_once_and_keeps_bridge_running() {
         })
         .count();
     assert_eq!(receipts, 1);
-    let response = observe(&bridge, &format!(
+    let response = observe(
+        &bridge,
+        &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
             crate::store::graphql::escape_graphql_string(&tool_doc_id)
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert_eq!(
         response.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
         "running"
@@ -929,23 +939,29 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     .await
     .unwrap();
 
-    let response = observe(&bridge, &format!(
+    let response = observe(
+        &bridge,
+        &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
             crate::store::graphql::escape_graphql_string(&tool_doc_id)
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     assert_eq!(
         response.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
         "completed"
     );
 
-    let segments = observe(&bridge, &format!(
+    let segments = observe(
+        &bridge,
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(bridge.request_doc_id.as_deref().unwrap()),
             AGENT_OUTPUT_SEGMENT_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!segments.has_errors(), "{:#?}", segments.errors);
     let tool_segments = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
@@ -1072,12 +1088,15 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
         .is_err());
 
     let request_doc_id = bridge.request_doc_id.as_deref().unwrap();
-    let response = observe(&bridge, &format!(
+    let response = observe(
+        &bridge,
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(request_doc_id),
             AGENT_OUTPUT_SEGMENT_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     let closures = response.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()

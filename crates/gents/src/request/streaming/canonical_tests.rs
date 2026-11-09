@@ -81,11 +81,7 @@ async fn fixture_with_ids(
         .verify_fresh_for_claim(&request, agent.did())
         .await
         .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        request,
-        60,
-    );
+    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     lifecycle.set_client_claim_admission(admission);
     assert_eq!(
@@ -195,11 +191,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
         .verify_fresh_for_claim(&request, agent.did())
         .await
         .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        request,
-        60,
-    );
+    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     lifecycle.set_client_claim_admission(admission);
     assert_eq!(
@@ -778,17 +770,25 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
         let after = published_children(node, lifecycle).await;
         let error = match result {
             Ok(published) => {
-                assert_eq!(observed, index - 1, "a committed attempt must not pass the injected position");
+                assert_eq!(
+                    observed,
+                    index - 1,
+                    "a committed attempt must not pass the injected position"
+                );
                 assert!(child_links(&after).iter().all(|linked| *linked));
-                assert_eq!(after["AgentMessage"][0]["_docID"], published.message_doc_id.as_str());
+                assert_eq!(
+                    after["AgentMessage"][0]["_docID"],
+                    published.message_doc_id.as_str()
+                );
                 break;
             }
             Err(error) => error,
         };
         let detail = format!("{error:?}");
         assert!(
-            detail.contains(&format!("injected failure after successful transaction mutation {index}"))
-                || detail.contains(&format!("InjectedMutationFailure {{ count: {index} }}")),
+            detail.contains(&format!(
+                "injected failure after successful transaction mutation {index}"
+            )) || detail.contains(&format!("InjectedMutationFailure {{ count: {index} }}")),
             "unexpected failure at mutation {index}: {detail}"
         );
         assert_eq!(observed, index, "injection must fire exactly once");
@@ -799,9 +799,16 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
             );
         } else {
             let committed = *transactional.get_or_insert(index - 1);
-            assert!(committed >= 3, "tool-bearing publication must have multiple writes");
+            assert!(
+                committed >= 3,
+                "tool-bearing publication must have multiple writes"
+            );
             let links = child_links(&after);
-            assert_eq!(links.len(), 3, "mutation {index}: the publication commits every child together");
+            assert_eq!(
+                links.len(),
+                3,
+                "mutation {index}: the publication commits every child together"
+            );
             assert!(
                 links.iter().any(|linked| !linked),
                 "mutation {index}: a failed relationship phase must leave a recoverable child"
@@ -811,7 +818,11 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
                 .unwrap();
             let recovered = published_children(node, lifecycle).await;
             assert!(child_links(&recovered).iter().all(|linked| *linked));
-            assert_eq!(child_ids(&recovered), child_ids(&after), "mutation {index}: replay adds no child");
+            assert_eq!(
+                child_ids(&recovered),
+                child_ids(&after),
+                "mutation {index}: replay adds no child"
+            );
             assert_eq!(recovered["AgentRequest"], after["AgentRequest"]);
             assert_eq!(
                 recovered["AgentMessage"][0]["_docID"],
@@ -965,7 +976,11 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
         let after = recovery_snapshot(node, lifecycle, doc_id).await;
         let error = match result {
             Ok(recovered) => {
-                assert_eq!(count, index - 1, "a committed attempt must not pass the injected position");
+                assert_eq!(
+                    count,
+                    index - 1,
+                    "a committed attempt must not pass the injected position"
+                );
                 assert_eq!(recovered, RecoveryResult::Won { published: 1 });
                 assert!(child_links(&after).iter().all(|linked| *linked));
                 assert_ne!(
@@ -986,8 +1001,9 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
         };
         let detail = format!("{error:?}");
         assert!(
-            detail.contains(&format!("injected failure after successful transaction mutation {index}"))
-                || detail.contains(&format!("InjectedMutationFailure {{ count: {index} }}")),
+            detail.contains(&format!(
+                "injected failure after successful transaction mutation {index}"
+            )) || detail.contains(&format!("InjectedMutationFailure {{ count: {index} }}")),
             "unexpected failure at mutation {index}: {detail}"
         );
         assert_eq!(count, index, "injection must fire exactly once");
@@ -1013,10 +1029,17 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
             )
             .await;
             assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
-            assert!(writes > 0, "mutation {index}: replay must link the pending children");
+            assert!(
+                writes > 0,
+                "mutation {index}: replay must link the pending children"
+            );
             let recovered = recovery_snapshot(node, lifecycle, doc_id).await;
             assert!(child_links(&recovered).iter().all(|linked| *linked));
-            assert_eq!(child_ids(&recovered), child_ids(&after), "mutation {index}: replay adds no child");
+            assert_eq!(
+                child_ids(&recovered),
+                child_ids(&after),
+                "mutation {index}: replay adds no child"
+            );
             assert_eq!(recovered["AgentRequest"], after["AgentRequest"]);
             assert_eq!(recovered["AgentSession"], after["AgentSession"]);
             let (node, path, ..) = std::mem::replace(
@@ -2106,9 +2129,9 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
 
 #[tokio::test]
 async fn cancelled_flush_replays_before_inference_close_or_publication() {
-    use gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS;
     use crate::store::config_client::ConfigApplyTxn;
     use gents_protocol::message::Message;
+    use gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS;
     use gents_protocol::output::TerminalOutput;
 
     for publish in [false, true] {

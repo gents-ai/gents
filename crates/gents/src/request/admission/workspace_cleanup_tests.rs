@@ -88,15 +88,19 @@ impl Fixture {
                 let placement = &placement;
                 Box::pin(async move {
                     let response = txn
-                        .execute(&crate::tools::workspace::isolated_workspace_upsert_mutation(
-                            workspace,
-                        ))
+                        .execute(
+                            &crate::tools::workspace::isolated_workspace_upsert_mutation(workspace),
+                        )
                         .await?;
                     let doc = crate::store::graphql::mutation_documents(
                         &response,
                         "upsert_IsolatedWorkspace",
                     )?
-                    .and_then(|rows| rows.first().and_then(|row| row["_docID"].as_str()).map(str::to_owned))
+                    .and_then(|rows| {
+                        rows.first()
+                            .and_then(|row| row["_docID"].as_str())
+                            .map(str::to_owned)
+                    })
                     .expect("workspace physical ID");
                     txn.add_actor_relationship(
                         "IsolatedWorkspace",
@@ -106,16 +110,22 @@ impl Fixture {
                     )
                     .await?;
                     let response = txn
-                        .execute(&crate::tools::workspace::workspace_placement_upsert_mutation(
-                            placement,
-                            "2026-09-01T00:00:00Z",
-                        ))
+                        .execute(
+                            &crate::tools::workspace::workspace_placement_upsert_mutation(
+                                placement,
+                                "2026-09-01T00:00:00Z",
+                            ),
+                        )
                         .await?;
                     let placement_doc = crate::store::graphql::mutation_documents(
                         &response,
                         "upsert_WorkspacePlacement",
                     )?
-                    .and_then(|rows| rows.first().and_then(|row| row["_docID"].as_str()).map(str::to_owned))
+                    .and_then(|rows| {
+                        rows.first()
+                            .and_then(|row| row["_docID"].as_str())
+                            .map(str::to_owned)
+                    })
                     .expect("placement physical ID");
                     txn.add_resource_relationship(
                         "WorkspacePlacement",

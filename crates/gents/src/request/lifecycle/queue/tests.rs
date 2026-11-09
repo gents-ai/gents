@@ -459,11 +459,7 @@ async fn canonical_background_fixture_with_input(
         admission.is_some(),
         "fixture must retain client claim admission"
     );
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        request,
-        60,
-    );
+    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
     lifecycle
         .bind_managed_agent(db.agent_identity.as_ref())
         .unwrap();

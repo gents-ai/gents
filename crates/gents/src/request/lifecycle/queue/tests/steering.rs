@@ -4,7 +4,11 @@ use crate::lean_vocab_test::LeanQueuedSteeringAction as Action;
 /// Reads through the Agent's own access: the queued rows are Agent-owned, so
 /// the node identity does not see them.
 async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
-    let response = db.agent_access.execute(query).await.expect("agent queue query");
+    let response = db
+        .agent_access
+        .execute(query)
+        .await
+        .expect("agent queue query");
     assert!(response.get("errors").is_none(), "{response}");
     response["data"].clone()
 }
@@ -55,10 +59,13 @@ async fn steering_admission_keeps_signed_content_queued_without_transcript_publi
     .await
     .unwrap();
 
-    let request = crate::request::binding::load_agent_request_by_doc_id_with_access(&db.agent_access, &enqueued.doc_id)
-        .await
-        .unwrap()
-        .expect("queued steering request");
+    let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
+        &enqueued.doc_id,
+    )
+    .await
+    .unwrap()
+    .expect("queued steering request");
     assert_eq!(request.content, content);
     assert_eq!(request.request_id, enqueued.request_id);
     let queue = request.input.queue.expect("steering queue input");
@@ -74,10 +81,7 @@ async fn steering_admission_keeps_signed_content_queued_without_transcript_publi
     );
 
     let messages = agent_data(&db, "{ AgentMessage { _docID } }").await;
-    assert_eq!(
-        messages["AgentMessage"],
-        serde_json::json!([])
-    );
+    assert_eq!(messages["AgentMessage"], serde_json::json!([]));
 }
 
 #[tokio::test]
@@ -141,17 +145,17 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
             "{}",
             case.name
         );
-        let request =
-            crate::request::binding::load_agent_request_by_doc_id_with_access(&db.agent_access, &enqueued.doc_id)
-                .await
-                .unwrap()
-                .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_node_did(
-            db.node.clone(),
-            request,
-            60,
-        );
-        lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
+        let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &db.agent_access,
+            &enqueued.doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
+        lifecycle
+            .bind_managed_agent(db.agent_identity.as_ref())
+            .unwrap();
         match terminal {
             Action::InterruptBeforeClaim => {
                 assert!(case.interrupt_at.is_some(), "{}", case.name);
@@ -323,41 +327,46 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             case.name
         );
 
-        let parent_row =
-            crate::request::binding::load_agent_request_by_doc_id_with_access(&db.agent_access, &parent.doc_id)
-                .await
-                .unwrap()
-                .expect("parent queue fixture");
-        let mut parent_lifecycle = RequestLifecycle::new_with_node_did(
-            db.node.clone(),
-            parent_row,
-            60,
-        );
-        parent_lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
+        let parent_row = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &db.agent_access,
+            &parent.doc_id,
+        )
+        .await
+        .unwrap()
+        .expect("parent queue fixture");
+        let mut parent_lifecycle =
+            RequestLifecycle::new_with_node_did(db.node.clone(), parent_row, 60);
+        parent_lifecycle
+            .bind_managed_agent(db.agent_identity.as_ref())
+            .unwrap();
         parent_lifecycle
             .reject_admission("finished parent fixture")
             .await
             .unwrap();
 
-        let request =
-            crate::request::binding::load_agent_request_by_doc_id_with_access(&db.agent_access, &enqueued.doc_id)
-                .await
-                .unwrap()
-                .expect("signed queued steering request");
-        let mut lifecycle = RequestLifecycle::new_with_node_did(
-            db.node.clone(),
-            request,
-            60,
-        );
-        lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
+        let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &db.agent_access,
+            &enqueued.doc_id,
+        )
+        .await
+        .unwrap()
+        .expect("signed queued steering request");
+        let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
+        lifecycle
+            .bind_managed_agent(db.agent_identity.as_ref())
+            .unwrap();
         assert_eq!(
             lifecycle.claim().await.unwrap(),
             ClaimOutcome::Claimed,
             "{}",
             case.name
         );
-        let writer = DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
-            .unwrap();
+        let writer = DefraStreamWriter::new_managed(
+            db.node.clone(),
+            db.agent_identity.as_ref(),
+            Duration::ZERO,
+        )
+        .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
 
         if outcome == crate::request::lifecycle::RequestTerminalOutcome::Interrupted {

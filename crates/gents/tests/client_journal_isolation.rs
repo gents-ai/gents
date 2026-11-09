@@ -155,7 +155,9 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
                 }
                 Ok(response) => response["data"]["PendingChatSubmission"]
                     .as_array()
-                    .unwrap_or_else(|| panic!("journal read returned no rows for {case}: {response}"))
+                    .unwrap_or_else(|| {
+                        panic!("journal read returned no rows for {case}: {response}")
+                    })
                     .iter()
                     .any(|row| row["_docID"] == doc_id && row["payload"] == "client secret"),
                 Err(error) if identity.is_none() => {

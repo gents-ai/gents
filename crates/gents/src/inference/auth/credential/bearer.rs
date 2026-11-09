@@ -71,7 +71,10 @@ pub fn shared_bearer(
     let mut registry = bearer_registry()
         .lock()
         .expect("bearer registry mutex poisoned");
-    if let Some(bearer) = registry.get(credential_id).and_then(std::sync::Weak::upgrade) {
+    if let Some(bearer) = registry
+        .get(credential_id)
+        .and_then(std::sync::Weak::upgrade)
+    {
         if Arc::ptr_eq(&bearer.node, node) {
             return bearer;
         }

@@ -680,11 +680,8 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
             .unwrap()
             .unwrap();
     let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
-    let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
-        node.clone(),
-        request,
-        300,
-    );
+    let mut owner =
+        crate::request::lifecycle::RequestLifecycle::new_with_node_did(node.clone(), request, 300);
     owner.claim().await.unwrap();
     let workspace =
         super::load_isolated_workspace_record(&node, "artifact-workspace", &workspace_owner)

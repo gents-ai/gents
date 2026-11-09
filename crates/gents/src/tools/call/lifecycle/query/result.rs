@@ -1168,9 +1168,15 @@ mod tests {
         let requester = parent.requester_did().map(str::to_owned);
         let access = ConfigAccess::local_as(node.clone(), child.actor().clone());
         assert_eq!(
-            load_tool_call_arguments(&access, &child_doc, &node_did, &session_id, requester.as_deref())
-                .await
-                .unwrap(),
+            load_tool_call_arguments(
+                &access,
+                &child_doc,
+                &node_did,
+                &session_id,
+                requester.as_deref()
+            )
+            .await
+            .unwrap(),
             arguments
         );
         child.start_running().await.unwrap();
@@ -1224,14 +1230,21 @@ mod tests {
             .await
             .is_err());
         parent.complete("parent result").await.unwrap();
-        let presentation =
-            load_tool_call_presentation(&access, &child_doc, &node_did, &session_id, requester.as_deref())
-                .await
-                .unwrap();
+        let presentation = load_tool_call_presentation(
+            &access,
+            &child_doc,
+            &node_did,
+            &session_id,
+            requester.as_deref(),
+        )
+        .await
+        .unwrap();
         assert_eq!(presentation.arguments, arguments);
         assert_eq!(presentation.result.as_deref(), Some("[bounded effect]"));
-        let read =
-            child.access().unwrap().transact_write("test.plugin_child_read", |txn| {
+        let read = child
+            .access()
+            .unwrap()
+            .transact_write("test.plugin_child_read", |txn| {
                 Box::pin(load_tool_call_read_in_txn(
                     txn,
                     &child_doc,
@@ -1247,10 +1260,14 @@ mod tests {
             render_tool_result(read.result.as_ref().unwrap()).unwrap(),
             "[bounded effect]"
         );
-        let headers =
-            scoped_canonical_headers(ReadSource::Access(&access), &node_did, &session_id, requester.as_deref())
-                .await
-                .unwrap();
+        let headers = scoped_canonical_headers(
+            ReadSource::Access(&access),
+            &node_did,
+            &session_id,
+            requester.as_deref(),
+        )
+        .await
+        .unwrap();
         assert!(headers.iter().all(|row| !matches!(&row.message.publication,
             MessagePublication::ToolDelivery { tool_call_doc_id } if tool_call_doc_id == &child_doc)));
         let foreign = PresentedPayload {
@@ -1267,11 +1284,15 @@ mod tests {
                 Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
-        assert!(
-            load_tool_call_result(&access, &child_doc, &node_did, &session_id, requester.as_deref())
-                .await
-                .is_err()
-        );
+        assert!(load_tool_call_result(
+            &access,
+            &child_doc,
+            &node_did,
+            &session_id,
+            requester.as_deref()
+        )
+        .await
+        .is_err());
         drop(request_owner);
         node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
@@ -1308,9 +1329,10 @@ mod tests {
         let node_did = child.node_did().to_owned();
         let session_id = child.session_id().to_owned();
         let requester = child.requester_did().map(str::to_owned);
-        let read = child.access().unwrap().transact_write(
-            "test.plugin_child_timeout",
-            |txn| {
+        let read = child
+            .access()
+            .unwrap()
+            .transact_write("test.plugin_child_timeout", |txn| {
                 Box::pin(load_tool_call_read_in_txn(
                     txn,
                     &child_doc,
@@ -1318,8 +1340,7 @@ mod tests {
                     &session_id,
                     requester.as_deref(),
                 ))
-            },
-        )
+            })
             .await
             .unwrap();
         assert_eq!(read.raw_result.as_deref(), Some("partial output"));
@@ -1402,17 +1423,20 @@ mod tests {
         let session_id = tool.session_id().to_owned();
         let requester = tool.requester_did().map(str::to_owned);
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
-        let read = tool.access().unwrap().transact_write("tool_result.txn_read", |txn| {
-            Box::pin(load_tool_call_read_in_txn(
-                txn,
-                &doc_id,
-                &node_did,
-                &session_id,
-                requester.as_deref(),
-            ))
-        })
-        .await
-        .unwrap();
+        let read = tool
+            .access()
+            .unwrap()
+            .transact_write("tool_result.txn_read", |txn| {
+                Box::pin(load_tool_call_read_in_txn(
+                    txn,
+                    &doc_id,
+                    &node_did,
+                    &session_id,
+                    requester.as_deref(),
+                ))
+            })
+            .await
+            .unwrap();
         assert_eq!(read.request_doc_id, request_doc_id);
         assert_eq!(
             read.tool_name,
@@ -1426,35 +1450,47 @@ mod tests {
         );
         assert_eq!(read.raw_result.as_deref(), Some(raw));
 
-        tool.access().unwrap().transact_write("tool_result.ambiguous_reply", |txn| {
-            Box::pin(async {
-                let headers =
-                    scoped_canonical_headers(ReadSource::Txn(txn), &node_did, &session_id, requester.as_deref())
-                        .await?;
-                let mut duplicate = headers
-                    .iter()
-                    .find(|row| is_invocation_reply(&row.message, &doc_id))
-                    .expect("fixture completed invocation reply")
-                    .message
-                    .clone();
-                duplicate.message_key.push_str(":duplicate");
-                duplicate.sequence += 1;
-                txn.execute_with_variables(
-                    gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
-                    &gents_protocol::output::rows::transcript_message_create_variables(
-                        &duplicate,
-                    )?,
-                )
-                .await?;
-                let error = load_tool_call_read_in_txn(txn, &doc_id, &node_did, &session_id, requester.as_deref())
+        tool.access()
+            .unwrap()
+            .transact_write("tool_result.ambiguous_reply", |txn| {
+                Box::pin(async {
+                    let headers = scoped_canonical_headers(
+                        ReadSource::Txn(txn),
+                        &node_did,
+                        &session_id,
+                        requester.as_deref(),
+                    )
+                    .await?;
+                    let mut duplicate = headers
+                        .iter()
+                        .find(|row| is_invocation_reply(&row.message, &doc_id))
+                        .expect("fixture completed invocation reply")
+                        .message
+                        .clone();
+                    duplicate.message_key.push_str(":duplicate");
+                    duplicate.sequence += 1;
+                    txn.execute_with_variables(
+                        gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        &gents_protocol::output::rows::transcript_message_create_variables(
+                            &duplicate,
+                        )?,
+                    )
+                    .await?;
+                    let error = load_tool_call_read_in_txn(
+                        txn,
+                        &doc_id,
+                        &node_did,
+                        &session_id,
+                        requester.as_deref(),
+                    )
                     .await
                     .unwrap_err();
-                assert!(error.to_string().contains("ambiguous invocation reply"));
-                Ok::<_, anyhow::Error>(())
+                    assert!(error.to_string().contains("ambiguous invocation reply"));
+                    Ok::<_, anyhow::Error>(())
+                })
             })
-        })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }
@@ -1468,38 +1504,50 @@ mod tests {
         let node_did = tool.node_did().to_owned();
         let session_id = tool.session_id().to_owned();
         let requester = tool.requester_did().map(str::to_owned);
-        tool.access().unwrap().transact_write("tool_result.malformed_reply", |txn| {
-            Box::pin(async {
-                let headers =
-                    scoped_canonical_headers(ReadSource::Txn(txn), &node_did, &session_id, requester.as_deref())
-                        .await?;
-                let mut malformed = headers
-                    .iter()
-                    .find(|row| row.message.role == MessageRole::Assistant)
-                    .expect("fixture accepted assistant header")
-                    .message
-                    .clone();
-                malformed.message_key.push_str(":malformed-delivery");
-                malformed.sequence += 1;
-                malformed.publication = MessagePublication::ToolDelivery {
-                    tool_call_doc_id: doc_id.clone(),
-                };
-                txn.execute_with_variables(
-                    gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
-                    &gents_protocol::output::rows::transcript_message_create_variables(
-                        &malformed,
-                    )?,
-                )
-                .await?;
-                let error = load_tool_call_read_in_txn(txn, &doc_id, &node_did, &session_id, requester.as_deref())
+        tool.access()
+            .unwrap()
+            .transact_write("tool_result.malformed_reply", |txn| {
+                Box::pin(async {
+                    let headers = scoped_canonical_headers(
+                        ReadSource::Txn(txn),
+                        &node_did,
+                        &session_id,
+                        requester.as_deref(),
+                    )
+                    .await?;
+                    let mut malformed = headers
+                        .iter()
+                        .find(|row| row.message.role == MessageRole::Assistant)
+                        .expect("fixture accepted assistant header")
+                        .message
+                        .clone();
+                    malformed.message_key.push_str(":malformed-delivery");
+                    malformed.sequence += 1;
+                    malformed.publication = MessagePublication::ToolDelivery {
+                        tool_call_doc_id: doc_id.clone(),
+                    };
+                    txn.execute_with_variables(
+                        gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        &gents_protocol::output::rows::transcript_message_create_variables(
+                            &malformed,
+                        )?,
+                    )
+                    .await?;
+                    let error = load_tool_call_read_in_txn(
+                        txn,
+                        &doc_id,
+                        &node_did,
+                        &session_id,
+                        requester.as_deref(),
+                    )
                     .await
                     .unwrap_err();
-                assert!(error.to_string().contains("carries no native tool-result"));
-                Ok::<_, anyhow::Error>(())
+                    assert!(error.to_string().contains("carries no native tool-result"));
+                    Ok::<_, anyhow::Error>(())
+                })
             })
-        })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }

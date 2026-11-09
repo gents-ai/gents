@@ -32,22 +32,22 @@ fn decode(payload: &str, request_id: &str) -> Result<Entry> {
     let envelope: Envelope =
         serde_json::from_str(payload).context("decoding a client journal record")?;
     match envelope {
-            Envelope::Goal(record) => {
-                anyhow::ensure!(
-                    record.intent.command_id == request_id
-                        && record.decision() != super::goal_delivery::Decision::Refused,
-                    "retained Goal caller binding is invalid"
-                );
-                Ok(Entry::Goal(record))
-            }
-            Envelope::Publication(record) => {
-                anyhow::ensure!(
-                    record.key() == request_id,
-                    "retained publication binding is invalid"
-                );
-                record.validate()?;
-                Ok(Entry::Publication(record))
-            }
+        Envelope::Goal(record) => {
+            anyhow::ensure!(
+                record.intent.command_id == request_id
+                    && record.decision() != super::goal_delivery::Decision::Refused,
+                "retained Goal caller binding is invalid"
+            );
+            Ok(Entry::Goal(record))
+        }
+        Envelope::Publication(record) => {
+            anyhow::ensure!(
+                record.key() == request_id,
+                "retained publication binding is invalid"
+            );
+            record.validate()?;
+            Ok(Entry::Publication(record))
+        }
     }
 }
 

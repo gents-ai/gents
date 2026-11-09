@@ -10,9 +10,9 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
 use super::{ObservedStore, ObserverMetrics, RuntimeConnectionEvent};
-use gents::store::config_client::SubscriptionEnd;
 use crate::client::query::OBSERVED_COLLECTIONS;
 use crate::client::{PeerRecord, SnapshotReadError};
+use gents::store::config_client::SubscriptionEnd;
 
 /// One event of a source task (`RuntimeConnectionObservation.armedEvent` or
 /// `streamEndEvent`).
@@ -179,7 +179,9 @@ impl Sources {
                 metrics.transport_failures.fetch_add(1, Ordering::Relaxed);
             }
             RuntimeConnectionEvent::Renewed => {
-                metrics.subscription_renewals.fetch_add(1, Ordering::Relaxed);
+                metrics
+                    .subscription_renewals
+                    .fetch_add(1, Ordering::Relaxed);
             }
             _ => {}
         }
@@ -271,12 +273,14 @@ impl Sources {
                 endpoint.map(|endpoint| (peer.node_did.clone(), endpoint))
             })
             .collect();
-        let observed: BTreeSet<String> =
-            endpoints.keys().chain(&unavailable).cloned().collect();
+        let observed: BTreeSet<String> = endpoints.keys().chain(&unavailable).cloned().collect();
         for removed in self.observed.difference(&observed) {
             store.set_runtime_connection(removed, None);
         }
-        for node in unavailable.iter().filter(|node| !endpoints.contains_key(*node)) {
+        for node in unavailable
+            .iter()
+            .filter(|node| !endpoints.contains_key(*node))
+        {
             store.observe_runtime_connection(node, RuntimeConnectionEvent::EndpointMissing);
         }
         self.observed = observed;
@@ -290,7 +294,8 @@ impl Sources {
                 .is_some_and(|endpoint| endpoint.to_string() == source.endpoint.to_string())
         });
         self.attempts.retain(|node, _| endpoints.contains_key(node));
-        self.connected_at.retain(|node, _| self.entries.contains_key(node));
+        self.connected_at
+            .retain(|node, _| self.entries.contains_key(node));
         let reconnecting = std::mem::take(&mut self.reconnecting);
         for (node, endpoint) in endpoints {
             if self.entries.contains_key(&node) {
@@ -330,7 +335,9 @@ impl Sources {
 pub(super) enum StreamEnd {
     Ended(SubscriptionEnd),
     /// `refused` is the access owner's classification of the failure.
-    Failed { refused: bool },
+    Failed {
+        refused: bool,
+    },
 }
 
 /// `RuntimeConnectionObservation.streamEndEvent`.

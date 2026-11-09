@@ -210,7 +210,10 @@ pub(crate) async fn published_root_covering_in_txn(
         .await
         .context("querying WorkspaceRoot paths in configuration transaction")?;
     for document in decode_workspace_root_rows(&response)? {
-        let Some(path) = document.root_path.filter(|_| document.enabled.unwrap_or(false)) else {
+        let Some(path) = document
+            .root_path
+            .filter(|_| document.enabled.unwrap_or(false))
+        else {
             continue;
         };
         let Ok(published) = resolve_configured_tool_root(Path::new(path.trim())) else {

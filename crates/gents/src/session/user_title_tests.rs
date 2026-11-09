@@ -249,7 +249,9 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
 #[tokio::test]
 async fn title_transitions_preserve_session_and_request_observation() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::test_support::acp_policies::install_identity_acp_policies(&node).await.unwrap();
+    crate::test_support::acp_policies::install_identity_acp_policies(&node)
+        .await
+        .unwrap();
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)
         .await
         .unwrap();
@@ -431,7 +433,9 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         let before = model_session(&case["before"]);
         let expected = model_session(&case["after"]);
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::test_support::acp_policies::install_identity_acp_policies(&node).await.unwrap();
+        crate::test_support::acp_policies::install_identity_acp_policies(&node)
+            .await
+            .unwrap();
         node.add_collection(gents_protocol::schemas::AGENT_SESSION)
             .await
             .unwrap();

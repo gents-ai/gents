@@ -53,8 +53,8 @@ pub(crate) use compaction_entries::{
 pub use control::{resume_session_with_access, stop_session_with_access, SessionStopReceipt};
 pub(crate) use fork::message_tool_references;
 pub use fork::{
-    fork_edit_on, fork_on, is_user_turn, publish_fork_relationships,
-    ForkBoundary, ForkError, ForkOutcome, ForkParams, ForkRelationshipIntent,
+    fork_edit_on, fork_on, is_user_turn, publish_fork_relationships, ForkBoundary, ForkError,
+    ForkOutcome, ForkParams, ForkRelationshipIntent,
 };
 #[cfg(test)]
 pub(crate) use history::load_history_with_access;
@@ -92,11 +92,11 @@ pub(crate) use output::replay_request::validate_canonical_replay_boundary;
 pub(crate) use output::replay_tags::resolve_canonical_replay_tags_on;
 pub use output::CanonicalOutputReadError;
 pub(crate) use output::CanonicalReplayScope;
+#[cfg(test)]
+pub(crate) use query::load_session_agent_did;
 pub(crate) use query::session_is_stopped;
 pub(crate) use query::session_stopped_in_txn;
 pub use query::{client_requester_scope, public_request_filter};
-#[cfg(test)]
-pub(crate) use query::load_session_agent_did;
 pub(crate) use query::{
     load_session_agent_selection, load_session_requester_scope, require_session,
 };

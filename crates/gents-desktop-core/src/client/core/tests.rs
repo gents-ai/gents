@@ -1286,9 +1286,9 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         .await;
     let denied = denied.expect_err("a route without an operator endpoint has no write path");
     assert!(
-        denied.to_string().contains(
-            crate::client::peer_directory::ChatRouteCause::NoEndpoint.token()
-        ),
+        denied
+            .to_string()
+            .contains(crate::client::peer_directory::ChatRouteCause::NoEndpoint.token()),
         "{denied:#}"
     );
     // Losing the endpoint also detaches the route's projection, so resend
@@ -1312,7 +1312,12 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             Some(&agent.agent_did),
         )
         .await?;
-    assert_eq!(owner_request(unpaired_submit.request_id.clone()).await?.len(), 1);
+    assert_eq!(
+        owner_request(unpaired_submit.request_id.clone())
+            .await?
+            .len(),
+        1
+    );
     let all = runtime
         .user_access()
         .execute("{ AgentRequest { request_id } }")

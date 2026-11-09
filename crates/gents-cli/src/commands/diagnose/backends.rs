@@ -312,8 +312,8 @@ mod tests {
         let client = crate::shared::test_support::ClientHome::new().await;
         let owner = client.node_did().to_owned();
         let peer_dir = tempfile::tempdir().unwrap();
-        let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)
-            .unwrap();
+        let peer =
+            gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None).unwrap();
         let foreign = gents::NodeIdentity::did(&peer).to_owned();
         let backend: InferenceBackend = serde_json::from_value(json!({
             "node_did": owner, "backend_id": "claude-max", "name": "Claude",

@@ -65,14 +65,33 @@ mod tests {
             let owner = runtime.did();
             let binding = gents::store::identity::provision_agent_identity(runtime).unwrap();
             let mut documents = vec![
-                (Collection::InferenceBackend,json!({"node_did":owner,"backend_id":"same-backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
-                (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"same-profile","backend_id":"same-backend","model_name":model,"context_window":window})),
-                (Collection::Agent, json!({"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"same-profile"})),
+                (
+                    Collection::InferenceBackend,
+                    json!({"node_did":owner,"backend_id":"same-backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}}),
+                ),
+                (
+                    Collection::InferenceProfile,
+                    json!({"node_did":owner,"profile_id":"same-profile","backend_id":"same-backend","model_name":model,"context_window":window}),
+                ),
+                (
+                    Collection::Agent,
+                    json!({"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"same-profile"}),
+                ),
             ];
             if owner != client.node_did() {
                 documents.insert(0, (Collection::Node, json!({"node_did":owner})));
             }
-            let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection,value)|DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
+            let plan = DesiredStateApplyPlan::new(
+                documents
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+            )
+            .unwrap();
             client
                 .access
                 .transact_write("codex.binding.fixture", |txn| {
@@ -104,9 +123,11 @@ mod tests {
                 .unwrap(),
             32000
         );
-        assert!(load_bound_model_selection_id(&node, "did:missing", &first_agent)
-            .await
-            .is_err());
+        assert!(
+            load_bound_model_selection_id(&node, "did:missing", &first_agent)
+                .await
+                .is_err()
+        );
         assert!(load_bound_model_selection_id(&node, &first, "missing")
             .await
             .is_err());

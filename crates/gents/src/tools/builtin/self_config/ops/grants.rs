@@ -199,7 +199,8 @@ mod lean_bound_tests {
                 policy: case[field].as_bool().unwrap(),
             };
             assert_eq!(
-                grants("candidate_policy").bounded_by(&grants("stored_policy"), &grants("held_policy")),
+                grants("candidate_policy")
+                    .bounded_by(&grants("stored_policy"), &grants("held_policy")),
                 case["accepted"].as_bool().unwrap(),
                 "{case}"
             );

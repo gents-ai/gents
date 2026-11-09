@@ -26,8 +26,7 @@ pub(crate) use install::{
 };
 pub(crate) use scope::{
     plugin_notification_scope, record_plugin_store_change, resolve_home_owner_under_plugin_store,
-    resolve_scope_owner,
-    warn_on_unrecorded_removal,
+    resolve_scope_owner, warn_on_unrecorded_removal,
 };
 use serde_json::json;
 use source::{asset_cache_root, materialize_cached_pack};

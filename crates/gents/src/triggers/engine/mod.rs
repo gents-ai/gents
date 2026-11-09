@@ -164,21 +164,11 @@ pub(crate) const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
 pub enum FireResult {
-    Duplicate {
-        request_id: String,
-    },
-    Fired {
-        request_id: String,
-    },
-    Skipped {
-        reason: String,
-    },
-    Errored {
-        error: String,
-    },
-    Rejected {
-        error: String,
-    },
+    Duplicate { request_id: String },
+    Fired { request_id: String },
+    Skipped { reason: String },
+    Errored { error: String },
+    Rejected { error: String },
 }
 
 pub trait TriggerSource: Send + Sync {
@@ -368,7 +358,11 @@ impl TriggerEngine {
             None
         };
         if let Some(identity) = &delivery_identity {
-            match self.materializer.recover_admitted_fire(identity, &intent.task).await {
+            match self
+                .materializer
+                .recover_admitted_fire(identity, &intent.task)
+                .await
+            {
                 Ok(Some(request_id)) => {
                     let result = FireResult::Duplicate { request_id };
                     (intent.on_result)(result.clone());

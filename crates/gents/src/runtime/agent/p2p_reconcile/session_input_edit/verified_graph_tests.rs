@@ -14,7 +14,9 @@ async fn verified_signer_as(
     cid: &str,
     reader: &str,
 ) -> anyhow::Result<String> {
-    let (block, signature) = node.authorized_signed_block_bytes(cid, Some(reader)).await?;
+    let (block, signature) = node
+        .authorized_signed_block_bytes(cid, Some(reader))
+        .await?;
     let block = defra_core::block::Block::from_dag_cbor(&block)?;
     let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
     db::block::verify::verified_signature_signer_did(&block, &signature).map_err(anyhow::Error::msg)
@@ -192,14 +194,8 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             }
         }
         let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
-            test_signed_replacement_fields(
-                &access,
-                author,
-                root.did(),
-                "session",
-                &replacements,
-            )
-            .await;
+            test_signed_replacement_fields(&access, author, root.did(), "session", &replacements)
+                .await;
         let mut command = SessionInputEdit {
             version: SESSION_INPUT_EDIT_VERSION,
             command_id: uuid::Uuid::new_v4().to_string(),

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
 use gents::inference::llm::message::{AssistantContent, Message, UserContent};
+use gents::store::graphql::escape_graphql_string;
 use gents::tools::background::job::control::control;
 use gents::tools::background::job::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobControlRequest, JobReadError, JobSpawn,
@@ -13,7 +14,6 @@ use gents::tools::background::job::job::{
 };
 use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents::tools::background::status::ProcessControlScope;
-use gents::store::graphql::escape_graphql_string;
 use gents::tools::call::control::{
     cancel_background_tool_call, cancel_session_background_process, CancelBackgroundToolCallOutcome,
 };
@@ -649,15 +649,22 @@ async fn paired_job(
         runtime,
         session_id,
     };
-    (h, runtime_b, db_b, plugin_home, backend_b, prompt_a, prompt_b)
+    (
+        h,
+        runtime_b,
+        db_b,
+        plugin_home,
+        backend_b,
+        prompt_a,
+        prompt_b,
+    )
 }
 
 /// A job stages requests only on its own runtime (Lean Recovery.observeCaused):
 /// a plan addressed to a peer's Agent is refused when the job call is
 /// persisted, so no job row exists and neither child is ever served.
 async fn refuse_peer_addressed_job(name: &str) {
-    let (h, runtime_b, _db_b, _plugin_home, backend_b, prompt_a, prompt_b) =
-        paired_job(name).await;
+    let (h, runtime_b, _db_b, _plugin_home, backend_b, prompt_a, prompt_b) = paired_job(name).await;
     let parent = escape_graphql_string(&format!("{}-parent", h.session_id));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -672,7 +679,9 @@ async fn refuse_peer_addressed_job(name: &str) {
             .expect("read the parent request");
         let state = response["data"]["AgentRequest"][0]["lifecycle_state"]
             .as_str()
-            .and_then(|state| gents_protocol::request_lifecycle::RequestLifecycleState::parse(state).ok());
+            .and_then(|state| {
+                gents_protocol::request_lifecycle::RequestLifecycleState::parse(state).ok()
+            });
         if state.is_some_and(|state| state.is_terminal()) {
             break;
         }

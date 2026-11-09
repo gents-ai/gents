@@ -473,9 +473,9 @@ use request_loaders::{
     load_timeline_child_requests, load_timeline_request_by_id, load_timeline_requests_for_session,
 };
 use validation::{
-    ensure_unique_timeline_request_ids, merge_timeline_request,
-    request_scoped_row_is_in_timeline, timeline_request_bindings, timeline_request_doc_ids,
-    timeline_session_ids, validate_child_tool_bridges, validate_request_scoped_rows,
+    ensure_unique_timeline_request_ids, merge_timeline_request, request_scoped_row_is_in_timeline,
+    timeline_request_bindings, timeline_request_doc_ids, timeline_session_ids,
+    validate_child_tool_bridges, validate_request_scoped_rows,
 };
 
 #[cfg(test)]

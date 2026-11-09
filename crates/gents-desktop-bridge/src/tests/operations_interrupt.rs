@@ -35,8 +35,22 @@ async fn latch(core: &ClientCore, node: &str, request: &str) -> Option<String> {
 async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
     let served = served_desktop().await;
     let (core, node) = (&served.core, served.node_did());
-    submit_request(core, &served.runtime, &served.agent, "parent-session", "parent").await;
-    submit_request(core, &served.runtime, &served.agent, "child-session", "child").await;
+    submit_request(
+        core,
+        &served.runtime,
+        &served.agent,
+        "parent-session",
+        "parent",
+    )
+    .await;
+    submit_request(
+        core,
+        &served.runtime,
+        &served.agent,
+        "child-session",
+        "child",
+    )
+    .await;
     let first = interrupt_request(core, &user_cancel("parent", Some(node)))
         .await
         .unwrap();
@@ -68,10 +82,12 @@ async fn interrupt_refuses_ambiguous_terminal_and_non_user_causes() {
         .await
         .unwrap_err();
     assert!(format!("{twin:#}").contains("already held"), "{twin:#}");
-    assert!(interrupt_request(core, &user_cancel("twins", Some(node)))
-        .await
-        .unwrap()
-        .accepted);
+    assert!(
+        interrupt_request(core, &user_cancel("twins", Some(node)))
+            .await
+            .unwrap()
+            .accepted
+    );
     let done = submit_request(core, &served.runtime, &served.agent, "done-session", "done").await;
     reject_admission(&served.runtime, &served.agent, &done, "fixture rejection").await;
     assert!(interrupt_request(core, &user_cancel("done", Some(node)))

@@ -142,7 +142,8 @@ mod tests {
                 .await?,
         );
         node.add_collection(SDL).await?;
-        let offline = || ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        let offline =
+            || ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
         assert!(matches!(
             create_authored_document(
                 &offline(),

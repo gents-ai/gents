@@ -193,7 +193,8 @@ pub async fn try_submit_request(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::client(&user),
     );
-    create.session_doc_id = Some(gents::request::lifecycle::reserve_goal_session(&access, &create).await?);
+    create.session_doc_id =
+        Some(gents::request::lifecycle::reserve_goal_session(&access, &create).await?);
     create.agent_doc_id = Some(runtime.agent_doc_id(agent).await);
     gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
     gents::request::lifecycle::submit_client_request(&access, &create).await?;

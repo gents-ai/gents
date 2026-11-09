@@ -7,13 +7,24 @@ use crate::tools::call::lifecycle::admission_fixture::{
 /// The admission's Agent owns its request and tool rows; ACP hides them
 /// from any other reader.
 fn owner(admission: &PublishedAdmission) -> ConfigAccess {
-    admission.tool.access().expect("admission carries its Agent access")
+    admission
+        .tool
+        .access()
+        .expect("admission carries its Agent access")
 }
 
-async fn single_row(admission: &PublishedAdmission, query: String, collection: &str) -> serde_json::Value {
+async fn single_row(
+    admission: &PublishedAdmission,
+    query: String,
+    collection: &str,
+) -> serde_json::Value {
     let response = owner(admission).execute(&query).await.unwrap();
     let rows = response["data"][collection].as_array().unwrap().clone();
-    assert_eq!(rows.len(), 1, "physical {collection} identity must be unique");
+    assert_eq!(
+        rows.len(),
+        1,
+        "physical {collection} identity must be unique"
+    );
     rows.into_iter().next().unwrap()
 }
 
@@ -41,7 +52,12 @@ async fn request_row(admission: &PublishedAdmission, doc_id: &str) -> serde_json
     .await
 }
 
-async fn owner_update(admission: &PublishedAdmission, collection: &str, doc_id: &str, fields: &str) {
+async fn owner_update(
+    admission: &PublishedAdmission,
+    collection: &str,
+    doc_id: &str,
+    fields: &str,
+) {
     let response = owner(admission)
         .write(
             "test.composed_conformance.update",
@@ -69,12 +85,30 @@ async fn prepare_expired_composed_boundary(
     let past = crate::store::graphql::escape_graphql_string(
         &(chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339(),
     );
-    owner_update(admission, "AgentToolCall", tool_doc_id, &format!(r#"deadline_at: "{past}""#)).await;
-    owner_update(admission, "AgentRequest", request_doc_id, &format!(r#"deadline: "{past}""#)).await;
+    owner_update(
+        admission,
+        "AgentToolCall",
+        tool_doc_id,
+        &format!(r#"deadline_at: "{past}""#),
+    )
+    .await;
+    owner_update(
+        admission,
+        "AgentRequest",
+        request_doc_id,
+        &format!(r#"deadline: "{past}""#),
+    )
+    .await;
 }
 
 async fn interrupt_request(admission: &PublishedAdmission, request_doc_id: &str) {
-    owner_update(admission, "AgentRequest", request_doc_id, r#"lifecycle_state: "interrupted""#).await;
+    owner_update(
+        admission,
+        "AgentRequest",
+        request_doc_id,
+        r#"lifecycle_state: "interrupted""#,
+    )
+    .await;
 }
 
 async fn teardown(admission: PublishedAdmission) {

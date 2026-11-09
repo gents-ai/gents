@@ -7,8 +7,8 @@ use gents_protocol::goal_control::{
 use super::*;
 #[cfg(test)]
 mod contract_tests;
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::config_client::agent_session::AgentSessionRowRead;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::NodeIdentity;
 use gents_protocol::session::SessionOwnerRow;
 
@@ -392,10 +392,11 @@ pub async fn load_client_session_goal_observation_state(
     access
         .transact_readonly("goal.read_client_observation", |txn| {
             Box::pin(async move {
-                let session = crate::store::config_client::agent_session::read_agent_session_owner_in_txn(
-                    txn, node_did, session_id,
-                )
-                .await?;
+                let session =
+                    crate::store::config_client::agent_session::read_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?;
                 let projection = match &session {
                     AgentSessionRowRead::Present(row) => {
                         anyhow::ensure!(

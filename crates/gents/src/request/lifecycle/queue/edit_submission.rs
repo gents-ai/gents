@@ -31,15 +31,7 @@ pub async fn submit_pending_user_edit(
         &edit,
     )
     .await?;
-    submit_prepared_edit(
-        access,
-        signer,
-        node_did,
-        session_id,
-        edit,
-        replacements,
-    )
-    .await
+    submit_prepared_edit(access, signer, node_did, session_id, edit, replacements).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -84,15 +76,7 @@ pub async fn submit_pending_user_steer(
         request_id,
     )
     .await?;
-    submit_prepared_edit(
-        access,
-        signer,
-        node_did,
-        session_id,
-        edit,
-        replacements,
-    )
-    .await
+    submit_prepared_edit(access, signer, node_did, session_id, edit, replacements).await
 }
 
 async fn submit_prepared_edit(

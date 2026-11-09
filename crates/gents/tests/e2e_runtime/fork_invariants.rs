@@ -195,8 +195,8 @@ async fn fork_via_http_uses_same_header_contract() {
         &gents::store::config_client::ConfigAccess::Graphql(endpoint),
         f.own("parent-http", 1),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     let copied = f.headers(&outcome.session_id).await;
     assert!(
         matches!(&copied[0].message.publication, MessagePublication::Fork { origin_message_doc_id } if origin_message_doc_id == &source.header)

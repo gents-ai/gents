@@ -189,10 +189,7 @@ pub(crate) mod test_support {
 
     /// Creates the fixture Node through the runtime owner's signed access.
     /// `ensure_node` only loads; production Nodes are created by an authenticated client.
-    pub(crate) async fn ensure_test_node(
-        node: &std::sync::Arc<defra_node::Node>,
-        node_did: &str,
-    ) {
+    pub(crate) async fn ensure_test_node(node: &std::sync::Arc<defra_node::Node>, node_did: &str) {
         if crate::load_node(node, node_did).await.unwrap().is_some() {
             return;
         }
@@ -219,9 +216,7 @@ pub(crate) mod test_support {
         access
             .transact_write("test.signed_node", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await
             .unwrap();
@@ -448,11 +443,26 @@ pub(crate) mod test_support {
         let profile = format!("{agent_did}:inference");
         let backend = format!("{agent_did}:backend");
         vec![
-            (Collection::Agent, json!({"node_did":owner,"agent_did":agent_did,"creation_nonce":binding.creation_nonce,"display_name":display_name,"context_id":context,"inference_profile_id":profile})),
-            (Collection::AgentContext, json!({"node_did":owner,"context_id":context,"tools_id":tools})),
-            (Collection::Tools, json!({"node_did":owner,"tools_id":tools})),
-            (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
-            (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+            (
+                Collection::Agent,
+                json!({"node_did":owner,"agent_did":agent_did,"creation_nonce":binding.creation_nonce,"display_name":display_name,"context_id":context,"inference_profile_id":profile}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"node_did":owner,"context_id":context,"tools_id":tools}),
+            ),
+            (
+                Collection::Tools,
+                json!({"node_did":owner,"tools_id":tools}),
+            ),
+            (
+                Collection::InferenceProfile,
+                json!({"node_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"}),
+            ),
+            (
+                Collection::InferenceBackend,
+                json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}}),
+            ),
         ]
     }
 
@@ -475,9 +485,7 @@ pub(crate) mod test_support {
         access
             .transact_write("test.install_agent", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await
             .unwrap();
@@ -619,9 +627,9 @@ pub(crate) mod test_support {
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
 pub mod request;
+pub use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 #[doc(hidden)]
 pub use request::admission::final_claim_admission_disposition;
-pub use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 pub use request::admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
 };
@@ -632,6 +640,10 @@ pub mod truncation;
 pub mod turn;
 
 pub use defra_node;
+pub use documents::automation::{
+    EventTriggerFireMode, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
+    MAX_EVENT_TRIGGER_GROUP_DOCS,
+};
 pub use documents::template::{
     check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
     TemplateScope, VariableRef,
@@ -640,12 +652,18 @@ pub use documents::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
     deserialize_dual_shape, ensure_node, is_reserved_builtin_tool_name, list_agents,
     list_datastore_tool_surfaces, list_inference_profile_records, load_agent,
-    load_inference_profile, load_node, merge_datastore_tool_surfaces, Agent as AgentDocument, AgentTargetDocument, ConfigReferences,
-    DatastoreToolSurfaceDocument, InferenceProfile, MergedSurfaceTools, QueryToolDecl,
-    SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField, WriteToolFieldFill,
-    WriteToolOutputObligation, WriteToolOutputObligationScope,
+    load_inference_profile, load_node, merge_datastore_tool_surfaces, Agent as AgentDocument,
+    AgentTargetDocument, ConfigReferences, DatastoreToolSurfaceDocument, InferenceProfile,
+    MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
+    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
+pub use documents::{ConcurrencyMode, ScheduleCadence};
 pub use gents_protocol::client_protocol;
+pub use gents_protocol::request_lifecycle::{
+    next_request_hop, request_hop_within_bound, EnqueuedAgentRequest, RequestHopCapObservation,
+    RequestHopCause,
+};
+pub use gents_protocol::row::AgentRequest;
 pub use inference::admission::call_state_holds_backend_slot;
 pub use inference::admission::BackendAdmissionConfig;
 pub use inference::admission::{
@@ -695,10 +713,6 @@ pub use request::interrupt::{
     fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
     interrupt_request_by_doc_id,
 };
-pub use gents_protocol::request_lifecycle::{
-    next_request_hop, request_hop_within_bound, EnqueuedAgentRequest, RequestHopCapObservation,
-    RequestHopCause,
-};
 pub use request::lifecycle::{
     background_wake_next_retry_at, background_wake_retry_delay,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
@@ -708,7 +722,6 @@ pub use request::lifecycle::{
     RequestSigner, RequestSpec, RetryLink, TerminalRepairReport,
 };
 pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
-pub use gents_protocol::row::AgentRequest;
 pub use request::watcher::{DefraWatcher, Watcher};
 pub use runtime::agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
@@ -727,11 +740,6 @@ pub use runtime::periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
     PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
-pub use documents::automation::{
-    EventTriggerFireMode, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
-    MAX_EVENT_TRIGGER_GROUP_DOCS,
-};
-pub use documents::{ConcurrencyMode, ScheduleCadence};
 pub use runtime::snapshot::{ActiveRuntimeSnapshot, DispatcherMap};
 pub use session::load_history;
 pub use session::{ForkError, ForkOutcome, ForkParams};
@@ -796,11 +804,11 @@ pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 pub mod __test_internals {
     pub use crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
-    pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
     pub use crate::request::lifecycle::queue::{
         reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
         QueueSource,
     };
     pub use crate::runtime::agent::principal_assembly::AgentBuildError;
     pub use crate::store::config_client::TXN_TRACING_TARGET;
+    pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 }

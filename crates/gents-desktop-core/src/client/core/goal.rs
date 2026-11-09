@@ -97,8 +97,7 @@ impl ClientCore {
         std::sync::Arc<dyn gents::store::identity::NodeIdentity>,
         SessionGoalControl,
     )> {
-        let peer = self
-            .peer_record_for_chat_write(node_did)?;
+        let peer = self.peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer.as_ref())?;
         if matches!(operation, GoalOperation::Stop {})
             || (matches!(operation, GoalOperation::Create { .. }) && expected.is_some())

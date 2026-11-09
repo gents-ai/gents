@@ -9,8 +9,8 @@ use super::validate::{
 };
 use super::*;
 use crate::documents::apply_desired_state_plan;
-use crate::store::config_client::ConfigAccess;
 use crate::store::config_client::schema_introspection::SchemaField;
+use crate::store::config_client::ConfigAccess;
 use anyhow::Context;
 use defra_node::Node as EmbeddedNode;
 use serde_json::json;
@@ -340,7 +340,10 @@ async fn ensure_owner_nodes(
                 crate::store::graphql::escape_graphql_string(owner)
             ))
             .await?;
-        if response["data"]["Node"].as_array().is_some_and(Vec::is_empty) {
+        if response["data"]["Node"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+        {
             crate::test_support::bootstrap_signed_test_node(access, owner).await;
         }
     }
@@ -372,7 +375,10 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
-    let mut backend = backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "ignored-wire");
+    let mut backend = backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "ignored-wire",
+    );
     backend["provider_kind"] = json!("OpenRouter");
     backend["openai_wire_api"] = json!("responses");
     apply(&access, vec![document(backend.clone())]).await?;
@@ -451,23 +457,44 @@ fn commitments_do_not_reinterpret_authored_strings_as_json() {
 
 #[test]
 fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
-    let mut value = backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local");
+    let mut value = backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "local",
+    );
     value["probe_status"] = "healthy".into();
     assert!(DesiredStateApplyPlan::new(vec![document(value)]).is_err());
-    let mut doc = document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local"));
+    let mut doc = document(backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "local",
+    ));
     doc.update = json!({"enabled":false});
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
-    let mut doc = document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local"));
+    let mut doc = document(backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "local",
+    ));
     doc.update["node_did"] = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into();
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
     assert!(DesiredStateApplyPlan::new(vec![
-        document(backend("did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh", "same")),
-        document(backend("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76", "same"))
+        document(backend(
+            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
+            "same"
+        )),
+        document(backend(
+            "did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76",
+            "same"
+        ))
     ])
     .is_ok());
     assert!(DesiredStateApplyPlan::new(vec![
-        document(backend("did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh", "same")),
-        document(backend("did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh", "same"))
+        document(backend(
+            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
+            "same"
+        )),
+        document(backend(
+            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
+            "same"
+        ))
     ])
     .is_err());
 }
@@ -477,7 +504,10 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let mut initial = backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local");
+    let mut initial = backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "local",
+    );
     initial["max_concurrent"] = 7.into();
     initial["enabled"] = false.into();
     initial["tags"] = json!(["old"]);
@@ -485,7 +515,10 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
         &access,
         vec![
             document(initial),
-            document(backend("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK", "local")),
+            document(backend(
+                "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+                "local",
+            )),
         ],
     )
     .await?;
@@ -495,7 +528,14 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
         .await;
     assert!(!before.has_errors());
     let before = before.data.unwrap();
-    apply(&access, vec![document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local"))]).await?;
+    apply(
+        &access,
+        vec![document(backend(
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            "local",
+        ))],
+    )
+    .await?;
     let after = node
         .execute(
             "{InferenceBackend{_docID node_did max_concurrent enabled tags catalogs probe_status}}",
@@ -527,7 +567,10 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
     let access = runtime_access(&node)?;
     apply(
         &access,
-        vec![document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "z_duplicate"))],
+        vec![document(backend(
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            "z_duplicate",
+        ))],
     )
     .await?;
     access
@@ -543,8 +586,14 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
     assert!(apply(
         &access,
         vec![
-            document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "a_staged")),
-            document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "z_duplicate"))
+            document(backend(
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                "a_staged"
+            )),
+            document(backend(
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                "z_duplicate"
+            ))
         ]
     )
     .await
@@ -920,7 +969,10 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     for collection in ["Agent", "InferenceBackendMetadata"] {
         let rows = remaining["data"][collection].as_array().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["node_did"], "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR");
+        assert_eq!(
+            rows[0]["node_did"],
+            "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"
+        );
     }
     Ok(())
 }
@@ -1169,7 +1221,13 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         let prior = case
             .pre_desired
             .iter()
-            .map(|row| document(doc_for(modeled_owner(&row.target.node_did), &row.target.id, &row.content)))
+            .map(|row| {
+                document(doc_for(
+                    modeled_owner(&row.target.node_did),
+                    &row.target.id,
+                    &row.content,
+                ))
+            })
             .collect::<Vec<_>>();
         apply(&access, prior).await?;
 
@@ -1180,15 +1238,31 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                 let digest = row
                     .content
                     .as_deref()
-                    .map(|content| authored_digest(modeled_owner(&row.target.node_did), &row.target.id, content))
+                    .map(|content| {
+                        authored_digest(
+                            modeled_owner(&row.target.node_did),
+                            &row.target.id,
+                            content,
+                        )
+                    })
                     .transpose()?;
-                Ok(expectation(modeled_owner(&row.target.node_did), &row.target.id, digest))
+                Ok(expectation(
+                    modeled_owner(&row.target.node_did),
+                    &row.target.id,
+                    digest,
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
         let plan = DesiredStateApplyPlan::new(
             case.candidate
                 .iter()
-                .map(|row| document(doc_for(modeled_owner(&row.target.node_did), &row.target.id, &row.content)))
+                .map(|row| {
+                    document(doc_for(
+                        modeled_owner(&row.target.node_did),
+                        &row.target.id,
+                        &row.content,
+                    ))
+                })
                 .collect(),
         )?
         .with_expected(expected)?;
@@ -1210,8 +1284,13 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
 
         let mut after_first = Vec::new();
         for row in &case.expected_after_desired {
-            let live = live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id).await?;
-            let want = authored_digest(modeled_owner(&row.target.node_did), &row.target.id, &row.content)?;
+            let live =
+                live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id).await?;
+            let want = authored_digest(
+                modeled_owner(&row.target.node_did),
+                &row.target.id,
+                &row.content,
+            )?;
             assert_eq!(
                 live,
                 Some(want),
@@ -1251,7 +1330,8 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             }
             for (row, first) in case.expected_after_desired.iter().zip(&after_first) {
                 assert_eq!(
-                    live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id).await?,
+                    live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id)
+                        .await?,
                     *first,
                     "case {} document {} changed on replay",
                     case.name,
@@ -2398,17 +2478,20 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
             _ => None,
         })
         .expect("modeled runtime");
-    assert!(case
-        .actions
-        .iter()
-        .any(|action| matches!(action, LeanIdentityAction::Check { actor, .. } if actor == modeled_agent)));
+    assert!(case.actions.iter().any(
+        |action| matches!(action, LeanIdentityAction::Check { actor, .. } if actor == modeled_agent)
+    ));
     // Modeled DIDs carry no keys; held identities play the modeled User,
     // runtime and Agent so the User's configuration writes are signed.
     use crate::NodeIdentity as _;
     let keys = tempfile::tempdir()?;
     let held = |name: &str| crate::KeyIdentity::load_or_create(keys.path().join(name), None);
     let (user_key, runtime_key, agent_key) = (held("user")?, held("runtime")?, held("agent")?);
-    let (user, runtime, agent) = (user_key.did().to_owned(), runtime_key.did(), agent_key.did());
+    let (user, runtime, agent) = (
+        user_key.did().to_owned(),
+        runtime_key.did(),
+        agent_key.did(),
+    );
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let node = Arc::new(
@@ -2476,10 +2559,7 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
                         hidden["data"]["Node"].as_array().unwrap().is_empty(),
                         "agent unexpectedly reads Node"
                     );
-                    anyhow::ensure!(
-                        txn.actor_did() == Some(agent),
-                        "transaction actor changed"
-                    );
+                    anyhow::ensure!(txn.actor_did() == Some(agent), "transaction actor changed");
                     configuration_node_doc(txn, runtime, Some(binding)).await
                 })
             })

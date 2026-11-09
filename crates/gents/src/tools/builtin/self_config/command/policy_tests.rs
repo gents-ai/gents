@@ -181,7 +181,9 @@ fn permission_names(view: &Value) -> Vec<String> {
 fn assert_refused_with_policy_get(failure: &Value, verb: &str, permission: &str) {
     let message = failure["error"].as_str().expect("error message");
     assert!(
-        message.contains(&format!("policy {verb} refused for node permission {permission}")),
+        message.contains(&format!(
+            "policy {verb} refused for node permission {permission}"
+        )),
         "{message}"
     );
     assert_eq!(
@@ -209,7 +211,10 @@ async fn engineer_grants_held_permission_to_sibling_and_policy_get_shows_it() {
         format!("Granted node permission get-collection to {sibling}.")
     );
     let access = receipt["effective_access"].as_str().unwrap();
-    assert!(access.contains("still holds it through: direct grant"), "{access}");
+    assert!(
+        access.contains("still holds it through: direct grant"),
+        "{access}"
+    );
     assert_eq!(receipt["metadata"]["acting_agent_did"], fixture.agent_did);
     assert_eq!(receipt["metadata"]["subject_did"], sibling);
     assert!(receipt["config_execution"].is_object(), "{receipt}");
@@ -371,10 +376,7 @@ async fn explain_reports_missing_add_nac_relation_when_permission_is_held() {
     let fixture = PolicyFixture::new("policy-explain-no-operation").await;
     let sibling = fixture.install_sibling("Reviewer").await;
     fixture
-        .grant_engineer(&[
-            NodePermission::NacStatus,
-            NodePermission::CollectionGet,
-        ])
+        .grant_engineer(&[NodePermission::NacStatus, NodePermission::CollectionGet])
         .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);

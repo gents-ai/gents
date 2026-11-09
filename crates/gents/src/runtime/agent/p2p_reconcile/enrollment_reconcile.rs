@@ -1564,8 +1564,13 @@ mod tests {
                 Box::pin(async move {
                     let response = txn.execute(mutation).await?;
                     let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
-                    txn.add_actor_relationship("AgentRequest", &doc_id, "working_agent", working_agent)
-                        .await?;
+                    txn.add_actor_relationship(
+                        "AgentRequest",
+                        &doc_id,
+                        "working_agent",
+                        working_agent,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(doc_id)
                 })
             })
@@ -1780,7 +1785,11 @@ mod tests {
         ] {
             let request_id = request.request_id.clone();
             let blocked = verifier
-                .verify_fresh_at(&request, agent.did(), "2030-01-01T00:06:00Z".parse().unwrap())
+                .verify_fresh_at(
+                    &request,
+                    agent.did(),
+                    "2030-01-01T00:06:00Z".parse().unwrap(),
+                )
                 .await
                 .unwrap_err();
             assert!(!blocked.is_denied(), "{request_id}: {blocked:#}");
@@ -1799,7 +1808,11 @@ mod tests {
                 .is_none()
             );
             let row: PendingRow = request_row_as_runtime(&node, target.as_ref(), &request_id).await;
-            assert_eq!(row.lifecycle_state, RequestLifecycleState::Pending, "{request_id}");
+            assert_eq!(
+                row.lifecycle_state,
+                RequestLifecycleState::Pending,
+                "{request_id}"
+            );
             assert!(row.claimed_at.is_none(), "{request_id}");
             assert!(
                 row.failure_reason.as_deref().is_none_or(str::is_empty),

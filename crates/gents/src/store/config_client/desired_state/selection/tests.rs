@@ -165,9 +165,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
     access
         .transact_write("test.skill.install", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let skill = access
@@ -287,9 +285,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
     access
         .transact_write("test.skill.unrelated", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     assert!(!visible(&agent_access.execute(query).await?));
@@ -382,9 +378,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
     access
         .transact_write("test.skill.create_removal_target", |txn| {
             let plan = &user_plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let query_removable = "{ Skill(filter:{skill_id:{_eq:\"user-skill\"}}) {_docID description} }";
@@ -555,9 +549,12 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
         .transact_write("test.inference.select", |txn| {
             let changes = &changes;
             Box::pin(async move {
-                apply_selection_changes(txn, changes, |collection| {
-                    collection != Collection::InferenceBackend
-                }, false)
+                apply_selection_changes(
+                    txn,
+                    changes,
+                    |collection| collection != Collection::InferenceBackend,
+                    false,
+                )
                 .await
             })
         })
@@ -587,9 +584,12 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
                 .transact_write("test.inference.remove_execution", |txn| {
                     let change = &change;
                     Box::pin(async move {
-                        apply_selection_changes(txn, change, |collection| {
-                            collection != Collection::InferenceBackend
-                        }, false)
+                        apply_selection_changes(
+                            txn,
+                            change,
+                            |collection| collection != Collection::InferenceBackend,
+                            false,
+                        )
                         .await
                     })
                 })
@@ -716,9 +716,12 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         .transact_write("test.skill.select", |txn| {
             let changes = &changes;
             Box::pin(async move {
-                apply_selection_changes(txn, changes, |collection| {
-                    collection != Collection::InferenceProfile
-                }, false)
+                apply_selection_changes(
+                    txn,
+                    changes,
+                    |collection| collection != Collection::InferenceProfile,
+                    false,
+                )
                 .await
             })
         })
@@ -905,9 +908,12 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         .transact_write("test.skill.unrelated", |txn| {
             let changes = &unrelated;
             Box::pin(async move {
-                apply_selection_changes(txn, changes, |collection| {
-                    collection != Collection::InferenceProfile
-                }, false)
+                apply_selection_changes(
+                    txn,
+                    changes,
+                    |collection| collection != Collection::InferenceProfile,
+                    false,
+                )
                 .await
             })
         })
@@ -940,9 +946,12 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         .transact_write("test.skill.deselect", |txn| {
             let changes = &removal;
             Box::pin(async move {
-                apply_selection_changes(txn, changes, |collection| {
-                    collection != Collection::InferenceProfile
-                }, false)
+                apply_selection_changes(
+                    txn,
+                    changes,
+                    |collection| collection != Collection::InferenceProfile,
+                    false,
+                )
                 .await
             })
         })

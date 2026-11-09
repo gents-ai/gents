@@ -413,7 +413,11 @@ async fn held_history_for(
         .expect("message headers")
     {
         let header = header["_docID"].as_str().expect("message document ID");
-        messages.push(crate::support::fixtures::held_canonical_message(db, fixture, header).await.1);
+        messages.push(
+            crate::support::fixtures::held_canonical_message(db, fixture, header)
+                .await
+                .1,
+        );
     }
     messages
 }
@@ -1414,10 +1418,12 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
     let history = held_history(&turn, &turn.session_id).await;
     let late = history
         .iter()
-        .filter(|message| matches!(message,
+        .filter(|message| {
+            matches!(message,
             Message::User { content }
                 if content.iter().any(|item| matches!(item,
-                    UserContent::ToolResult(result) if result.id == "meta-wait-deadline"))))
+                    UserContent::ToolResult(result) if result.id == "meta-wait-deadline")))
+        })
         .collect::<Vec<_>>();
     // The timed-out wait settles with its deadline failure; a late success
     // envelope from the background job must never replace it.

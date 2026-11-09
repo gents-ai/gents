@@ -504,13 +504,12 @@ mod tests {
         let error = crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .expect_err("an older lineage must not open");
-        let store = incompatible_store(&error, &data)
-            .unwrap_or_else(|| {
-                panic!(
-                    "typed refusal: {}",
-                    gents_protocol::error_chain::ErrorChain(&error)
-                )
-            });
+        let store = incompatible_store(&error, &data).unwrap_or_else(|| {
+            panic!(
+                "typed refusal: {}",
+                gents_protocol::error_chain::ErrorChain(&error)
+            )
+        });
         assert_eq!(store.kind, IncompatibleStoreKind::UnknownLineage);
         assert!(
             node.get_collection(gents_protocol::schemas::NODE_NAME)

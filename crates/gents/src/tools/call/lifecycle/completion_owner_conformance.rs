@@ -933,11 +933,8 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     } = selected_background_wake().await;
     let node = &admission.node;
     let did = &admission.node_did;
-    let mut continuation = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
-        node.clone(),
-        selected,
-        60,
-    );
+    let mut continuation =
+        crate::request::lifecycle::RequestLifecycle::new_with_node_did(node.clone(), selected, 60);
     let signer = admission
         .tool
         .access()

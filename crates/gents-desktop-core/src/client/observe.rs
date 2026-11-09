@@ -104,7 +104,14 @@ fn apply_source_notice(
 ) -> Option<SourceNotice> {
     let kind = SourceNotice::of(event)?;
     queue.notice(store, node, generation, kind);
-    sources.observe(node, remote::Origin::Source, event, store, Instant::now(), metrics);
+    sources.observe(
+        node,
+        remote::Origin::Source,
+        event,
+        store,
+        Instant::now(),
+        metrics,
+    );
     Some(kind)
 }
 
@@ -162,7 +169,8 @@ impl Queue {
             }
             Settlement::TransportFailed => {
                 self.pending.insert(node.to_owned());
-                self.retry_at.insert(node.to_owned(), now + SNAPSHOT_RETRY_DELAY);
+                self.retry_at
+                    .insert(node.to_owned(), now + SNAPSHOT_RETRY_DELAY);
             }
             Settlement::Refused => {
                 self.pending.remove(node);
@@ -429,7 +437,11 @@ pub fn spawn_observer(
                 .iter()
                 .filter(|node| {
                     sources.entries.get(*node).is_some_and(|source| {
-                        queue.startable(node, source.generation, loads.in_flight.contains_key(*node))
+                        queue.startable(
+                            node,
+                            source.generation,
+                            loads.in_flight.contains_key(*node),
+                        )
                     })
                 })
                 .cloned()

@@ -97,7 +97,12 @@ mod tests {
         let mut record = PeerRecord::new("Remote", "iroh://peer", "did:key:selected");
         record.graphql = Some(format!("{}/api/v0/graphql", server.uri()));
         let supported = gents_protocol::session_input_edit::AUTHORED_QUEUE_EDIT_VERSION;
-        for version in [None, Some(supported - 1), Some(supported), Some(supported + 1)] {
+        for version in [
+            None,
+            Some(supported - 1),
+            Some(supported),
+            Some(supported + 1),
+        ] {
             server.reset().await;
             Mock::given(method("GET"))
                 .and(path("/status"))

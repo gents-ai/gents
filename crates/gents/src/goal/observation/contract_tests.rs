@@ -672,7 +672,10 @@ async fn modeled_responses(case: &Value, agent: &dyn NodeIdentity) -> (Value, Va
         "missing" => json!([]),
         kind @ ("unverified" | "verified") => {
             let mut observation = modeled_observation(&case["projection"]["goal"], agent.did());
-            observation.signature = agent.sign(&observation.signing_payload().unwrap()).await.unwrap();
+            observation.signature = agent
+                .sign(&observation.signing_payload().unwrap())
+                .await
+                .unwrap();
             if kind == "unverified" {
                 observation.signature[0] ^= 1;
             }
@@ -806,12 +809,22 @@ async fn client_goal_read_is_unknown_until_the_agent_publishes() {
         panic!("published projection must be observed");
     };
     assert_eq!(observed.goal.unwrap().snapshot.goal_id, f.goal.goal_id);
-    for (requester, collapsed) in [(Some(f.user.did()), true), (Some("did:key:other"), false), (None, false)] {
+    for (requester, collapsed) in [
+        (Some(f.user.did()), true),
+        (Some("did:key:other"), false),
+        (None, false),
+    ] {
         assert_eq!(
-            load_session_goal_observation(&access, identity.as_ref(), identity.did(), SESSION, requester)
-                .await
-                .unwrap()
-                .is_some(),
+            load_session_goal_observation(
+                &access,
+                identity.as_ref(),
+                identity.did(),
+                SESSION,
+                requester
+            )
+            .await
+            .unwrap()
+            .is_some(),
             collapsed,
             "the collapse yields only the envelope verified for {requester:?}"
         );

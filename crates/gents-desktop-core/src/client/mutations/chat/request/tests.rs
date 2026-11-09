@@ -1122,7 +1122,10 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
                 escape_graphql_string(&session_id),
             ))
             .await?;
-        let request = match response["data"]["AgentRequest"].as_array().map(Vec::as_slice) {
+        let request = match response["data"]["AgentRequest"]
+            .as_array()
+            .map(Vec::as_slice)
+        {
             Some([row]) => row,
             _ => bail!("the owner must hold exactly one request: {response}"),
         };
@@ -1138,7 +1141,10 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
                 "AgentRequest must carry {field}"
             );
         }
-        let session = match response["data"]["AgentSession"].as_array().map(Vec::as_slice) {
+        let session = match response["data"]["AgentSession"]
+            .as_array()
+            .map(Vec::as_slice)
+        {
             Some([row]) => row,
             _ => bail!("the owner must hold exactly one reserved session: {response}"),
         };
@@ -1246,8 +1252,7 @@ async fn chat_send_replays_lean_optimistic_send_traces() -> Result<()> {
             for kind in history {
                 match *kind {
                     "commit" => {
-                        let submitted =
-                            send(request_id.clone(), session_id.clone(), None).await?;
+                        let submitted = send(request_id.clone(), session_id.clone(), None).await?;
                         assert_eq!(submitted.request_id, request_id, "{history:?}");
                         held = true;
                     }
@@ -1285,8 +1290,16 @@ async fn chat_send_replays_lean_optimistic_send_traces() -> Result<()> {
         // A retry racing its first send still committing (Lean: two creates of
         // one identity on the wire) is one request, and both replies confirm.
         let (left, right) = tokio::join!(
-            send("optimistic-raced".into(), "optimistic-raced-session".into(), None),
-            send("optimistic-raced".into(), "optimistic-raced-session".into(), None),
+            send(
+                "optimistic-raced".into(),
+                "optimistic-raced-session".into(),
+                None
+            ),
+            send(
+                "optimistic-raced".into(),
+                "optimistic-raced-session".into(),
+                None
+            ),
         );
         assert_eq!(left?.request_id, "optimistic-raced");
         assert_eq!(right?.request_id, "optimistic-raced");

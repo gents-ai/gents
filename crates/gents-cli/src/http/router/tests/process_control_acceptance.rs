@@ -355,7 +355,10 @@ async fn configure_background_bash(
     };
     let projected = plan(vec![
         (Collection::Tools, serde_json::to_value(tools).unwrap()),
-        (Collection::AgentContext, serde_json::to_value(context).unwrap()),
+        (
+            Collection::AgentContext,
+            serde_json::to_value(context).unwrap(),
+        ),
     ])
     .unwrap();
     home.access
@@ -393,8 +396,11 @@ async fn configure_background_bash(
                     read(Collection::InferenceBackend, format!("{agent_did}:backend")).await?;
                 backend["endpoint"] = endpoint.into();
                 backend["openai_wire_api"] = "chat_completions".into();
-                let mut profile =
-                    read(Collection::InferenceProfile, format!("{agent_did}:inference")).await?;
+                let mut profile = read(
+                    Collection::InferenceProfile,
+                    format!("{agent_did}:inference"),
+                )
+                .await?;
                 profile["model_name"] = model.into();
                 let plan = plan(vec![
                     (Collection::InferenceBackend, backend),

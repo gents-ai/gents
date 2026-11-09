@@ -3,8 +3,8 @@ use crate::tools::call::lifecycle::admission_fixture::{
     complete_child_managed_verified, published_session_message,
     published_session_message_with_owner, PublishedAdmissionOptions,
 };
-use gents_protocol::tool_call::AwaitMode;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
+use gents_protocol::tool_call::AwaitMode;
 use std::sync::Arc;
 
 use super::fixtures::{completion_obligations, update};
@@ -32,7 +32,12 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
     let did = admission.node_did.clone();
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     let session_id = admission.tool.session_id().to_owned();
-    update(&access, &tool_doc_id, r#"deadline_at: "2020-01-01T00:00:00Z""#).await;
+    update(
+        &access,
+        &tool_doc_id,
+        r#"deadline_at: "2020-01-01T00:00:00Z""#,
+    )
+    .await;
 
     let restart = ToolCallLifecycle::recover_all(node, &did, &identities)
         .await
@@ -258,11 +263,13 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let wakes = pending_wakes(agent_access.clone(), session_id.clone()).await;
     assert_eq!(wakes.len(), 1);
 
-    let caller =
-        crate::request::binding::load_agent_request_by_doc_id_with_access(&agent_access, &caller_doc_id)
-            .await
-        .unwrap()
-        .unwrap();
+    let caller = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &agent_access,
+        &caller_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let native =
         crate::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access(
             &message.admission.tool.access().unwrap(),
@@ -287,7 +294,10 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         .await
         .unwrap();
     assert!(!native.created_request);
-    assert_eq!(pending_wakes(agent_access.clone(), session_id.clone()).await, wakes);
+    assert_eq!(
+        pending_wakes(agent_access.clone(), session_id.clone()).await,
+        wakes
+    );
     let (admitted, row) = admit(wakes[0].clone()).await;
     assert!(admitted, "{row}");
     assert_eq!(row["request_hop"], caller.request_hop);
@@ -362,10 +372,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         ))
         .await
         .unwrap();
-    let wakes = response["data"]["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .clone();
+    let wakes = response["data"]["AgentRequest"].as_array().unwrap().clone();
     assert_eq!(wakes.len(), 1, "{wakes:?}");
     let wake = crate::request::binding::load_agent_request_by_doc_id_with_access(
         &agent_access,
@@ -408,11 +415,8 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     )
     .await
     .expect("the returned result is admitted into the client's session");
-    let mut lifecycle = crate::RequestLifecycle::new_with_node_did(
-        node.clone(),
-        verified.clone(),
-        60,
-    );
+    let mut lifecycle =
+        crate::RequestLifecycle::new_with_node_did(node.clone(), verified.clone(), 60);
     lifecycle.bind_managed_agent(&signer).unwrap();
     lifecycle.set_client_claim_admission(client_claim);
     assert_eq!(

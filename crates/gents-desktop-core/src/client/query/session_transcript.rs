@@ -282,7 +282,8 @@ async fn load_fork_copies(
         );
         let data = access.execute(&query, "canonical fork copies").await?;
         *query_count += 1;
-        let rows = parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
+        let rows =
+            parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
         *queried_rows = queried_rows.saturating_add(rows.len());
         if rows.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
             bail!(
@@ -302,10 +303,12 @@ async fn load_fork_copies(
     }
     let observed = copies
         .iter()
-        .map(|row| gents_protocol::output::reconstruction::ObservedSegment {
-            doc_id: &row.doc_id,
-            segment: &row.segment,
-        })
+        .map(
+            |row| gents_protocol::output::reconstruction::ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            },
+        )
         .collect::<Vec<_>>();
     let copied = page_headers
         .iter()

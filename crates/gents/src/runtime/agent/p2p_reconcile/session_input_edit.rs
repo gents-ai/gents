@@ -75,10 +75,9 @@ async fn authority_rejection(
     if command.requester_peer_id.is_some() {
         return Ok(Some("remote session edits are not accepted".into()));
     }
-    let expected_admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
-            &command.requester_did,
-        );
+    let expected_admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+        &command.requester_did,
+    );
     for replacement in &command.replacements {
         let mut actual = replacement.admission.clone();
         actual.signature.clear();
@@ -220,9 +219,11 @@ async fn physical_session_agent(
     let [session] = sessions.as_slice() else {
         return Ok(None);
     };
-    Ok((session["node_did"].as_str() == Some(row.node_did.as_str()))
-        .then(|| session["agent_did"].as_str().map(str::to_owned))
-        .flatten())
+    Ok(
+        (session["node_did"].as_str() == Some(row.node_did.as_str()))
+            .then(|| session["agent_did"].as_str().map(str::to_owned))
+            .flatten(),
+    )
 }
 
 async fn verified_graphs(

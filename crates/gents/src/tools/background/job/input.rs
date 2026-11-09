@@ -1826,11 +1826,8 @@ pub(crate) mod tests {
             .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-        let mut request = RequestLifecycle::new_with_node_did(
-            node.clone(),
-            row.try_into().unwrap(),
-            60,
-        );
+        let mut request =
+            RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
         request
             .bind_managed_agent(managed_agent().as_ref())
             .unwrap();

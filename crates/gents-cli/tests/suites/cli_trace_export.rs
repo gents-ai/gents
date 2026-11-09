@@ -1598,15 +1598,10 @@ async fn exec_variables_doc_id(
     variables: Value,
     collection: &str,
 ) -> Result<String> {
-    let response = node
-        .execute_with_variables(query, variables)
-        .await;
+    let response = node.execute_with_variables(query, variables).await;
     anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
-    gents::store::graphql::created_doc_id(
-        &json!({"data": response.data}),
-        collection,
-    )
-    .with_context(|| format!("{collection} mutation omitted document"))
+    gents::store::graphql::created_doc_id(&json!({"data": response.data}), collection)
+        .with_context(|| format!("{collection} mutation omitted document"))
 }
 
 #[allow(clippy::too_many_arguments)]

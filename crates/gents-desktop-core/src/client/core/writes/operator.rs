@@ -251,14 +251,12 @@ impl ClientCore {
             self.node_identity.private_key_bytes(),
         )
         .map_err(LocalHomeAccessError::Signing)?;
-        Ok(
-            gents::store::config_client::GraphqlEndpoint::as_principal(
-                url,
-                self.node_identity.did(),
-            )
-            .with_client_signing_capability(capability)
-            .map_err(LocalHomeAccessError::Signing)?
-            .with_client_signed_agent_creates(),
+        Ok(gents::store::config_client::GraphqlEndpoint::as_principal(
+            url,
+            self.node_identity.did(),
         )
+        .with_client_signing_capability(capability)
+        .map_err(LocalHomeAccessError::Signing)?
+        .with_client_signed_agent_creates())
     }
 }

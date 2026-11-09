@@ -20,7 +20,11 @@ async fn signed_trigger_materializer(
         .map(|id| {
             (
                 (*id).to_owned(),
-                resolved_event_trigger_with_concurrency(id, task.clone(), ConcurrencyMode::Parallel),
+                resolved_event_trigger_with_concurrency(
+                    id,
+                    task.clone(),
+                    ConcurrencyMode::Parallel,
+                ),
             )
         })
         .collect();
@@ -59,7 +63,9 @@ async fn admin_delete(client: &crate::ConfigAccess, collection: &str, filter: St
             let filter = filter.clone();
             Box::pin(async move {
                 let rows = txn
-                    .execute(&format!("{{ {collection}(filter: {{{filter}}}) {{ _docID }} }}"))
+                    .execute(&format!(
+                        "{{ {collection}(filter: {{{filter}}}) {{ _docID }} }}"
+                    ))
                     .await?;
                 let docs: Vec<String> = rows["data"][collection]
                     .as_array()
@@ -201,9 +207,8 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             .unwrap()
     );
     let session_request = request.clone();
-    let reopened = access.transact_write(
-        "test.task_session",
-        move |txn| {
+    let reopened = access
+        .transact_write("test.task_session", move |txn| {
             let request = session_request.clone();
             Box::pin(async move {
                 crate::session::ensure_session_in_txn(
@@ -218,10 +223,9 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                 )
                 .await
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
     assert!(!reopened, "the delivered Task session already exists");
     assert!(
         crate::session::origin::task_triggered_opening(&access, &scope)
@@ -233,15 +237,12 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         ..scope.clone()
     };
     // A same-node Agent's session interrupts the Task-opened session.
-    assert!(crate::session::message::interrupt_refusal(
-        &node,
-        &agent.agent_did,
-        &caller,
-        &scope
-    )
-    .await
-    .unwrap()
-    .is_none());
+    assert!(
+        crate::session::message::interrupt_refusal(&node, &agent.agent_did, &caller, &scope)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let mut caller_request = request.clone();
     caller_request.session_id = caller.session_id.clone();
     let tools = crate::tools::surface::AgentToolConfig {
@@ -284,15 +285,12 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         node_did: "did:other".into(),
         ..caller
     };
-    assert!(crate::session::message::interrupt_refusal(
-        &node,
-        &agent.agent_did,
-        &foreign,
-        &scope
-    )
-    .await
-    .unwrap()
-    .is_some());
+    assert!(
+        crate::session::message::interrupt_refusal(&node, &agent.agent_did, &foreign, &scope)
+            .await
+            .unwrap()
+            .is_some()
+    );
     create_session_fire(&access, &agent.agent_did, &owner, &scope.session_id, format!(
         r#"mutation {{create_TriggerFire(input: {{fire_key: "duplicate-fire", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "authority-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
         escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
@@ -320,10 +318,16 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
 
     // Receipts under a session are removed by its administrator, the User.
     assert_eq!(
-        admin_delete(&client_access, "TriggerFire", format!(
-            r#"owner_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}"#,
-            escape_graphql_string(&owner), escape_graphql_string(&request.request_id)
-        )).await,
+        admin_delete(
+            &client_access,
+            "TriggerFire",
+            format!(
+                r#"owner_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}"#,
+                escape_graphql_string(&owner),
+                escape_graphql_string(&request.request_id)
+            )
+        )
+        .await,
         2
     );
     create_session_fire(&access, &agent.agent_did, &owner, &scope.session_id, format!(
@@ -336,7 +340,12 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             .unwrap()
     );
     assert_eq!(
-        admin_delete(&client_access, "TriggerFire", r#"fire_key: {_eq: "wrong-trigger-fire"}"#.to_owned()).await,
+        admin_delete(
+            &client_access,
+            "TriggerFire",
+            r#"fire_key: {_eq: "wrong-trigger-fire"}"#.to_owned()
+        )
+        .await,
         1
     );
     create_session_fire(&access, &agent.agent_did, &owner, &scope.session_id, format!(
@@ -349,16 +358,21 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             .unwrap()
     );
     assert_eq!(
-        admin_delete(&client_access, "AgentSession", format!(
-            r#"node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}"#,
-            escape_graphql_string(&owner), escape_graphql_string(&scope.session_id)
-        )).await,
+        admin_delete(
+            &client_access,
+            "AgentSession",
+            format!(
+                r#"node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}"#,
+                escape_graphql_string(&owner),
+                escape_graphql_string(&scope.session_id)
+            )
+        )
+        .await,
         1
     );
     let original_request = request.clone();
-    access.transact_write(
-        "test.wrong_requester_session",
-        move |txn| {
+    access
+        .transact_write("test.wrong_requester_session", move |txn| {
             let request = original_request.clone();
             Box::pin(async move {
                 crate::session::ensure_session_in_txn(
@@ -455,9 +469,8 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         let session = test_session.to_owned();
         let node_did = owner.clone();
         let agent_did = agent.agent_did.clone();
-        access.transact_write(
-            "test.bad_opening_session",
-            move |txn| {
+        access
+            .transact_write("test.bad_opening_session", move |txn| {
                 let session = session.clone();
                 let node_did = node_did.clone();
                 let agent_did = agent_did.clone();
@@ -762,7 +775,10 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let escaped_session = escape_graphql_string(&identity.session_id);
     // Session children are removed by the session's administrator, the User.
     let session_filter = format!(r#"session_id: {{_eq: "{escaped_session}"}}"#);
-    assert_eq!(admin_delete(&client_access, "Goal", session_filter.clone()).await, 1);
+    assert_eq!(
+        admin_delete(&client_access, "Goal", session_filter.clone()).await,
+        1
+    );
     assert_eq!(
         admin_delete(&client_access, "GoalCreationClaim", session_filter).await,
         1
@@ -772,7 +788,10 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         .await
         .unwrap();
     assert!(remaining["data"]["Goal"].as_array().unwrap().is_empty());
-    assert!(remaining["data"]["GoalCreationClaim"].as_array().unwrap().is_empty());
+    assert!(remaining["data"]["GoalCreationClaim"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
         materializer
             .recover_goal_task_fire(&task, fire_key)

@@ -23,8 +23,11 @@ impl DefraStreamWriter {
         generation: String,
         profile: gents_loop::provider_input::ProviderInputProfile,
     ) -> AuxiliaryOutputSink {
-        let mut writer =
-            DefraStreamWriter::new(Arc::clone(&self.node), &request.agent_did, self.batch_interval);
+        let mut writer = DefraStreamWriter::new(
+            Arc::clone(&self.node),
+            &request.agent_did,
+            self.batch_interval,
+        );
         writer.agent_signer = self.agent_signer.clone();
         sink_with_writer(Arc::new(writer), request, generation, profile)
     }

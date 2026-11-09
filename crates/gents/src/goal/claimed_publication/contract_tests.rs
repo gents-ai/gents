@@ -34,11 +34,8 @@ async fn verified_client_lifecycle(
         admission.is_some(),
         "client request must retain its native claim admission"
     );
-    let mut lifecycle = crate::RequestLifecycle::new_with_node_did(
-        fixture.node.clone(),
-        request,
-        60,
-    );
+    let mut lifecycle =
+        crate::RequestLifecycle::new_with_node_did(fixture.node.clone(), request, 60);
     lifecycle
         .bind_managed_agent(fixture.agent.as_ref())
         .unwrap();

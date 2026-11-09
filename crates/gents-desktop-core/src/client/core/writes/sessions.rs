@@ -61,8 +61,7 @@ impl ClientCore {
         );
         let child_session_id = normalize_required("child_session_id", child_session_id)?;
         anyhow::ensure!(!message_key.trim().is_empty(), "message_key is required");
-        let peer = self
-            .peer_record_for_chat_write(node_did)?;
+        let peer = self.peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer.as_ref())?;
         let requester = self.requester_did(
             peer.as_ref()

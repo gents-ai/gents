@@ -820,16 +820,11 @@ async fn wait_for_chat_ready_enrollment(
     let mut updates = core.sync_state_updates();
     loop {
         let now = Utc::now();
-        if let Some(record) = core
-            .peer_records()
-            .await
-            .into_iter()
-            .find(|record| {
-                record.node_did == node_did
-                    && record.is_enrollment_ready_at(now)
-                    && record.is_chat_ready()
-            })
-        {
+        if let Some(record) = core.peer_records().await.into_iter().find(|record| {
+            record.node_did == node_did
+                && record.is_enrollment_ready_at(now)
+                && record.is_chat_ready()
+        }) {
             return Ok(record);
         }
         if Instant::now() >= deadline {

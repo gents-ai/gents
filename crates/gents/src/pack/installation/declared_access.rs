@@ -28,8 +28,7 @@ pub(super) fn ensure_admissible(
         for reader in document.add[field].as_array().into_iter().flatten() {
             let did = reader["agent_did"].as_str().unwrap_or_default();
             anyhow::ensure!(
-                bindings.values().any(|binding| binding.agent_did == did)
-                    || installer == Some(did),
+                bindings.values().any(|binding| binding.agent_did == did) || installer == Some(did),
                 "{} {} declares reader {did:?}, which is not an Agent this pack provisions",
                 document.collection.graphql_type(),
                 field

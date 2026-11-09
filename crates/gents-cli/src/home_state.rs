@@ -291,8 +291,7 @@ pub(crate) fn cli_client_did() -> Result<identity::Did> {
     let client =
         gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
             .context("CLI client identity is unavailable; initialize the CLI client first")?;
-    identity::Did::new(client.did().to_owned())
-        .context("CLI client DID is not ACP-addressable")
+    identity::Did::new(client.did().to_owned()).context("CLI client DID is not ACP-addressable")
 }
 
 /// The CLI's held User key signs every client-authored command; a registry

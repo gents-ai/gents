@@ -6,7 +6,10 @@ use crate::tools::call::lifecycle::admission_fixture::{
 /// The admission's Agent owns its request and tool rows; ACP hides them
 /// from any other reader.
 fn owner(admission: &PublishedAdmission) -> crate::ConfigAccess {
-    admission.tool.access().expect("admission carries its Agent access")
+    admission
+        .tool
+        .access()
+        .expect("admission carries its Agent access")
 }
 
 async fn update(admission: &PublishedAdmission, collection: &str, doc_id: &str, fields: &str) {

@@ -266,8 +266,8 @@ impl ClientHome {
             .await
             .unwrap();
         let user_dir = tempfile::tempdir().unwrap();
-        let user = gents::KeyIdentity::load_or_create(user_dir.path().join("user.key"), None)
-            .unwrap();
+        let user =
+            gents::KeyIdentity::load_or_create(user_dir.path().join("user.key"), None).unwrap();
         gents::store::identity::GrantSet::OperatorUser
             .grant(
                 &gents::store::config_client::ConfigAccess::local_as(
@@ -502,10 +502,7 @@ pub(crate) enum ProxyDecision {
 }
 
 pub(crate) type ProxyHook = std::sync::Arc<
-    dyn Fn(
-            String,
-            axum::body::Bytes,
-        ) -> futures_util::future::BoxFuture<'static, ProxyDecision>
+    dyn Fn(String, axum::body::Bytes) -> futures_util::future::BoxFuture<'static, ProxyDecision>
         + Send
         + Sync,
 >;

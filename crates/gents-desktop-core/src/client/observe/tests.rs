@@ -629,8 +629,12 @@ fn generated_runtime_connection_observations_drive_the_owner() {
     assert_eq!(ends.len(), 4);
     for case in ends {
         let end = match case["end"].as_str().unwrap() {
-            "renewalDue" => remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::RenewalDue),
-            "completed" => remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::Completed),
+            "renewalDue" => {
+                remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::RenewalDue)
+            }
+            "completed" => {
+                remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::Completed)
+            }
             "refusedFailure" => remote::StreamEnd::Failed { refused: true },
             "transportFailure" => remote::StreamEnd::Failed { refused: false },
             other => panic!("unexpected stream end {other}"),
@@ -695,7 +699,10 @@ fn generated_runtime_connection_observations_drive_the_owner() {
         );
     }
     for (rust, lean) in [
-        (gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD, "renewalPeriodMs"),
+        (
+            gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
+            "renewalPeriodMs",
+        ),
         (SNAPSHOT_RETRY_DELAY, "snapshotRetryDelayMs"),
     ] {
         assert_eq!(
@@ -835,7 +842,12 @@ async fn failed_snapshot_read_keeps_the_streams_armed() {
         fixture.client.client_signing_capability().unwrap(),
     );
     wait_for_name(&store, Some("remote")).await;
-    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Connected).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
     let before = handle.metrics_snapshot();
 
     set_proxy_mode(&fixture.proxy_commands, ProxyMode::FailingReads).await;
@@ -848,17 +860,35 @@ async fn failed_snapshot_read_keeps_the_streams_armed() {
         )
         .await
         .unwrap();
-    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Disconnected)
-        .await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Disconnected,
+    )
+    .await;
     let during = handle.metrics_snapshot();
-    assert!(during.fetch_failures > before.fetch_failures, "the read failed");
-    assert_eq!(during.reconnects, before.reconnects, "a failed read never reconnects");
+    assert!(
+        during.fetch_failures > before.fetch_failures,
+        "the read failed"
+    );
+    assert_eq!(
+        during.reconnects, before.reconnects,
+        "a failed read never reconnects"
+    );
 
     set_proxy_mode(&fixture.proxy_commands, ProxyMode::Online).await;
     wait_for_name(&store, Some("after read outage")).await;
-    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Connected).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
     let after = handle.metrics_snapshot();
-    assert_eq!(after.reconnects, before.reconnects, "the armed streams were kept");
+    assert_eq!(
+        after.reconnects, before.reconnects,
+        "the armed streams were kept"
+    );
     handle.shutdown().await;
     fixture.stop().await;
 }
@@ -963,7 +993,11 @@ fn generated_reconnect_backoff_drives_the_sources() {
         let attempts = u32::try_from(case["attempts"].as_u64().unwrap()).unwrap();
         let connected = case["connectedMs"].as_u64().map(Duration::from_millis);
         let attempt = remote::reconnect_attempt(attempts, connected);
-        assert_eq!(u64::from(attempt), case["attempt"].as_u64().unwrap(), "{case}");
+        assert_eq!(
+            u64::from(attempt),
+            case["attempt"].as_u64().unwrap(),
+            "{case}"
+        );
         assert_eq!(
             u64::try_from(remote::reconnect_delay(attempt).as_millis()).unwrap(),
             case["delayMs"].as_u64().unwrap(),
@@ -991,17 +1025,33 @@ async fn every_reconnect_path_uses_the_backoff_and_only_a_stable_connection_rese
     let mut waits = Vec::new();
     let mut at = base;
     for (origin, event) in [
-        (remote::Origin::Source, RuntimeConnectionEvent::TransportFailed),
+        (
+            remote::Origin::Source,
+            RuntimeConnectionEvent::TransportFailed,
+        ),
         (remote::Origin::Source, RuntimeConnectionEvent::Refused),
         (remote::Origin::Snapshot, RuntimeConnectionEvent::Refused),
-        (remote::Origin::Source, RuntimeConnectionEvent::TransportFailed),
+        (
+            remote::Origin::Source,
+            RuntimeConnectionEvent::TransportFailed,
+        ),
         (remote::Origin::Source, RuntimeConnectionEvent::Refused),
         (remote::Origin::Snapshot, RuntimeConnectionEvent::Refused),
-        (remote::Origin::Source, RuntimeConnectionEvent::TransportFailed),
+        (
+            remote::Origin::Source,
+            RuntimeConnectionEvent::TransportFailed,
+        ),
     ] {
         sources.start_inert(node);
         // Each cycle connects and drops before the stable period.
-        sources.observe(node, remote::Origin::Snapshot, RuntimeConnectionEvent::SnapshotSucceeded, &store, at, &metrics);
+        sources.observe(
+            node,
+            remote::Origin::Snapshot,
+            RuntimeConnectionEvent::SnapshotSucceeded,
+            &store,
+            at,
+            &metrics,
+        );
         at += Duration::from_secs(1);
         sources.observe(node, origin, event, &store, at, &metrics);
         let due = sources.next_reconnect().unwrap();
@@ -1014,16 +1064,37 @@ async fn every_reconnect_path_uses_the_backoff_and_only_a_stable_connection_rese
     assert_eq!(metrics.snapshot().reconnects, 7);
 
     let generation = sources.start_inert(node);
-    sources.observe(node, remote::Origin::Snapshot, RuntimeConnectionEvent::TransportFailed, &store, at, &metrics);
+    sources.observe(
+        node,
+        remote::Origin::Snapshot,
+        RuntimeConnectionEvent::TransportFailed,
+        &store,
+        at,
+        &metrics,
+    );
     let source = &sources.entries[node];
     assert_eq!(source.generation, generation);
     assert!(!source.ended(), "a failed read keeps the streams armed");
     assert_eq!(sources.next_reconnect(), None);
     assert_eq!(metrics.snapshot().reconnects, 7);
 
-    sources.observe(node, remote::Origin::Snapshot, RuntimeConnectionEvent::SnapshotSucceeded, &store, at, &metrics);
+    sources.observe(
+        node,
+        remote::Origin::Snapshot,
+        RuntimeConnectionEvent::SnapshotSucceeded,
+        &store,
+        at,
+        &metrics,
+    );
     let stable = at + remote::RECONNECT_STABLE;
-    sources.observe(node, remote::Origin::Source, RuntimeConnectionEvent::TransportFailed, &store, stable, &metrics);
+    sources.observe(
+        node,
+        remote::Origin::Source,
+        RuntimeConnectionEvent::TransportFailed,
+        &store,
+        stable,
+        &metrics,
+    );
     assert_eq!(
         sources.next_reconnect().unwrap().duration_since(stable),
         remote::reconnect_delay(0),
@@ -1069,7 +1140,14 @@ async fn reconcile_keeps_an_ended_source_until_its_notice_schedules_the_reconnec
         "the ended source is kept for its notice"
     );
     let now = Instant::now();
-    sources.observe(&notice.node, remote::Origin::Source, notice.event, &store, now, &metrics);
+    sources.observe(
+        &notice.node,
+        remote::Origin::Source,
+        notice.event,
+        &store,
+        now,
+        &metrics,
+    );
     assert_eq!(
         sources.next_reconnect().unwrap().duration_since(now),
         remote::reconnect_delay(0)
@@ -1111,7 +1189,10 @@ async fn node_doc_id(home: &crate::test_fixtures::ServedRuntimeHome) -> String {
         ))
         .await
         .unwrap();
-    rows["data"]["Node"][0]["_docID"].as_str().unwrap().to_owned()
+    rows["data"]["Node"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 /// Locally minted bearers last `DEFRADB_BEARER_LIFETIME` (60s) and each
@@ -1194,16 +1275,31 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
         configured.clone(),
         client.client_signing_capability().unwrap(),
     );
-    wait_for_connection(&store, "did:test:enrolled", RuntimeConnectionStatus::NoEndpoint).await;
+    wait_for_connection(
+        &store,
+        "did:test:enrolled",
+        RuntimeConnectionStatus::NoEndpoint,
+    )
+    .await;
 
     let (stalled_url, _queries, stalled_task) = stalled_runtime().await;
     let mut reachable = enrolled.clone();
     reachable.graphql = Some(stalled_url);
     configured.upsert_for_test(reachable).await.unwrap();
-    wait_for_connection(&store, "did:test:enrolled", RuntimeConnectionStatus::Connecting).await;
+    wait_for_connection(
+        &store,
+        "did:test:enrolled",
+        RuntimeConnectionStatus::Connecting,
+    )
+    .await;
 
     configured.upsert_for_test(enrolled.clone()).await.unwrap();
-    wait_for_connection(&store, "did:test:enrolled", RuntimeConnectionStatus::NoEndpoint).await;
+    wait_for_connection(
+        &store,
+        "did:test:enrolled",
+        RuntimeConnectionStatus::NoEndpoint,
+    )
+    .await;
 
     let current = configured
         .records()
@@ -1237,7 +1333,12 @@ async fn revoked_user_is_answered_with_omitted_roots() {
     let query = crate::client::query::snapshot_query(Some(home.node_did())).unwrap();
     let authorized = access.execute(&query).await.unwrap();
     assert!(authorized.get("errors").is_none(), "{authorized}");
-    let mut answered: Vec<_> = authorized["data"].as_object().unwrap().keys().cloned().collect();
+    let mut answered: Vec<_> = authorized["data"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
     answered.sort();
     let mut roots: Vec<_> = crate::client::query::SNAPSHOT_ROOTS
         .iter()
@@ -1274,7 +1375,11 @@ async fn revoked_user_is_answered_with_omitted_roots() {
     let hidden = crate::client::load_node_snapshot_on(&access, home.node_did())
         .await
         .expect("an omitted root is an empty read, not a failure");
-    assert_eq!(hidden.row_count(), 0, "nothing is visible to the revoked User");
+    assert_eq!(
+        hidden.row_count(),
+        0,
+        "nothing is visible to the revoked User"
+    );
     home.shutdown().await;
 }
 
@@ -1319,7 +1424,10 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
         store.runtime_connection(home.node_did()),
         Some(RuntimeConnectionStatus::Connected)
     );
-    assert_eq!(after.reconnects, before.reconnects, "an empty view never reconnects");
+    assert_eq!(
+        after.reconnects, before.reconnects,
+        "an empty view never reconnects"
+    );
     assert_eq!(after.transport_failures, before.transport_failures);
 
     gents::store::identity::GrantSet::HouseholdOwner
@@ -1500,7 +1608,13 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     store.observe_request_event(None);
                 }
                 let kind = apply_source_notice(
-                    queue, sources, &store, &node_did, *generation, event, &metrics,
+                    queue,
+                    sources,
+                    &store,
+                    &node_did,
+                    *generation,
+                    event,
+                    &metrics,
                 )
                 .expect("a source task event");
                 if kind.aborts_load() {
@@ -1539,8 +1653,11 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     RuntimeConnectionEvent::Refused,
                 ),
                 "start" => {
-                    if queue.startable(&node_did, generation[node], in_flight.contains_key(&node_did))
-                    {
+                    if queue.startable(
+                        &node_did,
+                        generation[node],
+                        in_flight.contains_key(&node_did),
+                    ) {
                         queue.pending.remove(&node_did);
                         in_flight.insert(node_did.clone(), store.capture_read());
                     }

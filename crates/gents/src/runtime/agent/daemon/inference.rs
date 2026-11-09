@@ -1221,7 +1221,14 @@ pub(super) mod tests {
                         inputs.len() == 1
                     };
                     if first {
-                        if let Some(WakeSuccessor { node, request_id, did, signer, runtime }) = &self.successor {
+                        if let Some(WakeSuccessor {
+                            node,
+                            request_id,
+                            did,
+                            signer,
+                            runtime,
+                        }) = &self.successor
+                        {
                             crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
                                 node,
                                 request_id,

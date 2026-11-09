@@ -244,7 +244,8 @@ mod tests {
     async fn existing_provision_identity_remains_readable_while_runtime_holds_the_store() {
         use gents::NodeIdentity as _;
         let temp = tempfile::tempdir().unwrap();
-        let owner = gents::KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+        let owner =
+            gents::KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
         let owner = owner.did();
         let home = temp.path().join("home");
         let original = ensure_home_identity(

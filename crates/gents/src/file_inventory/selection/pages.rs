@@ -1,6 +1,6 @@
 use super::*;
-use crate::store::graphql::CURSOR_PAGE_SIZE;
 use crate::file_inventory::SessionCollection;
+use crate::store::graphql::CURSOR_PAGE_SIZE;
 
 pub(super) const PAGE_SIZE: usize = CURSOR_PAGE_SIZE;
 
@@ -56,22 +56,20 @@ pub(super) fn session_filter(
         .as_deref()
         .filter(|value| !value.is_empty())
         .context("canonical page scope omitted requester")?;
-    Ok(
-        if collection == SessionCollection::AgentOutputSegment {
-            format!(
-                r#"session_id: {{ _eq: "{}" }}, _or: [{{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}]"#,
-                escape_graphql_string(&scope.session_id),
-                escape_graphql_string(&scope.node_did),
-                escape_graphql_string(requester)
-            )
-        } else {
-            gents_protocol::session::session_scope_filter(
-                &scope.node_did,
-                &scope.session_id,
-                Some(requester),
-            )
-        },
-    )
+    Ok(if collection == SessionCollection::AgentOutputSegment {
+        format!(
+            r#"session_id: {{ _eq: "{}" }}, _or: [{{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}]"#,
+            escape_graphql_string(&scope.session_id),
+            escape_graphql_string(&scope.node_did),
+            escape_graphql_string(requester)
+        )
+    } else {
+        gents_protocol::session::session_scope_filter(
+            &scope.node_did,
+            &scope.session_id,
+            Some(requester),
+        )
+    })
 }
 
 pub(super) async fn load_session_rows(

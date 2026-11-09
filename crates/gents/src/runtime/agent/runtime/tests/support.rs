@@ -164,14 +164,12 @@ pub(super) async fn merge_fixture_document(
             Box::pin(async move {
                 let (_, mut document) =
                     crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        collection,
-                        &node_did,
-                        &id,
+                        txn, collection, &node_did, &id,
                     )
                     .await?
                     .expect("fixture document must exist before its update");
-                if let (Some(target), Some(source)) = (document.as_object_mut(), fields.as_object()) {
+                if let (Some(target), Some(source)) = (document.as_object_mut(), fields.as_object())
+                {
                     for (key, value) in source {
                         target.insert(key.clone(), value.clone());
                     }

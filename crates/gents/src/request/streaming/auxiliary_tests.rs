@@ -23,8 +23,8 @@ use crate::lean_vocab_test::{
     LeanReasoningPart,
 };
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::store::config_client::ConfigAccess;
+use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 
 #[tokio::test]
 async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
@@ -118,8 +118,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
     )
     .await
     .unwrap();
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node.clone(), title, 60);
+    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), title, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let writer = Arc::new(
@@ -399,11 +398,8 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let response = access.execute(&query).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        row.try_into().unwrap(),
-        60,
-    );
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
     lifecycle
         .bind_managed_agent(crate::triggers::callback::test_agent_identity().as_ref())
         .unwrap();
@@ -545,9 +541,12 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             panic!("{}: raw has no request writer", case.name);
         };
         assert_eq!(*raw_generation, case.authority.generation, "{}", case.name);
-        let writer =
-            DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::from_millis(1))
-            .unwrap();
+        let writer = DefraStreamWriter::new_for_lifecycle(
+            node.clone(),
+            &lifecycle,
+            Duration::from_millis(1),
+        )
+        .unwrap();
         let generation = lifecycle.execution_generation().unwrap().to_owned();
         let request_doc_id = lifecycle.request().doc_id.clone();
         let empty_state = output_state(&node, &request_doc_id).await;
@@ -926,9 +925,12 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         )
         .await;
         let mut lifecycle = claimed(&node, &case.name).await;
-        let writer =
-            DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::from_millis(1))
-            .unwrap();
+        let writer = DefraStreamWriter::new_for_lifecycle(
+            node.clone(),
+            &lifecycle,
+            Duration::from_millis(1),
+        )
+        .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         let request = lifecycle.request().clone();
         let generation = lifecycle.execution_generation().unwrap().to_owned();

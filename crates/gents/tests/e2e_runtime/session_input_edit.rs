@@ -311,8 +311,14 @@ impl EndpointEdits {
         let selected = pending.iter().skip(offset).take(count).collect::<Vec<_>>();
         let replacements = model["replacements"].as_array().unwrap();
         let mut edit = PendingQueueEdit {
-            expected_request_doc_ids: pending.iter().map(|id| seeded.doc_ids[id].clone()).collect(),
-            selected_request_doc_ids: selected.iter().map(|id| seeded.doc_ids[id].clone()).collect(),
+            expected_request_doc_ids: pending
+                .iter()
+                .map(|id| seeded.doc_ids[id].clone())
+                .collect(),
+            selected_request_doc_ids: selected
+                .iter()
+                .map(|id| seeded.doc_ids[id].clone())
+                .collect(),
             messages: replacements
                 .iter()
                 .zip(&selected)
@@ -473,7 +479,10 @@ impl EndpointEdits {
         for index in ["one", "two"] {
             let session = format!("barrier-{suffix}-{index}");
             let mut seeded = self
-                .seed(&session, case["initial"]["queue"]["pending"].as_array().unwrap())
+                .seed(
+                    &session,
+                    case["initial"]["queue"]["pending"].as_array().unwrap(),
+                )
                 .await;
             let command = self
                 .command(&case, &mut seeded, &format!("barrier-{suffix}-{index}"))
@@ -514,7 +523,10 @@ async fn generated_client_edits_publish_concurrently_with_signed_effect_and_rece
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(
-        cases.iter().map(|case| case["name"].as_str().unwrap()).collect::<Vec<_>>(),
+        cases
+            .iter()
+            .map(|case| case["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         [
             "local_self_applied",
             "expired_rejected",
@@ -535,7 +547,9 @@ async fn generated_client_edits_publish_concurrently_with_signed_effect_and_rece
                 case["initial"]["queue"]["pending"].as_array().unwrap(),
             )
             .await;
-        let command = edits.command(case, &mut seeded, &format!("edit-{name}")).await;
+        let command = edits
+            .command(case, &mut seeded, &format!("edit-{name}"))
+            .await;
         assert_eq!(
             edits.pending(&seeded.session_id).await,
             edits.modeled_pending(&seeded, &case["initial"]),
@@ -591,9 +605,19 @@ async fn generated_client_edits_publish_concurrently_with_signed_effect_and_rece
             let Some(doc) = seeded.doc_ids.get(&terminal) else {
                 continue;
             };
-            let row = wait_row_as(&edits.client, "AgentRequest", "_docID", doc, "lifecycle_state", "")
-                .await;
-            assert_eq!(row["lifecycle_state"], "superseded", "{name}: replaced input");
+            let row = wait_row_as(
+                &edits.client,
+                "AgentRequest",
+                "_docID",
+                doc,
+                "lifecycle_state",
+                "",
+            )
+            .await;
+            assert_eq!(
+                row["lifecycle_state"], "superseded",
+                "{name}: replaced input"
+            );
         }
     }
     drop(_stop);
@@ -608,12 +632,23 @@ async fn same_signed_edit_published_concurrently_applies_and_replays_once() {
     let edits = EndpointEdits::start("same-edit-endpoint").await;
     let case = lean_edit_case("local_self_applied");
     let replay = lean_edit_case("exact_replay_after_expiry");
-    assert_eq!(replay["before"], replay["after"], "exact replay changes nothing");
-    assert_eq!(replay["receipt"], case["receipt"], "exact replay returns the receipt");
+    assert_eq!(
+        replay["before"], replay["after"],
+        "exact replay changes nothing"
+    );
+    assert_eq!(
+        replay["receipt"], case["receipt"],
+        "exact replay returns the receipt"
+    );
     let mut seeded = edits
-        .seed("same-intent", case["initial"]["queue"]["pending"].as_array().unwrap())
+        .seed(
+            "same-intent",
+            case["initial"]["queue"]["pending"].as_array().unwrap(),
+        )
         .await;
-    let command = edits.command(&case, &mut seeded, "same-intent-command").await;
+    let command = edits
+        .command(&case, &mut seeded, "same-intent-command")
+        .await;
     let (left, right) = tokio::join!(edits.publish(&command), edits.publish(&command));
     assert_eq!(
         usize::from(left.is_ok()) + usize::from(right.is_ok()),
@@ -663,15 +698,20 @@ async fn different_edit_intents_racing_for_one_command_id_admit_one() {
     let pending = case["initial"]["queue"]["pending"].as_array().unwrap();
     let mut left_session = edits.seed("racing-left", pending).await;
     let mut right_session = edits.seed("racing-right", pending).await;
-    let left = edits.command(&case, &mut left_session, "racing-command").await;
-    let right = edits.command(&case, &mut right_session, "racing-command").await;
+    let left = edits
+        .command(&case, &mut left_session, "racing-command")
+        .await;
+    let right = edits
+        .command(&case, &mut right_session, "racing-command")
+        .await;
     assert_ne!(
         serde_json::to_value(&left).unwrap(),
         serde_json::to_value(&right).unwrap()
     );
     let right_before = edits.session_rows(&right_session.session_id).await;
     let left_before = edits.session_rows(&left_session.session_id).await;
-    let (left_published, right_published) = tokio::join!(edits.publish(&left), edits.publish(&right));
+    let (left_published, right_published) =
+        tokio::join!(edits.publish(&left), edits.publish(&right));
     assert_eq!(
         usize::from(left_published.is_ok()) + usize::from(right_published.is_ok()),
         1,
@@ -717,14 +757,18 @@ async fn late_command_id_twin_in_another_session_is_refused() {
     let pending = case["initial"]["queue"]["pending"].as_array().unwrap();
     let mut prior_session = edits.seed("late-prior", pending).await;
     let mut twin_session = edits.seed("late-twin", pending).await;
-    let prior = edits.command(&case, &mut prior_session, "late-command").await;
+    let prior = edits
+        .command(&case, &mut prior_session, "late-command")
+        .await;
     edits.publish(&prior).await.unwrap();
     let (stop, worker) = edits.reconciler().await;
     let (raw, receipt) = edits.receipt(&prior).await;
     assert_eq!(receipt.outcome, SessionInputEditOutcome::Applied);
     let prior_rows = edits.session_rows(&prior_session.session_id).await;
     let twin_rows = edits.session_rows(&twin_session.session_id).await;
-    let late = edits.command(&case, &mut twin_session, "late-command").await;
+    let late = edits
+        .command(&case, &mut twin_session, "late-command")
+        .await;
     assert!(
         edits.publish(&late).await.is_err(),
         "a second physical document under an applied command ID is refused"
@@ -735,8 +779,14 @@ async fn late_command_id_twin_in_another_session_is_refused() {
     let rows = edits.command_rows("late-command").await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["receipt_json"], raw, "prior receipt is final");
-    assert_eq!(edits.session_rows(&prior_session.session_id).await, prior_rows);
-    assert_eq!(edits.session_rows(&twin_session.session_id).await, twin_rows);
+    assert_eq!(
+        edits.session_rows(&prior_session.session_id).await,
+        prior_rows
+    );
+    assert_eq!(
+        edits.session_rows(&twin_session.session_id).await,
+        twin_rows
+    );
 }
 
 /// Republishing the identical signed intent after its receipt: the model
@@ -750,7 +800,10 @@ async fn identical_edit_republished_after_receipt_is_refused() {
     assert!(observed["receipt"].is_null());
     let case = lean_edit_case("local_self_applied");
     let mut seeded = edits
-        .seed("identical", case["initial"]["queue"]["pending"].as_array().unwrap())
+        .seed(
+            "identical",
+            case["initial"]["queue"]["pending"].as_array().unwrap(),
+        )
         .await;
     let command = edits.command(&case, &mut seeded, "identical-command").await;
     edits.publish(&command).await.unwrap();

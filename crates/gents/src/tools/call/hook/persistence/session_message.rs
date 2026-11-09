@@ -2,8 +2,8 @@ use super::*;
 use anyhow::Context;
 
 use crate::session::message::{AgentMessageArgs, AgentNewArgs};
-use crate::tools::native::AGENT_SESSION_LIST_TOOL_NAME;
 use crate::store::config_client::TransactionFailure;
+use crate::tools::native::AGENT_SESSION_LIST_TOOL_NAME;
 
 fn unavailable_agent_payload(tool_name: &str) -> String {
     service_unavailable_payload(tool_name, "/agent", "selected agent is unavailable", false)
@@ -770,7 +770,10 @@ mod unreachable_session_tests {
         }
     }
 
-    fn refusal(session_id: &str, tools: &crate::tools::surface::AgentToolConfig) -> serde_json::Value {
+    fn refusal(
+        session_id: &str,
+        tools: &crate::tools::surface::AgentToolConfig,
+    ) -> serde_json::Value {
         let args: AgentMessageArgs = serde_json::from_value(
             json!({"session_id": session_id, "message": "Reply with exactly TRAIN-111"}),
         )
@@ -787,14 +790,21 @@ mod unreachable_session_tests {
     #[test]
     fn an_agent_name_as_session_id_names_the_agent_new_call() {
         let tools = tools(&["research-helper", "reviewer"]);
-        for requested in ["research-helper", "Research-Helper", "did:key:research-helper"] {
+        for requested in [
+            "research-helper",
+            "Research-Helper",
+            "did:key:research-helper",
+        ] {
             let refusal = refusal(requested, &tools);
             assert_eq!(
                 refusal["next_call"],
                 json!({"tool": "agent_new", "arguments": {"agent": "research-helper", "prompt": "Reply with exactly TRAIN-111"}}),
                 "{requested}"
             );
-            assert!(refusal["message"].as_str().unwrap().contains("not a session"));
+            assert!(refusal["message"]
+                .as_str()
+                .unwrap()
+                .contains("not a session"));
         }
     }
 
@@ -810,6 +820,9 @@ mod unreachable_session_tests {
         );
         let none = refusal("missing", &tools(&[]));
         assert_eq!(none["next_call"]["tool"], "agent_session_list");
-        assert!(none["message"].as_str().unwrap().contains("agent_new is unavailable"));
+        assert!(none["message"]
+            .as_str()
+            .unwrap()
+            .contains("agent_new is unavailable"));
     }
 }

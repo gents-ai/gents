@@ -1049,7 +1049,8 @@ async fn access_review_never_dispatches_a_requested_tool() {
     drain_reviews(&tasks, false).await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.session_message_count().await, 0);
-    let response = fixture.agent_access()
+    let response = fixture
+        .agent_access()
         .execute("{ AgentToolCall { _docID } }")
         .await
         .unwrap();
@@ -1293,10 +1294,8 @@ impl TitleFixture {
         let agent_did = binding.agent_did.clone();
         let agent_identity =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
-        let admin = ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(identity.did()).unwrap(),
-        );
+        let admin =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(identity.did()).unwrap());
         let agent_did_id = identity::Did::new(&agent_did).unwrap();
         for permission in [
             crate::store::config_client::NodePermission::CollectionGet,
@@ -1574,10 +1573,7 @@ impl TitleFixture {
     async fn output_rows(&self) -> (Vec<gents_protocol::output::rows::OutputSegmentRow>, usize) {
         let doc = crate::store::graphql::escape_graphql_string(&self.title.doc_id);
         let query = format!("{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: \"{doc}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{doc}\" }} }}) {{ _docID }} }}");
-        let response = self.agent_access()
-            .execute(&query)
-            .await
-            .unwrap();
+        let response = self.agent_access().execute(&query).await.unwrap();
         let data = &response["data"];
         let rows = data["AgentOutputSegment"]
             .as_array()
@@ -1597,10 +1593,7 @@ impl TitleFixture {
     ) {
         let doc = crate::store::graphql::escape_graphql_string(&self.title.doc_id);
         let query = format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state terminal_output }} }}");
-        let response = self.agent_access()
-            .execute(&query)
-            .await
-            .unwrap();
+        let response = self.agent_access().execute(&query).await.unwrap();
         let row = &response["data"]["AgentRequest"][0];
         (
             serde_json::from_value(row["lifecycle_state"].clone()).unwrap(),
@@ -2180,7 +2173,10 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             fixture.node.clone(),
             fixture.identity.did().to_owned(),
         );
-        status.initialize_startup(&fixture.agent_config.agent_did).await.unwrap();
+        status
+            .initialize_startup(&fixture.agent_config.agent_did)
+            .await
+            .unwrap();
         status
             .readiness()
             .register_slot(&fixture.agent_config.agent_did, 1)
@@ -2204,7 +2200,10 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             active_event_triggers: Default::default(),
             unavailable_event_triggers: Default::default(),
             active_tasks: Default::default(),
-            dispatchers: rapidhash::RapidHashMap::from_iter([(fixture.agent_config.agent_did.clone(), dispatch)]),
+            dispatchers: rapidhash::RapidHashMap::from_iter([(
+                fixture.agent_config.agent_did.clone(),
+                dispatch,
+            )]),
             agent_executor_capacities: Default::default(),
             agent_executor_queue_capacities: Default::default(),
         });
@@ -2381,7 +2380,10 @@ async fn start_owned_title_daemon(
         fixture.node.clone(),
         fixture.identity.did().to_owned(),
     );
-    status.initialize_startup(&fixture.agent_config.agent_did).await.unwrap();
+    status
+        .initialize_startup(&fixture.agent_config.agent_did)
+        .await
+        .unwrap();
     status
         .readiness()
         .register_slot(&fixture.agent_config.agent_did, 1)
@@ -2402,7 +2404,10 @@ async fn start_owned_title_daemon(
         active_event_triggers: Default::default(),
         unavailable_event_triggers: Default::default(),
         active_tasks: Default::default(),
-        dispatchers: rapidhash::RapidHashMap::from_iter([(fixture.agent_config.agent_did.clone(), dispatch.clone())]),
+        dispatchers: rapidhash::RapidHashMap::from_iter([(
+            fixture.agent_config.agent_did.clone(),
+            dispatch.clone(),
+        )]),
         agent_executor_capacities: Default::default(),
         agent_executor_queue_capacities: Default::default(),
     };
@@ -2750,7 +2755,8 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
         )
     );
     let session = crate::store::graphql::escape_graphql_string(&fixture.parent.session_id);
-    let response = fixture.agent_access()
+    let response = fixture
+        .agent_access()
         .execute(&format!(
             "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
         ))
@@ -2857,7 +2863,8 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         )
     );
     let session = crate::store::graphql::escape_graphql_string(&fixture.parent.session_id);
-    let response = fixture.agent_access()
+    let response = fixture
+        .agent_access()
         .execute(&format!(
             "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
         ))
@@ -2896,7 +2903,8 @@ async fn fenced_title_output_fails_closed_without_retry() {
         "{error:#}"
     );
     let session = crate::store::graphql::escape_graphql_string(&fixture.parent.session_id);
-    let response = fixture.agent_access()
+    let response = fixture
+        .agent_access()
         .execute(&format!(
             "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
         ))

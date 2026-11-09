@@ -267,9 +267,7 @@ async fn delete_tools_document(access: &crate::ConfigAccess, tools_id: &str) {
     let doc_id = doc_id.as_str();
     access
         .transact_write("test.delete_tools_document", |txn| {
-            Box::pin(async move {
-                txn.delete_configuration_document("Tools", doc_id).await
-            })
+            Box::pin(async move { txn.delete_configuration_document("Tools", doc_id).await })
         })
         .await
         .unwrap();

@@ -1,8 +1,8 @@
 use super::*;
 use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
-use gents_protocol::row::AgentRequest;
 use crate::store::config_client::NodePermission;
+use gents_protocol::row::AgentRequest;
 
 #[tokio::test]
 async fn watcher_routes_native_private_requests_as_their_selected_agents() {
@@ -472,7 +472,10 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             agent_identity.as_ref(),
         )
         .unwrap();
-        let query = format!("{{ AgentRequest {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS);
+        let query = format!(
+            "{{ AgentRequest {{ {} }} }}",
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+        );
         let response = agent_access.execute(&query).await.unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
@@ -738,7 +741,10 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let agent_access =
         ConfigAccess::local_managed_agent(node.clone(), agent.clone(), agent_identity.as_ref())
             .unwrap();
-    let query = format!("{{ AgentRequest {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS);
+    let query = format!(
+        "{{ AgentRequest {{ {} }} }}",
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+    );
     let response = agent_access.execute(&query).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
@@ -867,9 +873,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    let denied_update = submit(&collaborator_access, &denied_update)
-        .await
-        .unwrap();
+    let denied_update = submit(&collaborator_access, &denied_update).await.unwrap();
     assert_eq!(
         claim(&node, &agent_access, &agent, &denied_update)
             .await
@@ -920,9 +924,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    let denied_invoke = submit(&collaborator_access, &denied_invoke)
-        .await
-        .unwrap();
+    let denied_invoke = submit(&collaborator_access, &denied_invoke).await.unwrap();
     assert_eq!(
         claim(&node, &agent_access, &agent, &denied_invoke)
             .await
@@ -964,9 +966,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    let denied_read = submit(&collaborator_access, &denied_read)
-        .await
-        .unwrap();
+    let denied_read = submit(&collaborator_access, &denied_read).await.unwrap();
     admin
         .revoke_node_permission(
             &collaborator.did().parse().unwrap(),

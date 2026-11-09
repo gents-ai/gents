@@ -741,14 +741,10 @@ mod provider_account_tests {
                 gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             ),
         ] {
-            let error = retry_pending_credential(
-                &pending,
-                Ok(runtime.user_access()),
-                node_did,
-                provider,
-            )
-            .await
-            .expect_err("no credential is held for this key");
+            let error =
+                retry_pending_credential(&pending, Ok(runtime.user_access()), node_did, provider)
+                    .await
+                    .expect_err("no credential is held for this key");
             assert_eq!(error.code, BridgeErrorCode::NotFound);
         }
         assert_eq!(held_tokens(&pending, "did:key:zAgent"), ["issued-access"]);

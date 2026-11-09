@@ -292,10 +292,7 @@ impl ToolPermissionProjection {
             let Some((tools_doc, tool_value)) = tools_by_id.get(&tools_id) else {
                 continue;
             };
-            let Ok(operations) = self
-                .policy
-                .node_operation_sources(tool_value, &surfaces)
-            else {
+            let Ok(operations) = self.policy.node_operation_sources(tool_value, &surfaces) else {
                 continue;
             };
             if let Ok(plugins) = self.policy.plugin_refs(tool_value) {
@@ -703,10 +700,15 @@ mod tests {
                 "docId":tools["_docID"].as_str().unwrap_or_default(),
                 "toolsId":tools["tools_id"].as_str().unwrap_or_default(), "plugins":plugins})
         }).collect::<Vec<_>>();
-        let installed = installed.iter().map(|plugin| json!({
-            "coordinate":plugin.coordinate, "digest":plugin.digest,
-            "operations":if plugin.deletes { vec!["delete"] } else { Vec::new() },
-        })).collect::<Vec<_>>();
+        let installed = installed
+            .iter()
+            .map(|plugin| {
+                json!({
+                    "coordinate":plugin.coordinate, "digest":plugin.digest,
+                    "operations":if plugin.deletes { vec!["delete"] } else { Vec::new() },
+                })
+            })
+            .collect::<Vec<_>>();
         Ok(
             json!({"node":runtime.did(), "installed":installed, "agents":agents,
             "contexts":contexts, "tools":tools, "actor":actor.as_str(), "direct":direct}),
@@ -738,7 +740,8 @@ mod tests {
         tools: serde_json::Value,
     ) -> anyhow::Result<()> {
         use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        let mut value = serde_json::json!({"node_did": node_did, "tools_id": format!("{agent_did}:tools")});
+        let mut value =
+            serde_json::json!({"node_did": node_did, "tools_id": format!("{agent_did}:tools")});
         for (key, field) in tools.as_object().expect("Tools fields") {
             value[key] = field.clone();
         }
@@ -750,9 +753,7 @@ mod tests {
         access
             .transact_write("test.projection.fixture_tools", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await?;
         Ok(())
@@ -1165,9 +1166,11 @@ mod tests {
                 Some(LeanClaimedDid::Derived {
                     node_key,
                     creation_nonce,
-                }) => crate::store::identity::derive_agent_identity(&key(node_key)?, creation_nonce)?
-                    .did()
-                    .to_owned(),
+                }) => {
+                    crate::store::identity::derive_agent_identity(&key(node_key)?, creation_nonce)?
+                        .did()
+                        .to_owned()
+                }
             };
             let derived = case.creation_nonce.as_deref().and_then(|nonce| {
                 crate::store::identity::derive_agent_identity(&runtime, nonce)
@@ -1271,7 +1274,9 @@ mod tests {
                 ))
                 .await?;
             assert!(
-                stored["data"]["Agent"].as_array().is_some_and(Vec::is_empty),
+                stored["data"]["Agent"]
+                    .as_array()
+                    .is_some_and(Vec::is_empty),
                 "{stored}"
             );
             owner.transact_write("test.owner_managed_agent", |txn| {

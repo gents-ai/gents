@@ -677,7 +677,8 @@ pub(super) async fn apply_user_config(
     trigger_id: &str,
 ) -> String {
     let owner = config.node.node_did.clone();
-    let plan = crate::store::config_client::DesiredStateApplyPlan::from_pack_config(config).unwrap();
+    let plan =
+        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(config).unwrap();
     client
         .transact_write("test.trigger_config", |txn| {
             let plan = &plan;

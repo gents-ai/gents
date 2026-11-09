@@ -14,10 +14,10 @@ use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
 mod catalog;
+mod declared_access;
 mod dependencies;
 mod documents;
 mod hosted;
-mod declared_access;
 pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
 mod removal;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};

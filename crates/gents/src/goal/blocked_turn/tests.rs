@@ -696,8 +696,7 @@ async fn embedded() -> (
         admission.is_some(),
         "client claim requires verified admission"
     );
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
+    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     lifecycle.set_client_claim_admission(admission);
     assert_eq!(

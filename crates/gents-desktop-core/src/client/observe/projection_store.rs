@@ -190,8 +190,9 @@ impl StoreMutation {
     ) -> bool {
         match self {
             Self::Replace(_) => fences.accepts_reload(captured, scope),
-            Self::ReplaceNode(node, incoming) => fences
-                .accepts_reload(captured, &current.replacement_check_scope(node, incoming)),
+            Self::ReplaceNode(node, incoming) => {
+                fences.accepts_reload(captured, &current.replacement_check_scope(node, incoming))
+            }
             Self::Chat(_) | Self::Observer(_) => fences.accepts(captured, scope),
         }
     }

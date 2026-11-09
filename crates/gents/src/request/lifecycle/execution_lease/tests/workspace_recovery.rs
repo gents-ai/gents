@@ -62,14 +62,15 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     let (session_doc, agent_doc) = access
         .transact_readonly("test.workspace_recovery_targets", |txn| {
             Box::pin(async move {
-                let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
-                    txn,
-                    did,
-                    "workspace-recovery-session",
-                )
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("fixture session is missing"))?
-                .doc_id;
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn,
+                        did,
+                        "workspace-recovery-session",
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("fixture session is missing"))?
+                    .doc_id;
                 let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Agent,
@@ -146,9 +147,9 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             let placement = &placement;
             Box::pin(async move {
                 let response = txn
-                    .execute(&crate::tools::workspace::isolated_workspace_upsert_mutation(
-                        workspace,
-                    ))
+                    .execute(
+                        &crate::tools::workspace::isolated_workspace_upsert_mutation(workspace),
+                    )
                     .await?;
                 let workspace_doc = upserted_doc_id(&response, "upsert_IsolatedWorkspace")?;
                 txn.add_actor_relationship(
@@ -159,10 +160,12 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
                 )
                 .await?;
                 let response = txn
-                    .execute(&crate::tools::workspace::workspace_placement_upsert_mutation(
-                        placement,
-                        "2026-09-01T00:00:00Z",
-                    ))
+                    .execute(
+                        &crate::tools::workspace::workspace_placement_upsert_mutation(
+                            placement,
+                            "2026-09-01T00:00:00Z",
+                        ),
+                    )
                     .await?;
                 let placement_doc = upserted_doc_id(&response, "upsert_WorkspacePlacement")?;
                 txn.add_resource_relationship(

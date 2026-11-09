@@ -448,9 +448,8 @@ pub(crate) async fn load_consumed_folded_inputs(
         return Ok(Vec::new());
     }
     let query = &query;
-    access.transact_write(
-        "lifecycle.load_folded_inputs",
-        move |txn| {
+    access
+        .transact_write("lifecycle.load_folded_inputs", move |txn| {
             Box::pin(async move {
                 let response = txn.execute(query).await?;
                 let rows: Vec<AgentRequestRow> =
@@ -490,7 +489,6 @@ pub(crate) async fn load_consumed_folded_inputs(
                     })
                     .collect()
             })
-        },
-    )
-    .await
+        })
+        .await
 }

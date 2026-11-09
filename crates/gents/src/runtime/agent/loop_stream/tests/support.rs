@@ -692,14 +692,13 @@ pub(super) async fn owned_test_hook_with_identity(
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
 ) {
-    let (node, hook, writer, lifecycle, _) =
-        owned_test_hook_with_identity_policy(
-            Some(identity),
-            FailurePolicy::default(),
-            None,
-            RequestSignature::Valid,
-        )
-        .await;
+    let (node, hook, writer, lifecycle, _) = owned_test_hook_with_identity_policy(
+        Some(identity),
+        FailurePolicy::default(),
+        None,
+        RequestSignature::Valid,
+    )
+    .await;
     (node, hook, writer, lifecycle)
 }
 
@@ -745,11 +744,13 @@ async fn write_owned_request(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> (String, gents_protocol::row::AgentRequestRow) {
     let result = access
-        .write("test.owned_loop_request", &create.graphql_mutation().unwrap())
+        .write(
+            "test.owned_loop_request",
+            &create.graphql_mutation().unwrap(),
+        )
         .await
         .unwrap();
-    let doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
+    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
     let loaded = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
@@ -782,11 +783,8 @@ async fn owned_test_hook_with_identity_policy(
     let root: Arc<dyn crate::NodeIdentity> = match identity.clone() {
         Some(identity) => identity,
         None => Arc::new(
-            crate::KeyIdentity::load_or_create(
-                unsigned_node_key_dir.path().join("node.key"),
-                None,
-            )
-            .unwrap(),
+            crate::KeyIdentity::load_or_create(unsigned_node_key_dir.path().join("node.key"), None)
+                .unwrap(),
         ),
     };
     let node_did_owned = root.did().to_owned();
@@ -899,7 +897,9 @@ async fn owned_test_hook_with_identity_policy(
         row.try_into().unwrap(),
         60,
     );
-    lifecycle.bind_managed_agent(agent_identity.as_ref()).unwrap();
+    lifecycle
+        .bind_managed_agent(agent_identity.as_ref())
+        .unwrap();
     if let Some(case) = folded_case {
         let admitted = case
             .folded
@@ -953,11 +953,11 @@ async fn owned_test_hook_with_identity_policy(
 
 /// The loop's rows are owned by the claimed Agent and invisible to the node
 /// identity, so fixture observations read them as that Agent.
-pub(super) async fn agent_query(
-    reader: &crate::ConfigAccess,
-    query: &str,
-) -> serde_json::Value {
-    reader.execute(query).await.expect("Agent-scoped fixture read")
+pub(super) async fn agent_query(reader: &crate::ConfigAccess, query: &str) -> serde_json::Value {
+    reader
+        .execute(query)
+        .await
+        .expect("Agent-scoped fixture read")
 }
 
 /// [`agent_query`] in the node's response shape for fixtures that inspect it.

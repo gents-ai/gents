@@ -179,8 +179,7 @@ impl ClientCore {
         steer: Option<&str>,
         request_id: Option<&str>,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
-        let peer = self
-            .peer_record_for_chat_write(node_did)?;
+        let peer = self.peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer.as_ref())?;
         if edit
             .messages

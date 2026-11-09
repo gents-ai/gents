@@ -295,11 +295,8 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
             update_goal_root(&user, &f.goal.doc_id, Some(&new_root)).await;
         }
 
-        let mut lifecycle = RequestLifecycle::new_with_node_did(
-            f.node.clone(),
-            request.clone(),
-            60,
-        );
+        let mut lifecycle =
+            RequestLifecycle::new_with_node_did(f.node.clone(), request.clone(), 60);
         lifecycle.bind_managed_agent(f.agent.as_ref()).unwrap();
         lifecycle.set_client_claim_admission(client_claim);
         let result = lifecycle.claim_with_identity().await;

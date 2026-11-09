@@ -57,8 +57,8 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         Some(args.home.as_path()),
     )
     .context("resolving the Grok shim's client-signed GraphQL endpoint")?;
-    let actor = crate::home_state::cli_client_did()
-        .context("resolving the Grok shim's User client DID")?;
+    let actor =
+        crate::home_state::cli_client_did().context("resolving the Grok shim's User client DID")?;
     let agent_did =
         resolve_grok_shim_agent_did(node.as_ref(), args.agent_did.as_deref(), &args.node_did)
             .await?;

@@ -493,11 +493,7 @@ async fn job_chain(
             .verify_fresh_for_claim_with_identity(&request, agent)
             .await
             .unwrap();
-        let mut child = crate::RequestLifecycle::new_with_node_did(
-            db.node.clone(),
-            request,
-            60,
-        );
+        let mut child = crate::RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
         child.bind_managed_agent(agent).unwrap();
         child.set_client_claim_admission(admission);
         assert_eq!(

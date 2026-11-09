@@ -982,14 +982,19 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
     let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(
-        [(crate::Collection::InferenceBackend, backend), (crate::Collection::InferenceProfile, profile)]
-            .into_iter()
-            .map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+        [
+            (crate::Collection::InferenceBackend, backend),
+            (crate::Collection::InferenceProfile, profile),
+        ]
+        .into_iter()
+        .map(
+            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
-            })
-            .collect(),
+            },
+        )
+        .collect(),
     )
     .unwrap();
     user_access
@@ -1023,7 +1028,12 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     let held = |node: Arc<defra_node::Node>, agent: identity::Did| async move {
         let mut held = Vec::new();
         for permission in crate::store::identity::GrantSet::AgentBaseline.permissions() {
-            if node.nac_manager().check_permission(&agent, *permission).await.unwrap() {
+            if node
+                .nac_manager()
+                .check_permission(&agent, *permission)
+                .await
+                .unwrap()
+            {
                 held.push(permission.as_str().to_owned());
             }
         }
@@ -4119,11 +4129,13 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
             (crate::Collection::InferenceProfile, profile),
         ]
         .into_iter()
-        .map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        })
+        .map(
+            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            },
+        )
         .collect(),
     )
     .unwrap();
@@ -4166,15 +4178,15 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
     };
     let bindings = install().await;
     assert_eq!(bindings.len(), 3, "{bindings:?}");
-    let admin =
-        ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
+    let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
     let other = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     GrantSet::AgentBaseline
         .grant(&admin, &identity::Did::new(&other.agent_did).unwrap())
         .await
         .unwrap();
     let agent_access = |binding: &gents_protocol::agent_identity::AgentIdentityBinding| {
-        let key = crate::store::identity::resolve_agent_identity(runtime.as_ref(), binding).unwrap();
+        let key =
+            crate::store::identity::resolve_agent_identity(runtime.as_ref(), binding).unwrap();
         ConfigAccess::local_managed_agent(
             db.node.clone(),
             identity::Did::new(&binding.agent_did).unwrap(),

@@ -119,11 +119,8 @@ async fn claimed(
             .await
             .unwrap();
     }
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        request.clone().try_into().unwrap(),
-        60,
-    );
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), request.clone().try_into().unwrap(), 60);
     if agent.managed_agent_signer().is_some() {
         lifecycle.bind_managed_agent(agent).unwrap();
     }

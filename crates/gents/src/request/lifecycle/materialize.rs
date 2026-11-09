@@ -1628,10 +1628,8 @@ async fn stage_task_delivery_with_receipt(
             );
             let generation = expected_event_source
                 .context("event source generation is required for admission")?;
-            crate::documents::event_consumer::validate_event_admission(
-                txn, fire, generation,
-            )
-            .await?;
+            crate::documents::event_consumer::validate_event_admission(txn, fire, generation)
+                .await?;
         }
         anyhow::ensure!(
             create.node_did == fire.identity.owner_did
@@ -1795,14 +1793,15 @@ async fn stage_task_delivery_with_receipt(
                 | gents_protocol::request_admission::AgentRequestAdmissionKind::RuntimeInternal
         );
         if created || agent_owned {
-            let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
-                txn,
-                &request.node_did,
-                &request.session_id,
-                request.requester_did.as_deref(),
-            )
-            .await?
-            .context("Task session disappeared")?;
+            let session =
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                    txn,
+                    &request.node_did,
+                    &request.session_id,
+                    request.requester_did.as_deref(),
+                )
+                .await?
+                .context("Task session disappeared")?;
             let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
                 txn,
                 crate::Collection::Agent,
@@ -2080,10 +2079,8 @@ mod task_delivery_tests {
             })
         }).await.unwrap();
         // Relationship writes need a signed actor; the node root owns the Agent it created.
-        let node_actor = crate::ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(runtime.did()).unwrap(),
-        );
+        let node_actor =
+            crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
         node_actor
             .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
             .await

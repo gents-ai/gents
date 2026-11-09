@@ -3,9 +3,9 @@ use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, Outp
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use serde::Deserialize;
 
-use gents_protocol::output::rows::TranscriptMessageRow;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::{escape_graphql_string, response_has_documents};
+use gents_protocol::output::rows::TranscriptMessageRow;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ToolAccountingRejection {
@@ -90,8 +90,11 @@ pub(super) async fn account_tools_in_txn(
         .session_id
         .as_deref()
         .context("request missing session")?;
-    let scope =
-        gents_protocol::session::session_scope_filter(agent, session, request.requester_did.as_deref());
+    let scope = gents_protocol::session::session_scope_filter(
+        agent,
+        session,
+        request.requester_did.as_deref(),
+    );
     let escaped_request = escape_graphql_string(request_id);
     let response = txn
         .execute_local_response(&format!(
@@ -348,9 +351,8 @@ mod tests {
                 request_owner.managed_agent_signer(),
             )
             .unwrap();
-            let result = access.transact_write(
-                "test.plugin_child_accounting",
-                |txn| {
+            let result = access
+                .transact_write("test.plugin_child_accounting", |txn| {
                     let request_doc = request_doc.clone();
                     let session = session.clone();
                     let generation = generation.clone();
@@ -396,9 +398,8 @@ mod tests {
                         )
                         .await
                     })
-                },
-            )
-            .await;
+                })
+                .await;
             if normal {
                 assert_eq!(
                     result.is_ok(),

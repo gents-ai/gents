@@ -194,7 +194,10 @@ impl ClientCore {
         if record.is_some() {
             return Ok(record);
         }
-        if let Some(stale) = records.iter().find(|record| record.node_did == node_did.trim()) {
+        if let Some(stale) = records
+            .iter()
+            .find(|record| record.node_did == node_did.trim())
+        {
             ensure_peer_chat_ready(node_did, Some(stale))?;
         }
         Ok(None)

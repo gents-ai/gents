@@ -1008,7 +1008,12 @@ pub(crate) mod tests {
     pub(crate) fn with_route_observations(record: &PeerRecord) -> Vec<PeerRecord> {
         let mut observed = Vec::new();
         for pairing in [false, true] {
-            for lease in [None, Some("not-a-timestamp"), Some("2000-01-01T00:00:00Z"), Some("2999-01-01T00:00:00Z")] {
+            for lease in [
+                None,
+                Some("not-a-timestamp"),
+                Some("2000-01-01T00:00:00Z"),
+                Some("2999-01-01T00:00:00Z"),
+            ] {
                 let mut peer = record.clone();
                 peer.pairing_ready = pairing;
                 peer.pairing_network_id = pairing.then(|| "network".into());

@@ -451,15 +451,15 @@ mod tests {
                 .with_client_signing_capability(capability)
                 .unwrap(),
         )
-            .transact_write("test.per_request_bearer", |txn| {
-                Box::pin(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-                    txn.execute("mutation { create_X(input: {}) { _docID } }")
-                        .await
-                })
+        .transact_write("test.per_request_bearer", |txn| {
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+                txn.execute("mutation { create_X(input: {}) { _docID } }")
+                    .await
             })
-            .await
-            .unwrap();
+        })
+        .await
+        .unwrap();
         server.abort();
 
         let issued_at = |bearer: &str| -> u64 {

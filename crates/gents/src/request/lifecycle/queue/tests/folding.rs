@@ -188,8 +188,8 @@ pub(super) async fn claim_head(
         &bound[&head],
     )
     .await
-        .unwrap()
-        .unwrap();
+    .unwrap()
+    .unwrap();
     claim_request(db, bound, request, admitted).await
 }
 
@@ -237,12 +237,10 @@ async fn claim_request(
 ) -> ActiveTurn {
     let head = request.request_id.clone();
     let (request, client_claim) = verify_claim_admission(db, request).await;
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        request,
-        60,
-    );
-    lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
+    lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
     // As the daemon does, signed folded input is re-verified by the held Agent
     // when its publication consumes it; unsigned fixture rows carry no admission.
     if client_claim.is_some() {
@@ -300,8 +298,9 @@ async fn drive(case: &LeanFoldQueueCase) {
     let mut arrivals: Vec<u64> = Vec::new();
     let mut active: Option<ActiveTurn> = None;
     let mut claims = Vec::new();
-    let writer = DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
-        .unwrap();
+    let writer =
+        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+            .unwrap();
     for event in &case.inputs {
         match event {
             LeanFoldQueueInput::Enqueue { entry } => {
@@ -599,7 +598,11 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             bound.insert(id, enqueue_signed(&db, &session_id, &entry, arrival).await);
         }
         let head_doc = bound[&case.head].clone();
-        let writer = DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+        let writer = DefraStreamWriter::new_managed(
+            db.node.clone(),
+            db.agent_identity.as_ref(),
+            Duration::ZERO,
+        )
         .unwrap();
         let mut generations: RapidHashMap<u64, ActiveTurn> = RapidHashMap::new();
         let mut first = claim_head(&db, &bound, case.head, &[case.selected]).await;
@@ -913,8 +916,9 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
     }
     let mut active = claim_head(&db, &bound, 2, &[3]).await;
     assert_eq!(active.selected, vec![3]);
-    let writer = DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
-        .unwrap();
+    let writer =
+        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+            .unwrap();
     active.begin(&writer).await;
     let incompatible = LeanFoldQueueEntry {
         request_id: 1,
@@ -993,8 +997,9 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
     };
     bound.insert(99, enqueue_signed(&db, session_id, &head, 0).await);
     let mut active = claim_head(&db, &bound, 99, &[]).await;
-    let writer = DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
-        .unwrap();
+    let writer =
+        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+            .unwrap();
     active.begin(&writer).await;
     for (index, item) in case.inputs.iter().enumerate() {
         let delivery = if item.kind == "user_steer" {
@@ -1087,7 +1092,11 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
         let head_doc = enqueue_signed(&db, session_id, head, 0).await;
         let mut bound = RapidHashMap::from_iter([(head.request_id, head_doc)]);
         let mut active = claim_head(&db, &bound, head.request_id, &[]).await;
-        let writer = DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+        let writer = DefraStreamWriter::new_managed(
+            db.node.clone(),
+            db.agent_identity.as_ref(),
+            Duration::ZERO,
+        )
         .unwrap();
         active.begin(&writer).await;
         for (index, entry) in case.before.pending.iter().enumerate() {

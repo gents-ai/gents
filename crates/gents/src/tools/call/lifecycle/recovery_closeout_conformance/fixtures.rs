@@ -5,7 +5,11 @@ use crate::tools::call::lifecycle::admission_fixture::PublishedAdmission;
 /// bounded. Writes go through the owning actor's access: ACP hides and
 /// refuses the Agent-owned rows for any other identity. A client-submitted
 /// parent request is owned by its client, not its Agent.
-async fn execute_fixture_write(access: &crate::ConfigAccess, operation: &'static str, mutation: &str) {
+async fn execute_fixture_write(
+    access: &crate::ConfigAccess,
+    operation: &'static str,
+    mutation: &str,
+) {
     let mut backoff = std::time::Duration::from_millis(5);
     let mut last_error = None;
     for _ in 0..8 {

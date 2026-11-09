@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
 use crate::error::BridgeError;
+use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::JobControlOutcome;
 
 use crate::types::DesktopJobControlRequest;

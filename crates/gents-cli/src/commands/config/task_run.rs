@@ -560,9 +560,9 @@ mod tests {
             let forged = forged.clone();
             Box::pin(async move {
                 if String::from_utf8_lossy(&body).contains("retry_key") {
-                    ProxyDecision::ForwardThenRespond(
-                        axum::response::IntoResponse::into_response(axum::Json(forged)),
-                    )
+                    ProxyDecision::ForwardThenRespond(axum::response::IntoResponse::into_response(
+                        axum::Json(forged),
+                    ))
                 } else {
                     ProxyDecision::Forward
                 }

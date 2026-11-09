@@ -159,9 +159,12 @@ impl SelfConfigCore {
                 process_ceiling.root.as_deref(),
             )?;
             if let (true, true, Some(root)) = (foreign, policy.configured, effective.as_deref()) {
-                let published =
-                    crate::tools::surface::published_root_covering_in_txn(txn, self.node_did(), root)
-                        .await?;
+                let published = crate::tools::surface::published_root_covering_in_txn(
+                    txn,
+                    self.node_did(),
+                    root,
+                )
+                .await?;
                 root_access = crate::tools::surface::reader_grant_step(
                     self.agent_did(),
                     published.as_deref(),

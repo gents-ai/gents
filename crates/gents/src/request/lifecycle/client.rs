@@ -2559,7 +2559,9 @@ mod tests {
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
         let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
-        let signed_in = |session: &'static str, request_id: &'static str, created_at: &'static str| {
+        let signed_in = |session: &'static str,
+                         request_id: &'static str,
+                         created_at: &'static str| {
             let access = &access;
             let user = &user;
             let runtime = &runtime;
@@ -2609,7 +2611,10 @@ mod tests {
         assert_eq!(send_client_request(&access, &first).await.unwrap(), "first");
         let rebuilt = signed("first", "2026-11-04T00:00:07Z").await;
         assert_ne!(rebuilt.admission.signature, first.admission.signature);
-        assert_eq!(send_client_request(&access, &rebuilt).await.unwrap(), "first");
+        assert_eq!(
+            send_client_request(&access, &rebuilt).await.unwrap(),
+            "first"
+        );
         assert_eq!(count("first").await, 1);
 
         let left = signed("raced", "2026-11-04T00:01:00Z").await;
@@ -2644,7 +2649,10 @@ mod tests {
         submit_client_request(&access, &keyless).await.unwrap();
         assert_eq!(count("keyless").await, 1);
         let keyed = signed("keyless", "2026-11-04T00:02:02Z").await;
-        assert_eq!(send_client_request(&access, &keyed).await.unwrap(), "keyless");
+        assert_eq!(
+            send_client_request(&access, &keyed).await.unwrap(),
+            "keyless"
+        );
         assert_eq!(count("keyless").await, 1);
         // The raw create does not admit a second request under a held identity.
         assert!(submit_client_request(&access, &foreign_key).await.is_err());

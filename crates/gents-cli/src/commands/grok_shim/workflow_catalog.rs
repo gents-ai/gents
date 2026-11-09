@@ -146,8 +146,11 @@ mod tests {
                 .map(|plugin| serde_json::from_value(json!({"plugin": plugin})).unwrap())
                 .collect();
             let (did, agent) = (node_did.clone(), agent_did.clone());
-            gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(node_did.as_str()).unwrap())
-                .transact_write("catalog.fixture", |txn| {
+            gents::ConfigAccess::local_as(
+                node.clone(),
+                ::identity::Did::new(node_did.as_str()).unwrap(),
+            )
+            .transact_write("catalog.fixture", |txn| {
                 let (did, agent, refs) = (did.clone(), agent.clone(), refs.clone());
                 Box::pin(async move {
                     use gents::documents::apply_desired_state_plan;

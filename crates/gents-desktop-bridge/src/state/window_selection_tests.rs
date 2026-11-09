@@ -255,9 +255,7 @@ async fn external_attachment_release_retains_the_current_window_scope() {
 fn generated_window_scope_traces_match_the_lean_owner() {
     const WINDOWS: [&str; 3] = ["main", "second", "third"];
     const NODES: [&str; 2] = ["did:node:0", "did:node:1"];
-    let op = |op: &str, window: usize, node: Option<usize>| {
-        serde_json::json!({"op": op, "window": window, "node": node})
-    };
+    let op = |op: &str, window: usize, node: Option<usize>| serde_json::json!({"op": op, "window": window, "node": node});
     let mut alphabet = Vec::new();
     for window in 0..WINDOWS.len() {
         alphabet.push(op("register", window, None));
@@ -273,7 +271,9 @@ fn generated_window_scope_traces_match_the_lean_owner() {
         for b in &alphabet {
             for c in &alphabet {
                 let ops: Vec<_> = prefix.iter().chain([a, b, c]).cloned().collect();
-                traces.push(serde_json::json!({"windows": WINDOWS.len(), "nodes": NODES.len(), "ops": ops}));
+                traces.push(
+                    serde_json::json!({"windows": WINDOWS.len(), "nodes": NODES.len(), "ops": ops}),
+                );
             }
         }
     }
@@ -286,9 +286,8 @@ fn generated_window_scope_traces_match_the_lean_owner() {
     .unwrap();
     let modeled: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
     assert_eq!(modeled.len(), traces.len());
-    let node_index = |did: Option<String>| {
-        did.map(|did| NODES.iter().position(|node| *node == did).unwrap())
-    };
+    let node_index =
+        |did: Option<String>| did.map(|did| NODES.iter().position(|node| *node == did).unwrap());
 
     let (_temp, state) = state();
     let mut checked = 0;
@@ -397,21 +396,42 @@ fn two_windows_on_two_nodes_resolve_through_their_own_selection() {
     state.register_window("main");
     state.register_window("second");
     let acted_on = |window: &tauri::WebviewWindow<tauri::test::MockRuntime>| {
-        let backends = invoke(window, "desktop_list_backends_with_health", serde_json::json!({}))
-            .expect_err("no runtime is routed");
+        let backends = invoke(
+            window,
+            "desktop_list_backends_with_health",
+            serde_json::json!({}),
+        )
+        .expect_err("no runtime is routed");
         let operations = invoke(
             window,
             "desktop_operations_snapshot",
             serde_json::json!({"request": {}}),
         )
         .expect_err("no runtime is routed");
-        [backends, operations]
-            .map(|error| ["did:a", "did:b"].into_iter().find(|node| error.contains(&format!("runtime {node} "))))
+        [backends, operations].map(|error| {
+            ["did:a", "did:b"]
+                .into_iter()
+                .find(|node| error.contains(&format!("runtime {node} ")))
+        })
     };
 
-    invoke(&main, "desktop_set_selected_node", serde_json::json!({"nodeDid": "did:a"})).unwrap();
-    invoke(&second, "desktop_set_selected_node", serde_json::json!({"nodeDid": "did:b"})).unwrap();
-    assert_eq!(core.selected_node_did(), None, "no shared selection with two windows");
+    invoke(
+        &main,
+        "desktop_set_selected_node",
+        serde_json::json!({"nodeDid": "did:a"}),
+    )
+    .unwrap();
+    invoke(
+        &second,
+        "desktop_set_selected_node",
+        serde_json::json!({"nodeDid": "did:b"}),
+    )
+    .unwrap();
+    assert_eq!(
+        core.selected_node_did(),
+        None,
+        "no shared selection with two windows"
+    );
     assert_eq!(acted_on(&main), [Some("did:a"); 2]);
     assert_eq!(acted_on(&second), [Some("did:b"); 2]);
     let named = invoke(
@@ -420,14 +440,28 @@ fn two_windows_on_two_nodes_resolve_through_their_own_selection() {
         serde_json::json!({"request": {"nodeDid": "did:a"}}),
     )
     .unwrap_err();
-    assert!(named.contains("runtime did:a "), "a named node wins: {named}");
+    assert!(
+        named.contains("runtime did:a "),
+        "a named node wins: {named}"
+    );
 
     // What `desktop_ux_data_watch` registers for each window's own node.
     let main_watch = state.ux_watches.insert("main", "pack-a").unwrap();
     let second_watch = state.ux_watches.insert("second", "pack-b").unwrap();
-    invoke(&main, "desktop_set_selected_node", serde_json::json!({"nodeDid": "did:b"})).unwrap();
-    assert!(main_watch.is_cancelled(), "the switching window's watch ends");
-    assert!(!second_watch.is_cancelled(), "the other window keeps its watch");
+    invoke(
+        &main,
+        "desktop_set_selected_node",
+        serde_json::json!({"nodeDid": "did:b"}),
+    )
+    .unwrap();
+    assert!(
+        main_watch.is_cancelled(),
+        "the switching window's watch ends"
+    );
+    assert!(
+        !second_watch.is_cancelled(),
+        "the other window keeps its watch"
+    );
     assert!(!state.ux_watches.deliver("main", "pack-a", || true));
     assert!(state.ux_watches.deliver("second", "pack-b", || true));
     assert_eq!(acted_on(&main), [Some("did:b"); 2]);
@@ -435,9 +469,17 @@ fn two_windows_on_two_nodes_resolve_through_their_own_selection() {
 
     state.window_event("second", &tauri::WindowEvent::Destroyed);
     assert!(second_watch.is_cancelled());
-    invoke(&second, "desktop_set_selected_node", serde_json::json!({"nodeDid": "did:a"}))
-        .expect("late IPC from a destroyed window is ignored");
-    assert_eq!(acted_on(&second), [None; 2], "a destroyed window acts on nothing");
+    invoke(
+        &second,
+        "desktop_set_selected_node",
+        serde_json::json!({"nodeDid": "did:a"}),
+    )
+    .expect("late IPC from a destroyed window is ignored");
+    assert_eq!(
+        acted_on(&second),
+        [None; 2],
+        "a destroyed window acts on nothing"
+    );
     assert_eq!(acted_on(&main), [Some("did:b"); 2]);
     assert_eq!(core.selected_node_did().as_deref(), Some("did:b"));
 

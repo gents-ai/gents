@@ -69,14 +69,14 @@ pub use manual::{
     write_manual_agent_request, write_manual_agent_request_with_conversation_title,
     ManualRequestTarget,
 };
+pub(crate) use materialize::{
+    build_session_message_request,
+    write_pending_agent_request_with_lineage_workspace_and_conversation_title,
+};
 pub use materialize::{
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     build_signed_request, task_fire_key, write_task_delivery, write_task_delivery_local,
     ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink, TaskDeliveryAdmission,
-};
-pub(crate) use materialize::{
-    build_session_message_request,
-    write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;

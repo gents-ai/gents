@@ -228,7 +228,11 @@ impl ClientStore {
     }
 
     /// Adds the owner of every current row `incoming` overwrites by merge key.
-    fn extend_overwritten_owners(&self, incoming: &ClientStore, scope: &mut StoreScope) -> Overwritten {
+    fn extend_overwritten_owners(
+        &self,
+        incoming: &ClientStore,
+        scope: &mut StoreScope,
+    ) -> Overwritten {
         let mut overwritten = Overwritten::Known;
         let mut unowned = || {
             if overwritten == Overwritten::Known {

@@ -145,8 +145,22 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     let question =
         json!({"version":3,"prompt":"What should happen next?","options":[],"allow_free_text":true})
             .to_string();
-    file("current", &requester, "ask", "start_request", Some(question.clone())).await;
-    file("other-requester", "did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3", "ask", "start_request", Some(question)).await;
+    file(
+        "current",
+        &requester,
+        "ask",
+        "start_request",
+        Some(question.clone()),
+    )
+    .await;
+    file(
+        "other-requester",
+        "did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3",
+        "ask",
+        "start_request",
+        Some(question),
+    )
+    .await;
     let closed = file("closed", &requester, "flag", "ack", None).await;
     gents::session::mailbox::dismiss_mailbox_item_on(
         &core.operator_access(&node).unwrap(),

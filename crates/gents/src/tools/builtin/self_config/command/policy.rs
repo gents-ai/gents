@@ -35,17 +35,22 @@ fn guidance(message: impl Into<String>, next_call: Value) -> anyhow::Error {
 fn ensure_options(parsed: &ParsedArgs, verb: &str) -> Result<()> {
     let allowed: &[&str] = match verb {
         "get" => &["subject", "collection", "doc"],
-        _ => &[
-            "subject",
-            "permission",
-            "collection",
-            "doc",
-            "relation",
-        ],
+        _ => &["subject", "permission", "collection", "doc", "relation"],
     };
-    if let Some(name) = parsed.options.keys().find(|name| !allowed.contains(&name.as_str())) {
+    if let Some(name) = parsed
+        .options
+        .keys()
+        .find(|name| !allowed.contains(&name.as_str()))
+    {
         return Err(guidance(
-            format!("policy {verb} does not accept --{name}; accepted: {}", allowed.iter().map(|o| format!("--{o}")).collect::<Vec<_>>().join(", ")),
+            format!(
+                "policy {verb} does not accept --{name}; accepted: {}",
+                allowed
+                    .iter()
+                    .map(|o| format!("--{o}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             json!({"argv": ["policy", "--help"]}),
         ));
     }
@@ -270,18 +275,18 @@ impl ConfigCommandTool {
                     .await
                     .map_err(|error| {
                         guidance(
-                            format!("cannot read the relationships of {collection} {doc_id}: {error}"),
+                            format!(
+                                "cannot read the relationships of {collection} {doc_id}: {error}"
+                            ),
                             json!({"argv": ["policy", "get"]}),
                         )
                     })?,
             ),
             (None, None) => None,
-            _ => {
-                return Err(guidance(
-                    "policy get lists a document's relationships only with both --collection and --doc",
-                    json!({"argv": ["policy", "--help"]}),
-                ))
-            }
+            _ => return Err(guidance(
+                "policy get lists a document's relationships only with both --collection and --doc",
+                json!({"argv": ["policy", "--help"]}),
+            )),
         };
         let relation_rows = relations.as_ref().map(|rows| {
             rows.iter()
@@ -337,14 +342,18 @@ impl ConfigCommandTool {
                     .await
                     .map_err(|error| {
                         guidance(
-                            format!("cannot read the relationships of {collection} {doc_id}: {error}"),
+                            format!(
+                                "cannot read the relationships of {collection} {doc_id}: {error}"
+                            ),
                             json!({"argv": ["policy", "get"]}),
                         )
                     })?;
                 let subject = call.subject.as_str();
                 let ways = rows
                     .iter()
-                    .filter(|row| row.relation == *relation && (row.subject == subject || row.subject == "*"))
+                    .filter(|row| {
+                        row.relation == *relation && (row.subject == subject || row.subject == "*")
+                    })
                     .map(|row| {
                         if row.subject == "*" {
                             "granted to everyone".to_owned()
@@ -384,7 +393,10 @@ impl ConfigCommandTool {
             (false, false) if explain => self.missing_grant_path(access, call, target).await?,
             (false, false) => "policy explain with the same target names the path or the grant that would allow it.".to_owned(),
         };
-        if !allowed && explain && matches!(target, PolicyTarget::Node(permission) if permission.is_admin_class()) {
+        if !allowed
+            && explain
+            && matches!(target, PolicyTarget::Node(permission) if permission.is_admin_class())
+        {
             how = format!("{how} Admin-class permissions are never delegated; only a native admin can change them.");
         }
         ordered! {
@@ -464,10 +476,14 @@ impl ConfigCommandTool {
         self.execution.enter_mutation();
         let changed = match target {
             PolicyTarget::Node(permission) if grant => {
-                access.grant_node_permission(&call.subject, *permission).await
+                access
+                    .grant_node_permission(&call.subject, *permission)
+                    .await
             }
             PolicyTarget::Node(permission) => {
-                access.revoke_node_permission(&call.subject, *permission).await
+                access
+                    .revoke_node_permission(&call.subject, *permission)
+                    .await
             }
             PolicyTarget::Relation {
                 collection,
@@ -593,7 +609,10 @@ mod tests {
     use super::*;
 
     fn parsed(words: &[&str]) -> ParsedArgs {
-        let argv = words.iter().map(|word| (*word).to_owned()).collect::<Vec<_>>();
+        let argv = words
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect::<Vec<_>>();
         ParsedArgs::parse(&argv).expect("argv parses")
     }
 
@@ -606,12 +625,23 @@ mod tests {
         ));
         assert!(matches!(
             parse_target(&parsed(&[
-                "--collection", "Agent", "--doc", "bae-1", "--relation", "config_writer"
+                "--collection",
+                "Agent",
+                "--doc",
+                "bae-1",
+                "--relation",
+                "config_writer"
             ]))
             .unwrap(),
             Some(PolicyTarget::Relation { .. })
         ));
-        assert!(parse_target(&parsed(&["--permission", "read-document", "--doc", "bae-1"])).is_err());
+        assert!(parse_target(&parsed(&[
+            "--permission",
+            "read-document",
+            "--doc",
+            "bae-1"
+        ]))
+        .is_err());
         assert!(parse_target(&parsed(&["--collection", "Agent"])).is_err());
     }
 
@@ -631,7 +661,8 @@ mod tests {
 
     #[test]
     fn modeled_policy_exposure_controls_the_resource() {
-        for case in &crate::lean_vocab_test::lean_contract_snapshot().policy_resource_exposure_cases {
+        for case in &crate::lean_vocab_test::lean_contract_snapshot().policy_resource_exposure_cases
+        {
             let categories = case["categories"]
                 .as_array()
                 .unwrap()
@@ -639,7 +670,11 @@ mod tests {
                 .map(|value| value.as_str().unwrap().to_owned())
                 .collect::<BTreeSet<_>>();
             let exposed = model_resources(&categories, false).contains(&"policy");
-            assert_eq!(exposed, case["exposed"].as_bool().unwrap(), "{categories:?}");
+            assert_eq!(
+                exposed,
+                case["exposed"].as_bool().unwrap(),
+                "{categories:?}"
+            );
         }
     }
 

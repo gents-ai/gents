@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents::goal::{
-    session_token_usage, set_goal_from_access, CreateGoalForSessionError, CreateGoalForSessionOutcome, GoalStatus,
+    session_token_usage, set_goal_from_access, CreateGoalForSessionError,
+    CreateGoalForSessionOutcome, GoalStatus,
 };
 use gents::store::graphql::escape_graphql_string;
 use gents::{
@@ -140,8 +141,12 @@ async fn goal_fixture_usage_for_node(
 
 /// The working Agent's own signed access, the only actor its controller writes run as.
 fn agent_access(db: &TestDb, agent: &Arc<dyn NodeIdentity>) -> ConfigAccess {
-    ConfigAccess::local_managed_agent(db.node.clone(), agent.did().parse().unwrap(), agent.as_ref())
-        .unwrap()
+    ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap()
 }
 
 async fn load_goal_as(access: &ConfigAccess, node_did: &str) -> Option<gents::goal::GoalDocument> {
@@ -1011,13 +1016,7 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
-    create_visible_foreign_collision(
-        &db,
-        agent.as_ref(),
-        &collision_id,
-        None,
-    )
-    .await;
+    create_visible_foreign_collision(&db, agent.as_ref(), &collision_id, None).await;
 
     let (mut source, _tx) = source_for_agent(&db, &agent).await;
     let fired = tokio::time::timeout(Duration::from_secs(2), source.next_fire()).await;

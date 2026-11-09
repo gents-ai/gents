@@ -2,8 +2,8 @@ use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };
-use gents_protocol::tool_call::AwaitMode;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
+use gents_protocol::tool_call::AwaitMode;
 use std::sync::Arc;
 
 use super::fixtures::{completion_obligations, update_request};
@@ -281,9 +281,13 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 "interrupted"
             }
         );
-        let (notifications, _) =
-            completion_obligations(&tool.access().unwrap(), &session_id, &node_did, tool.requester_did())
-                .await;
+        let (notifications, _) = completion_obligations(
+            &tool.access().unwrap(),
+            &session_id,
+            &node_did,
+            tool.requester_did(),
+        )
+        .await;
         let reason = deleted.notification_reason.as_deref().unwrap();
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
@@ -457,7 +461,11 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         .unwrap()
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
-            gents_protocol::session::session_scope_filter(&node_did, &session_id, tool.requester_did(),)
+            gents_protocol::session::session_scope_filter(
+                &node_did,
+                &session_id,
+                tool.requester_did(),
+            )
         ))
         .await
         .unwrap();
@@ -484,7 +492,11 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         .unwrap()
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
-            gents_protocol::session::session_scope_filter(&node_did, &session_id, tool.requester_did())
+            gents_protocol::session::session_scope_filter(
+                &node_did,
+                &session_id,
+                tool.requester_did()
+            )
         ))
         .await
         .unwrap();

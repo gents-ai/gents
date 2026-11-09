@@ -500,8 +500,12 @@ impl ReplyLossProxy {
             (creates.clone(), arm.clone(), commit.clone(), losing.clone());
         let task = tokio::spawn(async move {
             while let Ok((mut client, _)) = listener.accept().await {
-                let (counted, armed, committing, lost) =
-                    (counted.clone(), armed.clone(), committing.clone(), lost.clone());
+                let (counted, armed, committing, lost) = (
+                    counted.clone(),
+                    armed.clone(),
+                    committing.clone(),
+                    lost.clone(),
+                );
                 tokio::spawn(async move {
                     let _ = async {
                         let mut request = Vec::new();
@@ -610,8 +614,10 @@ impl ReplyLossProxy {
 
     pub fn restore(&self) {
         self.arm.store(false, std::sync::atomic::Ordering::SeqCst);
-        self.commit.store(false, std::sync::atomic::Ordering::SeqCst);
-        self.losing.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.commit
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.losing
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Client-signed creates forwarded to the runtime.

@@ -68,10 +68,7 @@ async fn agent_selection_requires_exact_did_and_suggests_display_name() {
     .await;
     assert!(missing.contains("next_call"), "{missing}");
     let error = refused(&tools, json!({"argv": ["agent", "create"], "options": {"id": "x", "display-name": "X", "system-prompt": "p", "preset": "readonly", "profile": format!("{}:inference", fixture.agent_did())}})).await;
-    assert!(
-        error.contains("provisions a fresh agent DID"),
-        "{error}"
-    );
+    assert!(error.contains("provisions a fresh agent DID"), "{error}");
 }
 
 #[tokio::test]
@@ -428,8 +425,11 @@ async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
 
 #[tokio::test]
 async fn help_is_layered_and_its_recipes_run_as_written() {
-    let (fixture, tools) =
-        authenticated_setup("recipes", &["node", "agent", "tools", "profile", "automation"]).await;
+    let (fixture, tools) = authenticated_setup(
+        "recipes",
+        &["node", "agent", "tools", "profile", "automation"],
+    )
+    .await;
     let owner = fixture.node_did();
     let agent = fixture.agent_did();
     let backend = format!("{agent}:backend");
@@ -634,7 +634,10 @@ async fn target_id_fills_a_positional_id() {
         json!({"argv":["tools","get"],"options":{"agent":agent_did}}),
     )
     .await;
-    assert_eq!(recovered["document"]["tools_id"], format!("{agent_did}:tools"));
+    assert_eq!(
+        recovered["document"]["tools_id"],
+        format!("{agent_did}:tools")
+    );
 }
 
 #[tokio::test]
@@ -1673,8 +1676,7 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
                     );
                     assert_eq!(
                         authority.native_admin(),
-                        case["nac_enabled"].as_bool().unwrap()
-                            && case["admin"].as_bool().unwrap(),
+                        case["nac_enabled"].as_bool().unwrap() && case["admin"].as_bool().unwrap(),
                         "with NAC disabled no actor is the native admin: {actor}"
                     );
                     if repair {

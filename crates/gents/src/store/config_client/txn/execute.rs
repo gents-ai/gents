@@ -671,9 +671,7 @@ impl ConfigApplyTxn<'_> {
     /// every write it gates is still checked natively. Over HTTP, NAC status
     /// and the admin relation are read as the caller; a caller native refuses
     /// either observation is refused.
-    pub(crate) async fn destructive_authority(
-        &self,
-    ) -> Result<super::super::DestructiveAuthority> {
+    pub(crate) async fn destructive_authority(&self) -> Result<super::super::DestructiveAuthority> {
         let (node, native_operations) = match &self.backend {
             TxnBackend::Embedded {
                 node,

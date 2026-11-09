@@ -378,7 +378,11 @@ pub fn reconstruct_stream(
 /// within `message`'s own session scope. Fork publication writes each record
 /// of a referenced closure into the destination session with `request_doc_id`
 /// naming that logical closing record instead of a request.
-pub fn is_fork_copy_for(message: &TranscriptMessage, segment: &OutputSegment, logical: &str) -> bool {
+pub fn is_fork_copy_for(
+    message: &TranscriptMessage,
+    segment: &OutputSegment,
+    logical: &str,
+) -> bool {
     segment.session_id == message.session_id
         && segment.node_did == message.node_did
         && segment.requester_did == message.requester_did

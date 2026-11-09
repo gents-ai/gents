@@ -2672,8 +2672,11 @@ mod tests {
                 .await
                 .unwrap()
                 .with_document_projector(
-                    gents::store::local::document_projector(identity.clone(), std::sync::Arc::new(ceiling))
-                        .unwrap(),
+                    gents::store::local::document_projector(
+                        identity.clone(),
+                        std::sync::Arc::new(ceiling),
+                    )
+                    .unwrap(),
                 )
                 .with_node_identity_did(identity.did())
                 .with_node_acp_enabled()

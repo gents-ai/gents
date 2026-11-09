@@ -1,3 +1,4 @@
+mod declared_readers;
 pub(crate) mod plan;
 pub(crate) mod projection;
 pub(crate) mod read;
@@ -7,7 +8,6 @@ mod self_config_inference;
 pub(crate) mod semantics;
 pub(super) mod task_selection;
 pub(super) mod validate;
-mod declared_readers;
 mod workspace_selection;
 
 use super::{ConfigApplyTxn, ConfigRelationshipGrant};

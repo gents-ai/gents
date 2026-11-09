@@ -213,9 +213,7 @@ async fn agent_step(
     access
         .transact_write("test.grant_sets.agent", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     Ok(())
@@ -230,10 +228,8 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
             crate::test_support::signed_test_node_without_agent(&case.name).await;
         let runtime = db.node_identity.clone();
         let runtime_did = runtime.did().to_owned();
-        let admin = ConfigAccess::local_as(
-            db.node.clone(),
-            identity::Did::new(runtime.did()).unwrap(),
-        );
+        let admin =
+            ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
         let actor_name = format!("{}-actor", case.name);
         let actor = tokio::task::spawn_blocking(move || {
             crate::support::fixtures::test_identity(&actor_name)
@@ -244,10 +240,8 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
         for set in recipient_sets(&case.actor) {
             set.grant(&admin, &actor_did).await.unwrap();
         }
-        let node_doc = owner_access
-            .execute("{ Node { _docID } }")
-            .await
-            .unwrap()["data"]["Node"][0]["_docID"]
+        let node_doc = owner_access.execute("{ Node { _docID } }").await.unwrap()["data"]["Node"]
+            [0]["_docID"]
             .as_str()
             .expect("fixture Node")
             .to_owned();

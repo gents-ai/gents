@@ -121,14 +121,16 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
         fixture
             .create_session(name, bound, name != "invisible")
             .await;
-        let node_view =
-            ConfigAccess::local_as(fixture.db.node.clone(), fixture.runtime.did().parse().unwrap())
-                .execute(&format!(
-                    r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-                    escape_graphql_string(name)
-                ))
-                .await
-                .unwrap();
+        let node_view = ConfigAccess::local_as(
+            fixture.db.node.clone(),
+            fixture.runtime.did().parse().unwrap(),
+        )
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(name)
+        ))
+        .await
+        .unwrap();
         assert!(
             node_view["data"]["AgentSession"]
                 .as_array()

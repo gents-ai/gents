@@ -191,10 +191,13 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
             "{name}: assignment coalescing"
         );
         for (wake, field) in [(&first_wake, "first_scope"), (&second_wake, "second_scope")] {
-            let row = crate::request::binding::load_agent_request_with_access(&db.agent_access, &wake.request_id)
-                .await
-                .unwrap()
-                .unwrap();
+            let row = crate::request::binding::load_agent_request_with_access(
+                &db.agent_access,
+                &wake.request_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
             let scope = &case[field];
             let reference = (scope["kind"] == "referenced").then(|| GoalAssignmentInput {
                 goal_id: format!("goal-{}", scope["goal"]),

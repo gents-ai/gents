@@ -80,7 +80,9 @@ fn a_document_pack_with_a_plugin_installs_and_its_removal_refuses_intact() -> Re
         &["pack", "remove", "demo_tools", "--home", home_arg],
     )?;
     anyhow::ensure!(
-        refused.contains("plugin retirement requires a complete native configuration reference inventory"),
+        refused.contains(
+            "plugin retirement requires a complete native configuration reference inventory"
+        ),
         "{refused}"
     );
     let retained = run_cli_json(
@@ -416,7 +418,9 @@ fn a_documents_dependency_plugin_is_retained_when_its_dependent_removal_refuses(
         ],
     )?;
     anyhow::ensure!(
-        refused.contains("plugin retirement requires a complete native configuration reference inventory"),
+        refused.contains(
+            "plugin retirement requires a complete native configuration reference inventory"
+        ),
         "{refused}"
     );
     let retained = gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;

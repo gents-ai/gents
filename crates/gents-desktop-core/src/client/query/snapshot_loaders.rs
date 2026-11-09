@@ -1008,7 +1008,8 @@ mod remote_failure_tests {
         .await
         .unwrap();
         let healthy_did = "did:test:healthy";
-        let source = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let source =
+            std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&source)
             .await
             .unwrap();

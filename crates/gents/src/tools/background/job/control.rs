@@ -225,13 +225,11 @@ async fn observe_children_in_txn(
     let observed = live_own_children(job)
         .map(|child| {
             let observation =
-                KillObservation::observe(caused.get(&child.retry_key).map(|request| {
-                    CausedFacts {
-                        terminal: RequestLifecycleState::is_terminal_str(
-                            request.lifecycle_state.as_deref(),
-                        ),
-                        this_runtime: request.node_did == node_did,
-                    }
+                KillObservation::observe(caused.get(&child.retry_key).map(|request| CausedFacts {
+                    terminal: RequestLifecycleState::is_terminal_str(
+                        request.lifecycle_state.as_deref(),
+                    ),
+                    this_runtime: request.node_did == node_did,
                 }));
             (child.retry_key.clone(), observation)
         })

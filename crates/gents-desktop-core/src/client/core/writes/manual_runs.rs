@@ -3,9 +3,7 @@ use gents::request::lifecycle::TriggerLineage;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
-use super::{
-    agent_did_for_write, ensure_peer_chat_ready, observe_submitted_request, ClientCore,
-};
+use super::{agent_did_for_write, ensure_peer_chat_ready, observe_submitted_request, ClientCore};
 use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
 
 impl ClientCore {
@@ -39,8 +37,7 @@ impl ClientCore {
         invocation: mutations::ManualTaskInvocation,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        let peer_record = self
-            .peer_record_for_chat_write(&invocation.node_did)?;
+        let peer_record = self.peer_record_for_chat_write(&invocation.node_did)?;
         ensure_peer_chat_ready(&invocation.node_did, peer_record.as_ref())?;
         let (signer, admission, requester_did) = self
             .request_authority(&invocation.node_did, peer_record.as_ref())
@@ -76,9 +73,12 @@ impl ClientCore {
         match submitted {
             Ok(result) => {
                 let node = result.node_did.clone();
-                let result =
-                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
-                        .await;
+                let result = observe_submitted_request(
+                    &self.store,
+                    result,
+                    self.refresh_written_node(&node),
+                )
+                .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

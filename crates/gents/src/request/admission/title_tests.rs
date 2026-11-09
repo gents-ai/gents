@@ -301,7 +301,9 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     }
     let (_owner, enrollment) = enrollment_authority_channel();
     let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, enrollment);
-    let result = verifier.verify_fresh(&queued, &modeled_agent_did(&case.session_agent)).await;
+    let result = verifier
+        .verify_fresh(&queued, &modeled_agent_did(&case.session_agent))
+        .await;
     let actual_disposition = match &result {
         Ok(_) => "admit",
         Err(AgentRequestAdmissionError::Denied(_)) => "deny",

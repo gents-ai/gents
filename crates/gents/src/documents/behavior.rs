@@ -148,4 +148,3 @@ pub(crate) async fn list_agent_records(
 
     Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
 }
-

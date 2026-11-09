@@ -94,7 +94,10 @@ fn every_phase_and_event_steps_as_the_model() {
                 .map(move |event| (*phase, *event, step(*phase, *event)))
         })
         .collect();
-    assert_eq!(transitions.len(), (4 + 3 * RETRY_BUDGET as usize) * EVENTS.len());
+    assert_eq!(
+        transitions.len(),
+        (4 + 3 * RETRY_BUDGET as usize) * EVENTS.len()
+    );
     assert_modeled(&transitions);
 }
 
@@ -293,7 +296,10 @@ struct Outcome {
 
 impl Outcome {
     fn events(&self) -> Vec<WatchEvent> {
-        self.transitions.iter().map(|(_, event, _)| *event).collect()
+        self.transitions
+            .iter()
+            .map(|(_, event, _)| *event)
+            .collect()
     }
 
     fn notices(&self) -> Vec<WatchNotice> {
@@ -465,7 +471,13 @@ async fn the_runtime_error_event_and_a_restarting_client_are_retried() {
         Reply::Frames(vec![snapshot(7)], After::Hang),
     ])
     .await;
-    let outcome = watch(vec![Err(RESTARTING), Ok(runtime.endpoint())], Some(7), true, false).await;
+    let outcome = watch(
+        vec![Err(RESTARTING), Ok(runtime.endpoint())],
+        Some(7),
+        true,
+        false,
+    )
+    .await;
     assert_eq!(
         outcome.seen,
         vec![reconnecting(1), reconnecting(2), Seen::Snapshot(7)]
@@ -551,7 +563,9 @@ async fn an_unavailable_runtime_is_retried_at_the_modeled_spacing_then_reported(
         }
     }
     assert_eq!(retries, RETRY_BUDGET - 1);
-    let budget: Duration = (1..RETRY_BUDGET).map(|failures| TIMING.backoff(failures)).sum();
+    let budget: Duration = (1..RETRY_BUDGET)
+        .map(|failures| TIMING.backoff(failures))
+        .sum();
     assert!(*outcome.at.last().unwrap() >= outcome.started + budget);
     outcome.assert_modeled().await;
 }

@@ -966,10 +966,7 @@ mod tests {
     /// The runtime root's access: it creates request rows and grants their
     /// working Agent, as the creating owner does in production.
     fn root_access(node: &Arc<EmbeddedNode>) -> crate::ConfigAccess {
-        crate::ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(test_node_did()).unwrap(),
-        )
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(test_node_did()).unwrap())
     }
 
     /// The fixture Agent's managed access, used for every lifecycle write a
@@ -1505,7 +1502,7 @@ mod tests {
                 let session = "task-goal-session";
                 ensure_agent_session(&node, session, &test_node_did(), None)
                     .await
-                .unwrap();
+                    .unwrap();
                 let original = crate::goal::set_goal_from_access(
                     &agent_access(&node),
                     &test_node_did(),
@@ -1581,10 +1578,7 @@ mod tests {
                         .unwrap(),
                     DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
                 ));
-                let unchanged = load_agent_goal(&node, session)
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let unchanged = load_agent_goal(&node, session).await.unwrap().unwrap();
                 assert_eq!(unchanged.objective, original.objective);
                 assert_eq!(
                     unchanged.continuation_sequence(),
@@ -1627,10 +1621,7 @@ mod tests {
                     .await
                     .unwrap()
                     .was_claimed());
-                let assigned = load_agent_goal(&node, session)
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let assigned = load_agent_goal(&node, session).await.unwrap().unwrap();
                 assert_eq!(assigned.objective, "perform next assignment");
                 assert_eq!(
                     assigned.assignment_root_request_doc_id.as_deref(),
@@ -1651,8 +1642,8 @@ mod tests {
                 );
                 assert_eq!(
                     crate::goal::refresh_goal_usage_from_access(&agent_access(&node), &assigned)
-                    .await
-                    .unwrap(),
+                        .await
+                        .unwrap(),
                     if stopped { 0 } else { 100 }
                 );
                 assert!(!crate::goal::update_goal_fields_if_status_from_access(
@@ -1866,7 +1857,7 @@ mod tests {
         let (node_did, agent_did) = (test_node_did(), test_agent_did());
         ensure_agent_session(node, session, &node_did, Some(&agent_did))
             .await
-        .unwrap();
+            .unwrap();
         let mut parent = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "snapshot-parent",
@@ -1882,11 +1873,7 @@ mod tests {
         crate::sign_agent_request_create(identity, &mut parent)
             .await
             .unwrap();
-        let parent_doc = create_fixture_request(
-            &access,
-            &parent.graphql_mutation().unwrap(),
-        )
-        .await;
+        let parent_doc = create_fixture_request(&access, &parent.graphql_mutation().unwrap()).await;
         agent.write("test.snapshot_finished_parent", &format!("mutation {{update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"completed\"}}) {{_docID}}}}",escape_graphql_string(&parent_doc))).await.unwrap();
         let mut wake = AgentRequestCreate::base(
             RequestPurpose::Normal,

@@ -216,9 +216,7 @@ impl ScopedWatcherFixture {
         client_access
             .transact_write("test.scoped_watcher.agent", |txn| {
                 let plan = &plan;
-                Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan).await
-                })
+                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
             })
             .await
             .unwrap();
@@ -228,10 +226,7 @@ impl ScopedWatcherFixture {
         let admin =
             crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
         crate::store::identity::GrantSet::AgentBaseline
-            .grant(
-                &admin,
-                &identity::Did::new(&binding.agent_did).unwrap(),
-            )
+            .grant(&admin, &identity::Did::new(&binding.agent_did).unwrap())
             .await
             .unwrap();
         let agent =

@@ -26,7 +26,9 @@ pub(crate) async fn install_identity_acp_policies(node: &defra_node::Node) -> Re
         (MAILBOX_POLICY, MAILBOX_POLICY_ID),
         (CLIENT_JOURNAL_POLICY, CLIENT_JOURNAL_POLICY_ID),
     ] {
-        let id = node.add_dac_policy_with_counter_as(&context, policy, 0).await?;
+        let id = node
+            .add_dac_policy_with_counter_as(&context, policy, 0)
+            .await?;
         if id != expected_id {
             return Err(anyhow!(
                 "installed ACP policy id {id} does not match expected {expected_id}"

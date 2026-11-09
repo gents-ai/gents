@@ -92,11 +92,10 @@ mod tests {
             .await
             .unwrap(),
         );
-        let runtime =
-            gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
-                std::sync::Arc::new(core.node_identity().clone()),
-            )
-            .await;
+        let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+            std::sync::Arc::new(core.node_identity().clone()),
+        )
+        .await;
         runtime.publish_node(serde_json::json!({})).await;
         let agent = runtime.publish_chat_agent().await;
         core.stop_observer_for_test().await;

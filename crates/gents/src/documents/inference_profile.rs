@@ -186,4 +186,3 @@ pub async fn list_inference_profile_records(
         })
         .collect()
 }
-

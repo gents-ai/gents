@@ -612,11 +612,8 @@ mod tests {
             .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(row["data"]["AgentRequest"][0].clone()).unwrap();
-        let mut worker = crate::RequestLifecycle::new_with_node_did(
-            node.clone(),
-            row.try_into().unwrap(),
-            60,
-        );
+        let mut worker =
+            crate::RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
         worker.bind_managed_agent(&signer).unwrap();
         assert_eq!(
             worker.claim().await.unwrap(),

@@ -24,6 +24,7 @@ pub use action_plan::{
     CAP_CLEANUP_WORKSPACE, CAP_CLONE_ARTIFACTS, CAP_CREATE_WORKSPACE, CAP_INTEGRATE_WORKSPACE,
     CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE, DEFAULT_MAKE_WORKTREE_ARTIFACTS,
 };
+pub(crate) use documents::handoff_route_fields;
 pub use documents::{
     isolated_workspace_upsert_mutation, repository_placement_upsert_mutation,
     workspace_binding_upsert_mutation, workspace_cleanup_docs_mutation,
@@ -33,7 +34,6 @@ pub use documents::{
 };
 pub use executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
 pub use executor::create::execute_create_workspace_plan;
-pub(crate) use documents::handoff_route_fields;
 pub(crate) use executor::create::prepare_workspace_reservation;
 pub use executor::freeze::execute_freeze_workspace_base_plan;
 pub use executor::integrate::{
@@ -71,8 +71,7 @@ pub(crate) use overlay::{
 
 #[cfg(test)]
 pub(crate) use overlay::{
-    bind_workspace_overlay, IsolatedWorkspaceRecord,
-    WorkspaceBindInput, WorkspacePlacementRecord,
+    bind_workspace_overlay, IsolatedWorkspaceRecord, WorkspaceBindInput, WorkspacePlacementRecord,
 };
 
 #[cfg(test)]

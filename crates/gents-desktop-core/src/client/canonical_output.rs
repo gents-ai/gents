@@ -18,7 +18,10 @@ pub enum CanonicalMessageProjection {
 
 /// Whether `header` is a fork resolving from copies observed in its own
 /// session; its projection then needs nothing from the fork origin.
-pub fn resolves_from_fork_copies(header: &TranscriptMessageRow, segments: &[OutputSegmentRow]) -> bool {
+pub fn resolves_from_fork_copies(
+    header: &TranscriptMessageRow,
+    segments: &[OutputSegmentRow],
+) -> bool {
     let observed = segments
         .iter()
         .map(|row| ObservedSegment {

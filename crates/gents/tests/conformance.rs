@@ -143,7 +143,8 @@ async fn single_claimer_watcher_never_claims_foreign_replica() {
 
 #[tokio::test]
 async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
-    request_owner_scope::canonical_recovery_repairs_expired_request_after_terminal_write_gap().await;
+    request_owner_scope::canonical_recovery_repairs_expired_request_after_terminal_write_gap()
+        .await;
 }
 
 #[tokio::test]

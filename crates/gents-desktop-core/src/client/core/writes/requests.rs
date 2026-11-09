@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use gents_protocol::row::AgentRequestRow;
 
 use super::{
-    agent_did_for_write, ensure_peer_chat_ready, find_request_in_scope,
-    observe_submitted_request, ClientCore,
+    agent_did_for_write, ensure_peer_chat_ready, find_request_in_scope, observe_submitted_request,
+    ClientCore,
 };
 use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
 
@@ -46,8 +46,7 @@ impl ClientCore {
         mut options: SubmitRequestOptions,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        let peer_record = self
-            .peer_record_for_chat_write(node_did)?;
+        let peer_record = self.peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let (signer, admission, requester_did) = self
             .request_authority(node_did, peer_record.as_ref())
@@ -85,9 +84,12 @@ impl ClientCore {
         {
             Ok(result) => {
                 let node = result.node_did.clone();
-                let result =
-                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
-                        .await;
+                let result = observe_submitted_request(
+                    &self.store,
+                    result,
+                    self.refresh_written_node(&node),
+                )
+                .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -125,8 +127,7 @@ impl ClientCore {
                 .context("stale request has no node_did")?,
             None => node_did.with_context(|| format!("request {stale_request_id} not found"))?,
         };
-        let peer_record = self
-            .peer_record_for_chat_write(node_did)?;
+        let peer_record = self.peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let (signer, admission, _) = self
             .request_authority(node_did, peer_record.as_ref())
@@ -153,9 +154,12 @@ impl ClientCore {
         match result {
             Ok(result) => {
                 let node = result.node_did.clone();
-                let result =
-                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
-                        .await;
+                let result = observe_submitted_request(
+                    &self.store,
+                    result,
+                    self.refresh_written_node(&node),
+                )
+                .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -176,8 +180,7 @@ impl ClientCore {
             .node_did
             .as_deref()
             .context("retry parent has no node_did")?;
-        let peer_record = self
-            .peer_record_for_chat_write(node_did)?;
+        let peer_record = self.peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         crate::local_runtime::ensure_request_input_supported(
             peer_record.as_ref(),
@@ -203,9 +206,12 @@ impl ClientCore {
         match result {
             Ok(result) => {
                 let node = result.node_did.clone();
-                let result =
-                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
-                        .await;
+                let result = observe_submitted_request(
+                    &self.store,
+                    result,
+                    self.refresh_written_node(&node),
+                )
+                .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

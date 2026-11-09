@@ -106,7 +106,11 @@ impl DesktopBridge {
     /// the node it names, else the calling window's own selection. Another
     /// window's selection is never consulted, so each window keeps working
     /// on its own node while others are open.
-    pub(crate) fn window_command_node(&self, label: &str, explicit: Option<&str>) -> Option<String> {
+    pub(crate) fn window_command_node(
+        &self,
+        label: &str,
+        explicit: Option<&str>,
+    ) -> Option<String> {
         explicit
             .map(str::trim)
             .filter(|node| !node.is_empty())
@@ -184,7 +188,11 @@ impl DesktopAppState {
     }
 
     /// [`DesktopBridge::window_command_node`] under the bridge lock.
-    pub(crate) fn window_command_node(&self, label: &str, explicit: Option<&str>) -> Option<String> {
+    pub(crate) fn window_command_node(
+        &self,
+        label: &str,
+        explicit: Option<&str>,
+    ) -> Option<String> {
         self.bridge
             .lock()
             .expect("desktop bridge lock poisoned")

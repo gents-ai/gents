@@ -5,16 +5,16 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use axum::body::Bytes;
+use axum::extract::ws::{Message as ProxyMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::extract::ws::{Message as ProxyMessage, WebSocket, WebSocketUpgrade};
 use axum::routing::{any, get};
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as UpstreamMessage};
 use axum::Router;
+use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::Semaphore;
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as UpstreamMessage};
 use uuid::Uuid;
 
 const TRANSACTION_STAGE_DEADLINE: Duration = Duration::from_secs(10);
@@ -295,11 +295,7 @@ async fn relay_and_stall_client_signed_mutation(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let target = format!(
-        "{}{}",
-        state.target_origin.replacen("http", "ws", 1),
-        uri
-    );
+    let target = format!("{}{}", state.target_origin.replacen("http", "ws", 1), uri);
     let mut request = match target.into_client_request() {
         Ok(request) => request,
         Err(error) => {

@@ -397,8 +397,7 @@ pub(crate) async fn prepare_cli_goal_input(
         .context("Goal input requires an authenticated client identity")?;
     let verifier =
         gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
-    gents::goal::prepare_client_goal_input(access, &verifier, node_did, session_id, input)
-    .await
+    gents::goal::prepare_client_goal_input(access, &verifier, node_did, session_id, input).await
 }
 
 /// Exact retries use the same immutable submission key and converge to the
@@ -1436,7 +1435,8 @@ mod tests {
                     if path == "/api/v0/graphql/client-sign" {
                         creates.fetch_add(1, Ordering::SeqCst);
                         staged.store(true, Ordering::SeqCst);
-                    } else if path.starts_with("/api/v0/tx/") && staged.swap(false, Ordering::SeqCst)
+                    } else if path.starts_with("/api/v0/tx/")
+                        && staged.swap(false, Ordering::SeqCst)
                     {
                         return ProxyDecision::ForwardThenRespond(lost());
                     }
@@ -1444,7 +1444,10 @@ mod tests {
                 }) as futures_util::future::BoxFuture<'static, ProxyDecision>
             })
         };
-        (ForwardingProxy::spawn(client.graphql(), hook).await, creates)
+        (
+            ForwardingProxy::spawn(client.graphql(), hook).await,
+            creates,
+        )
     }
 
     async fn durable_request_rows(

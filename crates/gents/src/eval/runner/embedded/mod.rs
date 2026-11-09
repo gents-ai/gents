@@ -10,7 +10,8 @@ pub use executor::EmbeddedExecutor;
 pub use home::{boot_runtime, wait_for_runtime_ready, EmbeddedHome, RunningRuntime};
 pub use inspect::{inspect_retained_requests, RetainedRequest};
 pub use observe::{
-    classify_request_outcome, evidence_query, inference_sample_query, request_evidence_from_query_data,
-    request_evidence_from_sources, InferenceCallEvidence, MessageEvidence, NoHook, ObservationHook,
-    RequestEvidence, ResponseEvidence, TerminalObservation, ToolCallEvidence,
+    classify_request_outcome, evidence_query, inference_sample_query,
+    request_evidence_from_query_data, request_evidence_from_sources, InferenceCallEvidence,
+    MessageEvidence, NoHook, ObservationHook, RequestEvidence, ResponseEvidence,
+    TerminalObservation, ToolCallEvidence,
 };

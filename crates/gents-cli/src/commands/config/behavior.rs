@@ -531,8 +531,15 @@ mod tests {
         let root = std::fs::canonicalize(workspace.path())?
             .to_string_lossy()
             .into_owned();
-        gents::tools::surface::set_workspace_root_with_readers(&access, owner, &root, None, true, &[])
-            .await?;
+        gents::tools::surface::set_workspace_root_with_readers(
+            &access,
+            owner,
+            &root,
+            None,
+            true,
+            &[],
+        )
+        .await?;
         let user = identity::Did::new(client.user.did())?;
         let provision = || {
             gents::store::identity::provision_agent_identity_authorized(
@@ -668,7 +675,8 @@ mod tests {
         use gents::documents::apply_desired_state_plan;
         use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let client = crate::shared::test_support::ClientHome::new().await;
-        let binding = gents::store::identity::provision_agent_identity(client.home.identity.as_ref())?;
+        let binding =
+            gents::store::identity::provision_agent_identity(client.home.identity.as_ref())?;
         let agent = json!({
             "creation_nonce": binding.creation_nonce,
             "agent_did": binding.agent_did,
@@ -689,7 +697,10 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(format!("{error:#}").contains("missing-profile"), "{error:#}");
+        assert!(
+            format!("{error:#}").contains("missing-profile"),
+            "{error:#}"
+        );
         let response = client
             .access
             .execute("{ Agent {agent_did} AgentContext {context_id} Tools {tools_id} }")

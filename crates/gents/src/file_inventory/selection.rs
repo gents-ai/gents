@@ -101,14 +101,7 @@ pub(super) async fn load_canonical_selection_in_txn(
         .map(|row| decode_output_segment_row(row).map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     let copied = copied_fork_headers(&root_headers, &output_segments);
-    load_origin_headers(
-        txn,
-        &mut root_headers,
-        &copied,
-        &scope.node_did,
-        requester,
-    )
-    .await?;
+    load_origin_headers(txn, &mut root_headers, &copied, &scope.node_did, requester).await?;
     load_referenced_segments(
         txn,
         &root_headers,
@@ -157,10 +150,7 @@ pub(super) async fn load_canonical_selection_in_txn(
     load_effect_children(txn, scope, &bases, &mut effects).await?;
     let parents = bases
         .iter()
-        .filter(|row| {
-            row.collection
-                == crate::file_inventory::SessionCollection::AgentToolCall
-        })
+        .filter(|row| row.collection == crate::file_inventory::SessionCollection::AgentToolCall)
         .map(|row| row.doc_id.as_str())
         .collect::<BTreeSet<_>>();
     let effect_requests = effects
@@ -216,8 +206,7 @@ pub(super) async fn load_canonical_selection_in_txn(
         let row = bases
             .iter()
             .find(|row| {
-                row.collection
-                    == crate::file_inventory::SessionCollection::AgentRequest
+                row.collection == crate::file_inventory::SessionCollection::AgentRequest
                     && row.doc_id == request_id
             })
             .context("terminal hydration request missing from authorized base rows")?;
@@ -251,10 +240,12 @@ fn copied_fork_headers(
 ) -> CopiedForks {
     let observed = segments
         .iter()
-        .map(|row| gents_protocol::output::reconstruction::ObservedSegment {
-            doc_id: &row.doc_id,
-            segment: &row.segment,
-        })
+        .map(
+            |row| gents_protocol::output::reconstruction::ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            },
+        )
         .collect::<Vec<_>>();
     let mut copied = CopiedForks::default();
     for header in headers {
@@ -408,8 +399,8 @@ async fn load_referenced_bases(
         node_did,
         requester_did,
     } = input;
-    use gents_protocol::output::{MessageBlock, MessagePublication, OutputSource};
     use crate::file_inventory::SessionCollection;
+    use gents_protocol::output::{MessageBlock, MessagePublication, OutputSource};
     let mut wanted = BTreeSet::new();
     for row in headers
         .iter()
@@ -419,10 +410,7 @@ async fn load_referenced_bases(
             wanted.insert((SessionCollection::AgentRequest, id.clone()));
         }
         if let MessagePublication::ToolDelivery { tool_call_doc_id } = &row.message.publication {
-            wanted.insert((
-                SessionCollection::AgentToolCall,
-                tool_call_doc_id.clone(),
-            ));
+            wanted.insert((SessionCollection::AgentToolCall, tool_call_doc_id.clone()));
         }
         for block in &row.message.blocks {
             if let MessageBlock::ToolCall {
@@ -432,10 +420,7 @@ async fn load_referenced_bases(
                 tool_call_doc_id, ..
             } = block
             {
-                wanted.insert((
-                    SessionCollection::AgentToolCall,
-                    tool_call_doc_id.clone(),
-                ));
+                wanted.insert((SessionCollection::AgentToolCall, tool_call_doc_id.clone()));
             }
         }
     }
@@ -444,10 +429,7 @@ async fn load_referenced_bases(
         .filter(|row| !copied.segments.contains(&row.doc_id))
     {
         if let OutputSource::ToolCall { tool_call_doc_id } = &row.segment.source {
-            wanted.insert((
-                SessionCollection::AgentToolCall,
-                tool_call_doc_id.clone(),
-            ));
+            wanted.insert((SessionCollection::AgentToolCall, tool_call_doc_id.clone()));
         }
     }
     let agent = escape_graphql_string(node_did);
@@ -542,8 +524,7 @@ pub(super) async fn load_effect_children(
     let parents = bases
         .iter()
         .filter(|row| {
-            row.collection
-                == crate::file_inventory::SessionCollection::AgentToolCall
+            row.collection == crate::file_inventory::SessionCollection::AgentToolCall
                 && row.session_id != scope.session_id
         })
         .map(|row| row.doc_id.as_str())

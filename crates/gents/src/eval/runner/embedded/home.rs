@@ -409,8 +409,7 @@ fn release_unstopped_node<H>(node: Arc<EmbeddedNode>, held: H) {
 /// The node a trial home's HTTP route serves. The node owns the HTTP server
 /// that holds this cell, so it is held weakly: a strong reference would keep a
 /// dropped home's node (and its threads and descriptors) alive.
-type ServedNode =
-    Arc<std::sync::OnceLock<(std::sync::Weak<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
+type ServedNode = Arc<std::sync::OnceLock<(std::sync::Weak<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
 
 async fn trial_http(served: ServedNode) -> Result<(crate::defra_node::HttpConfig, String)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

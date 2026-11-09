@@ -46,7 +46,8 @@ async fn claimed_client_tool_context(
     )
     .await?;
     crate::request::lifecycle::submit_client_request(user_access, &create).await?;
-    let agent_access = ConfigAccess::local_managed_agent(node.clone(), agent.did().parse()?, agent)?;
+    let agent_access =
+        ConfigAccess::local_managed_agent(node.clone(), agent.did().parse()?, agent)?;
     let response = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ {} }} }}"#,
@@ -64,7 +65,9 @@ async fn claimed_client_tool_context(
         runtime.clone(),
         authority,
     );
-    let (request, admission) = verifier.verify_fresh_for_claim(&request, agent.did()).await?;
+    let (request, admission) = verifier
+        .verify_fresh_for_claim(&request, agent.did())
+        .await?;
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         request,
@@ -75,7 +78,10 @@ async fn claimed_client_tool_context(
     lifecycle.bind_managed_agent(agent)?;
     lifecycle.set_client_claim_admission(admission);
     anyhow::ensure!(
-        matches!(lifecycle.claim_with_identity().await?, ClaimOutcome::Claimed),
+        matches!(
+            lifecycle.claim_with_identity().await?,
+            ClaimOutcome::Claimed
+        ),
         "the selected Agent claims the User's request"
     );
     let context = lifecycle.claimed_tool_context()?;
@@ -347,9 +353,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.agent_creator.seed", |txn| {
             let plan = &plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .context("seeding the user-owned Agent configuration")?;
@@ -923,9 +927,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.select", |txn| {
             let plan = &initial_surface_plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let sibling_tools_query = format!(
@@ -1084,7 +1086,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             &mailbox_context,
         )
         .await
-    .map_err(|error| anyhow::anyhow!("cached mailbox failed: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("cached mailbox failed: {error}"))?;
     assert!(mailbox.contains("Selected Agent notice"));
     let mailbox: Value = serde_json::from_str(&mailbox)?;
     let mailbox_doc = mailbox["item"]["_docID"]
@@ -1163,9 +1165,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.change", |txn| {
             let plan = &changed_plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     assert_eq!(
@@ -1175,9 +1175,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.restore", |txn| {
             let plan = &initial_surface_plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     let deselected_tools = json!({"node_did":runtime.did(), "tools_id":sibling_tools});
@@ -1189,9 +1187,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.deselect", |txn| {
             let plan = &deselect_plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     assert_eq!(sibling_writer.execute("{ DatastoreToolSurface(filter: {surface_id: {_eq: \"fixture/surface\"}}) { _docID } }").await?["data"]["DatastoreToolSurface"].as_array().unwrap().len(), 1);
@@ -1205,9 +1201,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.reselect", |txn| {
             let plan = &initial_surface_plan;
-            Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await
-            })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await?;
     assert!(cached_surface_usable(&sibling_writer, runtime.did(), &declaration).await);
@@ -1706,7 +1700,11 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let retain = tokio::task::spawn_blocking(|| {
         crate::lean_vocab_test::lean_plugin_reference_cases()
             .iter()
-            .find(|case| case["root_ships"].as_array().is_some_and(|ships| !ships.is_empty()))
+            .find(|case| {
+                case["root_ships"]
+                    .as_array()
+                    .is_some_and(|ships| !ships.is_empty())
+            })
             .and_then(|case| case["retain_notification_record"].as_bool())
     })
     .await?

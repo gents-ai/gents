@@ -366,7 +366,9 @@ mod tests {
         access
             .transact_write("test.records.progress", |txn| {
                 let (guest, host) = (guest.clone(), host.clone());
-                Box::pin(async move { write_progress_in_txn(txn, doc_id, expected, guest, host).await })
+                Box::pin(
+                    async move { write_progress_in_txn(txn, doc_id, expected, guest, host).await },
+                )
             })
             .await
     }

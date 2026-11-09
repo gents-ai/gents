@@ -28,14 +28,14 @@ mod queued_user_messages;
 mod rendered_request_capture;
 #[path = "e2e_runtime/runtime_observability.rs"]
 mod runtime_observability;
-#[path = "e2e_runtime/workspace_binding_recovery.rs"]
-mod workspace_binding_recovery;
 #[path = "e2e_runtime/schedule_snapshot_reconcile.rs"]
 mod schedule_snapshot_reconcile;
 #[path = "e2e_runtime/self_config_tools.rs"]
 mod self_config_tools;
 #[path = "e2e_runtime/storage_budget.rs"]
 mod storage_budget;
+#[path = "e2e_runtime/workspace_binding_recovery.rs"]
+mod workspace_binding_recovery;
 
 #[test]
 fn provider_wire_fixtures_do_not_contain_credentials() {

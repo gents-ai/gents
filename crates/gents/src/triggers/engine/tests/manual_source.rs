@@ -36,8 +36,7 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
 
 #[tokio::test]
 async fn production_materializer_persists_event_source_document_lineage() {
-    let (db, _user, client, behavior) =
-        signed_materializer_agent("event-source-lineage").await;
+    let (db, _user, client, behavior) = signed_materializer_agent("event-source-lineage").await;
     let node = db.node.clone();
     let identity = behavior.node_identity().clone();
     let owner = behavior.node_did();
@@ -286,8 +285,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
 
 #[tokio::test]
 async fn production_schedule_materialization_passes_final_exact_config_admission() {
-    let (db, _user, client, behavior) =
-        signed_materializer_agent("schedule-exact-config").await;
+    let (db, _user, client, behavior) = signed_materializer_agent("schedule-exact-config").await;
     let node = db.node.clone();
     let identity = behavior.node_identity().clone();
     let owner = behavior.node_did();
@@ -396,7 +394,10 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
         )
         .await
         .expect_err("non-Event materialization must reject source document lineage");
-    assert!(misplaced.to_string().contains("Only Event"), "{misplaced:#}");
+    assert!(
+        misplaced.to_string().contains("Only Event"),
+        "{misplaced:#}"
+    );
 }
 
 #[tokio::test]
