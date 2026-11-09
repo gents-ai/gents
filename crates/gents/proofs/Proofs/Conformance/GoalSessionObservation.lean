@@ -16,7 +16,7 @@ def projections : List ProjectionRead :=
     .verified (some ⟨2, some 200⟩)]
 
 def cases : List Case :=
-  [SessionRead.absent, .present, .omitted].flatMap fun session =>
+  [SessionRead.absent, .present].flatMap fun session =>
     projections.flatMap fun projection =>
       [none, some ⟨1, some 100⟩].map fun captured => ⟨session, projection, captured⟩
 
@@ -24,7 +24,7 @@ def referenceJson (reference : Reference) : Json :=
   Json.mkObj [("goal", toJson reference.goal), ("root", toJson reference.root)]
 
 def sessionJson : SessionRead → Json
-  | .absent => "absent" | .present => "present" | .omitted => "omitted"
+  | .absent => "absent" | .present => "present"
 
 def projectionJson : ProjectionRead → Json
   | .missing => Json.mkObj [("kind", "missing")]
@@ -33,7 +33,6 @@ def projectionJson : ProjectionRead → Json
       ("goal", goal.map referenceJson |>.getD Json.null)]
 
 def unknownCauseJson : UnknownCause → Json
-  | .readIncomplete => "read_incomplete"
   | .projectionMissing => "projection_missing"
   | .projectionUnverified => "projection_unverified"
 
@@ -53,7 +52,7 @@ def viewJson : View → Json
 
 def nextJson : NextAction → Json
   | .controlGoal => "control_goal" | .startGoal => "start_goal"
-  | .send => "send" | .refresh => "refresh"
+  | .send => "send" | .awaitPublication => "await_publication"
 
 def preparedJson : PreparedInput → Json
   | .pending => Json.mkObj [("kind", "pending")]
@@ -66,10 +65,11 @@ def caseJson (c : Case) : Json :=
     ("captured", c.captured.map referenceJson |>.getD Json.null),
     ("expected_state", stateJson state), ("expected_view", viewJson (view state)),
     ("expected_next", nextJson (next state)),
-    ("expected_bind", preparedJson (bind c.captured state))]
+    ("expected_bind", preparedJson (bind c.captured state)),
+    ("expected_refusal", (refusal c.captured state).map unknownCauseJson |>.getD Json.null)]
 
 def casesJson : String := (toJson (cases.map caseJson)).compress
 
-example : cases.length = 30 := by decide
+example : cases.length = 20 := by decide
 
 end Conformance.GoalSessionObservationContracts
