@@ -23,11 +23,15 @@
 \* .clientSignedWriteMayRetry`); `Redrive` and `ReserveRedrive` select that
 \* rebuild, FALSE being the code before each fix.
 \*
-\* The create is idempotent on the request identity: the runtime's unique
-\* request key (`AgentRequest.retry_key`, `@index(unique: true)`;
-\* `send_client_request`) makes a repeat of one identity the same request, so
-\* `rows` is a set of identities. Two sends of one identity may be on the wire
-\* at once (a retry after a deadline while the first is still committing).
+\* The create is idempotent on the request identity (`send_client_request`:
+\* the unique key derived from the identity, the held lookup by
+\* `request_id`, and `stage_client_request_in_txn`'s held check), so `rows`
+\* is a set of identities. Two sends of one identity may be on the wire at
+\* once (a retry after a deadline while the first is still committing). The
+\* runtime refuses only an identity it does not hold: the held lookup runs
+\* before any other admission check (Lean `held_resend_never_refused`). The
+\* transport may fail a send before it reaches the runtime, held or not.
+\* `Timeout` is the client deadline `CHAT_SEND_DEADLINE_MS`.
 \*
 \* `Publications` bounds the Agent's session refreshes that land inside one
 \* attempt series, and `MaxSends` bounds the person's retries.
@@ -143,8 +147,16 @@ SubmitCommit(i) ==
                    /\ UNCHANGED rows
   /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends>>
 
-\* The runtime refuses the send, or the transport fails before it commits.
+\* The runtime refuses a send of an identity it does not hold.
 Refuse(i) ==
+  /\ Refusals
+  /\ wire[i].id \notin rows
+  /\ wire' = Remove(wire, i)
+  /\ replies' = Append(replies, [id |-> wire[i].id, ok |-> FALSE])
+  /\ UNCHANGED <<sessVer, agentLeft, msg, payload, cur, sends, rows, conflictLost>>
+
+\* The transport fails before the send reaches the runtime.
+TransportFail(i) ==
   /\ Refusals
   /\ wire' = Remove(wire, i)
   /\ replies' = Append(replies, [id |-> wire[i].id, ok |-> FALSE])
@@ -202,7 +214,7 @@ DropPayload ==
 
 Runtime ==
   \/ \E i \in 1..Len(wire) : ReserveCommit(i) \/ SubmitCommit(i)
-  \/ \E i \in 1..Len(wire) : Refuse(i)
+  \/ \E i \in 1..Len(wire) : Refuse(i) \/ TransportFail(i)
 
 Next ==
   \/ AgentPublish
@@ -244,8 +256,9 @@ CreatedOnce == Cardinality(rows) <= 1
 \* The client keeps the payload of every unconfirmed message.
 RetainedUntilConfirmed == msg \in {"pending", "failed"} => payload
 
-\* A failed message always offers Retry: nothing is stuck.
-FailedOffersRetry == msg = "failed" => payload
+\* A failed message always offers Retry: nothing is stuck. `sends = MaxSends`
+\* is the model's bound on the person's retries, not a client state.
+FailedOffersRetry == msg = "failed" => (ENABLED Retry \/ sends = MaxSends)
 
 \* Pending always resolves: confirmed, or failed with Retry.
 PendingResolves == [](msg = "pending" => <>(msg \in {"confirmed", "failed"}))

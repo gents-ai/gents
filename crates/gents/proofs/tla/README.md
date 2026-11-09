@@ -50,12 +50,16 @@ See `../README.md` for how this fits the broader formal-verification model.
   submission (`request.client.submit`), whose commits abort when the working
   Agent refreshes the session observation; both are signed-conflict rebuilds
   (Lean `clientSignedWriteMayRetry`). The runtime's create is idempotent on
-  the request identity (`send_client_request`, the unique `retry_key`).
+  the request identity (`send_client_request`: the key derived from the
+  identity, the held lookup by `request_id`, the staging held check) and the
+  runtime refuses only an identity it does not hold; the transport may fail
+  any send. `Timeout` is the client deadline `CHAT_SEND_DEADLINE_MS`.
   `NoConflictLoss`, `CreatedOnce`, `RetainedUntilConfirmed`,
-  `FailedOffersRetry`, `PendingResolves` and `EverySendSettles` hold under
-  lost replies, refusals and retries racing an earlier send of the same
-  identity. `SingleAttempt` is the found submission race (the busy-session
-  mailbox test); `ReserveSingleAttempt` is the found reservation race ("a
+  `FailedOffersRetry` (Retry is enabled for every failed message below the
+  model's send bound), `PendingResolves` and `EverySendSettles` hold under
+  lost replies, refusals, transport failures and retries racing an earlier
+  send of the same identity. `SingleAttempt` is the found submission race
+  (the busy-session mailbox test); `ReserveSingleAttempt` is the found reservation race ("a
   partial read lost to a newer merge" in the live backgrounding run);
   `ShortBudget` shows the overlap premise is load-bearing; `RetryFreshId`
   retries under a new identity and duplicates the turn; `NoPayload` drops the
@@ -80,25 +84,6 @@ See `../README.md` for how this fits the broader formal-verification model.
   registry entry; `SilentBackoff` sends only snapshots and terminal errors;
   `ResetOnAccept` resets the count on every accepted connection; `Unbounded`
   retries forever. Lean `ClientShell.PackWatch` owns the per-task phases.
-
-  `Recovery` adds reconciliation of an unconfirmed submission while its
-  original commit may still land or abort: the retained signed bytes are
-  replayed only as the identical document; `FreshReplay` answers absence with
-  a freshly signed request and duplicates the turn. A lost reservation
-  response is repeated by Resume (`ReserveRetry`). `BytesLost` lets the caller
-  lose those bytes first (an older uncorrelated send or a reset journal; Lean
-  `journal_records_never_show_unprovable` excludes journal-written records),
-  leaving only the owner's visible request as evidence. Green covers that
-  path: absence stays unconfirmed and the person may set the send aside (Lean
-  `affordances`), which never claims non-delivery (`NotDeliveredIsProven`)
-  and is always offered (`NeverBlocked`). `UnretainedWait` is the code before
-  set-aside (never resolves); `Unretained` is the rejected `.refused` reading
-  (claims non-delivery while the original is in flight). Green's liveness
-  rests on the owner becoming reachable for retained bytes;
-  `OwnerUnreachable` shows that premise is load-bearing.
-  `ReplayRejectedInFlight` is a reported gap: a definite rejection of the
-  identical replay is reported not delivered while the original may still
-  land.
 - `SessionHeadObservation` — a session's observed request head and the
   client that projects it on reopen (#3604). The runtime claims a session's
   requests one at a time; each claim or admission refusal names the incoming

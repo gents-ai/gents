@@ -8,11 +8,35 @@ message as pending at once and keeps its payload. It sends one signed create.
 A reply confirms it; a refusal, or no reply by the client's deadline (the
 reply was lost, the runtime restarted, the app closed), shows it as failed
 with Retry. Retry resends the same payload under the same identity. The
-runtime treats a repeat of that identity as the same request: its create is
-idempotent on the owner's unique request key (`AgentRequest.retry_key`, an
-`@index(unique: true)` field; `gents::request::lifecycle::send_client_request`),
-so a retry after a lost reply never makes a second turn. The payload is
-released only once the message is confirmed or the person discards it.
+runtime treats a repeat of that identity as the same request, so a retry after
+a lost reply never makes a second turn. The payload is released only once the
+message is confirmed or the person discards it.
+
+Code owners of each action:
+* `create` is `gents::request::lifecycle::send_client_request`. It requires
+  the create's `retry_key` to be `client_request_key` of its signer and
+  request identity (`AgentRequest.retry_key` is `@index(unique: true)`, so two
+  concurrent creates of one identity commit once), returns the request the
+  runtime already holds under that `request_id` before it validates anything
+  else (`held_client_request`, which also finds requests committed before the
+  key existed), and `stage_client_request_in_txn` refuses any client create
+  whose `request_id` is already held. `AgentRequest.request_id` itself is only
+  `@index`; these three checks are what make the identity idempotent.
+* `refuse` is a runtime refusal (a closed question, an unavailable Agent). It
+  never applies to an identity the runtime holds: the held lookup runs before
+  the mailbox cause or any other admission check
+  (`gents_desktop_core` `submit_request`), so a resend of a held identity
+  confirms (`held_resend_never_refused`).
+* `drop` is the transport failing before the create reaches the runtime.
+* `timeout` is the client deadline `CHAT_SEND_DEADLINE_MS`
+  (`apps/gents-desktop/src/hooks/chatDelivery.ts`). Each send persists its
+  deadline with the kept payload (`ChatDraft.pendingUntil`), so every window
+  derives the same status from the shared draft and a closed or crashed
+  window's send also fails at its deadline. A window's in-memory state never
+  decides the status.
+* `receive true` marks the message confirmed before the view applies the
+  reply; a failure to update the view is reported as such and never shows a
+  confirmed message as failed.
 
 Decisions (#3538, user):
 * No receipt journal, no reconcile of an unknown outcome and no
@@ -80,8 +104,10 @@ inductive Action where
   | compose (id : Nat)
   /-- The runtime commits a create and replies. -/
   | commit (id : Nat)
-  /-- The runtime refuses a create (or it fails before it commits). -/
+  /-- The runtime refuses a create of an identity it does not hold. -/
   | refuse (id : Nat)
+  /-- The transport fails before the create reaches the runtime. -/
+  | drop (id : Nat)
   /-- A reply is lost on its way back. -/
   | loseReply (id : Nat) (ok : Bool)
   /-- The client receives a reply. -/
@@ -119,6 +145,10 @@ def step (s : State) : Action → Option State
                     replies := s.replies ++ [(id, true)] }
     else none
   | .refuse id =>
+    if id ∈ s.wire ∧ id ∉ s.turns then
+      some { s with wire := s.wire.erase id, replies := s.replies ++ [(id, false)] }
+    else none
+  | .drop id =>
     if id ∈ s.wire then
       some { s with wire := s.wire.erase id, replies := s.replies ++ [(id, false)] }
     else none
@@ -323,6 +353,12 @@ theorem step_inv (s s' : State) (action : Action) (inv : Inv s) (h : step s acti
     · cases h
       exact ⟨ids, turns, ⟨fun x hx => wire x (List.mem_of_mem_erase hx), held⟩, kept⟩
     · contradiction
+  | drop id =>
+    simp only [step] at h
+    split at h
+    · cases h
+      exact ⟨ids, turns, ⟨fun x hx => wire x (List.mem_of_mem_erase hx), held⟩, kept⟩
+    · contradiction
   | loseReply id ok =>
     simp only [step] at h
     split at h
@@ -494,6 +530,21 @@ theorem failed_offers_retry {s : State} (h : Reachable s) (m : Message) (mem : m
     exact ⟨m, mem, by simp [failed, payload]⟩
   simp only [step, offered, ↓reduceIte, Option.isSome_some]
 
+/-- The runtime never refuses an identity it holds: a resend of a held
+identity (a retry after a lost reply, a retry after the question it answers
+was claimed) can only be answered by its commit, which confirms it. -/
+theorem held_resend_never_refused (s : State) (id : Nat) (held : id ∈ s.turns) :
+    step s (.refuse id) = none := by
+  simp [step, held]
+
+/-- A held identity's resend commits as the same request and replies that it
+is held. -/
+theorem held_resend_confirms (s : State) (id : Nat) (held : id ∈ s.turns) (onWire : id ∈ s.wire) :
+    ∃ s', step s (.commit id) = some s' ∧ s'.turns = s.turns ∧ (id, true) ∈ s'.replies := by
+  refine ⟨{ s with wire := s.wire.erase id, turns := create s.turns id,
+                   replies := s.replies ++ [(id, true)] }, by simp [step, onWire], ?_, by simp⟩
+  exact create_repeat_is_same_request _ _ held
+
 theorem retry_commit_is_idempotent (s : State) (id : Nat) (held : id ∈ s.turns) (onWire : id ∈ s.wire) :
     (step s (.commit id)).map (·.turns) = some s.turns := by
   simp [step, onWire, create_repeat_is_same_request _ _ held]
@@ -565,6 +616,7 @@ def actionJson : Action → Json
   | .compose id => Json.mkObj [("kind", toJson "compose"), ("id", toJson id)]
   | .commit id => Json.mkObj [("kind", toJson "commit"), ("id", toJson id)]
   | .refuse id => Json.mkObj [("kind", toJson "refuse"), ("id", toJson id)]
+  | .drop id => Json.mkObj [("kind", toJson "drop"), ("id", toJson id)]
   | .loseReply id ok => Json.mkObj [("kind", toJson "loseReply"), ("id", toJson id), ("ok", toJson ok)]
   | .receive id ok => Json.mkObj [("kind", toJson "receive"), ("id", toJson id), ("ok", toJson ok)]
   | .timeout id => Json.mkObj [("kind", toJson "timeout"), ("id", toJson id)]
@@ -573,7 +625,7 @@ def actionJson : Action → Json
 
 /-- The actions on one message `1` the generated traces explore. -/
 def traceActions : List Action :=
-  [.compose 1, .commit 1, .refuse 1, .loseReply 1 true, .loseReply 1 false,
+  [.compose 1, .commit 1, .refuse 1, .drop 1, .loseReply 1 true, .loseReply 1 false,
    .receive 1 true, .receive 1 false, .timeout 1, .retry 1, .discard 1]
 
 /-- Every enabled trace of `depth` actions from `s`, with its end state. -/
