@@ -4627,11 +4627,16 @@ dependencies = [
  "acp",
  "anyhow",
  "chrono",
+ "crypto",
+ "defra-core",
  "defra-node",
  "gents-protocol",
  "gents-schemas",
+ "hex",
+ "identity",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
