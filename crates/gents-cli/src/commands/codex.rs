@@ -1,5 +1,5 @@
 use std::io::IsTerminal;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -36,17 +36,16 @@ pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "codex".to_string());
     let command_args = codex_command_args(&args);
-    let status = Command::new(&codex_bin)
-        .args(&command_args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .with_context(|| {
-            format!(
-                "launching `{codex_bin}`; install the Codex CLI or set {CODEX_BIN_ENV} to its path"
-            )
-        })?;
+    let status = gents::tools::exec::native_spawn::status_std(
+        std::process::Command::new(&codex_bin)
+            .args(&command_args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit()),
+    )
+    .with_context(|| {
+        format!("launching `{codex_bin}`; install the Codex CLI or set {CODEX_BIN_ENV} to its path")
+    })?;
 
     if status.success() {
         Ok(())

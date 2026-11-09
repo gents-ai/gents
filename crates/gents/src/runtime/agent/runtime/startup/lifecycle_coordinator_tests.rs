@@ -79,14 +79,19 @@ async fn admission_gate_waits_for_durable_ready_retry_ack() {
     coordinator.begin_shutdown().await.unwrap();
     coordinator.finish_shutdown().await.unwrap();
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn shutdown_wins_over_a_late_startup_barrier_release() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let status = RuntimeStatusHandle::new(node.clone(), "did:test:lifecycle-race");
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity")
+        .to_owned();
+    crate::test_support::ensure_test_node(&node, &node_did).await;
+    let status = RuntimeStatusHandle::new(node.clone(), node_did);
     status.initialize_startup("general").await.unwrap();
     let gate = super::super::router::RuntimeAdmissionGate::closed();
     let observer = Arc::new(RecordingObserver::default());
@@ -126,5 +131,5 @@ async fn shutdown_wins_over_a_late_startup_barrier_release() {
         vec![ProcessLifecycleState::ShuttingDown],
         "Ready must never become observable after shutdown begins"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -54,9 +54,13 @@ mod session_message;
 pub(crate) use session_message::turn_assignment_handoff;
 mod side_effects;
 
-pub(crate) use notification_delivery::append_background_tool_completion;
+pub(crate) use notification_delivery::{
+    append_background_tool_completion, append_background_tool_completion_for_parent,
+};
 pub(crate) use observer::run_background_completion_observer;
-pub(crate) use session_message::{settle_running_session_message_rows, settle_session_message_row};
+pub(crate) use session_message::{
+    settle_running_session_message_rows_with_access, settle_session_message_row,
+};
 
 use datetime_fields::agent_tool_call_datetime_update_fragment;
 pub(crate) use rendering::is_tool_completion_text;

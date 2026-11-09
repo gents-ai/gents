@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::session::{fork, fork_via_http, ForkBoundary, ForkError, ForkOutcome, ForkParams};
+use gents::session::{fork_on, ForkBoundary, ForkError, ForkOutcome, ForkParams};
 use gents::store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
@@ -13,11 +10,10 @@ use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{
-    default_data_dir, graphql_diagnostic_hint, graphql_rows, graphql_string_list_literal,
-    print_json, resolve_config_access, resolve_home_dir, resolve_node_did,
+    graphql_rows, graphql_string_list_literal, print_json, resolve_config_access, resolve_node_did,
 };
 
-const SESSION_FIELDS: &str = "session_id node_did requester_did agent_id created_at closed_at \
+const SESSION_FIELDS: &str = "session_id node_did requester_did agent_did created_at closed_at \
 title tags provenance observation";
 
 pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
@@ -82,45 +78,18 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())
         .context("resolving caller node_did")?;
 
-    if let Some(graphql) = args.graphql.as_deref() {
-        let endpoint = crate::resolve_graphql_endpoint(Some(graphql), args.home.as_deref())?;
-        let outcome = fork_via_http(
-            &endpoint,
-            ForkParams {
-                source_session_id: &args.from,
-                boundary: ForkBoundary::UserTurn(args.at_user_turn),
-                caller_node_did: &node_did,
-                caller_requester_did: args.requester_did.as_deref(),
-                target_agent_id: args.agent.as_deref(),
-            },
-        )
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
-        .map_err(|error| map_graphql_fork_error(error, graphql))?;
+        .context("resolving authenticated access for session fork")?;
 
-        print_fork_outcome(&args, outcome)?;
-        return Ok(());
-    }
-
-    let home = resolve_home_dir(args.home.as_deref());
-    let data_dir = default_data_dir(&home);
-
-    let access = open_offline_fork_store(&home, &data_dir).await?;
-    let node = access
-        .local_node()
-        .ok_or_else(|| anyhow::anyhow!("offline fork requires local DefraDB access"))?;
-    gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
-        .await
-        .context("ensuring runtime schemas")?;
-    gents::store::local::store_key::upgrade::finish(&data_dir)?;
-
-    let outcome = fork(
-        node,
+    let outcome = fork_on(
+        &access,
         ForkParams {
             source_session_id: &args.from,
             boundary: ForkBoundary::UserTurn(args.at_user_turn),
             caller_node_did: &node_did,
             caller_requester_did: args.requester_did.as_deref(),
-            target_agent_id: args.agent.as_deref(),
+            target_agent_did: args.agent.as_deref(),
         },
     )
     .await
@@ -128,35 +97,6 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
 
     print_fork_outcome(&args, outcome)?;
     Ok(())
-}
-
-async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigAccess> {
-    anyhow::ensure!(
-        crate::read_init_config(home)?.is_some(),
-        "gents home {} is not initialized; run `gents init --home {}` first",
-        home.display(),
-        home.display(),
-    );
-    fs::create_dir_all(data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let claim = gents::store::local::home::lock_store(home, data_dir).map_err(|error| {
-        let held = error.lock_held().is_some();
-        let error = anyhow::Error::from(error);
-        if held {
-            error.context(
-                "the home's store is in use; to fork against the running runtime, rerun with --graphql",
-            )
-        } else {
-            error
-        }
-    })?;
-    let builder = crate::persistent_node_builder_with_stored_identity(home, data_dir).await?;
-    let node = builder
-        .build()
-        .await
-        .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
-    let node = Arc::new(node);
-    Ok(ConfigAccess::claimed_local(node, claim)?)
 }
 
 async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {
@@ -343,18 +283,10 @@ fn map_fork_error(error: ForkError) -> anyhow::Error {
         | ForkError::ForkAgentNotFound(_)
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy
-        | ForkError::ForkMessageNotEditable(_) => anyhow::anyhow!("{error}"),
+        | ForkError::ForkMessageNotEditable(_)
+        | ForkError::CrossAgentForkUnavailable
+        | ForkError::ForkRecoveryIntentRequired(_) => anyhow::Error::new(error),
+        error @ ForkError::ForkRelationshipIncomplete { .. } => anyhow::Error::new(error),
         ForkError::ForkCopyFailed(inner) => inner.context("fork copy step failed"),
-    }
-}
-
-fn map_graphql_fork_error(error: ForkError, graphql: &str) -> anyhow::Error {
-    match error {
-        ForkError::ForkCopyFailed(inner) => anyhow::anyhow!(
-            "{}\n{}",
-            inner.context("fork copy step failed"),
-            graphql_diagnostic_hint(graphql)
-        ),
-        other => map_fork_error(other),
     }
 }

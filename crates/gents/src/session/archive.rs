@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+#[cfg(test)]
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::session::{AgentSession, SessionArchiveOutcome, SessionArchiveReceipt};
 use std::sync::Arc;
 
@@ -43,25 +44,6 @@ fn apply_transition(
 /// scope fields select the row and never confer authority. The revision fences
 /// observations in the same native store; cross-node convergence remains owned
 /// by DefraDB's branchable document merge rather than a global session lease.
-pub async fn set_session_archived(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    session_id: &str,
-    actor: &dyn NodeIdentity,
-    expected_revision: u64,
-    archived: bool,
-) -> Result<SessionArchiveReceipt> {
-    set_session_archived_on(
-        &ConfigAccess::local(Arc::clone(node)),
-        node_did,
-        session_id,
-        actor,
-        expected_revision,
-        archived,
-    )
-    .await
-}
-
 /// HTTP access uses its endpoint's authenticated DID; embedded access retains
 /// the explicitly supplied actor. Scope identifiers confer no authorization.
 pub async fn set_session_archived_on(
@@ -83,11 +65,13 @@ pub async fn set_session_archived_on(
     let now = chrono::Utc::now().to_rfc3339();
     match access {
         ConfigAccess::Local(local) => {
-            ConfigAccess::transact_local_write(
-                local.node(),
-                Some(::identity::Did::new(actor.did())?),
-                "session.archive",
-                |txn| {
+            let selected = ConfigAccess::local_with_optional_agent_signer(
+                Arc::clone(local.node()),
+                ::identity::Did::new(actor.did())?,
+                actor.managed_agent_signer(),
+            )?;
+            selected
+                .transact_write("session.archive", |txn| {
                     Box::pin(apply_in_txn(
                         txn,
                         node_did,
@@ -96,9 +80,8 @@ pub async fn set_session_archived_on(
                         archived,
                         &now,
                     ))
-                },
-            )
-            .await
+                })
+                .await
         }
         ConfigAccess::Graphql(_) => {
             access
@@ -131,31 +114,37 @@ async fn apply_in_txn(
         escape_graphql_string(session_id)
     );
     let rows = txn
-        .cursor_rows("AgentSession", super::AGENT_SESSION_FIELDS, &filter)
+        .cursor_rows(
+            "AgentSession",
+            gents_protocol::session::AGENT_SESSION_FIELDS,
+            &filter,
+        )
         .await?;
     anyhow::ensure!(rows.len() <= 1, "session archive scope is ambiguous");
-    let row = super::decode_session_row(
+    let row = gents_protocol::session::decode_session_row(
         rows.first()
             .context("session archive target is absent or unreadable")?,
     )?;
-    super::query::validate_agent_session(&row.session)?;
+    gents_protocol::session::validate_agent_session(&row.session)?;
     let (decision, session) = apply_transition(row.session, expected_revision, archived, now);
     let outcome = match decision {
         Decision::Applied => {
-            let archived_at = session
-                .archived_at
-                .as_ref()
-                .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-                .unwrap_or_else(|| "null".into());
-            let response = txn
-                .execute(&format!(
-                    r#"mutation {{ update_AgentSession(
-            filter: {{ _docID: {{ _eq: "{}" }}, {filter} }},
-            input: {{ archived_at: {archived_at}, archive_revision: {} }}
+            let mutation = format!(
+                r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(
+            filter: {{ _docID: {{ _eq: "{}" }}, {filter} }}, input: $input
         ) {{ _docID }} }}"#,
-                    escape_graphql_string(&row.doc_id),
-                    session.archive_revision
-                ))
+                escape_graphql_string(&row.doc_id)
+            );
+            let input = serde_json::json!({"input": {
+                "archived_at": session.archived_at,
+                "archive_revision": session.archive_revision,
+            }});
+            let response = txn
+                .execute_client_signed_update(
+                    &mutation,
+                    &input,
+                    gents_protocol::schemas::AGENT_SESSION,
+                )
                 .await?;
             let documents =
                 crate::store::graphql::mutation_documents(&response, "update_AgentSession")?

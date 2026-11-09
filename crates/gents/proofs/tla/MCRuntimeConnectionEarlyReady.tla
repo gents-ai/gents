@@ -1,0 +1,4 @@
+---- MODULE MCRuntimeConnectionEarlyReady ----
+EXTENDS RuntimeConnectionTransport
+
+====

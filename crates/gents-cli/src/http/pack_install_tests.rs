@@ -77,10 +77,17 @@ fn received_dependencies_are_exactly_the_root_dependency_list() {
 }
 
 #[test]
-fn received_requests_bind_the_runtime_node_and_a_documents_root() {
+fn received_requests_bind_the_runtime_node_and_reviewed_root() {
     let root = archive("documents_fixture");
     assert!(refusal(&body(&root, &[], "did:key:zOtherNode")).contains("different node"));
-    assert!(refusal(&body(&archive("assets_fixture"), &[], NODE)).contains("documents pack root"));
+    let assets = archive("assets_fixture");
+    assert_eq!(
+        decode_request(&body(&assets, &[], NODE), NODE)
+            .unwrap()
+            .root
+            .digest(),
+        assets.digest()
+    );
 
     let mut conflicting: serde_json::Value =
         serde_json::from_slice(&body(&root, &[], NODE)).unwrap();

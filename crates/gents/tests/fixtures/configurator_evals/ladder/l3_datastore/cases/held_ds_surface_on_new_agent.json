@@ -35,7 +35,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -58,7 +58,7 @@
                   ]
                 },
                 {
-                  "agent_id": "held-out-writer",
+                  "agent_did": "held-out-writer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -78,7 +78,11 @@
                       "field": "datastore.enable_defra_query",
                       "matches": "^(null|false)$"
                     }
-                  ]
+                  ],
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^held[ -]out[ -]writer$"
+                  }
                 }
               ]
             },
@@ -112,7 +116,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -222,7 +226,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -280,7 +284,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",

@@ -174,7 +174,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .header(
             reqwest::header::AUTHORIZATION,
-            crate::support::graphql::served_endpoint(&graphql)
+            crate::support::graphql::node_principal_endpoint(&graphql)
                 .authorization()?
                 .context("missing fixture operator")?,
         )
@@ -316,7 +316,7 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .header(
             reqwest::header::AUTHORIZATION,
-            crate::support::graphql::served_endpoint(&graphql)
+            crate::support::graphql::node_principal_endpoint(&graphql)
                 .authorization()?
                 .context("missing fixture operator")?,
         )
@@ -384,7 +384,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{request_id}",
                     node_did: "{node_did}",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "{session_id}",
                     content: "stuck request seeded for liveness surface test",
                     lifecycle_state: "processing",
@@ -569,7 +569,7 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
                         create_AgentRequest(input: {{purpose: "normal", 
                             request_id: "{request_id}",
                             node_did: "{node_did}",
-                            agent_id: "default",
+                            agent_did: "default",
                             session_id: "session-{request_id}",
                             content: "liveness progress seed",
                             lifecycle_state: "processing",

@@ -28,19 +28,19 @@ theorem quiesce_once (s : EventGroupState) (first later : Nat) :
   cases h : s.quiescedAt <;> simp [EventGroupState.quiesce, h]
 
 def captureCallback (group : EventGroupState) (candidate : Candidate)
-    (invocationId input : String) : Option CallbackInvocation :=
+    (invocationId input agentDid : String) : Option CallbackInvocation :=
   if group.quiescedAt.isNone && candidate.eligible && decide (candidate.key = group.key) then
     match group.key.consumer with
     | .trigger _ => none
     | .callbackBinding _ => some
-        { invocationId := invocationId, ownerNodeDid := group.key.nodeDid,
+        { invocationId := invocationId, ownerNodeDid := group.key.nodeDid, agentDid := agentDid,
           input := input, originGroupKey := some group.key,
           state := .pending, journal := [], resultEmitted := false }
   else none
 
 theorem capture_binds_eligible_group_and_input (group : EventGroupState)
-    (candidate : Candidate) (id input : String) (inv : CallbackInvocation)
-    (h : captureCallback group candidate id input = some inv) :
+    (candidate : Candidate) (id input agentDid : String) (inv : CallbackInvocation)
+    (h : captureCallback group candidate id input agentDid = some inv) :
     group.quiescedAt = none ∧ candidate.eligible = true ∧ candidate.key = group.key ∧
       inv.ownerNodeDid = group.key.nodeDid ∧ inv.originGroupKey = some group.key ∧
       inv.input = input := by

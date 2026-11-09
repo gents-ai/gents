@@ -5,20 +5,21 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_admission::{
     project_agent_request_admission_disposition, validate_signing_fields,
     AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
-    AgentRequestAdmissionRecord, AgentRequestSigningFields, RequestPurpose,
-    RuntimeInternalSourceKind,
+    AgentRequestAdmissionRecord, RequestPurpose, RuntimeInternalSourceKind, SIGNED_REQUEST_FIELDS,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::AgentRequestRow;
+use gents_protocol::row::{AgentRequest, AgentRequestRow};
 use serde::Deserialize;
 
-use crate::request::watcher::AgentRequest;
-use crate::runtime::agent::p2p_reconcile::{EnrollmentAuthorityHandle, PeerAdmissionAuthority};
+use crate::runtime::agent::p2p_reconcile::EnrollmentAuthorityHandle;
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::identity::request_receipt::{
+    row_admission, row_signing_fields, verify_auxiliary_request_shape,
+};
 use crate::store::identity::NodeIdentity;
 
 #[derive(Debug)]
@@ -91,7 +92,7 @@ fn base_admission_observation(
         trigger_config_document_binding_current: false,
         source_document_binding_current: false,
         target_policy_allows: false,
-        peer_authority_allows: false,
+        native_create_authorized: false,
         hop_within_bound: false,
     }
 }
@@ -139,14 +140,21 @@ pub(crate) async fn verify_fresh_local_self_request(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     request: &AgentRequest,
-    target_agent_id: &str,
+    target_agent_did: &str,
 ) -> AdmissionResult<AgentRequest> {
-    let row = load_signed_request(node, &request.doc_id).await?;
+    let row = load_signed_request_as(node, &request.doc_id, target_agent_did).await?;
     deny_if(
         row.purpose == Some(RequestPurpose::Normal),
         "local-self claim cannot authorize auxiliary request purpose",
     )?;
     let admission = row_admission(&row).map_err(AgentRequestAdmissionError::denied)?;
+    if admission.kind == AgentRequestAdmissionKind::Client
+        && admission.signer_did != target_agent_did
+    {
+        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+            "atomic requester authorization at agent execution is unavailable"
+        )));
+    }
     let signing_fields = row_signing_fields(&row).map_err(AgentRequestAdmissionError::denied)?;
     let verified = identity
         .verify(
@@ -163,18 +171,43 @@ pub(crate) async fn verify_fresh_local_self_request(
     observation.signed_fields_match = row.request_id == request.request_id
         && row.purpose == Some(request.purpose)
         && row.node_did.as_deref() == Some(request.node_did.as_str())
-        && row.agent_id.as_deref() == Some(target_agent_id)
+        && row.agent_did.as_deref() == Some(target_agent_did)
         && validate_signing_fields(&signing_fields).is_ok();
     observation.branch_fields_exact =
         admission.validate_canonical_fields().is_ok() && admission.validate_branch_fields().is_ok();
     observation.pending_deadline_absent = row.deadline.is_none();
     observation.signer_matches_requester =
         row.requester_did.as_deref() == Some(admission.signer_did.as_str());
-    observation.requester_matches_target = row.requester_did.as_deref() == row.node_did.as_deref();
+    observation.requester_matches_target = row.requester_did.as_deref() == row.agent_did.as_deref();
+    if admission.kind == AgentRequestAdmissionKind::Client {
+        observation.requester_matches_session_scope =
+            client_requester_scope_matches(node, &row).await?;
+    }
     observation.hop_within_bound = request_hop_admitted(node, &row).await?;
     require_admitted_observation(observation, None)?;
-    verify_request_input(node, &row, &admission).await?;
+    verify_request_input(
+        node,
+        &row,
+        &admission,
+        (identity.did() == target_agent_did).then_some(identity),
+    )
+    .await?;
     row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
+}
+
+async fn client_requester_scope_matches(
+    node: &Arc<EmbeddedNode>,
+    row: &AgentRequestRow,
+) -> AdmissionResult<bool> {
+    let session_scope = crate::session::load_session_requester_scope(
+        node,
+        required_row_string(row.node_did.as_deref(), "node_did")?,
+        required_row_string(row.session_id.as_deref(), "session_id")?,
+        required_row_string(row.agent_did.as_deref(), "agent_did")?,
+    )
+    .await
+    .map_err(AgentRequestAdmissionError::unavailable)?;
+    Ok(session_scope.is_some() && row.requester_did.as_deref() == session_scope.as_deref())
 }
 
 pub async fn sign_agent_request_create(
@@ -182,6 +215,19 @@ pub async fn sign_agent_request_create(
     request: &mut gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<()> {
     validate_signing_fields(&request.signing_fields())?;
+    if request.admission.kind == AgentRequestAdmissionKind::Client {
+        anyhow::ensure!(
+            request
+                .session_doc_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+                && request
+                    .agent_doc_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty()),
+            "client request requires signed physical session and agent identities"
+        );
+    }
     request.admission.validate_canonical_fields()?;
     anyhow::ensure!(
         request.admission.signer_did == identity.did(),
@@ -198,13 +244,39 @@ pub async fn sign_agent_request_create(
         .map_err(anyhow::Error::msg)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingRejectionOutcome {
+    Terminalized,
+    NotMatched,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PendingRejectionError {
+    #[error("invalid selected agent identity: {0}")]
+    InvalidAgent(#[source] anyhow::Error),
+    #[error("pending request rejection failed: {0}")]
+    Transaction(#[source] anyhow::Error),
+}
+
 pub(crate) async fn terminalize_pending_request_rejection(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,
     node_did: &str,
+    agent_did: &str,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
     reason: &str,
     operation: &'static str,
-) -> Result<()> {
+) -> std::result::Result<PendingRejectionOutcome, PendingRejectionError> {
+    if node.node_identity_did() != Some(node_did) || agent_did == node_did {
+        return Err(PendingRejectionError::InvalidAgent(anyhow::anyhow!(
+            "pending rejection requires the local runtime's distinct managed Agent"
+        )));
+    }
+    let actor = identity::Did::new(agent_did)
+        .map_err(|error| PendingRejectionError::InvalidAgent(error.into()))?;
+    let access = crate::ConfigAccess::local_managed_agent(node.clone(), actor, agent_identity)
+        .map_err(|error| PendingRejectionError::InvalidAgent(error.into()))?;
+    let escaped_agent = escape_graphql_string(agent_did);
     let owner = node_did.to_owned();
     let now = Utc::now().to_rfc3339();
     let doc_id = escape_graphql_string(doc_id);
@@ -217,6 +289,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
                 docID: "{doc_id}", filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
                     node_did: {{ _eq: "{node_did}" }},
+                    agent_did: {{ _eq: "{escaped_agent}" }},
                     lifecycle_state: {{ _eq: "{pending}" }}
                 }},
                 input: {{
@@ -226,7 +299,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     terminal_redrive_attempts: 0,
                     terminal_output: $terminal_output
                 }}
-            ) {{ _docID request_id purpose node_did requester_did agent_id session_id content
+            ) {{ _docID request_id purpose node_did requester_did agent_did session_id session_doc_id agent_doc_id content
                  input created_at caused_by_parent_request_doc_id
                  workspace_id workspace_owner_node_did }}
         }}"#,
@@ -234,9 +307,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
         failed = RequestLifecycleState::Failed.as_str()
     );
     let mutation = &mutation;
-    crate::store::config_client::ConfigAccess::transact_local_idempotent(
-        node,
-        None,
+    access.transact_idempotent(
         crate::store::config_client::IdempotentTransactionRetry::Standard,
         operation,
         |txn| {
@@ -251,56 +322,250 @@ pub(crate) async fn terminalize_pending_request_rejection(
                         }),
                     )
                     .await?;
-                if let Some(rows) = response
-                    .pointer("/data/update_AgentRequest")
-                    .and_then(serde_json::Value::as_array)
-                {
-                    for row in rows {
-                        crate::tools::workspace::release_terminal_writer_binding(txn, row).await?;
-                        if let Some(request_id) = row["request_id"].as_str() {
-                            crate::triggers::engine::durable::publish_request_outcome(
-                                txn, owner, request_id, RequestLifecycleState::Failed, reason, now,
+                let rows = crate::store::graphql::mutation_documents(&response, "update_AgentRequest")?
+                    .context("pending rejection mutation omitted its result")?;
+                anyhow::ensure!(rows.len() <= 1, "pending rejection updated multiple requests");
+                for row in rows {
+                    crate::tools::workspace::release_terminal_writer_binding(txn, row).await?;
+                    if let Some(request_id) = row["request_id"].as_str() {
+                        crate::triggers::engine::durable::publish_request_outcome(
+                            txn, owner, request_id, RequestLifecycleState::Failed, reason, now,
+                        )
+                        .await?;
+                    }
+                    match serde_json::from_value::<AgentRequestRow>(row.clone())
+                        .map_err(anyhow::Error::from)
+                        .and_then(|row| {
+                            gents_protocol::row::AgentRequest::try_from(row)
+                                .map_err(anyhow::Error::from)
+                        })
+                    {
+                        Ok(request) => {
+                            crate::request::lifecycle::materialize::project_refused_request_session_in_txn(
+                                txn, &request, now,
                             )
                             .await?;
                         }
-                        match serde_json::from_value::<AgentRequestRow>(row.clone())
-                            .map_err(anyhow::Error::from)
-                            .and_then(crate::request::watcher::AgentRequest::try_from)
-                        {
-                            Ok(request) => {
-                                crate::request::lifecycle::materialize::project_refused_request_session_in_txn(
-                                    txn, &request, now,
-                                )
-                                .await?;
-                            }
-                            Err(error) => {
-                                tracing::warn!(
-                                    target: crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
-                                    request_id = row["request_id"].as_str().unwrap_or(""),
-                                    error = %error,
-                                    "refused row skipped session projection: decode failed"
-                                );
-                            }
+                        Err(error) => {
+                            tracing::warn!(
+                                target: crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
+                                request_id = row["request_id"].as_str().unwrap_or(""),
+                                error = %error,
+                                "refused row skipped session projection: decode failed"
+                            );
                         }
                     }
                 }
-                Ok(response)
+                Ok::<_, anyhow::Error>(if rows.is_empty() {
+                    PendingRejectionOutcome::NotMatched
+                } else {
+                    PendingRejectionOutcome::Terminalized
+                })
             })
         },
     )
     .await
-    .map(|_| ())
+    .map_err(PendingRejectionError::Transaction)
 }
 
 pub async fn sign_agent_request_create_as_registered_target(
     request: &mut gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<()> {
     let identity = crate::store::identity::RegisteredIdentity::from_registered_did(
-        request.node_did.clone(),
+        request.agent_did.clone(),
         None,
     )
-    .context("load registered target runtime identity for AgentRequest authoring")?;
+    .context("load registered target agent identity for AgentRequest authoring")?;
     sign_agent_request_create(&identity, request).await
+}
+
+/// Immutable signed admission retained until the native claim transaction.
+#[derive(Debug, Clone)]
+pub(crate) struct ClientClaimAdmission {
+    row: AgentRequestRow,
+}
+
+/// Exact signed client provenance retained by a successful native claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClaimedClientProvenance {
+    pub(crate) signer_did: String,
+    pub(crate) request_doc_id: String,
+    pub(crate) session_doc_id: String,
+    pub(crate) agent_doc_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientClaimAuthorization {
+    Allowed,
+    Denied,
+    Unavailable,
+}
+
+impl ClientClaimAdmission {
+    pub(crate) fn claimed_provenance(
+        &self,
+        request: &AgentRequest,
+    ) -> Option<ClaimedClientProvenance> {
+        let admission = row_admission(&self.row).ok()?;
+        let request_doc_id = self.row.doc_id.as_ref()?;
+        if admission.kind != AgentRequestAdmissionKind::Client
+            || request_doc_id != &request.doc_id
+            || self.row.request_id != request.request_id
+            || self.row.agent_did.as_deref() != Some(request.agent_did.as_str())
+            || self.row.session_id.as_deref() != Some(request.session_id.as_str())
+        {
+            return None;
+        }
+        Some(ClaimedClientProvenance {
+            signer_did: admission.signer_did,
+            request_doc_id: request_doc_id.clone(),
+            session_doc_id: self
+                .row
+                .session_doc_id
+                .clone()
+                .filter(|id| !id.is_empty())?,
+            agent_doc_id: self.row.agent_doc_id.clone().filter(|id| !id.is_empty())?,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn alter_signed_content_for_test(&mut self) {
+        self.row.content = Some("altered verified input".into());
+    }
+
+    /// Fence relationship readiness and rebind cross-actor native permissions
+    /// to the claim transaction.
+    pub(crate) async fn authorize_in_txn(
+        &self,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+        request: &AgentRequest,
+    ) -> Result<ClientClaimAuthorization> {
+        use ClientClaimAuthorization::{Allowed, Denied, Unavailable};
+        let doc = escape_graphql_string(&request.doc_id);
+        let response = txn.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ {SIGNED_REQUEST_FIELDS} relationships_pending }} }}"#,
+        )).await?;
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
+            .context("claim admission query omitted rows")?;
+        if rows.len() != 1 {
+            return Ok(Unavailable);
+        }
+        if rows[0]["relationships_pending"].as_bool() != Some(false) {
+            return Ok(Unavailable);
+        }
+        let row: AgentRequestRow = serde_json::from_value(rows[0].clone())?;
+        let retained = row_admission(&self.row)?;
+        let Some(session_doc) = self.row.session_doc_id.as_deref() else {
+            return Ok(Unavailable);
+        };
+        let Some(agent_doc) = self.row.agent_doc_id.as_deref() else {
+            return Ok(Unavailable);
+        };
+        let session = escape_graphql_string(session_doc);
+        let response = txn.execute(&format!(
+            r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID relationships_pending }} }}"#,
+        )).await?;
+        let Some(sessions) = response["data"]["AgentSession"].as_array() else {
+            return Ok(Unavailable);
+        };
+        if !matches!(sessions.as_slice(), [row] if row["_docID"].as_str() == Some(session_doc)
+            && row["relationships_pending"].as_bool() == Some(false))
+        {
+            return Ok(Unavailable);
+        }
+        let current = row_admission(&row);
+        let bound = current.as_ref().is_ok_and(|current| {
+            current.kind == AgentRequestAdmissionKind::Client
+                && current.signer_did == retained.signer_did
+                && current.signature == retained.signature
+                && row_signing_fields(&row)
+                    .ok()
+                    .zip(row_signing_fields(&self.row).ok())
+                    .is_some_and(|(live, signed)| {
+                        current.signing_payload(&live) == retained.signing_payload(&signed)
+                    })
+                && row.doc_id.as_deref() == Some(request.doc_id.as_str())
+                && row.request_id == request.request_id
+                && row.node_did.as_deref() == Some(request.node_did.as_str())
+                && row.session_id.as_deref() == Some(request.session_id.as_str())
+                && row.agent_did.as_deref() == Some(request.agent_did.as_str())
+        });
+        if retained.signer_did == request.agent_did {
+            return Ok(if bound { Allowed } else { Unavailable });
+        }
+        let owners = txn
+            .document_owners("AgentRequest", std::slice::from_ref(&request.doc_id))
+            .await?;
+        let Some(owner) = owners.first().and_then(|entry| entry.owner.as_ref()) else {
+            return Ok(Unavailable);
+        };
+        let owner_matches = owners.len() == 1 && owner.as_str() == retained.signer_did;
+        let Some(session) =
+            crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                txn,
+                &request.node_did,
+                &request.session_id,
+            )
+            .await?
+        else {
+            return Ok(Unavailable);
+        };
+        if session.doc_id != session_doc {
+            return Ok(Unavailable);
+        }
+        let session_matches = session.session.agent_did == request.agent_did
+            && session.session.requester_did == request.requester_did;
+        let agent = escape_graphql_string(agent_doc);
+        let target = txn.execute(&format!(r#"{{ Agent(filter: {{ _docID: {{ _eq: "{agent}" }} }}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#)).await?;
+        let agents = target["data"]["Agent"]
+            .as_array()
+            .context("claim agent query omitted rows")?;
+        if agents.len() != 1 {
+            return Ok(Unavailable);
+        }
+        let agent_matches = agents[0]["_docID"].as_str() == Some(agent_doc)
+            && agents[0]["node_did"].as_str() == Some(request.node_did.as_str())
+            && agents[0]["agent_did"].as_str() == Some(request.agent_did.as_str())
+            && agents[0]["enabled"].as_bool() != Some(false);
+        let subject = identity::Did::new(&retained.signer_did)?;
+        let named = |permission: &str| defra_node::DocumentAccessMode::Named {
+            permission: permission.to_owned(),
+            node_permission: acp::nac::NodePermission::DocumentUpdate,
+        };
+        let session_permission = txn
+            .observe_document_access(
+                &subject,
+                "AgentSession",
+                &[session_doc.to_owned()],
+                named("update"),
+            )
+            .await?;
+        let agent_permission = txn
+            .observe_document_access(&subject, "Agent", &[agent_doc.to_owned()], named("invoke"))
+            .await?;
+        use defra_node::DocumentAccessDecision::{
+            Allowed as AccessAllowed, Denied as AccessDenied,
+        };
+        let [session_permission @ (AccessAllowed | AccessDenied)] = session_permission.as_slice()
+        else {
+            return Ok(Unavailable);
+        };
+        let [agent_permission @ (AccessAllowed | AccessDenied)] = agent_permission.as_slice()
+        else {
+            return Ok(Unavailable);
+        };
+        if !bound
+            || !owner_matches
+            || !session_matches
+            || !agent_matches
+            || *session_permission == AccessDenied
+            || *agent_permission == AccessDenied
+        {
+            return Ok(Denied);
+        }
+        Ok(Allowed)
+    }
 }
 
 #[derive(Clone)]
@@ -308,7 +573,6 @@ pub(crate) struct AgentRequestAdmissionVerifier {
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     enrollment: EnrollmentAuthorityHandle,
-    peer_admission: Arc<dyn PeerAdmissionAuthority>,
 }
 
 impl AgentRequestAdmissionVerifier {
@@ -320,38 +584,100 @@ impl AgentRequestAdmissionVerifier {
         Self {
             node,
             identity,
-            enrollment: enrollment.clone(),
-            peer_admission: Arc::new(enrollment),
+            enrollment,
         }
     }
 
     pub(crate) async fn verify_fresh(
         &self,
         request: &AgentRequest,
-        target_agent_id: &str,
+        target_agent_did: &str,
     ) -> AdmissionResult<AgentRequest> {
-        self.verify_fresh_with_observation(request, target_agent_id, None)
+        self.verify_fresh_with_observation(request, target_agent_did, None, false, None)
             .await
+            .map(|(request, _)| request)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn verify_fresh_for_claim(
+        &self,
+        request: &AgentRequest,
+        target_agent_did: &str,
+    ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
+        self.verify_fresh_with_observation(request, target_agent_did, None, true, None)
+            .await
+    }
+
+    pub(crate) async fn verify_fresh_for_claim_with_identity(
+        &self,
+        request: &AgentRequest,
+        agent_identity: &dyn NodeIdentity,
+    ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
+        self.verify_fresh_with_observation(
+            request,
+            agent_identity.did(),
+            None,
+            true,
+            Some(agent_identity),
+        )
+        .await
+    }
+
+    pub(crate) async fn verify_folded_for_claim(
+        &self,
+        document: &str,
+        agent_identity: &dyn NodeIdentity,
+    ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
+        let row = load_signed_request_as(&self.node, document, agent_identity.did()).await?;
+        let request = AgentRequest::try_from(row).map_err(AgentRequestAdmissionError::denied)?;
+        self.verify_fresh_for_claim_with_identity(&request, agent_identity)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn verify_fresh_for_claim_at(
+        &self,
+        request: &AgentRequest,
+        agent_identity: &dyn NodeIdentity,
+        observed_at: chrono::DateTime<Utc>,
+    ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
+        self.verify_fresh_with_observation(
+            request,
+            agent_identity.did(),
+            Some(observed_at),
+            true,
+            Some(agent_identity),
+        )
+        .await
     }
 
     #[cfg(test)]
     pub(crate) async fn verify_fresh_at(
         &self,
         request: &AgentRequest,
-        target_agent_id: &str,
+        target_agent_did: &str,
         observed_at: chrono::DateTime<Utc>,
     ) -> AdmissionResult<AgentRequest> {
-        self.verify_fresh_with_observation(request, target_agent_id, Some(observed_at))
-            .await
+        self.verify_fresh_with_observation(
+            request,
+            target_agent_did,
+            Some(observed_at),
+            false,
+            None,
+        )
+        .await
+        .map(|(request, _)| request)
     }
 
     async fn verify_fresh_with_observation(
         &self,
         request: &AgentRequest,
-        target_agent_id: &str,
+        target_agent_did: &str,
         test_observed_at: Option<chrono::DateTime<Utc>>,
-    ) -> AdmissionResult<AgentRequest> {
-        let row = load_signed_request(self.node.as_ref(), &request.doc_id).await?;
+        allow_cross_actor_client_claim: bool,
+        agent_identity: Option<&dyn NodeIdentity>,
+    ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
+        let row = load_signed_request_as(&self.node, &request.doc_id, target_agent_did).await?;
         let admission = row_admission(&row).map_err(AgentRequestAdmissionError::denied)?;
         let signing_fields =
             row_signing_fields(&row).map_err(AgentRequestAdmissionError::denied)?;
@@ -370,7 +696,7 @@ impl AgentRequestAdmissionVerifier {
         observation.signed_fields_match = row.request_id == request.request_id
             && row.purpose == Some(request.purpose)
             && row.node_did.as_deref() == Some(request.node_did.as_str())
-            && row.agent_id.as_deref() == Some(target_agent_id)
+            && row.agent_did.as_deref() == Some(target_agent_did)
             && validate_signing_fields(&signing_fields).is_ok();
         observation.branch_fields_exact = admission.validate_canonical_fields().is_ok()
             && admission.validate_branch_fields().is_ok();
@@ -386,37 +712,85 @@ impl AgentRequestAdmissionVerifier {
             unreachable!("negative common admission evidence cannot be admitted");
         }
         if row.purpose.is_some_and(RequestPurpose::is_auxiliary) {
-            verify_auxiliary_request_shape(&row, &admission)?;
+            verify_auxiliary_request_shape(&row, &admission)
+                .map_err(AgentRequestAdmissionError::denied)?;
         }
+        // A default RequestInput is persisted as an absent field, so an absent
+        // input is the canonical empty input, not a session creation.
+        let local_agent_message = admission.kind == AgentRequestAdmissionKind::Client
+            && row.caused_by_parent_tool_call_doc_id.is_some()
+            && row
+                .input
+                .as_ref()
+                .is_none_or(|input| input.session_creation.is_none());
         let mut denied = None;
+        if admission.kind == AgentRequestAdmissionKind::Peer
+            || (matches!(
+                admission.kind,
+                AgentRequestAdmissionKind::Client
+                    | AgentRequestAdmissionKind::Enrollment
+                    | AgentRequestAdmissionKind::LocalSelf
+            ) && row.agent_did.as_deref() != Some(admission.signer_did.as_str())
+                && !(allow_cross_actor_client_claim
+                    && admission.kind == AgentRequestAdmissionKind::Client
+                    && row.purpose == Some(RequestPurpose::Normal)
+                    && client_claim_queue_candidate(row.input.as_ref(), local_agent_message)))
+        {
+            return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+                "atomic requester authorization at agent execution is unavailable"
+            )));
+        }
         match admission.kind {
+            AgentRequestAdmissionKind::Client => {
+                observation.requester_matches_session_scope =
+                    client_requester_scope_matches(&self.node, &row).await?;
+                if local_agent_message {
+                    let source = crate::session::origin::verified_agent_source(
+                        &crate::ConfigAccess::local_as(
+                            self.node.clone(),
+                            identity::Did::new(admission.signer_did.clone())
+                                .map_err(AgentRequestAdmissionError::denied)?,
+                        ),
+                        &row,
+                    )
+                    .await
+                    .map_err(AgentRequestAdmissionError::unavailable)?;
+                    if !source.is_some_and(|source| {
+                        Some(source.node_did.as_str()) == row.node_did.as_deref()
+                    }) {
+                        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+                            "local agent-message source is unavailable"
+                        )));
+                    }
+                }
+            }
             AgentRequestAdmissionKind::LocalSelf => {
                 observation.signer_matches_requester =
                     row.requester_did.as_deref() == Some(admission.signer_did.as_str());
                 observation.requester_matches_target =
-                    row.requester_did.as_deref() == row.node_did.as_deref();
+                    row.requester_did.as_deref() == row.agent_did.as_deref();
+                if observation.signer_matches_requester && !observation.requester_matches_target {
+                    observation.source_binding_current =
+                        crate::session::origin::verified_agent_source(
+                            &crate::ConfigAccess::local_as(
+                                self.node.clone(),
+                                identity::Did::new(admission.signer_did.clone())
+                                    .map_err(AgentRequestAdmissionError::denied)?,
+                            ),
+                            &row,
+                        )
+                        .await
+                        .map_err(AgentRequestAdmissionError::unavailable)?
+                        .is_some_and(|source| {
+                            Some(source.node_did.as_str()) == row.node_did.as_deref()
+                        });
+                }
             }
             AgentRequestAdmissionKind::Peer => {
                 observation.signer_matches_requester =
                     row.requester_did.as_deref() == Some(admission.signer_did.as_str());
                 observation.requester_matches_target =
-                    row.requester_did.as_deref() == row.node_did.as_deref();
-                if observation.signer_matches_requester && !observation.requester_matches_target {
-                    observation.peer_authority_allows = self
-                        .peer_admission
-                        .fresh_member_authorized_for_agent(
-                            &admission.signer_did,
-                            required_row_string(row.node_did.as_deref(), "node_did")?,
-                        )
-                        .await
-                        .context("reload peer requester admission")
-                        .map_err(AgentRequestAdmissionError::unavailable)?;
-                    if !observation.peer_authority_allows {
-                        denied = Some(anyhow::anyhow!(
-                            "peer requester is not authorized for the target node"
-                        ));
-                    }
-                }
+                    row.requester_did.as_deref() == row.agent_did.as_deref();
             }
             AgentRequestAdmissionKind::Enrollment => {
                 let requester = row
@@ -485,24 +859,29 @@ impl AgentRequestAdmissionVerifier {
                     issuer.is_some() && source.is_some() && admission.runtime_source_kind.is_some();
                 observation.signer_matches_issuer = issuer == Some(&admission.signer_did);
                 observation.signer_matches_target =
-                    row.node_did.as_deref() == Some(admission.signer_did.as_str());
+                    row.agent_did.as_deref() == Some(admission.signer_did.as_str());
                 observation.requester_matches_target =
-                    row.requester_did.as_deref() == row.node_did.as_deref();
-                observation.target_runtime_attestation_valid = issuer == row.node_did.as_deref();
+                    row.requester_did.as_deref() == row.agent_did.as_deref();
+                observation.target_runtime_attestation_valid = issuer == row.agent_did.as_deref();
                 let target = required_row_string(row.node_did.as_deref(), "node_did")?;
                 let session_scope = if row.purpose.is_some_and(RequestPurpose::is_auxiliary) {
                     None
                 } else {
                     crate::session::load_session_requester_scope(
-                        self.node.as_ref(),
+                        &self.node,
                         target,
                         required_row_string(row.session_id.as_deref(), "session_id")?,
+                        required_row_string(row.agent_did.as_deref(), "agent_did")?,
                     )
                     .await
                     .map_err(AgentRequestAdmissionError::unavailable)?
                 };
                 observation.requester_matches_session_scope = row.requester_did.as_deref()
-                    == Some(session_scope.as_deref().unwrap_or(target));
+                    == Some(
+                        session_scope
+                            .as_deref()
+                            .unwrap_or(required_row_string(row.agent_did.as_deref(), "agent_did")?),
+                    );
                 if !observation.runtime_evidence_present
                     || !observation.signer_matches_issuer
                     || !observation.signer_matches_target
@@ -521,7 +900,7 @@ impl AgentRequestAdmissionVerifier {
                             .map_err(AgentRequestAdmissionError::denied)?,
                         source,
                         source_kind,
-                        target_agent_id,
+                        target_agent_did,
                     )
                     .await
                     {
@@ -546,60 +925,35 @@ impl AgentRequestAdmissionVerifier {
             }
         }
         require_admitted_observation(observation, denied)?;
-        verify_request_input(&self.node, &row, &admission).await?;
-        row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
+        verify_request_input(&self.node, &row, &admission, agent_identity).await?;
+        let client_claim = (allow_cross_actor_client_claim
+            && admission.kind == AgentRequestAdmissionKind::Client)
+            .then(|| ClientClaimAdmission { row: row.clone() });
+        let request = row_into_agent_request(row, &request.doc_id)
+            .map_err(AgentRequestAdmissionError::denied)?;
+        Ok((request, client_claim))
     }
 }
 
-fn verify_auxiliary_request_shape(
-    row: &AgentRequestRow,
-    admission: &AgentRequestAdmissionRecord,
-) -> AdmissionResult<()> {
-    let target = required_row_string(row.node_did.as_deref(), "node_did")?;
-    let source = required_row_string(
-        admission.runtime_source_request_id.as_deref(),
-        "runtime source request ID",
-    )?;
-    deny_if(
-        admission.kind == AgentRequestAdmissionKind::RuntimeInternal
-            && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
-            && admission.signer_did == target
-            && admission.runtime_issuer_did.as_deref() == Some(target)
-            && row.requester_did.as_deref() == Some(target),
-        "auxiliary request requires target-runtime local-control admission",
-    )?;
-    deny_if(
-        !source.is_empty()
-            && source != row.request_id.as_str()
-            && row.caused_by_parent_request_id.as_deref() == Some(source)
-            && row.caused_by_parent_request_doc_id.is_some()
-            && row.caused_by_parent_tool_call_id.is_none()
-            && row.caused_by_parent_tool_call_doc_id.is_none()
-            && row.request_hop == Some(0),
-        "auxiliary request requires an exact parent-only request link",
-    )?;
-    deny_if(
-        row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT) == &*DEFAULT_REQUEST_INPUT
-            && row.retry_parent_request.is_none()
-            && row.retry_parent_request_doc_id.is_none()
-            && row.retry_root_request.as_deref() == Some(row.request_id.as_str())
-            && row.retry_key.is_none()
-            && row.retry_count == Some(0)
-            && row.max_retries == Some(0)
-            && row.caused_by_trigger_id.is_none()
-            && row.caused_by_trigger_doc_id.is_none()
-            && row.caused_by_trigger_kind.is_none()
-            && row.caused_by_correlation.is_none()
-            && row.caused_by_trigger_context.is_none()
-            && row.caused_by_source_doc_id.is_none(),
-        "auxiliary request cannot carry input, retry, or trigger lineage",
-    )
+fn client_claim_queue_candidate(
+    input: Option<&gents_protocol::request_input::RequestInput>,
+    local_agent_message: bool,
+) -> bool {
+    use gents_protocol::request_input::QueueSource;
+    input.is_none_or(|input| {
+        input.queue.as_ref().is_none_or(|queue| {
+            queue.source == QueueSource::User
+                || (local_agent_message && queue.source == QueueSource::Steering)
+                || (queue.source == QueueSource::Goal && input.goal_continuation.is_some())
+        })
+    })
 }
 
 async fn verify_request_input(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     admission: &AgentRequestAdmissionRecord,
+    agent_identity: Option<&dyn NodeIdentity>,
 ) -> AdmissionResult<()> {
     use gents_protocol::request_input::QueueSource;
     let input = row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT);
@@ -611,7 +965,7 @@ async fn verify_request_input(
     }
     validate_authored_content(input)?;
     let owner = required_row_string(row.node_did.as_deref(), "node_did")?;
-    let agent = required_row_string(row.agent_id.as_deref(), "agent_id")?;
+    let agent = required_row_string(row.agent_did.as_deref(), "agent_did")?;
     let (context, tools, _) = load_request_context(node, owner, agent).await?;
     let skills = context
         .as_ref()
@@ -626,23 +980,50 @@ async fn verify_request_input(
         .and_then(|host| host.bash.as_ref())
         .and_then(|bash| bash.execution_mode)
         == Some(crate::tools::native::CommandExecutionMode::ArtifactWrite);
-    crate::tools::workspace::validate_request_workspace_input(node, &request, artifact_requested)
+    if let Some(agent_identity) = agent_identity {
+        crate::tools::workspace::validate_request_workspace_input_with_identity(
+            node,
+            agent_identity,
+            &request,
+            artifact_requested,
+        )
         .await
         .map_err(AgentRequestAdmissionError::denied)?;
+    } else if request
+        .workspace_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+            "workspace admission requires the selected held Agent"
+        )));
+    } else {
+        crate::tools::workspace::validate_unbound_request_workspace_input(
+            &request,
+            artifact_requested,
+        )
+        .map_err(AgentRequestAdmissionError::denied)?;
+    }
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal
         && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl);
+    let client_goal =
+        admission.kind == AgentRequestAdmissionKind::Client && input.goal_continuation.is_some();
     if let Some(queue) = &input.queue {
         let session_message_steering = queue.source == QueueSource::Steering
             && row.caused_by_parent_request_doc_id.is_some()
             && row.caused_by_parent_tool_call_doc_id.is_some();
         deny_if(
-            queue.source == QueueSource::User || runtime_control || session_message_steering,
+            queue.source == QueueSource::User
+                || runtime_control
+                || session_message_steering
+                || (client_goal && queue.source == QueueSource::Goal),
             "runtime queue source requires authenticated local-control issuance",
         )?;
         if queue.position.is_some() {
+            let actor = identity::Did::new(agent).map_err(AgentRequestAdmissionError::denied)?;
             crate::store::config_client::ConfigAccess::transact_local_readonly(
                 node,
-                None,
+                Some(actor),
                 "admission.queue_position",
                 |txn| {
                     Box::pin(async move {
@@ -667,7 +1048,7 @@ async fn verify_request_input(
             .is_some_and(|queue| queue.source == QueueSource::Goal)
     {
         deny_if(
-            runtime_control && input.goal_continuation.is_some(),
+            (runtime_control || client_goal) && input.goal_continuation.is_some(),
             "goal continuation requires authenticated original issuance facts",
         )?;
         let parent = load_exact_parent_request(
@@ -676,6 +1057,7 @@ async fn verify_request_input(
                 row.caused_by_parent_request_doc_id.as_deref(),
                 "parent document ID",
             )?,
+            agent,
         )
         .await?;
         crate::goal::verify_goal_continuation_edge(
@@ -727,19 +1109,20 @@ async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> Adm
     let max_request_hop = max_request_hop(node, target)
         .await
         .map_err(AgentRequestAdmissionError::unavailable)?;
-    Ok(crate::request::lifecycle::request_hop_within_bound(
-        max_request_hop,
-        hop,
-    ))
+    Ok(max_request_hop.admit(hop).unwrap_or(false))
 }
 
 pub(crate) async fn max_request_hop(
     node: &EmbeddedNode,
     node_did: &str,
-) -> anyhow::Result<Option<u32>> {
-    Ok(crate::documents::load_node(node, node_did)
-        .await?
-        .and_then(|node_doc| node_doc.max_request_hop))
+) -> anyhow::Result<gents_protocol::request_lifecycle::RequestHopCapObservation> {
+    Ok(
+        gents_protocol::request_lifecycle::RequestHopCapObservation::of(
+            crate::documents::load_node(node, node_did)
+                .await?
+                .map(|node_doc| node_doc.max_request_hop),
+        ),
+    )
 }
 
 fn request_workspace(row: &AgentRequestRow) -> crate::request::lifecycle::WorkspaceLineage {
@@ -757,7 +1140,7 @@ async fn verify_runtime_source_binding(
     purpose: RequestPurpose,
     source: &str,
     source_kind: RuntimeInternalSourceKind,
-    target_agent_id: &str,
+    target_agent_did: &str,
 ) -> AdmissionResult<()> {
     match source_kind {
         RuntimeInternalSourceKind::LocalControl => {
@@ -775,7 +1158,7 @@ async fn verify_runtime_source_binding(
                             "local-control parent document binding is absent"
                         ))
                     })?;
-            let parent = load_exact_parent_request(node.as_ref(), parent_doc_id).await?;
+            let parent = load_exact_parent_request(&node, parent_doc_id, target_agent_did).await?;
             deny_if(
                 parent.request_id == source && parent.node_did == row.node_did,
                 "local-control parent document does not exactly own the source",
@@ -783,7 +1166,7 @@ async fn verify_runtime_source_binding(
             if purpose.is_auxiliary() {
                 return deny_if(
                     parent.session_id == row.session_id
-                        && parent.agent_id.as_deref() == Some(target_agent_id),
+                        && parent.agent_did.as_deref() == Some(target_agent_did),
                     "auxiliary request parent does not match its session and agent",
                 );
             }
@@ -792,7 +1175,7 @@ async fn verify_runtime_source_binding(
                     && parent
                         .requester_did
                         .as_deref()
-                        .or(parent.node_did.as_deref())
+                        .or(parent.agent_did.as_deref())
                         == row.requester_did.as_deref(),
                 "local-control parent is outside its session or requester scope",
             )?;
@@ -814,7 +1197,7 @@ async fn verify_runtime_source_binding(
                 row.caused_by_trigger_kind.as_deref().unwrap_or_default(),
                 source,
                 row.caused_by_trigger_doc_id.as_deref(),
-                target_agent_id,
+                target_agent_did,
                 required_row_string(row.node_did.as_deref(), "node_did")?,
             )
             .await
@@ -823,10 +1206,11 @@ async fn verify_runtime_source_binding(
 }
 
 async fn load_exact_parent_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     source_doc_id: &str,
+    actor: &str,
 ) -> AdmissionResult<AgentRequestRow> {
-    let row = load_signed_request(node, source_doc_id).await?;
+    let row = load_signed_request_as(node, source_doc_id, actor).await?;
     deny_if(
         row.doc_id.as_deref() == Some(source_doc_id),
         "runtime source parent physical document binding changed",
@@ -837,7 +1221,7 @@ async fn load_exact_parent_request(
 pub(crate) async fn load_request_context(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> AdmissionResult<(
     Option<crate::documents::AgentContext>,
     Option<crate::documents::Tools>,
@@ -845,12 +1229,19 @@ pub(crate) async fn load_request_context(
 )> {
     use crate::store::config_client::ConfigAccess;
     let owner = node_did.to_owned();
-    let agent_id = agent_id.to_owned();
-    ConfigAccess::transact_local_readonly(node, None, "request_admission.context", move |txn| {
-        let owner = owner.clone();
-        let agent_id = agent_id.clone();
-        Box::pin(async move { load_request_context_in_txn(txn, &owner, &agent_id).await })
-    })
+    let agent_did = agent_did.to_owned();
+    let actor =
+        ::identity::Did::new(&agent_did).map_err(AgentRequestAdmissionError::unavailable)?;
+    ConfigAccess::transact_local_readonly(
+        node,
+        Some(actor),
+        "request_admission.context",
+        move |txn| {
+            let owner = owner.clone();
+            let agent_did = agent_did.clone();
+            Box::pin(async move { load_request_context_in_txn(txn, &owner, &agent_did).await })
+        },
+    )
     .await
     .map_err(classify_context_error)
 }
@@ -867,7 +1258,7 @@ pub(crate) fn classify_context_error(error: anyhow::Error) -> AgentRequestAdmiss
 pub(crate) async fn load_request_context_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> anyhow::Result<(
     Option<crate::documents::AgentContext>,
     Option<crate::documents::Tools>,
@@ -877,7 +1268,7 @@ pub(crate) async fn load_request_context_in_txn(
     use crate::store::collection::Collection;
     use crate::store::config_client::read_desired_state_document_in_txn as read;
     let agent: Agent = serde_json::from_value(
-        read(txn, Collection::Agent, owner, agent_id)
+        read(txn, Collection::Agent, owner, agent_did)
             .await?
             .ok_or_else(|| {
                 AgentRequestAdmissionError::denied(anyhow::anyhow!("request agent is missing"))
@@ -926,7 +1317,7 @@ async fn verify_automated_trigger_source(
     kind: &str,
     trigger_id: &str,
     trigger_doc_id: Option<&str>,
-    target_agent_id: &str,
+    target_agent_did: &str,
     node_did: &str,
 ) -> AdmissionResult<()> {
     #[derive(Deserialize)]
@@ -939,7 +1330,7 @@ async fn verify_automated_trigger_source(
     }
     #[derive(Deserialize)]
     struct TaskRow {
-        agent_id: String,
+        agent_did: String,
         enabled: bool,
     }
     let doc = required_row_string(trigger_doc_id, "trigger document ID")?;
@@ -966,189 +1357,26 @@ async fn verify_automated_trigger_source(
         "runtime trigger physical source, node, kind, or availability changed",
     )?;
     let response = graphql_with_transaction_retry(node, &format!(
-        r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_id enabled }} }}"#,
+        r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did enabled }} }}"#,
         escape_graphql_string(&trigger.task_id), escape_graphql_string(node_did),
     ), "reload runtime trigger task").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let tasks: Vec<TaskRow> = crate::store::graphql::rows(&response, "Task")
         .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
-        tasks.len() == 1 && tasks[0].enabled && tasks[0].agent_id == target_agent_id,
+        tasks.len() == 1 && tasks[0].enabled && tasks[0].agent_did == target_agent_did,
         "runtime trigger task is missing, disabled, ambiguous, or targets another agent",
     )
 }
 
-#[cfg(test)]
-thread_local! {
-    static RECEIPT_VERIFICATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn count_request_receipt_verifications<T, F>(operation: F) -> (T, usize)
-where
-    F: FnOnce() -> T,
-{
-    let before = RECEIPT_VERIFICATION_COUNT.get();
-    let value = operation();
-    (value, RECEIPT_VERIFICATION_COUNT.get() - before)
-}
-
-pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
-    #[cfg(test)]
-    RECEIPT_VERIFICATION_COUNT.set(RECEIPT_VERIFICATION_COUNT.get() + 1);
-    let admission = row_admission(row)?;
-    admission.validate_canonical_fields()?;
-    admission
-        .validate_branch_fields()
-        .map_err(anyhow::Error::msg)?;
-    let fields = row_signing_fields(row)?;
-    validate_signing_fields(&fields)?;
-    anyhow::ensure!(
-        crate::store::identity::verify_did_signature(
-            &admission.signer_did,
-            &admission.signing_payload(&fields),
-            &admission.signature,
-        )?,
-        "immutable request receipt signature is invalid"
-    );
-    Ok(())
-}
-
-pub(crate) fn verify_historical_auxiliary_receipt(
-    request: &AgentRequestRow,
-    parent: &AgentRequestRow,
-) -> Result<()> {
-    verify_request_receipt_signature(request)?;
-    verify_request_receipt_signature(parent)?;
-    verify_auxiliary_request_shape(request, &row_admission(request)?)?;
-    anyhow::ensure!(
-        request.purpose.is_some_and(RequestPurpose::is_auxiliary)
-            && parent.purpose == Some(RequestPurpose::Normal)
-            && request.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            && parent.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            && request.doc_id != parent.doc_id
-            && request.caused_by_parent_request_doc_id == parent.doc_id
-            && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
-            && request.node_did == parent.node_did
-            && request.session_id == parent.session_id
-            && request.agent_id == parent.agent_id,
-        "auxiliary receipt crosses its authenticated parent scope"
-    );
-    Ok(())
-}
-
-pub(crate) fn verify_runtime_local_control_receipt(
-    row: &AgentRequestRow,
-    expected_target_did: &str,
-    expected_source_request_id: &str,
-    expected_requester_did: &str,
-) -> Result<()> {
-    let admission = row_admission(row)?;
-    verify_request_receipt_signature(row)?;
-    anyhow::ensure!(
-        row.purpose == Some(RequestPurpose::Normal)
-            && admission.kind == AgentRequestAdmissionKind::RuntimeInternal
-            && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
-            && admission.signer_did == expected_target_did
-            && admission.runtime_issuer_did.as_deref() == Some(expected_target_did)
-            && row.node_did.as_deref() == Some(expected_target_did)
-            && row.requester_did.as_deref() == Some(expected_requester_did)
-            && admission.runtime_source_request_id.as_deref() == Some(expected_source_request_id)
-            && row.caused_by_parent_request_id.as_deref() == Some(expected_source_request_id)
-            && row
-                .caused_by_parent_request_doc_id
-                .as_deref()
-                .is_some_and(|id| !id.is_empty())
-            && row.caused_by_parent_tool_call_id.is_none()
-            && row.caused_by_parent_tool_call_doc_id.is_none(),
-        "runtime local-control receipt does not match expected target/source binding"
-    );
-    Ok(())
-}
-
-fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissionRecord> {
-    AgentRequestAdmissionRecord::from_wire_fields(
-        row.admission_kind.as_deref(),
-        row.admission_signer_did.as_deref(),
-        row.admission_signature.as_deref(),
-        row.enrollment_request_id.as_deref(),
-        row.enrollment_request_digest.as_deref(),
-        row.enrollment_admin_did.as_deref(),
-        row.enrollment_authorization_sequence,
-        row.enrollment_authorization_expires_at.as_deref(),
-        row.runtime_issuer_did.as_deref(),
-        row.runtime_source_request_id.as_deref(),
-        row.runtime_source_kind.as_deref(),
-    )
-    .map_err(anyhow::Error::msg)
-}
-
 static DEFAULT_REQUEST_INPUT: std::sync::LazyLock<gents_protocol::request_input::RequestInput> =
     std::sync::LazyLock::new(Default::default);
-
-fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields<'_>> {
-    let request_hop = row
-        .request_hop
-        .map(u32::try_from)
-        .transpose()
-        .context("AgentRequest request_hop must fit in u32")?
-        .unwrap_or(0);
-    Ok(AgentRequestSigningFields {
-        request_id: &row.request_id,
-        purpose: row.purpose.context("AgentRequest is missing purpose")?,
-        node_did: row
-            .node_did
-            .as_deref()
-            .context("AgentRequest is missing node_did")?,
-        requester_did: row.requester_did.as_deref(),
-        agent_id: row
-            .agent_id
-            .as_deref()
-            .context("AgentRequest is missing agent_id")?,
-        session_id: row
-            .session_id
-            .as_deref()
-            .context("AgentRequest is missing session_id")?,
-        retry_parent_request: row.retry_parent_request.as_deref(),
-        retry_parent_request_doc_id: row.retry_parent_request_doc_id.as_deref(),
-        retry_root_request: row.retry_root_request.as_deref(),
-        retry_key: row.retry_key.as_deref(),
-        content: row
-            .content
-            .as_deref()
-            .context("AgentRequest is missing content")?,
-        input: row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT),
-        execution_origin: row.execution_origin.as_deref(),
-        caused_by_trigger_id: row.caused_by_trigger_id.as_deref(),
-        caused_by_trigger_kind: row.caused_by_trigger_kind.as_deref(),
-        caused_by_correlation: row.caused_by_correlation.as_deref(),
-        caused_by_trigger_context: row.caused_by_trigger_context.as_deref(),
-        caused_by_source_doc_id: row.caused_by_source_doc_id.as_deref(),
-        caused_by_trigger_doc_id: row.caused_by_trigger_doc_id.as_deref(),
-        created_at: row
-            .created_at
-            .as_deref()
-            .context("AgentRequest is missing created_at")?,
-        retry_count: row.retry_count,
-        max_retries: row.max_retries,
-        valid_until: row.valid_until.as_deref(),
-        request_hop,
-        caused_by_parent_request_id: row.caused_by_parent_request_id.as_deref(),
-        caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id.as_deref(),
-        caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id.as_deref(),
-        caused_by_parent_tool_call_doc_id: row.caused_by_parent_tool_call_doc_id.as_deref(),
-        workspace_id: row.workspace_id.as_deref(),
-        workspace_owner_node_did: row.workspace_owner_node_did.as_deref(),
-        workspace_authority: row.workspace_authority.as_deref(),
-        workspace_seal_hash: row.workspace_seal_hash.as_deref(),
-    })
-}
 
 fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result<AgentRequest> {
     anyhow::ensure!(
         row.doc_id.as_deref() == Some(expected_doc_id),
         "fresh AgentRequest document binding changed before admission"
     );
-    AgentRequest::try_from(row)
+    Ok(AgentRequest::try_from(row)?)
 }
 
 fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResult<&'a str> {
@@ -1157,35 +1385,39 @@ fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResu
     })
 }
 
-macro_rules! signed_request_receipt_fields {
-    () => {
-        r#"
-_docID request_id purpose node_did requester_did agent_id session_id
-                retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
-                content input max_total_tokens
-                execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
-                caused_by_trigger_context caused_by_source_doc_id caused_by_trigger_doc_id
-                created_at deadline execution_generation execution_lease_expires_at retry_count
-                max_retries valid_until request_hop caused_by_parent_request_id
-                caused_by_parent_request_doc_id caused_by_parent_tool_call_id
-                caused_by_parent_tool_call_doc_id workspace_id workspace_owner_node_did workspace_authority
-                workspace_seal_hash admission_kind
-                admission_signer_did admission_signature enrollment_request_id
-                enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence
-                enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id
-                runtime_source_kind
-"#
-    };
+async fn load_signed_request_as(
+    node: &Arc<EmbeddedNode>,
+    doc_id: &str,
+    actor: &str,
+) -> AdmissionResult<AgentRequestRow> {
+    let actor = identity::Did::new(actor).map_err(AgentRequestAdmissionError::denied)?;
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {SIGNED_REQUEST_FIELDS} }} }}"#,
+        escape_graphql_string(doc_id),
+    );
+    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        Some(actor),
+        "request.admission.read_as_agent",
+        |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute(query).await })
+        },
+    )
+    .await
+    .map_err(AgentRequestAdmissionError::unavailable)?;
+    let row = response
+        .pointer("/data/AgentRequest/0")
+        .cloned()
+        .ok_or_else(|| {
+            AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+                "AgentRequest is unavailable to selected agent"
+            ))
+        })?;
+    serde_json::from_value(row).map_err(AgentRequestAdmissionError::denied)
 }
 
-/// Historical receipt verification does not depend on mutable lifecycle state.
-pub(crate) const SIGNED_REQUEST_RECEIPT_FIELDS: &str = signed_request_receipt_fields!();
-
-/// Lifecycle is included for callers decoding the row, but is not part of the
-/// signed payload.
-pub const SIGNED_REQUEST_FIELDS: &str =
-    concat!("lifecycle_state ", signed_request_receipt_fields!());
-
+#[cfg(test)]
 async fn load_signed_request(
     node: &EmbeddedNode,
     doc_id: &str,
@@ -1223,10 +1455,28 @@ pub(crate) async fn load_request_for_admission_test(
 }
 
 #[cfg(test)]
+pub(crate) async fn load_request_for_admission_test_as(
+    node: &Arc<EmbeddedNode>,
+    doc_id: &str,
+    actor: &str,
+) -> Result<AgentRequest> {
+    let row = load_signed_request_as(node, doc_id, actor)
+        .await
+        .map_err(anyhow::Error::from)?;
+    row_into_agent_request(row, doc_id)
+}
+
+#[cfg(test)]
 mod title_tests;
 
 #[cfg(test)]
 mod captured_context_tests;
+
+#[cfg(test)]
+mod relationship_readiness_tests;
+
+#[cfg(test)]
+mod unattended_tests;
 
 #[cfg(test)]
 pub(crate) mod workspace_cleanup_tests;
@@ -1241,48 +1491,334 @@ mod tests {
     use crate::store::schema::ensure_runtime_schemas;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
+    #[test]
+    fn generated_client_claim_queue_candidates_match_the_model() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases;
+        for case in cases {
+            let input: gents_protocol::request_input::RequestInput =
+                serde_json::from_value(case["input"].clone()).unwrap();
+            for (agent_message, expected) in [
+                (false, "expected_client_claim_queue_candidate"),
+                (true, "expected_agent_message_claim_queue_candidate"),
+            ] {
+                assert_eq!(
+                    super::client_claim_queue_candidate(Some(&input), agent_message),
+                    case[expected].as_bool().unwrap(),
+                    "{}: local agent message {agent_message}",
+                    case["name"]
+                );
+            }
+        }
+        for name in [
+            "client-goal-original-edge-preserved",
+            "goal-source-needs-owned-admission",
+            "client-unrelated-runtime-queue-denied",
+            "client-local-agent-message-steering-candidate",
+        ] {
+            assert!(cases.iter().any(|case| case["name"] == name), "{name}");
+        }
+        assert!(super::client_claim_queue_candidate(None, false));
+    }
+
     #[tokio::test]
-    async fn pending_admission_rejection_selects_terminal_no_message() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity =
-            KeyIdentity::load_or_create(temp.path().join("rejection.key"), None).unwrap();
+    async fn pending_rejection_requires_the_selected_managed_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+        let other_root = KeyIdentity::load_or_create(dir.path().join("other.key"), None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+        let other_binding = crate::store::identity::provision_agent_identity(&other_root).unwrap();
+        let other_agent =
+            crate::store::identity::resolve_agent_identity(&other_root, &other_binding).unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
+            defra_node::Node::builder()
+                .with_node_identity_did(root.did())
+                .with_node_acp_enabled()
                 .build()
                 .await
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        let mut create = AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            "rejected-request",
-            identity.did(),
-            identity.did(),
-            "agent",
-            "session",
-            "work",
-            "interactive",
-            "2026-09-01T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(identity.did()),
-        );
-        crate::sign_agent_request_create(&identity, &mut create)
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(
+                &crate::store::config_client::ConfigAccess::local_as(
+                    node.clone(),
+                    identity::Did::new(root.did()).unwrap(),
+                ),
+                &identity::Did::new(agent.did()).unwrap(),
+            )
             .await
             .unwrap();
-        let created = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(!created.has_errors(), "{:?}", created.errors);
-        let doc_id =
-            crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
+        let denied = super::terminalize_pending_request_rejection(
+            &node,
+            "missing-doc",
+            root.did(),
+            agent.did(),
+            other_agent.as_ref(),
+            "rejected",
+            "test.rejection_foreign_agent",
+        )
+        .await;
+        assert!(matches!(
+            denied,
+            Err(super::PendingRejectionError::InvalidAgent(_))
+        ));
+        let outcome = super::terminalize_pending_request_rejection(
+            &node,
+            "missing-doc",
+            root.did(),
+            agent.did(),
+            agent.as_ref(),
+            "rejected",
+            "test.rejection_selected_agent",
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, super::PendingRejectionOutcome::NotMatched);
+        node.shutdown().await.unwrap();
+    }
+
+    /// Signed admission fixture: a test home whose ACP policies are installed,
+    /// whose default managed Agent holds its projected baseline grants, and whose
+    /// setup rows are written through the runtime owner's access.
+    struct AdmissionFixture {
+        db: crate::support::TestDb,
+        runtime: Arc<dyn NodeIdentity>,
+        agent: Arc<dyn NodeIdentity>,
+        admin: crate::store::config_client::ConfigAccess,
+        /// The configuring User's client-signed access; it owns Agent configuration.
+        user: crate::store::config_client::ConfigAccess,
+    }
+
+    impl AdmissionFixture {
+        async fn new(name: &str) -> Self {
+            let db = crate::support::test_db(name).await;
+            let (db, _user, user, binding) =
+                crate::test_support::signed_test_node_from_db(db, name).await;
+            let runtime = db.node_identity.clone();
+            let agent =
+                crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+            let admin = crate::store::config_client::ConfigAccess::local_as(
+                db.node.clone(),
+                identity::Did::new(runtime.did()).unwrap(),
+            );
+            let runtime_did = runtime.did().to_owned();
+            let agent_did = agent.did().to_owned();
+            admin
+                .transact_write("test.admission_fixture_executor", |txn| {
+                    let runtime_did = &runtime_did;
+                    let agent_did = &agent_did;
+                    Box::pin(async move {
+                        let (agent_doc, _) =
+                            crate::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                crate::Collection::Agent,
+                                runtime_did,
+                                agent_did,
+                            )
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
+                        txn.add_actor_relationship(
+                            "Agent",
+                            &agent_doc,
+                            "executor",
+                            &identity::Did::new(agent_did)?,
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
+            Self {
+                db,
+                runtime,
+                agent,
+                admin,
+                user,
+            }
+        }
+
+        fn node(&self) -> &Arc<defra_node::Node> {
+            &self.db.node
+        }
+
+        fn local_self_create(
+            &self,
+            request_id: &str,
+            session_id: &str,
+            agent_did: &str,
+            input: Option<serde_json::Value>,
+        ) -> AgentRequestCreate {
+            let mut create = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                self.runtime.did(),
+                self.runtime.did(),
+                agent_did,
+                session_id,
+                "run the disallowed skill",
+                "interactive",
+                "2026-09-01T00:00:00Z",
+                AgentRequestAdmissionRecord::local_self(self.runtime.did()),
+            );
+            if let Some(input) = input {
+                create.input = serde_json::from_value(input).unwrap();
+            }
+            create
+        }
+
+        /// Signs `create` as the runtime and writes it through the runtime's access.
+        async fn create_signed_request(&self, mut create: AgentRequestCreate) -> String {
+            crate::sign_agent_request_create(self.runtime.as_ref(), &mut create)
+                .await
+                .unwrap();
+            self.insert_signed_request(&create).await
+        }
+
+        /// Signs `create` as the managed Agent. Only a request the Agent authors for
+        /// itself (requester and signer both its DID) is admitted as local-self.
+        async fn create_agent_signed_request(&self, mut create: AgentRequestCreate) -> String {
+            crate::sign_agent_request_create(self.agent.as_ref(), &mut create)
+                .await
+                .unwrap();
+            self.insert_signed_request(&create).await
+        }
+
+        fn agent_self_create(
+            &self,
+            request_id: &str,
+            session_id: &str,
+            content: &str,
+            input: Option<serde_json::Value>,
+        ) -> AgentRequestCreate {
+            let agent_did = self.agent.did();
+            let mut create = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                self.runtime.did(),
+                agent_did,
+                agent_did,
+                session_id,
+                content,
+                "interactive",
+                "2026-09-01T00:00:00Z",
+                AgentRequestAdmissionRecord::local_self(agent_did),
+            );
+            if let Some(input) = input {
+                create.input = serde_json::from_value(input).unwrap();
+            }
+            create
+        }
+
+        /// Writes a signed request through the runtime's access and stages the
+        /// `working_agent` edge that lets its target Agent read and terminalize it.
+        async fn insert_signed_request(&self, create: &AgentRequestCreate) -> String {
+            let mutation = create.graphql_mutation().unwrap();
+            let doc_id = self.write_as_runtime(mutation, "AgentRequest").await;
+            self.grant_working_agent(&doc_id, &create.agent_did).await;
+            doc_id
+        }
+
+        async fn grant_working_agent(&self, doc_id: &str, agent_did: &str) {
+            self.admin
+                .add_actor_relationship(
+                    "AgentRequest",
+                    doc_id,
+                    "working_agent",
+                    &identity::Did::new(agent_did).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        /// The managed Agent owns the sessions it projects into; fixture sessions
+        /// and their observations are written and read under that same actor.
+        fn agent_access(&self) -> crate::store::config_client::ConfigAccess {
+            crate::store::config_client::ConfigAccess::local_managed_agent(
+                self.db.node.clone(),
+                identity::Did::new(self.agent.did()).unwrap(),
+                self.agent.as_ref(),
+            )
+            .unwrap()
+        }
+
+        async fn ensure_agent_session(&self, session_id: &str, requester_did: Option<&str>) {
+            let node_did = self.runtime.did().to_owned();
+            let agent_did = self.agent.did().to_owned();
+            self.agent_access()
+                .transact_write("test.admission_fixture_session", |txn| {
+                    let node_did = &node_did;
+                    let agent_did = &agent_did;
+                    Box::pin(async move {
+                        crate::session::ensure_session_in_txn(
+                            txn,
+                            session_id,
+                            node_did,
+                            agent_did,
+                            requester_did,
+                            None,
+                            None,
+                            "2026-09-01T00:00:00Z",
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap();
+        }
+
+        async fn write_as_agent(&self, mutation: String, collection: &'static str) -> String {
+            self.agent_access()
+                .transact_write("test.admission_fixture_agent_write", |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move {
+                        let response = txn.execute(mutation).await?;
+                        let doc_id = crate::store::graphql::created_doc_id(&response, collection)?;
+                        Ok::<_, anyhow::Error>(doc_id)
+                    })
+                })
+                .await
                 .unwrap()
-                .unwrap()["_docID"]
-                .as_str()
+        }
+
+        async fn read_as_agent(&self, document: &str) -> defra_node::QueryResponse {
+            self.agent_access()
+                .transact_readonly("test.admission_fixture_agent_read", |txn| {
+                    Box::pin(async move { txn.execute_local_response(document).await })
+                })
+                .await
                 .unwrap()
-                .to_owned();
+        }
+
+        async fn write_as_runtime(&self, mutation: String, collection: &'static str) -> String {
+            self.admin
+                .transact_write("test.admission_fixture_write", |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move {
+                        let response = txn.execute(mutation).await?;
+                        let doc_id = crate::store::graphql::created_doc_id(&response, collection)?;
+                        Ok::<_, anyhow::Error>(doc_id)
+                    })
+                })
+                .await
+                .unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_admission_rejection_selects_terminal_no_message() {
+        let fixture = AdmissionFixture::new("pending-rejection").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let create = fixture.local_self_create("rejected-request", "session", &agent_did, None);
+        let doc_id = fixture.create_signed_request(create).await;
 
         super::terminalize_pending_request_rejection(
-            &node,
+            fixture.node(),
             &doc_id,
-            identity.did(),
+            fixture.runtime.did(),
+            &agent_did,
+            fixture.agent.as_ref(),
             "request activates a skill outside its context allowlist",
             "test.admission_rejection",
         )
@@ -1290,7 +1826,8 @@ mod tests {
         .unwrap();
 
         let escaped_doc_id = crate::store::graphql::escape_graphql_string(&doc_id);
-        let selected = node
+        let selected = fixture
+            .node()
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
             ))
@@ -1310,32 +1847,57 @@ mod tests {
             terminal_output,
             gents_protocol::output::TerminalOutput::NoMessage
         );
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     #[tokio::test]
     async fn signed_input_cannot_expand_context_or_spoof_runtime_queue() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("input.key"), None).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        let owner = crate::store::graphql::escape_graphql_string(identity.did());
-        for mutation in [
-            format!(
-                r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}", skill_ids: ["allowed"] }}) {{ _docID }} }}"#
-            ),
-            format!(
-                r#"mutation {{ create_Agent(input: {{ agent_id: "agent", node_did: "{owner}", context_id: "context", inference_profile_id: "inference", enabled: true }}) {{ _docID }} }}"#
-            ),
-        ] {
-            let result = node.execute(&mutation).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-        }
+        let fixture = AdmissionFixture::new("signed-input").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let owner = fixture.runtime.did().to_owned();
+        let context = format!("{agent_did}:context");
+        fixture
+            .user
+            .transact_write("test.admission_context_allowlist", |txn| {
+                let owner = &owner;
+                let context = &context;
+                Box::pin(async move {
+                    let (_, mut record) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::AgentContext,
+                            owner,
+                            context,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("fixture AgentContext is missing"))?;
+                    record["skill_ids"] = serde_json::json!(["allowed"]);
+                    let skill = serde_json::json!({
+                        "skill_id": "allowed", "node_did": owner, "name": "Allowed skill",
+                        "instructions": "Admitted by the context allowlist.", "enabled": true,
+                    });
+                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::Skill,
+                            add: skill.clone(),
+                            update: skill,
+                        },
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::AgentContext,
+                            add: record.clone(),
+                            update: record,
+                        },
+                    ])?;
+                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                })
+            })
+            .await
+            .unwrap();
         for (index, input, allowed) in [
             (
                 0,
@@ -1358,75 +1920,43 @@ mod tests {
                 false,
             ),
         ] {
-            let mut create = AgentRequestCreate::base(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                format!("input-{index}"),
-                identity.did(),
-                identity.did(),
-                "agent",
+            let create = fixture.agent_self_create(
+                &format!("input-{index}"),
                 "session",
                 "work",
-                "interactive",
-                "2026-09-01T00:00:00Z",
-                AgentRequestAdmissionRecord::local_self(identity.did()),
+                Some(input),
             );
-            create.input = serde_json::from_value(input).unwrap();
-            crate::sign_agent_request_create(&identity, &mut create)
+            let doc_id = fixture.create_agent_signed_request(create).await;
+            let request = super::load_request_for_admission_test(fixture.node(), &doc_id)
                 .await
                 .unwrap();
-            let result = node.execute(&create.graphql_mutation().unwrap()).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-            let doc =
-                crate::store::graphql::single_mutation_document(&result, "create_AgentRequest")
-                    .unwrap()
-                    .unwrap()["_docID"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
-            let request = super::load_request_for_admission_test(&node, &doc)
-                .await
-                .unwrap();
-            let admitted =
-                super::verify_fresh_local_self_request(&node, &identity, &request, "agent").await;
+            let admitted = super::verify_fresh_local_self_request(
+                fixture.node(),
+                fixture.runtime.as_ref(),
+                &request,
+                &agent_did,
+            )
+            .await;
             assert_eq!(admitted.is_ok(), allowed, "case {index}: {admitted:?}");
         }
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     #[tokio::test]
     async fn admission_rejection_projects_the_failed_turn_into_the_request_owned_session_only() {
         let temp = tempfile::tempdir().unwrap();
-        let identity =
-            KeyIdentity::load_or_create(temp.path().join("projection.key"), None).unwrap();
         let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        let owner = crate::store::graphql::escape_graphql_string(identity.did());
-        for mutation in [
-            format!(
-                r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}", skill_ids: ["allowed"] }}) {{ _docID }} }}"#
-            ),
-            format!(
-                r#"mutation {{ create_Agent(input: {{ agent_id: "agent", node_did: "{owner}", context_id: "context", inference_profile_id: "inference", enabled: true }}) {{ _docID }} }}"#
-            ),
-        ] {
-            let result = node.execute(&mutation).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-        }
-        crate::session::ensure_session_with_agent_id_and_requester_did(
-            &node,
-            "foreign-session",
-            identity.did(),
-            "agent",
-            Some(foreign.did()),
-        )
-        .await
-        .unwrap();
+        let fixture = AdmissionFixture::new("admission-projection").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let owner = crate::store::graphql::escape_graphql_string(fixture.runtime.did());
+        fixture
+            .ensure_agent_session("foreign-session", Some(foreign.did()))
+            .await;
 
         let refusal_reason =
             "request admission denied: request activates a skill outside its context allowlist";
@@ -1434,59 +1964,46 @@ mod tests {
             ("refused-skill", "session"),
             ("foreign-scope", "foreign-session"),
         ] {
-            let mut create = AgentRequestCreate::base(
-                gents_protocol::request_admission::RequestPurpose::Normal,
+            let create = fixture.local_self_create(
                 request_id,
-                identity.did(),
-                identity.did(),
-                "agent",
                 session_id,
-                "run the disallowed skill",
-                "interactive",
-                "2026-09-01T00:00:00Z",
-                AgentRequestAdmissionRecord::local_self(identity.did()),
+                &agent_did,
+                Some(serde_json::json!({"selected_skill_ids": ["unconfigured"]})),
             );
-            create.input =
-                serde_json::from_value(serde_json::json!({"selected_skill_ids": ["unconfigured"]}))
-                    .unwrap();
-            crate::sign_agent_request_create(&identity, &mut create)
-                .await
-                .unwrap();
-            let result = node.execute(&create.graphql_mutation().unwrap()).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-            let doc_id =
-                crate::store::graphql::single_mutation_document(&result, "create_AgentRequest")
-                    .unwrap()
-                    .unwrap()["_docID"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
+            let doc_id = fixture.create_signed_request(create).await;
 
-            let request = super::load_request_for_admission_test(&node, &doc_id)
+            let request = super::load_request_for_admission_test(fixture.node(), &doc_id)
                 .await
                 .unwrap();
             assert!(
-                super::verify_fresh_local_self_request(&node, &identity, &request, "agent")
-                    .await
-                    .is_err(),
+                super::verify_fresh_local_self_request(
+                    fixture.node(),
+                    fixture.runtime.as_ref(),
+                    &request,
+                    &agent_did,
+                )
+                .await
+                .is_err(),
                 "{request_id} must be denied by the context allowlist"
             );
 
             super::terminalize_pending_request_rejection(
-                &node,
+                fixture.node(),
                 &doc_id,
-                identity.did(),
+                fixture.runtime.did(),
+                &agent_did,
+                fixture.agent.as_ref(),
                 refusal_reason,
                 "test.admission_rejection_projection",
             )
             .await
             .unwrap();
 
-            let selected = node
-                .execute(&format!(
+            let selected = fixture
+                .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
-                    crate::session::AGENT_SESSION_FIELDS,
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
             assert!(!selected.has_errors(), "{:?}", selected.errors);
@@ -1495,11 +2012,14 @@ mod tests {
                 .cloned()
                 .unwrap();
             assert_eq!(rows.len(), 1, "{request_id} must not add session rows");
-            let session = crate::session::decode_session_row(&rows[0])
+            let session = gents_protocol::session::decode_session_row(&rows[0])
                 .unwrap()
                 .session;
             if session_id == "session" {
-                assert_eq!(session.requester_did.as_deref(), Some(identity.did()));
+                assert_eq!(
+                    session.requester_did.as_deref(),
+                    Some(fixture.runtime.did())
+                );
                 let latest = session
                     .observation
                     .expect("refused request advances the session observation")
@@ -1518,62 +2038,41 @@ mod tests {
                 assert_eq!(session.requester_did.as_deref(), Some(foreign.did()));
             }
         }
-        node.shutdown().await;
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     async fn refused_pending_request_under_session(
-        node: &defra_node::EmbeddedNode,
-        identity: &crate::store::identity::KeyIdentity,
+        fixture: &AdmissionFixture,
         request_id: &str,
         session_id: &str,
+        agent_did: &str,
     ) -> String {
-        let mut create = AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
+        let create = fixture.local_self_create(
             request_id,
-            identity.did(),
-            identity.did(),
-            "agent",
             session_id,
-            "run the disallowed skill",
-            "interactive",
-            "2026-09-01T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(identity.did()),
+            agent_did,
+            Some(serde_json::json!({"selected_skill_ids": ["unconfigured"]})),
         );
-        create.input =
-            serde_json::from_value(serde_json::json!({"selected_skill_ids": ["unconfigured"]}))
-                .unwrap();
-        crate::sign_agent_request_create(identity, &mut create)
-            .await
-            .unwrap();
-        let result = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
-        crate::store::graphql::single_mutation_document(&result, "create_AgentRequest")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned()
+        fixture.create_signed_request(create).await
     }
 
     #[tokio::test]
     async fn refusal_survives_undecodable_session_rows_sharing_its_label() {
         let temp = tempfile::tempdir().unwrap();
-        let identity =
-            KeyIdentity::load_or_create(temp.path().join("corrupt-session.key"), None).unwrap();
         let foreign =
             KeyIdentity::load_or_create(temp.path().join("corrupt-foreign.key"), None).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        let node_did = crate::store::graphql::escape_graphql_string(identity.did());
+        let fixture = AdmissionFixture::new("corrupt-session-rows").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let escaped_agent_did = crate::store::graphql::escape_graphql_string(&agent_did);
+        let node_did = crate::store::graphql::escape_graphql_string(fixture.runtime.did());
         for (session_id, requester_did) in [
             ("corrupt-foreign-scope", Some(foreign.did())),
-            ("corrupt-own-scope", Some(identity.did())),
+            ("corrupt-own-scope", Some(fixture.runtime.did())),
         ] {
             let requester = match requester_did {
                 Some(did) => format!(
@@ -1582,32 +2081,41 @@ mod tests {
                 ),
                 None => "requester_did: null,".to_owned(),
             };
-            let seeded = node
-                .execute(&format!(
-                    r#"mutation {{ create_AgentSession(input: {{
-                        session_id: "{}", node_did: "{node_did}", {requester} agent_id: "agent",
+            fixture
+                .write_as_agent(
+                    format!(
+                        r#"mutation {{ create_AgentSession(input: {{
+                        session_id: "{}", node_did: "{node_did}", {requester} agent_did: "{escaped_agent_did}",
                         created_at: "not-an-rfc3339-timestamp"
                     }}) {{ _docID }} }}"#,
-                    crate::store::graphql::escape_graphql_string(session_id),
-                ))
+                        crate::store::graphql::escape_graphql_string(session_id),
+                    ),
+                    "AgentSession",
+                )
                 .await;
-            assert!(!seeded.has_errors(), "{session_id}: {:?}", seeded.errors);
 
             let request_id = format!("refused-under-{session_id}");
-            let doc_id =
-                refused_pending_request_under_session(&node, &identity, &request_id, session_id)
-                    .await;
+            let doc_id = refused_pending_request_under_session(
+                &fixture,
+                &request_id,
+                session_id,
+                &agent_did,
+            )
+            .await;
             super::terminalize_pending_request_rejection(
-                &node,
+                fixture.node(),
                 &doc_id,
-                identity.did(),
+                fixture.runtime.did(),
+                &agent_did,
+                fixture.agent.as_ref(),
                 "request admission denied: request activates a skill outside its context allowlist",
                 "test.admission_rejection_corrupt_session_row",
             )
             .await
             .unwrap_or_else(|error| panic!("{session_id}: the refusal must persist: {error}"));
 
-            let selected = node
+            let selected = fixture
+                .node()
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
                     crate::store::graphql::escape_graphql_string(&doc_id),
@@ -1619,11 +2127,11 @@ mod tests {
                 "failed",
                 "{session_id}: the refused request must not stay pending"
             );
-            let sessions = node
-                .execute(&format!(
+            let sessions = fixture
+                .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
-                    crate::session::AGENT_SESSION_FIELDS,
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
             assert!(!sessions.has_errors(), "{:?}", sessions.errors);
@@ -1637,27 +2145,24 @@ mod tests {
                 "{session_id}: the refusal must not mint beside an undecodable row"
             );
             assert!(
-                crate::session::decode_session_row(&rows[0]).is_err(),
+                gents_protocol::session::decode_session_row(&rows[0]).is_err(),
                 "{session_id}: the refusal must leave the undecodable row untouched"
             );
         }
-        node.shutdown().await;
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     #[tokio::test]
     async fn refusal_survives_unreadable_scoped_request_facts() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity =
-            KeyIdentity::load_or_create(temp.path().join("corrupt-facts.key"), None).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        let node_did = crate::store::graphql::escape_graphql_string(identity.did());
+        let fixture = AdmissionFixture::new("corrupt-facts").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let escaped_agent_did = crate::store::graphql::escape_graphql_string(&agent_did);
+        let node_did = crate::store::graphql::escape_graphql_string(fixture.runtime.did());
         for (session_id, sibling_request_id, sibling_created_at) in [
             ("facts-invalid-created-at", "sibling-invalid", "yesterday"),
             (
@@ -1666,49 +2171,53 @@ mod tests {
                 "2026-09-01T00:00:00Z",
             ),
         ] {
-            crate::session::ensure_session_with_agent_id_and_requester_did(
-                &node,
-                session_id,
-                identity.did(),
-                "agent",
-                Some(identity.did()),
-            )
-            .await
-            .unwrap();
+            fixture
+                .ensure_agent_session(session_id, Some(fixture.runtime.did()))
+                .await;
             let request_id = if session_id == "facts-duplicate-roots" {
                 "refused-dup-root".to_owned()
             } else {
                 format!("refused-{session_id}")
             };
-            let doc_id =
-                refused_pending_request_under_session(&node, &identity, &request_id, session_id)
-                    .await;
-            let sibling = node
-                .execute(&format!(
-                    r#"mutation {{ create_AgentRequest(input: {{
+            let doc_id = refused_pending_request_under_session(
+                &fixture,
+                &request_id,
+                session_id,
+                &agent_did,
+            )
+            .await;
+            let sibling = fixture
+                .write_as_runtime(
+                    format!(
+                        r#"mutation {{ create_AgentRequest(input: {{
                         request_id: "{}", purpose: "normal", node_did: "{node_did}",
-                        requester_did: "{node_did}", agent_id: "agent", session_id: "{}",
+                        requester_did: "{node_did}", agent_did: "{escaped_agent_did}", session_id: "{}",
                         content: "sibling turn", lifecycle_state: "pending",
                         created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
                     }}) {{ _docID }} }}"#,
-                    crate::store::graphql::escape_graphql_string(sibling_request_id),
-                    crate::store::graphql::escape_graphql_string(session_id),
-                    crate::store::graphql::escape_graphql_string(sibling_created_at),
-                ))
+                        crate::store::graphql::escape_graphql_string(sibling_request_id),
+                        crate::store::graphql::escape_graphql_string(session_id),
+                        crate::store::graphql::escape_graphql_string(sibling_created_at),
+                    ),
+                    "AgentRequest",
+                )
                 .await;
-            assert!(!sibling.has_errors(), "{session_id}: {:?}", sibling.errors);
+            fixture.grant_working_agent(&sibling, &agent_did).await;
 
             super::terminalize_pending_request_rejection(
-                &node,
+                fixture.node(),
                 &doc_id,
-                identity.did(),
+                fixture.runtime.did(),
+                &agent_did,
+                fixture.agent.as_ref(),
                 "request admission denied: request activates a skill outside its context allowlist",
                 "test.admission_rejection_unreadable_facts",
             )
             .await
             .unwrap_or_else(|error| panic!("{session_id}: the refusal must persist: {error}"));
 
-            let selected = node
+            let selected = fixture
+                .node()
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
                     crate::store::graphql::escape_graphql_string(&doc_id),
@@ -1720,11 +2229,11 @@ mod tests {
                 "failed",
                 "{session_id}: the refused request must not stay pending"
             );
-            let sessions = node
-                .execute(&format!(
+            let sessions = fixture
+                .read_as_agent(&format!(
                     r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::store::graphql::escape_graphql_string(session_id),
-                    crate::session::AGENT_SESSION_FIELDS,
+                    gents_protocol::session::AGENT_SESSION_FIELDS,
                 ))
                 .await;
             assert!(!sessions.has_errors(), "{:?}", sessions.errors);
@@ -1733,7 +2242,7 @@ mod tests {
                 .cloned()
                 .unwrap();
             assert_eq!(rows.len(), 1, "{session_id}: one session row");
-            let session = crate::session::decode_session_row(&rows[0])
+            let session = gents_protocol::session::decode_session_row(&rows[0])
                 .unwrap()
                 .session;
             assert!(
@@ -1743,7 +2252,12 @@ mod tests {
                 session.observation
             );
         }
-        node.shutdown().await;
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     #[derive(Clone)]
@@ -1783,43 +2297,41 @@ mod tests {
             .unwrap();
         tracing::subscriber::with_default(subscriber, || {
             runtime.block_on(async {
-                let temp = tempfile::tempdir().unwrap();
-                let identity = KeyIdentity::load_or_create(temp.path().join("skew.key"), None)
-                    .unwrap();
-                let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did()).build().await.unwrap());
-                ensure_runtime_schemas(&node).await.unwrap();
-                let node_did = crate::store::graphql::escape_graphql_string(identity.did());
-                let created = node
-                    .execute(&format!(
-                        r#"mutation {{ create_AgentRequest(input: {{
+                let fixture = AdmissionFixture::new("version-skew").await;
+                let agent_did = fixture.agent.did().to_owned();
+                let escaped_agent_did = crate::store::graphql::escape_graphql_string(&agent_did);
+                let node_did = crate::store::graphql::escape_graphql_string(fixture.runtime.did());
+                let doc_id = fixture
+                    .write_as_runtime(
+                        format!(
+                            r#"mutation {{ create_AgentRequest(input: {{
                             request_id: "version-skewed", purpose: "normal", node_did: "{node_did}",
-                            requester_did: "{node_did}", agent_id: "agent",
+                            requester_did: "{node_did}", agent_did: "{escaped_agent_did}",
                             session_id: "skew-session", content: "run the disallowed skill",
                             lifecycle_state: "pending", created_at: "2026-09-01T00:00:00Z",
                             input: {{ future_field: "written by a newer runtime" }},
                             retry_count: 0, max_retries: 3, request_hop: 0
                         }}) {{ _docID }} }}"#
-                    ))
+                        ),
+                        "AgentRequest",
+                    )
                     .await;
-                assert!(!created.has_errors(), "{:?}", created.errors);
-                let doc_id = crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
-                    .unwrap()
-                    .unwrap()["_docID"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
+                fixture.grant_working_agent(&doc_id, &agent_did).await;
 
                 super::terminalize_pending_request_rejection(
-                    &node,
+                    fixture.node(),
                     &doc_id,
-                    identity.did(),
+                    fixture.runtime.did(),
+                    &agent_did,
+                    fixture.agent.as_ref(),
                     "request admission denied: request activates a skill outside its context allowlist",
                     "test.admission_rejection_version_skew",
                 )
                 .await
                 .unwrap();
 
-                let selected = node
+                let selected = fixture
+                    .node()
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} AgentSession(filter: {{ session_id: {{ _eq: "skew-session" }} }}) {{ _docID }} }}"#,
                         crate::store::graphql::escape_graphql_string(&doc_id),
@@ -1832,7 +2344,12 @@ mod tests {
                     data["AgentSession"].as_array().unwrap().is_empty(),
                     "an undecodable row mints no session"
                 );
-                node.shutdown().await;
+                fixture
+                    .db
+                    .node
+                    .shutdown()
+                    .await
+                    .expect("shut down test node");
             });
         });
         let logs = captured.lock().unwrap().clone();
@@ -1846,30 +2363,33 @@ mod tests {
     async fn runtime_receipt_authenticates_terminal_expired_child_and_rejects_forgery() {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
+        // A runtime-local-control receipt is issued and signed by the target Agent itself.
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "receipt-child",
             identity.did(),
             identity.did(),
-            "agent-1",
+            agent.did(),
             "receipt-session",
             "original continuation",
             "scheduled",
             "2020-01-01T00:00:00Z",
-            AgentRequestAdmissionRecord::runtime_local_control(identity.did(), "receipt-parent"),
+            AgentRequestAdmissionRecord::runtime_local_control(agent.did(), "receipt-parent"),
         );
         create.caused_by_parent_request_id = Some("receipt-parent".into());
         create.caused_by_parent_request_doc_id = Some("receipt-parent-doc".into());
         create.valid_until = Some("2020-01-01T00:00:01Z".into());
-        crate::sign_agent_request_create(&identity, &mut create)
+        crate::sign_agent_request_create(agent.as_ref(), &mut create)
             .await
             .unwrap();
         let response = node.execute(&create.graphql_mutation().unwrap()).await;
@@ -1884,127 +2404,101 @@ mod tests {
         row.lifecycle_state =
             Some(gents_protocol::request_lifecycle::RequestLifecycleState::Completed);
         row.deadline = Some("2020-01-01T00:00:01Z".into());
-        super::verify_runtime_local_control_receipt(
+        crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
             &row,
             identity.did(),
             "receipt-parent",
             identity.did(),
         )
         .expect("terminal and expired original receipt remains authenticated");
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "different-parent",
-            identity.did(),
-        )
-        .is_err());
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "different-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
         let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            foreign.did(),
-            "receipt-parent",
-            foreign.did(),
-        )
-        .is_err());
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "receipt-parent",
-            foreign.did(),
-        )
-        .is_err());
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                foreign.did(),
+                "receipt-parent",
+                foreign.did(),
+            )
+            .is_err()
+        );
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                foreign.did(),
+            )
+            .is_err()
+        );
         row.content = Some("forged continuation".into());
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "receipt-parent",
-            identity.did(),
-        )
-        .is_err());
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
         row.content = Some("original continuation".into());
         row.admission_signature = Some("not-a-valid-signature".into());
-        assert!(super::verify_runtime_local_control_receipt(
-            &row,
-            identity.did(),
-            "receipt-parent",
-            identity.did(),
-        )
-        .is_err());
-        node.shutdown().await;
+        assert!(
+            crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                &row,
+                identity.did(),
+                "receipt-parent",
+                identity.did(),
+            )
+            .is_err()
+        );
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
     async fn final_verifier_returns_the_exact_fresh_signed_snapshot() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity: Arc<dyn NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
-        let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
-        let owner = crate::store::graphql::escape_graphql_string(identity.did());
-        let seeded = node.execute(&format!(r#"mutation {{ create_Agent(input: {{agent_id:"agent-1",node_did:"{owner}",inference_profile_id:"inference",enabled:true}}) {{_docID}} }}"#)).await;
-        assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+        let fixture = AdmissionFixture::new("final-verifier").await;
+        let agent_did = fixture.agent.did().to_owned();
         let request_id = uuid::Uuid::new_v4().to_string();
-        let mut create = AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            request_id,
-            identity.did(),
-            identity.did(),
-            "agent-1",
-            uuid::Uuid::new_v4().to_string(),
-            "durable signed content",
-            "interactive",
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            AgentRequestAdmissionRecord::local_self(identity.did()),
-        );
-        crate::sign_agent_request_create(identity.as_ref(), &mut create)
-            .await
-            .unwrap();
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(
-            !response.has_errors(),
-            "create signed request: {:?}",
-            response.errors
-        );
-        let doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| {
-                data.get("create_AgentRequest")
-                    .or_else(|| data.get("add_AgentRequest"))
-            })
-            .and_then(|value| {
-                value.get("_docID").or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
-                })
-            })
-            .and_then(serde_json::Value::as_str)
-            .expect("created request doc id")
-            .to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let create =
+            fixture.agent_self_create(&request_id, &session_id, "durable signed content", None);
+        let doc_id = fixture.create_agent_signed_request(create).await;
 
-        let row = super::load_signed_request(node.as_ref(), &doc_id)
+        let row = super::load_signed_request(fixture.node().as_ref(), &doc_id)
             .await
             .unwrap();
-        super::verify_request_receipt_signature(&row)
+        crate::store::identity::request_receipt::verify_request_receipt_signature(&row)
             .expect("original local-self immutable receipt signature");
         let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
         queued.content = "stale queued content".to_string();
 
-        let runtime_state = node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id))).await;
-        assert!(!runtime_state.has_errors(), "{:?}", runtime_state.errors);
+        fixture
+            .admin
+            .write(
+                "test.final_verifier.runtime_state",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
+                    crate::store::graphql::escape_graphql_string(&doc_id)
+                ),
+            )
+            .await
+            .unwrap();
         let (_authority_owner, authority) = enrollment_authority_channel();
-        let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, authority);
-        let verified = verifier.verify_fresh(&queued, "agent-1").await.unwrap();
+        let verifier = AgentRequestAdmissionVerifier::new(
+            fixture.node().clone(),
+            fixture.runtime.clone(),
+            authority,
+        );
+        let verified = verifier.verify_fresh(&queued, &agent_did).await.unwrap();
         assert_eq!(verified.content, "durable signed content");
         assert_ne!(verified.content, queued.content);
         assert_eq!(
@@ -2013,21 +2507,30 @@ mod tests {
         );
         assert_eq!(verified.max_total_tokens, Some(0));
 
-        let response = node
-            .execute(&format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(&queued.doc_id),
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "inject preclaim deadline: {:?}",
-            response.errors
-        );
-        let error = verifier.verify_fresh(&queued, "agent-1").await.unwrap_err();
+        fixture
+            .admin
+            .write(
+                "test.final_verifier.preclaim_deadline",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&queued.doc_id),
+                ),
+            )
+            .await
+            .unwrap();
+        let error = verifier
+            .verify_fresh(&queued, &agent_did)
+            .await
+            .unwrap_err();
         assert!(error
             .to_string()
             .contains("caller-authored execution deadline"));
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     #[tokio::test]
@@ -2038,7 +2541,7 @@ mod tests {
             .execute(
                 r#"mutation {
                     task: create_Task(input: {
-                        task_id: "task-1", node_did: "did:key:target", agent_id: "agent-1",
+                        task_id: "task-1", node_did: "did:key:target", agent_did: "agent-1",
                         prompt_template: "run", enabled: true
                     }) { _docID }
                     trigger: create_Trigger(input: {

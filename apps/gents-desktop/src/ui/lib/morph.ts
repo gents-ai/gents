@@ -71,6 +71,7 @@ export function useMorphCard(): Morph {
         startViewTransition?: (callback: () => void) => {
           finished?: Promise<unknown>;
           ready?: Promise<unknown>;
+          updateCallbackDone?: Promise<unknown>;
         };
       };
       if (
@@ -98,15 +99,20 @@ export function useMorphCard(): Morph {
         name();
       });
       /* the browser skips a transition when another starts or the page
-         hides, rejecting `ready` though the update still applied */
+         hides. The update still applies, but `ready` rejects, and so do
+         `updateCallbackDone` and `finished` when the skip comes before the
+         update has run; none of that is an error here */
       transition?.ready?.catch(() => undefined);
-      void Promise.resolve(transition?.finished).finally(() =>
-        each((element) => {
-          if (namedBy.get(element) !== token) return;
-          element.style.removeProperty("view-transition-name");
-          namedBy.delete(element);
-        }),
-      );
+      transition?.updateCallbackDone?.catch(() => undefined);
+      void Promise.resolve(transition?.finished)
+        .catch(() => undefined)
+        .finally(() =>
+          each((element) => {
+            if (namedBy.get(element) !== token) return;
+            element.style.removeProperty("view-transition-name");
+            namedBy.delete(element);
+          }),
+        );
     },
     [scope],
   );

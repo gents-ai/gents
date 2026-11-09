@@ -3,11 +3,16 @@ use super::*;
 #[tokio::test]
 async fn opening_request_is_the_agent_new_call_not_a_same_second_message() {
     let (_tempdir, node, node_did) = test_node().await;
-    let agent_id = gents::default_agent_id_for_node(&node_did);
+    let agent_did = gents::load_node(&node, &node_did)
+        .await
+        .unwrap()
+        .unwrap()
+        .default_agent_did
+        .unwrap();
     let node_literal = escape_graphql_string(&node_did);
-    let agent_literal = escape_graphql_string(&agent_id);
+    let agent_literal = escape_graphql_string(&agent_did);
     let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-        request_id:"open-root", purpose:"normal", session_id:"session-1", node_did:"{node_literal}", requester_did:"{node_literal}", agent_id:"{agent_literal}", lifecycle_state:"processing"
+        request_id:"open-root", purpose:"normal", session_id:"session-1", node_did:"{node_literal}", requester_did:"{node_literal}", agent_did:"{agent_literal}", lifecycle_state:"processing"
     }}) {{_docID}} }}"#)).await;
     ensure_no_errors(&response, "seed opening parent").unwrap();
     let parent_doc = gents_protocol::graphql::extract_mutation_doc_id(
@@ -15,7 +20,7 @@ async fn opening_request_is_the_agent_new_call_not_a_same_second_message() {
         "AgentRequest",
     )
     .unwrap();
-    let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":parent_doc,"request_id":"open-root","node_did":node_did,"requester_did":node_did,"agent_id":agent_id,"session_id":"session-1"})).unwrap();
+    let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":parent_doc,"request_id":"open-root","node_did":node_did,"requester_did":node_did,"agent_did":agent_did,"session_id":"session-1"})).unwrap();
     let open_call = seed_tool_call(&node, &parent, "call-open", "agent_new", "running", "").await;
     let message_call = seed_tool_call(
         &node,
@@ -36,7 +41,7 @@ async fn opening_request_is_the_agent_new_call_not_a_same_second_message() {
         let call_id = escape_graphql_string(call_id);
         let call_doc = escape_graphql_string(call_doc);
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-            request_id:"{request_id}", purpose:"normal", session_id:"opened", node_did:"{node_literal}", requester_did:"{node_literal}", agent_id:"{agent_literal}", lifecycle_state:"processing", created_at:"2026-09-27T00:00:00Z",
+            request_id:"{request_id}", purpose:"normal", session_id:"opened", node_did:"{node_literal}", requester_did:"{node_literal}", agent_did:"{agent_literal}", lifecycle_state:"processing", created_at:"2026-09-27T00:00:00Z",
             caused_by_parent_request_id:"open-root", caused_by_parent_request_doc_id:"{parent}", caused_by_parent_tool_call_id:"{call_id}", caused_by_parent_tool_call_doc_id:"{call_doc}"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "seed opened session request").unwrap();
@@ -55,7 +60,7 @@ async fn opening_request_is_the_agent_new_call_not_a_same_second_message() {
     crate::caused_sessions::fixtures::create_started_session(
         &node,
         gents_protocol::session::AgentSession {
-            agent_id: agent_id.clone(),
+            agent_did: agent_did.clone(),
             ..crate::caused_sessions::fixtures::fixture_session(&node_did, "opened")
         },
         gents_protocol::session::SessionReference {
@@ -85,12 +90,20 @@ async fn opening_request_is_the_agent_new_call_not_a_same_second_message() {
 #[tokio::test]
 async fn child_pane_streams_followups_before_finish_and_excludes_foreign_requester() {
     let (_tempdir, node, node_did) = test_node().await;
-    let manager = TurnManager::new(node.clone(), test_config(String::new(), &node_did));
+    let manager = TurnManager::new(
+        node.clone(),
+        test_config(String::new(), &node_did, &node).await,
+    );
     let engine = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();
-    let agent_id = gents::default_agent_id_for_node(&node_did);
+    let agent_did = gents::load_node(&node, &node_did)
+        .await
+        .unwrap()
+        .unwrap()
+        .default_agent_did
+        .unwrap();
     let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-        request_id:"pane-root", purpose:"normal", session_id:"session-1", node_did:"{node_did}", requester_did:"{node_did}", agent_id:"{agent_id}", lifecycle_state:"processing"
+        request_id:"pane-root", purpose:"normal", session_id:"session-1", node_did:"{node_did}", requester_did:"{node_did}", agent_did:"{agent_did}", lifecycle_state:"processing"
     }}) {{_docID}} }}"#)).await;
     ensure_no_errors(&response, "seed pane root").unwrap();
     let doc = gents_protocol::graphql::extract_mutation_doc_id(
@@ -98,7 +111,7 @@ async fn child_pane_streams_followups_before_finish_and_excludes_foreign_request
         "AgentRequest",
     )
     .unwrap();
-    let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":doc,"request_id":"pane-root","node_did":node_did,"requester_did":node_did,"agent_id":agent_id,"session_id":"session-1"})).unwrap();
+    let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":doc,"request_id":"pane-root","node_did":node_did,"requester_did":node_did,"agent_did":agent_did,"session_id":"session-1"})).unwrap();
     let tool = seed_tool_call(&node, &parent, "call-1", "agent_new", "running", "").await;
     let child = seed_child_request(&node, &parent, &tool, "pane-child", "processing").await;
     let mut followup = None;
@@ -123,10 +136,10 @@ async fn child_pane_streams_followups_before_finish_and_excludes_foreign_request
                 .unwrap_or_else(|| "null".into());
             let created_at = chrono::Utc::now().to_rfc3339();
             let response = node.execute(&format!(
-                r#"mutation {{create_AgentRequest(input: {{request_id:"{}", purpose:"normal", session_id:"session-1-child", node_did:"{}", requester_did:{requester_field}, agent_id:"{}", lifecycle_state:"processing", created_at:"{}"}}) {{_docID}} }}"#,
+                r#"mutation {{create_AgentRequest(input: {{request_id:"{}", purpose:"normal", session_id:"session-1-child", node_did:"{}", requester_did:{requester_field}, agent_did:"{}", lifecycle_state:"processing", created_at:"{}"}}) {{_docID}} }}"#,
                 escape_graphql_string(id),
                 escape_graphql_string(&node_did),
-                escape_graphql_string(&agent_id),
+                escape_graphql_string(&agent_did),
                 escape_graphql_string(&created_at),
             )).await;
             ensure_no_errors(&response, "seed child followup").unwrap();
@@ -135,7 +148,7 @@ async fn child_pane_streams_followups_before_finish_and_excludes_foreign_request
                 "AgentRequest",
             )
             .unwrap();
-            serde_json::from_value(json!({"_docID":doc,"request_id":id,"node_did":node_did,"requester_did":requester,"agent_id":agent_id,"session_id":"session-1-child"})).unwrap()
+            serde_json::from_value(json!({"_docID":doc,"request_id":id,"node_did":node_did,"requester_did":requester,"agent_did":agent_did,"session_id":"session-1-child"})).unwrap()
         };
         let sequence = if id == "pane-followup" { 2 } else { 1 };
         seed_assistant_message(&node, &row, sequence, text).await;

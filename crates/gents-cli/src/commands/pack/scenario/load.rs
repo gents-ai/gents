@@ -106,28 +106,19 @@ pub(super) fn load_manifest_with(
 fn load_pack_config_with(
     pack: &Path,
     lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<gents::documents::PackConfig> {
-    const VALIDATION_OWNER: &str = "did:key:zScenarioPackValidationOwner";
-    let path = pack.join("pack_config.json");
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading canonical pack config {}", path.display()))?;
-    let value = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing canonical pack config {}", path.display()))?;
-    gents::pack::decode_pack_config(
-        value,
-        Some(&gents::pack::PackInstallOptions {
-            node_did: VALIDATION_OWNER.into(),
-        }),
+) -> Result<gents::pack::AuthoredPackConfig> {
+    let distribution = read_distribution_manifest(pack)?;
+    gents::pack::load_pack_authoring_config(
+        &distribution,
+        &gents::pack::PackInstallOptions {
+            node_did: "did:key:zScenarioPackValidationOwner".into(),
+        },
+        &|path| Ok(std::fs::read(pack.join(path))?),
         lookup,
-        &|_, _, reference| read_pack_sidecar(pack, reference),
     )
-    .and_then(|config| {
-        gents::pack::ensure_pack_leaves_default_unselected(&config)?;
-        Ok(config)
-    })
-    .with_context(|| format!("decoding canonical pack config {}", path.display()))
 }
 
+#[cfg(test)]
 pub(super) fn read_pack_sidecar(pack: &Path, reference: &str) -> Result<String> {
     let relative = reference
         .strip_prefix("./")
@@ -146,7 +137,8 @@ pub(super) fn scenario_config(
     manifest
         .config
         .as_ref()
-        .context("scenario canonical configuration was not loaded")
+        .map(|config| &config.documents)
+        .context("scenario authored configuration was not loaded")
 }
 
 pub(super) fn trigger_source_collections(

@@ -711,7 +711,7 @@ describe("setup save", () => {
                   ...deployment.nodeReadiness,
                   agents: deployment.nodeReadiness.agents.map((agent) => ({
                     state: "unavailable" as const,
-                    agentId: agent.agentId,
+                    agentDid: agent.agentDid,
                     reason: "backend_disabled" as const,
                   })),
                 },

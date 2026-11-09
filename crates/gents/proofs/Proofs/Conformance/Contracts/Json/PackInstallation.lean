@@ -1,7 +1,35 @@
 import Proofs.Configuration
+import Proofs.Identity.State
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.PackInstallation
+
+def schemaCasesJson : String := jsonArray (
+  [false, true].flatMap fun scope => [false, true].flatMap fun signed =>
+    [false, true].map fun nativeUpdate =>
+      "{\"scope_matches\":" ++ toString scope ++
+      ",\"signed\":" ++ toString signed ++
+      ",\"native_update\":" ++ toString nativeUpdate ++
+      ",\"allowed\":" ++ toString (Identity.hostedSchemaAllowed scope signed nativeUpdate) ++ "}")
+
+def homeCasesJson : String := jsonArray (Configuration.hostedPackHomeCases.map fun written =>
+  "{\"home_written\":" ++ toString written ++ ",\"reported_success\":" ++
+    toString (Configuration.hostedPackReportedSuccess true true written) ++ "}")
+
+def hostedPluginCasesJson : String := jsonArray (
+  [false, true].flatMap fun reviewed => [false, true].flatMap fun plan =>
+    [false, true].map fun native =>
+      "{\"reviewed\":" ++ toString reviewed ++
+      ",\"plan\":" ++ toString plan ++ ",\"native\":" ++ toString native ++
+      ",\"allowed\":" ++ toString (Configuration.hostedPluginInstallAllowed reviewed plan native) ++ "}")
+
+def evidenceCasesJson : String := jsonArray (Configuration.hostedPackEffectCases.map fun
+    (actor, graph, plan) =>
+  "{\"actor_matches\":" ++ toString actor ++
+    ",\"graph_verified\":" ++ toString graph ++
+    ",\"plan_approved\":" ++ toString plan ++
+    ",\"allowed\":" ++ toString
+      (Configuration.hostedPackEffectAllowed actor graph plan true) ++ "}")
 
 def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map fun attempts =>
   let name := fun event : Configuration.PackAttemptEvidence => match event with
@@ -17,8 +45,10 @@ def caseJson (name : String) (references : List (List String))
     ",\"dependency_ships\":" ++ jsonStringArray dependencyShips ++
     ",\"installed\":" ++ jsonStringArray installed ++
     ",\"local\":" ++ toString isLocal ++
-    ",\"removal_accepted\":" ++ toString (Configuration.pluginRemovalSafe
-      references.flatten (rootShips ++ dependencyShips)) ++
+    ",\"removal_accepted\":" ++ toString (Configuration.pluginRemovalObservedSafe
+      references.flatten (rootShips ++ dependencyShips) false) ++
+    ",\"retain_notification_record\":" ++ toString
+      (Configuration.retainPluginStoreRecord rootShips false) ++
     ",\"accepted\":" ++ toString (Configuration.pluginInstallAvailable
       references.flatten (rootShips ++ dependencyShips) installed isLocal) ++ "}"
 
@@ -38,7 +68,8 @@ def pinCasesJson : String := jsonArray [
 
 def wireLockCasesJson : String := jsonArray ([false, true].map fun held =>
   "{\"held\":" ++ toString held ++ ",\"publish_allowed\":" ++
-    toString (Configuration.wireAndPluginPublishAllowed held) ++ "}")
+    toString (Configuration.wireAndPluginPublishAllowed held) ++
+    ",\"resolve_allowed\":" ++ toString (Configuration.stagedPluginResolutionAllowed held) ++ "}")
 
 def wireTargetCasesJson : String := jsonArray (
   [false, true].flatMap fun localTarget => [false, true].flatMap fun preview =>
@@ -66,5 +97,45 @@ def casesJson : String := jsonArray [
   caseJson "plugin_references.remote_shipped" [["acme/search"]] ["acme/search"] [] [] false,
   caseJson "plugin_references.remote_dependency" [[]] [] ["acme/search"] [] false
 ]
+
+
+def identityBindingJson (binding : Configuration.PackIdentity.Binding) : String :=
+  "{\"slot\":" ++ jsonString binding.slot ++
+    ",\"creation_nonce\":" ++ jsonString binding.creationNonce ++
+    ",\"agent_did\":" ++ jsonString binding.agentDid ++ "}"
+
+def identityBindingsJson (bindings : List Configuration.PackIdentity.Binding) : String :=
+  jsonArray (bindings.map identityBindingJson)
+
+def identityCasesJson : String := jsonArray (Configuration.PackIdentity.cases.map fun c =>
+  let result := Configuration.PackIdentity.plan c.recorded c.requested c.provisioned
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"recorded\":" ++ identityBindingsJson c.recorded ++
+    ",\"requested\":" ++ jsonStringArray c.requested ++
+    ",\"provisioned\":" ++ identityBindingsJson c.provisioned ++
+    ",\"accepted\":" ++ toString result.isSome ++
+    ",\"selected\":" ++ identityBindingsJson ((result.map (·.selected)).getD []) ++
+    ",\"next_recorded\":" ++ identityBindingsJson ((result.map (·.recorded)).getD []) ++ "}")
+
+def identityReferenceCasesJson : String := jsonArray (Configuration.PackIdentity.referenceCases.map fun c =>
+  let result := Configuration.PackIdentity.resolveDependency c.declared c.available c.dependency c.slot
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"declared\":" ++ jsonStringArray c.declared ++
+    ",\"available\":" ++ jsonArray (c.available.map fun entry =>
+      "{\"coordinate\":" ++ jsonString entry.coordinate ++
+      ",\"bindings\":" ++ identityBindingsJson entry.bindings ++ "}") ++
+    ",\"dependency\":" ++ jsonString c.dependency ++
+    ",\"slot\":" ++ jsonString c.slot ++
+    ",\"expected\":" ++ (match result with
+      | none => "null" | some binding => identityBindingJson binding) ++ "}")
+
+def evalSubjectCasesJson : String := jsonArray (Configuration.PackIdentity.evalSubjectCases.map fun c =>
+  let result := Configuration.PackIdentity.resolveEvalSubject c.selected c.slot
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"selected\":" ++ (match c.selected with
+      | none => "null" | some binding => identityBindingJson binding) ++
+    ",\"slot\":" ++ jsonString c.slot ++
+    ",\"expected\":" ++ (match result with
+      | none => "null" | some did => jsonString did) ++ "}")
 
 end Conformance.Contracts.PackInstallation

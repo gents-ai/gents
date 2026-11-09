@@ -2,18 +2,18 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::message::{AssistantContent, Message, UserContent};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::session::origin::SessionScope;
 use crate::session::TxnCanonicalReader;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::AgentToolConfig;
+use gents_protocol::session::SessionScope;
 
 const TEXT_CHARS: usize = 8_000;
 const TOOL_PREVIEW_CHARS: usize = 240;
@@ -200,7 +200,7 @@ async fn messages(
     target: &SessionScope,
     args: &AgentSessionReadArgs,
 ) -> Result<Value> {
-    let scope = crate::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         &target.node_did,
         &target.session_id,
         target.requester_did.as_deref(),
@@ -232,10 +232,13 @@ async fn messages(
     } else {
         args.limit.unwrap_or(6)
     };
-    let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}{bounds}{role}}}, order: {{sequence: DESC}}, limit: {}) {{{}}}}}", limit + 1, crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?;
+    let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}{bounds}{role}}}, order: {{sequence: DESC}}, limit: {}) {{{}}}}}", limit + 1, gents_protocol::output::rows::AGENT_MESSAGE_FIELDS)).await?;
     let headers = rows(&response, "AgentMessage")?
         .iter()
-        .map(crate::session::canonical_rows::decode_transcript_message_row)
+        .map(|row| {
+            gents_protocol::output::rows::decode_transcript_message_row(row)
+                .map_err(anyhow::Error::from)
+        })
         .collect::<Result<Vec<_>>>()?;
     let tool_calls = load_tool_call_summaries(txn, &scope, &headers, limit).await?;
     let mut reader =
@@ -271,7 +274,7 @@ async fn messages(
 }
 
 fn selected_tool_call_doc_ids(
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
     message_limit: usize,
 ) -> Vec<String> {
     let mut seen = RapidHashSet::new();
@@ -317,7 +320,7 @@ fn tool_call_batch_query(scope: &str, doc_ids: &[String]) -> Option<String> {
 async fn load_tool_call_summaries(
     txn: &ConfigApplyTxn<'_>,
     scope: &str,
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
+    headers: &[gents_protocol::output::rows::TranscriptMessageRow],
     message_limit: usize,
 ) -> Result<RapidHashMap<String, Value>> {
     let doc_ids = selected_tool_call_doc_ids(headers, message_limit);
@@ -390,45 +393,50 @@ fn tool_summaries(
 
 pub(crate) async fn agent_session_read(
     node: &Arc<EmbeddedNode>,
-    caller: &crate::AgentRequest,
+    caller: &gents_protocol::row::AgentRequest,
     tools: &AgentToolConfig,
     args: &AgentSessionReadArgs,
 ) -> Result<Value> {
     args.validate()?;
     anyhow::ensure!(args.session_id.trim() != caller.session_id, "agent_session_read cannot address the calling session; use sessions to inspect this conversation");
-    let target = super::resolve_send_target(node, &caller.node_did, tools, args.session_id.trim())
-        .await?
-        .context(
-            "session is not messageable; discover available sessions with agent_session_list",
-        )?;
-    let target = super::target_scope(&caller.node_did, &target);
+    let target = super::resolve_send_target(
+        node,
+        &caller.node_did,
+        &caller.agent_did,
+        tools,
+        args.session_id.trim(),
+    )
+    .await?
+    .context("session is not messageable; discover available sessions with agent_session_list")?;
+    let target = super::target_scope(&caller.agent_did, &target);
     args.validate_target(&target)?;
     // Captured before the first contributing lookup (active_session_request).
     let observation_started_at =
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let active = crate::request::interrupt::active_session_request(
-        node,
+    let identity: identity::Did = caller
+        .agent_did
+        .parse()
+        .context("session inspection requires a valid caller DID")?;
+    let access = ConfigAccess::local_as(node.clone(), identity.clone());
+    let active = crate::request::interrupt::active_session_request_with_access(
+        &access,
         &target.session_id,
         &target.node_did,
         target.requester_did.as_deref(),
     )
     .await?;
-    let identity = caller
-        .node_did
-        .parse()
-        .context("session inspection requires a valid caller DID")?;
     ConfigAccess::transact_local_readonly(node, Some(identity), "agent_session.read", |txn| {
         let target = target.clone();
         let active = active.clone();
         let args = args.clone();
         let observation_started_at = observation_started_at.clone();
         Box::pin(async move {
-            let scope = crate::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
-            let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", crate::session::AGENT_SESSION_FIELDS)).await?;
+            let scope = gents_protocol::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
+            let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", gents_protocol::session::AGENT_SESSION_FIELDS)).await?;
             let sessions = rows(&response, "AgentSession")?;
             anyhow::ensure!(sessions.len() == 1, "inspected session is unavailable or ambiguous");
-            let session = crate::session::decode_session_row(&sessions[0])?.session;
-            anyhow::ensure!(super::target::session_target_allowed(&session, &caller.node_did, tools), "inspected session is no longer messageable");
+            let session = gents_protocol::session::decode_session_row(&sessions[0])?.session;
+            anyhow::ensure!(super::target::session_target_allowed(&session, &caller.node_did, &caller.agent_did, tools), "inspected session is no longer messageable");
             let unobserved = if active.is_none() {
                 match session.observation.as_ref().and_then(|view| view.latest_request.as_ref()) {
                     Some(observed) if request_row(txn, &scope, &observed.request_doc_id).await?.is_none() => Some(observed),
@@ -541,26 +549,76 @@ mod tests {
     #[tokio::test]
     async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
         use crate::store::identity::NodeIdentity;
-        use crate::tools::call::lifecycle::admission_fixture::{
-            claimed_signed_request_with_trigger_correlation, publish_accepted_on_claimed_request,
-        };
-        use crate::tools::call::lifecycle::AwaitMode;
+        use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+        use gents_protocol::tool_call::AwaitMode;
         let (message, caller, _) =
             super::super::agent_tools_tests::started("agent-session-inspection").await;
         let node = message.admission.node.clone();
         let identity =
-            crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
+            crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None)
                 .unwrap();
-        let mut worker = claimed_signed_request_with_trigger_correlation(
-            &node,
+        let caller_access = message.admission.tool.access().unwrap();
+        let signer = caller_access.managed_agent_signer().unwrap();
+        caller_access
+            .transact_write("test.inspection.worker_session", |txn| {
+                Box::pin(crate::session::ensure_session_in_txn(
+                    txn,
+                    "read-worker",
+                    identity.did(),
+                    signer.did(),
+                    Some(signer.did()),
+                    None,
+                    None,
+                    "2026-11-04T00:00:00Z",
+                ))
+            })
+            .await
+            .unwrap();
+        let mut opening = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "read-worker-request",
+            identity.did(),
+            signer.did(),
+            signer.did(),
             "read-worker",
-            &identity,
-            None,
-            Some("shard-assignment"),
-            Some("R3a"),
-        )
-        .await;
+            "spawn",
+            "interactive",
+            "2026-11-04T00:00:00Z",
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                signer.did(),
+            ),
+        );
+        opening.caused_by_trigger_id = Some("shard-assignment".into());
+        opening.caused_by_trigger_kind = Some("schedule".into());
+        opening.caused_by_correlation = Some("R3a".into());
+        crate::sign_agent_request_create(&signer, &mut opening)
+            .await
+            .unwrap();
+        let created = caller_access
+            .write(
+                "test.inspection.worker_request",
+                &opening.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+        let request_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+        let escaped = escape_graphql_string(&request_doc);
+        let row = caller_access
+            .execute(&format!(
+                r#"{{AgentRequest(filter: {{_docID: {{_eq: "{escaped}"}}}}) {{{}}}}}"#,
+                gents_protocol::row::AGENT_REQUEST_FIELDS
+            ))
+            .await
+            .unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(row["data"]["AgentRequest"][0].clone()).unwrap();
+        let mut worker =
+            crate::RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
+        worker.bind_managed_agent(&signer).unwrap();
+        assert_eq!(
+            worker.claim().await.unwrap(),
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        );
         let mut tool = publish_accepted_on_claimed_request(
             node.clone(),
             &mut worker,
@@ -574,8 +632,8 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::goal::create_goal_for_session(
-            &node,
+        crate::goal::create_goal_for_session_from_access(
+            &caller_access,
             identity.did(),
             "read-worker",
             "verify shard R3a",
@@ -591,14 +649,14 @@ mod tests {
             gents_protocol::request_admission::RequestPurpose::Normal,
             "read-worker-steering",
             identity.did(),
-            identity.did(),
-            "general",
+            signer.did(),
+            signer.did(),
             "read-worker",
             "continue after verification",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                identity.did(),
+                signer.did(),
             ),
         );
         queued.input.queue = Some(gents_protocol::request_input::RequestQueue {
@@ -611,10 +669,10 @@ mod tests {
             interrupted_request_id: None,
             background_completion_wake_version: None,
         });
-        crate::sign_agent_request_create(&identity, &mut queued)
+        crate::sign_agent_request_create(&signer, &mut queued)
             .await
             .unwrap();
-        ConfigAccess::local(node.clone())
+        caller_access
             .write(
                 "test.inspection.steering",
                 &queued.graphql_mutation().unwrap(),
@@ -656,11 +714,12 @@ mod tests {
         );
         assert!(!status.to_string().contains("private tool arguments"));
         tool.complete(&"界".repeat(1000)).await.unwrap();
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
             node.clone(),
-            identity.did(),
+            &worker,
             std::time::Duration::ZERO,
-        );
+        )
+        .unwrap();
         writer
             .start_provider_attempt(
                 &worker.request().doc_id,
@@ -750,10 +809,10 @@ mod tests {
             result_message["text"], "",
             "full tool output must not appear in the message body"
         );
-        let scope = crate::session::session_scope_filter(
+        let scope = gents_protocol::session::session_scope_filter(
             identity.did(),
             "read-worker",
-            Some(identity.did()),
+            Some(signer.did()),
         );
         let observation = gents_protocol::session::SessionObservation {
             reply_preview: None,
@@ -766,7 +825,7 @@ mod tests {
                     gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
             }),
         };
-        ConfigAccess::transact_local_write(&node, None, "test.inspection.index_only", |txn| {
+        caller_access.transact_write("test.inspection.index_only", |txn| {
             let scope = scope.clone();
             let observation = observation.clone();
             Box::pin(async move { txn.execute_with_variables(&format!("mutation($input: AgentSessionMutationInputArg!) {{update_AgentSession(filter: {{{scope}}}, input: $input) {{_docID}}}}"), &json!({"input": {"observation": observation}})).await })
@@ -787,7 +846,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let foreign = crate::AgentRequest {
+        let foreign = gents_protocol::row::AgentRequest {
             node_did: foreign_identity.did().to_owned(),
             ..caller.clone()
         };
@@ -797,7 +856,7 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("not messageable"), "{error:#}");
         drop(worker);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 }

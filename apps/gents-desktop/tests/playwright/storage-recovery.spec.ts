@@ -1,6 +1,5 @@
 import { expect, gotoHarness, test } from "./desktopTest";
 import { chatDraftKey, retainChatDraft } from "../../src/hooks/chatDrafts";
-import { acceptedChat } from "../chat-delivery-fixture";
 
 for (const colorScheme of ["light", "dark"] as const) {
   test(`reviews disk-full recovery without replaying saved input in ${colorScheme}`, async ({
@@ -16,16 +15,15 @@ for (const colorScheme of ["light", "dark"] as const) {
       nodeDid: "did:key:z6MkBombadilAgent",
       requestId: "retained-storage-failure",
       sessionId: "session-intro",
-      agentId: "default",
+      agentDid: "default",
       cwd: null,
       content: "Retain this original message",
     };
     const draft = {
       ...retainChatDraft(request, "session-intro"),
-      result: {
-        ...acceptedChat(request),
-        outcome: "deliveryUnknown",
-        deliveryError: {
+      failure: {
+        message: "Storage is full",
+        error: {
           code: "storageFull",
           message: "Storage is full",
           retryable: false,
@@ -54,7 +52,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     });
     await dialog.getByRole("button", { name: "Restart runtime", exact: true }).click();
     await expect(dialog).toBeHidden();
-    await expect(panel).toContainText("restarting did not resend it");
+    await expect(panel).toContainText("restarting did not resend the message");
     await expect(input).toHaveText("Keep this newer draft");
     expect(
       await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), key),

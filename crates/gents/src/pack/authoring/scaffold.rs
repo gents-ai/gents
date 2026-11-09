@@ -418,7 +418,7 @@ fn config(names: &Names, template: Template) -> Value {
     let mut config = json!({
         "node": {},
         "agents": [{
-            "agent_id": agent,
+            "agent_slot": agent,
             "display_name": format!("{} worker", names.title),
             "context_id": format!("{kebab}-worker-context"),
             "inference_profile_id": "gents:inference-slot:worker",
@@ -436,7 +436,7 @@ fn config(names: &Names, template: Template) -> Value {
         "tasks": [{
             "task_id": format!("{kebab}-worker-task"),
             "display_name": format!("{} worker task", names.title),
-            "agent_id": agent,
+            "agent_did": crate::pack::agent_slot_reference(&agent),
             "prompt_template": "./tasks/worker_task/prompt.md",
         }],
     });
@@ -470,7 +470,7 @@ fn workflow_config(names: &Names) -> Value {
     json!({
         "node": {},
         "agents": [{
-            "agent_id": worker,
+            "agent_slot": worker,
             "display_name": format!("{} worker", names.title),
             "description": "Does one read-only task a workflow step gives it and answers in the shape asked.",
             "context_id": format!("{worker}-context"),
@@ -505,7 +505,7 @@ fn workflow_config(names: &Names) -> Value {
             },
         ],
         "agent_targets": [{
-            "agent_id": worker,
+            "agent_did": crate::pack::agent_slot_reference(&worker),
             "name": worker,
             "target_id": worker,
             "target_node_did": "${GENTS_PACK_NODE_DID}",
@@ -604,7 +604,7 @@ fn workflow_fixture(names: &Names) -> Value {
             "protocol": 1,
             "job": {"row_doc_id": "row-1", "chain_root_doc_id": "row-1", "chain": ["row-1"], "handle": ""},
             "caller": {"session_id": "session-1", "request_id": "request-1", "request_doc_id": "doc-1",
-                       "tool_call_id": "call_1", "node_did": "did:key:z6Mknode", "agent_id": "caller",
+                       "tool_call_id": "call_1", "node_did": "did:key:z6Mknode", "agent_did": "caller",
                        "request_hop": 0, "cwd": "/work"},
             "argv": [],
             "args": {"task": task},

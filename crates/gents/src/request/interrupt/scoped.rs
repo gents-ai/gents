@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::store::graphql::graphql_with_transaction_retry;
 
@@ -45,9 +45,38 @@ pub(crate) async fn observe_interrupt_requested_at_scoped(
         graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_scoped")
             .await
             .with_context(|| format!("fetch_interrupt_requested_at_scoped({request_id})"))?;
-    let rows = response
-        .data
-        .as_ref()
+    decode_scoped_observation(response.data.as_ref())
+}
+
+pub(crate) async fn observe_interrupt_requested_at_with_access(
+    access: &crate::ConfigAccess,
+    request_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<ScopedInterruptObservation> {
+    let filter = super::scoped_request_filter(request_id, node_did, requester_did)?;
+    let query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{{filter}}},
+                limit: 2
+            ) {{
+                _docID
+                interrupt_requested_at
+            }}
+        }}"#
+    );
+    let response = access
+        .execute(&query)
+        .await
+        .with_context(|| format!("fetch_interrupt_requested_at_scoped({request_id})"))?;
+    decode_scoped_observation(response.get("data"))
+}
+
+fn decode_scoped_observation(
+    data: Option<&serde_json::Value>,
+) -> Result<ScopedInterruptObservation> {
+    let rows = data
         .and_then(|data| data.get("AgentRequest"))
         .and_then(serde_json::Value::as_array)
         .context("interrupt request fetch omitted rows")?;

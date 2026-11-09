@@ -1,10 +1,8 @@
-use super::query_helpers::required_rows;
+use super::query_helpers::query_rows;
 use super::*;
 use crate::session::load_canonical_message;
-use crate::session::{
-    canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS},
-    TxnCanonicalReader,
-};
+use crate::session::TxnCanonicalReader;
+use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 
 pub(super) async fn resolve_timeline_messages_for_session(
     access: &ConfigAccess,
@@ -21,7 +19,7 @@ pub(super) async fn resolve_timeline_messages_for_session(
             let session_id = session_id.clone();
             let requester_did = requester_did.clone();
             Box::pin(async move {
-                let scope = crate::session::session_scope_filter(
+                let scope = gents_protocol::session::session_scope_filter(
                     &node_did,
                     &session_id,
                     requester_did.as_deref(),
@@ -48,7 +46,7 @@ pub(super) async fn resolve_timeline_messages_for_session(
                 );
                 let mut headers = raw_headers
                     .iter()
-                    .map(decode_transcript_message_row)
+                    .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))
                     .collect::<Result<Vec<_>>>()?;
                 for header in &headers {
                     anyhow::ensure!(
@@ -186,7 +184,7 @@ async fn load_message_header_ids(
     requester_did: Option<&str>,
     extra_filter: &str,
 ) -> Result<Vec<String>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -197,7 +195,7 @@ async fn load_message_header_ids(
             }}
         }}"#,
     );
-    required_rows(access, "AgentMessage", &query)
+    query_rows(access, "AgentMessage", &query)
         .await?
         .into_iter()
         .map(|row| {
@@ -247,7 +245,7 @@ async fn load_tool_observations(
     requester_did: Option<&str>,
     extra_args: &str,
 ) -> Result<Vec<ToolLifecycleObservation>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentToolCall(
@@ -343,12 +341,12 @@ async fn load_spawned_tool_output(
         reconstruction::{reconstruct_stream, ObservedSegment},
         OutputSource, PayloadRef, StreamPayload,
     };
-    let query = crate::session::canonical_rows::request_output_segments_query(request_doc_id);
-    let values = required_rows(access, "AgentOutputSegment", &query).await?;
+    let query = gents_protocol::output::rows::request_output_segments_query(request_doc_id);
+    let values = query_rows(access, "AgentOutputSegment", &query).await?;
     let source = OutputSource::ToolCall {
         tool_call_doc_id: tool_doc_id.to_owned(),
     };
-    let rows = crate::session::canonical_rows::decode_scoped_request_output_segments(
+    let rows = gents_protocol::output::rows::decode_scoped_request_output_segments(
         &values,
         node_did,
         Some(session_id),
@@ -573,7 +571,7 @@ pub(super) async fn load_timeline_inference_calls_for_requests(
                 started_at
                 ended_at
                 backend_id
-                agent_id
+                agent_did
                 node_did
                 call_kind
                 priority
@@ -699,7 +697,7 @@ pub(super) async fn load_timeline_compactions_for_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineCompactionRow>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             CompactionEntry(

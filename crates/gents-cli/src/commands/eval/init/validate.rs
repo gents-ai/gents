@@ -282,7 +282,7 @@ pub(crate) mod tests {
             pack_name: "eval_canary".into(),
             pack_version: "1.0.0".into(),
             pack_digest: "sha256:canary".into(),
-            agent_id: "canary".into(),
+            agent_slot: "canary".into(),
             slot: SLOT.into(),
             collections: BTreeMap::from([(
                 "CanaryItem".to_owned(),

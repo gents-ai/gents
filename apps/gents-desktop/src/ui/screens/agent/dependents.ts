@@ -25,10 +25,11 @@ export function dependents(
   };
   switch (kind) {
     case "agent":
-      if (deployment.node.defaultAgentId === id) parts.push("the node's default agent");
-      add(deployment.tasks.filter((t) => t.agentId === id).length, "task", "tasks");
+      if (deployment.node.defaultAgentDid === id)
+        parts.push("the node's default agent");
+      add(deployment.tasks.filter((t) => t.agentDid === id).length, "task", "tasks");
       add(
-        deployment.agentTargets.filter((t) => t.agent_id === id).length,
+        deployment.agentTargets.filter((t) => t.agent_did === id).length,
         "agent target",
         "agent targets",
       );

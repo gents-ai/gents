@@ -463,7 +463,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{parent_request_id}",
                     node_did: "{node_did}",
-                    agent_id: "parent-agent",
+                    agent_did: "parent-agent",
                     session_id: "{session_id}",
                     content: "parent request that started a session",
                     lifecycle_state: "processing",
@@ -513,7 +513,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     request_id: "{child_request_id}",
                     node_did: "{node_did}",
                     requester_did: "{node_did}",
-                    agent_id: "child-agent",
+                    agent_did: "child-agent",
                     session_id: "{child_session_id}",
                     content: "request caused by the agent_new tool call",
                     lifecycle_state: "processing",
@@ -540,7 +540,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             session_id: child_session_id.clone(),
             node_did: node_did.clone(),
             requester_did: Some(node_did.clone()),
-            agent_id: "child-agent".to_owned(),
+            agent_did: "child-agent".to_owned(),
             created_at: "2026-05-20T10:00:03Z".to_owned(),
             closed_at: None,
             archived_at: None,
@@ -614,7 +614,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     );
     assert_eq!(
         json_output
-            .pointer("/child_requests/0/agent_id")
+            .pointer("/child_requests/0/agent_did")
             .and_then(Value::as_str),
         Some("child-agent")
     );
@@ -649,13 +649,13 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal",
                     request_id: "{limited_request_id}", node_did: "{node_did}",
-                    agent_id: "parent-agent", session_id: "{session_id}",
+                    agent_did: "parent-agent", session_id: "{session_id}",
                     content: "limited", lifecycle_state: "failed",
                     failure_reason: "{failure}", created_at: "2026-05-20T10:01:00Z"
                 }}) {{ _docID }}
                 create_InferenceCall(input: {{
                     call_id: "{limited_request_id}-call", request_id: "{limited_request_id}",
-                    call_seq: 1, backend_id: "studios-cluster", agent_id: "parent-agent",
+                    call_seq: 1, backend_id: "studios-cluster", agent_did: "parent-agent",
                     node_did: "{node_did}", call_kind: "inference", attempt: 1,
                     call_state: "failed", failure_reason: "{failure}",
                     queued_at: "2026-05-20T10:01:00Z", started_at: "2026-05-20T10:01:00Z",
@@ -1094,7 +1094,7 @@ async fn create_started_session(
         session_id: session.session_id,
         session_doc_id: session_doc_id.clone(),
         requester_did: session.requester_did,
-        agent_id: session.agent_id,
+        agent_did: session.agent_did,
         opening_request_doc_id: opening_doc_id.to_owned(),
         cause: SessionCreationCause::AgentNew,
         cause_binding: tool_call_doc_id.to_owned(),

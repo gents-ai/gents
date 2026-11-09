@@ -3,7 +3,6 @@
 [default]
 description = "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)"
 permissions = [
-  "allow-desktop-bootstrap-summary",
   "allow-desktop-client-snapshot",
   "allow-desktop-observer-metrics",
   "allow-desktop-client-start",

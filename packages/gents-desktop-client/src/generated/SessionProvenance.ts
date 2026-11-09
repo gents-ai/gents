@@ -6,7 +6,7 @@ import type { SessionReference } from "./SessionReference.js";
 /**
  * These origins can coexist: a task runs, and that work can start another
  * session with `agent_new`. Descriptive references do not confer authority;
- * the creation receipt is evidence only after its node signature and bindings are verified.
+ * the creation receipt is evidence only after its creator signature and bindings are verified.
  */
 export type SessionProvenance = {
 /**
@@ -34,6 +34,6 @@ started_by?: SessionReference | null,
  */
 opening_request_doc_id?: string | null,
 /**
- * Node-signed evidence that this opening request created this exact session.
+ * Creator-signed evidence that this opening request created this exact session.
  */
 creation_receipt?: SessionCreationReceipt | null, fork?: SessionFork | null, };

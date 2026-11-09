@@ -1,3 +1,4 @@
+use crate::store::config_client::WriteRoute;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
@@ -9,9 +10,9 @@ use crate::store::config_client::write_telemetry::{
 };
 
 pub(super) fn backend_for_access(access: &ConfigAccess) -> WriteBackend {
-    match access {
-        ConfigAccess::Graphql(_) => WriteBackend::Http,
-        ConfigAccess::Local(_) => WriteBackend::Embedded,
+    match access.write_route() {
+        WriteRoute::Http(_) => WriteBackend::Http,
+        WriteRoute::Local(_) => WriteBackend::Embedded,
     }
 }
 

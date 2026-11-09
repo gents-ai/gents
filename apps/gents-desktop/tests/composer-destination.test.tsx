@@ -96,7 +96,6 @@ it("sends the first message to the active remote node while the local node is fi
   const app = fixture();
   const send = vi.fn(acceptedChatReply);
   app.api.sendChatMessage = send;
-  app.api.acknowledgeChatSubmission = vi.fn().mockResolvedValue(undefined);
   app.actions.selectNode(remote);
   expect(app.project().shellProjection.nonEmptyContentSendStatus).toMatchObject({
     kind: "ready",

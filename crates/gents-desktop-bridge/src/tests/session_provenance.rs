@@ -1,17 +1,10 @@
-use gents::session::origin::SessionScope;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::session::SessionScope;
+use serde_json::{json, Value};
 
-use crate::provenance::session_provenance;
-use crate::tests::support::{create_request, create_tool_call, seed_provenance_fixture, OPERATOR};
+use crate::provenance::{project_caused_calls, session_provenance};
+use crate::tests::support::{provenance_fixture, ProvenanceFixture};
 use crate::types::LinkedSessionView;
-
-fn scope(session_id: &str) -> SessionScope {
-    SessionScope {
-        node_did: OPERATOR.into(),
-        session_id: session_id.into(),
-        requester_did: Some(OPERATOR.into()),
-    }
-}
 
 fn sessions(links: &[LinkedSessionView]) -> Vec<&str> {
     let mut ids: Vec<_> = links.iter().map(|link| link.session_id.as_str()).collect();
@@ -19,10 +12,24 @@ fn sessions(links: &[LinkedSessionView]) -> Vec<&str> {
     ids
 }
 
+fn sorted(mut ids: Vec<&str>) -> Vec<&str> {
+    ids.sort_unstable();
+    ids
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
-    let (core, _tmp, parent_doc_id) = seed_provenance_fixture().await;
-    let view = session_provenance(&core, scope("sess_parent"))
+    let fixture = provenance_fixture().await;
+    let ProvenanceFixture {
+        desktop,
+        parent_doc,
+        child_session,
+        child_opening,
+        child_message,
+        existing_message,
+        ..
+    } = &fixture;
+    let view = session_provenance(&desktop.core, fixture.parent())
         .await
         .expect("provenance");
 
@@ -32,7 +39,10 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
         .map(|summary| summary.session_id.as_str())
         .collect();
     related.sort_unstable();
-    assert_eq!(related, ["sess_child", "sess_existing", "sess_peer"]);
+    assert_eq!(
+        related,
+        sorted(vec![child_session.as_str(), "sess_existing"])
+    );
     assert!(
         metadata
             .iter()
@@ -44,18 +54,18 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
     assert!(view.opening_request_id.is_none());
     assert_eq!(
         sessions(&view.started),
-        ["sess_child", "sess_peer"],
+        [child_session.as_str()],
         "started sessions are the sessions whose stored provenance names this session"
     );
     assert_eq!(
         sessions(&view.sent),
         ["sess_existing"],
-        "a message into a session the person started is not a start"
+        "a message into a session the Agent opened as a client is not a start"
     );
     assert!(view
         .started
         .iter()
-        .all(|link| link.cause_request_doc_id == parent_doc_id));
+        .all(|link| &link.cause_request_doc_id == parent_doc));
 
     let mut calls: Vec<_> = view
         .calls
@@ -79,45 +89,37 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
             (
                 "tc_existing",
                 "req_parent",
-                "req_existing_2",
+                existing_message.as_str(),
                 "sess_existing",
                 Some("processing")
             ),
             (
                 "tc_message",
                 "req_parent",
-                "req_child_2",
-                "sess_child",
-                Some("processing")
-            ),
-            (
-                "tc_peer",
-                "req_parent",
-                "req_peer",
-                "sess_peer",
+                child_message.as_str(),
+                child_session.as_str(),
                 Some("processing")
             ),
             (
                 "tc_start",
                 "req_parent",
-                "req_child",
-                "sess_child",
+                child_opening.as_str(),
+                child_session.as_str(),
                 Some("completed")
             ),
         ]
     );
-    let peer = view
+    assert!(view
         .calls
         .iter()
-        .find(|call| call.tool_call_id == "tc_peer")
-        .unwrap();
-    assert_eq!(peer.caused.node_did, crate::tests::support::OTHER);
+        .all(|call| call.caused.node_did == desktop.node_did()));
+    fixture.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
-    let (core, _tmp, _) = seed_provenance_fixture().await;
-    let view = session_provenance(&core, scope("sess_child"))
+    let fixture = provenance_fixture().await;
+    let view = session_provenance(&fixture.desktop.core, fixture.child())
         .await
         .expect("provenance");
 
@@ -128,56 +130,64 @@ async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
         Some("sess_parent")
     );
     assert!(view.started.is_empty() && view.sent.is_empty() && view.calls.is_empty());
-    assert_eq!(view.opening_request_id.as_deref(), Some("req_child"));
+    assert_eq!(
+        view.opening_request_id.as_deref(),
+        Some(fixture.child_opening.as_str())
+    );
     let mut senders: Vec<_> = view
         .senders
         .iter()
         .map(|turn| (turn.request_id.as_str(), turn.sender.session_id.as_str()))
         .collect();
     senders.sort_unstable();
-    assert_eq!(
-        senders,
-        [("req_child", "sess_parent"), ("req_child_2", "sess_parent")]
-    );
+    let mut expected = vec![
+        (fixture.child_opening.as_str(), "sess_parent"),
+        (fixture.child_message.as_str(), "sess_parent"),
+    ];
+    expected.sort_unstable();
+    assert_eq!(senders, expected);
+    fixture.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_messaged_session_was_not_started_by_its_sender() {
-    let (core, _tmp, _) = seed_provenance_fixture().await;
-    let view = session_provenance(&core, scope("sess_existing"))
+    let fixture = provenance_fixture().await;
+    let view = session_provenance(&fixture.desktop.core, fixture.existing())
         .await
         .expect("provenance");
     assert!(view.started_by.is_none());
     assert_eq!(sessions(&view.received), ["sess_parent"]);
+    fixture.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_root_session_has_no_provenance() {
-    let (core, _tmp, _) = seed_provenance_fixture().await;
-    let view = session_provenance(&core, scope("sess_unrelated"))
+    let fixture = provenance_fixture().await;
+    let view = session_provenance(&fixture.desktop.core, fixture.unrelated())
         .await
         .expect("provenance");
     assert!(view.started_by.is_none());
     assert!(view.received.is_empty() && view.sent.is_empty() && view.started.is_empty());
     assert!(view.calls.is_empty() && view.senders.is_empty());
+    fixture.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replicated_session_message_keeps_the_call_that_sent_it() {
-    let (core, _tmp, parent) = seed_provenance_fixture().await;
-    let view = session_provenance(&core, scope("sess_child"))
+async fn a_session_message_keeps_the_call_that_sent_it() {
+    let fixture = provenance_fixture().await;
+    let view = session_provenance(&fixture.desktop.core, fixture.child())
         .await
         .expect("provenance");
     let sender = view
         .senders
         .iter()
-        .find(|turn| turn.request_id == "req_child_2")
-        .expect("canonical lineage attributes the replicated message");
+        .find(|turn| turn.request_id == fixture.child_message)
+        .expect("canonical lineage attributes the message");
     assert_eq!(
-        sender.sender.cause_request_doc_id, parent,
+        sender.sender.cause_request_doc_id, fixture.parent_doc,
         "the message remains attached to its exact physical causing request"
     );
-    let parent_view = session_provenance(&core, scope("sess_parent"))
+    let parent_view = session_provenance(&fixture.desktop.core, fixture.parent())
         .await
         .expect("parent provenance");
     let call = parent_view
@@ -185,35 +195,49 @@ async fn a_replicated_session_message_keeps_the_call_that_sent_it() {
         .iter()
         .find(|call| call.tool_call_id == "tc_message")
         .expect("the causing agent-message call remains visible");
-    assert_eq!(call.caused.request_id, "req_child_2");
+    assert_eq!(call.caused.request_id, fixture.child_message);
     assert_eq!(sender.sender.session_id, "sess_parent");
+    fixture.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_non_session_message_call_lists_each_caused_request() {
-    let (core, _tmp, parent) = seed_provenance_fixture().await;
-    let call_doc = create_tool_call(&core, "tc_other", "run_workflow").await;
-    for (request_id, session_id, created_at) in [
-        ("req_other_a", "sess_other_a", "2026-05-20T00:05:00Z"),
-        ("req_other_b", "sess_other_b", "2026-05-20T00:05:30Z"),
-    ] {
-        create_request(
-            &core,
-            request_id,
-            OPERATOR,
-            session_id,
-            "processing",
-            created_at,
-            Some((&parent, "tc_other", &call_doc)),
-        )
-        .await;
-    }
-    let view = session_provenance(&core, scope("sess_parent"))
-        .await
-        .expect("provenance");
+/// A caused request row as the lineage owner reads it.
+fn caused(doc: &str, request_id: &str, session_id: &str, created_at: &str, call: &str) -> Value {
+    json!({
+        "_docID": doc, "node_did": "did:test:node", "session_id": session_id,
+        "requester_did": "did:test:lead", "request_id": request_id, "created_at": created_at,
+        "lifecycle_state": "processing", "caused_by_parent_tool_call_doc_id": call,
+    })
+}
+
+fn call(doc: &str, tool_call_id: &str, tool_name: &str) -> Value {
+    json!({
+        "_docID": doc, "request_id": "req_parent", "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+    })
+}
+
+#[test]
+fn a_non_session_message_call_lists_each_caused_request() {
+    let states = [
+        caused(
+            "doc_other_a",
+            "req_other_a",
+            "sess_other_a",
+            "2026-05-20T00:05:00Z",
+            "call_other",
+        ),
+        caused(
+            "doc_other_b",
+            "req_other_b",
+            "sess_other_b",
+            "2026-05-20T00:05:30Z",
+            "call_other",
+        ),
+    ];
+    let calls = [call("call_other", "tc_other", "run_workflow")];
+    let view = project_caused_calls(&states, &calls).unwrap();
 
     let mut caused: Vec<_> = view
-        .calls
         .iter()
         .filter(|call| call.tool_call_id == "tc_other")
         .map(|call| {
@@ -234,40 +258,87 @@ async fn a_non_session_message_call_lists_each_caused_request() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn session_message_calls_keep_one_view_each() {
-    let (core, _tmp, parent) = seed_provenance_fixture().await;
-    let call_doc = create_tool_call(&core, "tc_dup", "agent_new").await;
-    for (request_id, session_id, created_at) in [
-        ("req_dup_a", "sess_dup_a", "2026-05-20T00:07:00Z"),
-        ("req_dup_b", "sess_dup_b", "2026-05-20T00:07:30Z"),
-    ] {
-        create_request(
-            &core,
-            request_id,
-            OPERATOR,
-            session_id,
-            "processing",
-            created_at,
-            Some((&parent, "tc_dup", &call_doc)),
-        )
-        .await;
-    }
-    let view = session_provenance(&core, scope("sess_parent"))
-        .await
-        .expect("provenance");
-    for call in ["tc_start", "tc_message", "tc_peer", "tc_existing"] {
+#[test]
+fn session_message_calls_keep_one_view_each() {
+    let states = [
+        caused(
+            "doc_child",
+            "req_child",
+            "sess_child",
+            "2026-05-20T00:01:00Z",
+            "call_start",
+        ),
+        caused(
+            "doc_child_2",
+            "req_child_2",
+            "sess_child",
+            "2026-05-20T00:02:00Z",
+            "call_message",
+        ),
+        caused(
+            "doc_existing_2",
+            "req_existing_2",
+            "sess_existing",
+            "2026-05-20T00:04:00Z",
+            "call_existing",
+        ),
+        caused(
+            "doc_dup_a",
+            "req_dup_a",
+            "sess_dup_a",
+            "2026-05-20T00:07:00Z",
+            "call_dup",
+        ),
+        caused(
+            "doc_dup_b",
+            "req_dup_b",
+            "sess_dup_b",
+            "2026-05-20T00:07:30Z",
+            "call_dup",
+        ),
+    ];
+    let calls = [
+        call("call_start", "tc_start", "agent_new"),
+        call("call_message", "tc_message", "agent_message"),
+        call("call_existing", "tc_existing", "agent_message"),
+        call("call_dup", "tc_dup", "agent_new"),
+    ];
+    let view = project_caused_calls(&states, &calls).unwrap();
+    for call in ["tc_start", "tc_message", "tc_existing"] {
         assert_eq!(
-            view.calls
-                .iter()
-                .filter(|view| view.tool_call_id == call)
-                .count(),
+            view.iter().filter(|view| view.tool_call_id == call).count(),
             1,
             "{call}"
         );
     }
     assert!(
-        view.calls.iter().all(|view| view.tool_call_id != "tc_dup"),
+        view.iter().all(|view| view.tool_call_id != "tc_dup"),
         "a session-message call that caused several requests is ambiguous and shows none"
     );
+}
+
+impl ProvenanceFixture {
+    fn scope(&self, session_id: &str, requester_did: &str) -> SessionScope {
+        SessionScope {
+            node_did: self.desktop.node_did().into(),
+            session_id: session_id.into(),
+            requester_did: Some(requester_did.into()),
+        }
+    }
+
+    fn parent(&self) -> SessionScope {
+        self.scope("sess_parent", &self.desktop.user_did())
+    }
+
+    fn unrelated(&self) -> SessionScope {
+        self.scope("sess_unrelated", &self.desktop.user_did())
+    }
+
+    fn child(&self) -> SessionScope {
+        self.scope(&self.child_session, &self.desktop.lead.agent_did)
+    }
+
+    fn existing(&self) -> SessionScope {
+        self.scope("sess_existing", &self.desktop.lead.agent_did)
+    }
 }

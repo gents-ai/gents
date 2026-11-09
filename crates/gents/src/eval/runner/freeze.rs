@@ -36,7 +36,7 @@ pub struct CellRequest {
     pub cell_id: String,
     pub label: String,
     pub source: CellSource,
-    pub agent_id: String,
+    pub agent_slot: String,
     pub inference_profile_id: String,
 }
 

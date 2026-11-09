@@ -38,9 +38,8 @@ pub use crate::accounts::{CredentialSave, IssuedOAuthCredential, PendingOAuthCre
 #[derive(Default)]
 pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
-    /// Cancels `pairing_task` before any enrollment document is authored.
-    pub pairing_cancel: Option<tokio_util::sync::CancellationToken>,
-    pub schema_observation_task: Option<JoinHandle<()>>,
+    /// Lets shutdown drain an explicit enrollment before releasing its core.
+    pub pairing_cancel: Option<Arc<tokio_util::sync::CancellationToken>>,
     pub starting: bool,
     pub last_error: Option<String>,
     /// Cancels a start that is waiting outside the lifecycle lock.
@@ -103,6 +102,22 @@ impl DesktopBridge {
         self.selected_nodes_by_window.contains_key(label)
     }
 
+    /// `ClientWindowScope.commandNode`: the node a window's command acts on is
+    /// the node it names, else the calling window's own selection. Another
+    /// window's selection is never consulted, so each window keeps working
+    /// on its own node while others are open.
+    pub(crate) fn window_command_node(
+        &self,
+        label: &str,
+        explicit: Option<&str>,
+    ) -> Option<String> {
+        explicit
+            .map(str::trim)
+            .filter(|node| !node.is_empty())
+            .map(str::to_owned)
+            .or_else(|| self.selected_nodes_by_window.get(label).cloned().flatten())
+    }
+
     pub(crate) fn window_selects_node(&self, label: &str, node_did: &str) -> bool {
         self.selected_nodes_by_window
             .get(label)
@@ -110,11 +125,7 @@ impl DesktopBridge {
             == Some(node_did)
     }
 
-    pub(crate) fn set_window_selected_node(
-        &mut self,
-        label: &str,
-        node_did: Option<String>,
-    ) -> bool {
+    fn set_window_selected_node(&mut self, label: &str, node_did: Option<String>) -> bool {
         let Some(selected) = self.selected_nodes_by_window.get_mut(label) else {
             return false;
         };
@@ -122,6 +133,29 @@ impl DesktopBridge {
         *selected = node_did;
         self.apply_window_selection();
         changed
+    }
+
+    /// Changes a window's selected node and reports whether it changed. The
+    /// window's pack watches are cancelled first, while the old node is
+    /// still selected: a delivery holds only the watch registry's lock, so
+    /// cancelling after the write would let a watch of the old node deliver
+    /// to a window that already selects the new one (TLA `PackUxWatch`
+    /// `CancelBeforeSelect`). The caller holds the bridge lock across both.
+    pub(crate) fn select_window_node<F>(
+        &mut self,
+        label: &str,
+        node_did: Option<String>,
+        cancel_watches: F,
+    ) -> bool
+    where
+        F: FnOnce(&Self),
+    {
+        match self.selected_nodes_by_window.get(label) {
+            Some(selected) if *selected != node_did => {}
+            _ => return false,
+        }
+        cancel_watches(self);
+        self.set_window_selected_node(label, node_did)
     }
 }
 
@@ -153,6 +187,18 @@ impl DesktopAppState {
         }
     }
 
+    /// [`DesktopBridge::window_command_node`] under the bridge lock.
+    pub(crate) fn window_command_node(
+        &self,
+        label: &str,
+        explicit: Option<&str>,
+    ) -> Option<String> {
+        self.bridge
+            .lock()
+            .expect("desktop bridge lock poisoned")
+            .window_command_node(label, explicit)
+    }
+
     pub(crate) fn register_window(&self, label: &str) {
         let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
         bridge
@@ -174,7 +220,6 @@ impl DesktopAppState {
         if !matches!(event, tauri::WindowEvent::Destroyed) {
             return;
         }
-        self.ux_watches.cancel_window(label);
         if label == crate::navigation::EXPLORER_WINDOW {
             *self
                 .explorer_origin
@@ -182,6 +227,9 @@ impl DesktopAppState {
                 .expect("explorer origin lock poisoned") = None;
         }
         let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
+        // Under the bridge lock, so a late watch command cannot register a
+        // watch between this cancellation and the selection's removal.
+        self.ux_watches.cancel_window(label);
         bridge.approvals_prompt_subscriptions.remove_window(label);
         for wait in [
             &bridge.codex_login_cancel,

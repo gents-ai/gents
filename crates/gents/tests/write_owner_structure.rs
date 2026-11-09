@@ -403,6 +403,15 @@ fn parse_production(root: &Path, sources: Vec<PathBuf>) -> Vec<(String, syn::Fil
 fn mentions_embedded_node(ty: &syn::Type) -> bool {
     struct Finder(bool);
     impl<'ast> Visit<'ast> for Finder {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            self.0 |= path
+                .segments
+                .iter()
+                .zip(path.segments.iter().skip(1))
+                .any(|(module, ty)| module.ident == "defra_node" && ty.ident == "Node");
+            visit::visit_path(self, path);
+        }
+
         fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
             self.0 |= segment.ident == "EmbeddedNode";
             visit::visit_path_segment(self, segment);
@@ -577,9 +586,10 @@ impl<'ast> Visit<'ast> for ReadVisitor<'_> {
         if let Some(name) = path_name(call) {
             let mut segments = name.rsplit("::");
             let method = segments.next().unwrap_or_default();
-            if segments.next() == Some("EmbeddedNode")
-                && (method == "execute" || NODE_ONLY_METHODS.contains(&method))
-            {
+            let ty = segments.next();
+            let is_node = ty == Some("EmbeddedNode")
+                || (ty == Some("Node") && segments.next() == Some("defra_node"));
+            if is_node && (method == "execute" || NODE_ONLY_METHODS.contains(&method)) {
                 self.sites += 1;
             }
         }
@@ -682,13 +692,14 @@ fn read_fence_counts_direct_node_execution() {
     for source in [
         "fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
         "fn f(db: &EmbeddedNode, q: &str) { db.execute(q); }",
-        "fn f(db: Arc<defra_node::EmbeddedNode>, q: &str) { db.as_ref().execute(q); }",
+        "fn f(db: Arc<defra_node::Node>, q: &str) { db.as_ref().execute(q); }",
         "impl S { fn f(&self, q: &str) { self.node.execute(q); } }",
         "struct S { store: Arc<EmbeddedNode> } impl S { fn f(&self, q: &str) { self.store.execute(q); } }",
         "fn f(node: &EmbeddedNode, q: &str) { node.clone().execute(q); }",
         "fn f(node: &EmbeddedNode, q: &str) { (&*node).execute(q); }",
         "fn f(core: &Core, q: &str) { core.node().execute(q); }",
         "fn f(node: &EmbeddedNode, q: &str) { EmbeddedNode::execute(&node, q); }",
+        "fn f(db: &defra_node::Node, q: &str) { defra_node::Node::execute(db, q); }",
         "fn f(node: &EmbeddedNode, q: &str) { let db = node.clone(); db.execute(q); }",
         "fn f(node: Arc<EmbeddedNode>, q: &str) { let db = Arc::clone(&node); db.execute(q); }",
         "impl S { fn f(&self, q: &str) { let db = &self.node; db.execute(q); } }",
@@ -705,6 +716,7 @@ fn read_fence_counts_direct_node_execution() {
 fn read_fence_ignores_owner_wrappers_and_tests() {
     for source in [
         "fn f(executor: &Executor, q: &str) { executor.execute(q); }",
+        "fn f(db: &domain::Node, q: &str) { db.execute(q); domain::Node::execute(db, q); }",
         "fn f(access: &ConfigAccess, q: &str) { access.execute(q); }",
         "fn f(access: &ConfigAccess, q: &str) { ConfigAccess::execute(access, q); }",
         "fn f(txn: &ConfigApplyTxn, q: &str) { txn.execute(q); }",
@@ -808,13 +820,12 @@ const OAUTH_ROW_READERS: &[&str] = &[
     "oauth_credentials_for_node_query",
     "oauth_credential_by_id_query",
     "oauth_credential_by_doc_id_query",
-    "lookup_oauth_credential_by_id",
     "lookup_oauth_credential_by_doc_id",
 ];
 
 #[rustfmt::skip]
 const OAUTH_ROW_READ_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-desktop-bridge/src/accounts.rs", 2),
+    ("crates/gents-desktop-bridge/src/accounts/provider.rs", 2),
     ("crates/gents/src/runtime/agent/document_view/load.rs", 1),
     ("crates/gents/src/runtime/agent/document_view/mod.rs", 1),
 ];
@@ -970,7 +981,7 @@ fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
         (r#"fn f(d: &str) -> String { format!("query {{ OAuthCredential(filter: {{ node_did: {{ _eq: \"{d}\" }} }}) {{ _docID }} }}") }"#, 1, 0),
         ("fn f(a: &A) { list_oauth_credentials_on(a, \"d\"); }", 0, 1),
         ("fn f(v: &V) { v.oauth_credentials.values().find(|r| r.enabled); }", 0, 1),
-        ("fn f(n: &N) { lookup_oauth_credential_by_id(n, \"id\"); load_oauth_credential_for_discovery(); }", 0, 1),
+        ("fn f(n: &N) { lookup_oauth_credential_by_doc_id(n, \"id\"); load_oauth_credential_for_discovery(); }", 0, 1),
         ("#[cfg(test)] mod tests { fn f(n: &N) { lookup_oauth_credential(n); list_oauth_credentials(n); } }", 0, 0),
         (r#"const Q: &str = "query { OAuthCredential (filter: {}) { _docID } }";"#, 1, 0),
         (r#"fn f() -> String { format!("{{ OAuthCredential \n (filter: {{}}) {{ _docID }} }}") }"#, 1, 0),
@@ -1759,16 +1770,12 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// boundary, which then asks the owner enum it finds.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-cli/src/commands/config/backend.rs", 2),
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
     ("crates/gents-cli/src/commands/grok_shim/acp/errors.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/job_runs.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/workflow_command.rs", 1),
     ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
-    ("crates/gents-cli/src/http/file_inventory.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
-    ("crates/gents-desktop-bridge/src/commands/chat_resolve.rs", 3),
-    ("crates/gents-desktop-bridge/src/commands/session.rs", 1),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     ("crates/gents-desktop-bridge/src/inference_setup.rs", 2),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
@@ -1776,10 +1783,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
-    ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
-    ("crates/gents-desktop-core/src/client/core/writes/pending_submissions.rs", 2),
-    ("crates/gents-desktop-core/src/client/mutations/chat/request.rs", 1),
-    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt/delivery.rs", 1),
     ("crates/gents-desktop-core/src/error.rs", 1),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
@@ -1790,7 +1793,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/runtime/agent/stream_processor.rs", 1),
     ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
     ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
-    ("crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile/inventory.rs", 1),
     ("crates/gents/src/runtime/agent/reconcile.rs", 1),
     ("crates/gents/src/plugin/application_write/mod.rs", 1),
     ("crates/gents/src/tools/background/status/final_output.rs", 1),
@@ -1803,7 +1805,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/eval/report/store.rs", 1),
     ("crates/gents/src/eval/runner/freeze.rs", 1),
     ("crates/gents/src/eval/runner/mod.rs", 1),
-    ("crates/gents/src/file_inventory/operator.rs", 1),
     ("crates/gents/src/goal/creation.rs", 2),
     ("crates/gents/src/store/graphql.rs", 1),
     ("crates/gents/src/store/local/home.rs", 3),
@@ -1974,10 +1975,6 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/eval/watch.rs", 1),
     // launchctl print output
     ("crates/gents-cli/src/native_service.rs", 1),
-    // not yet typed: pairing closures flatten failures to strings
-    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
-    // DefraDB duplicate-document rejection wording (no structured code)
-    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt.rs", 2),
     // provider text through Rig's ProviderError(String) (ProviderReport)
     ("crates/gents-loop/src/error.rs", 21),
     // serde_json schema-mismatch message prefixes
@@ -2403,63 +2400,56 @@ const PEER_TIER: usize = 3;
 #[rustfmt::skip]
 const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
     ("documents", "goal", 4),
-    ("documents", "inference", 10),
+    ("documents", "inference", 7),
     ("documents", "observe", 1),
     ("documents", "pack", 3),
-    ("documents", "plugin", 4),
-    ("documents", "runtime", 1),
+    ("documents", "plugin", 3),
     ("documents", "session", 3),
     ("documents", "tools", 26),
-    ("documents", "triggers", 5),
-    ("goal", "request", 33),
-    ("goal", "runtime", 1),
-    ("goal", "session", 13),
+    ("documents", "triggers", 4),
+    ("goal", "request", 18),
+    ("goal", "session", 6),
     ("goal", "tools", 3),
     ("goal", "triggers", 6),
     ("inference", "observe", 3),
-    ("inference", "request", 4),
-    ("inference", "runtime", 3),
+    ("inference", "request", 2),
+    ("inference", "runtime", 1),
     ("inference", "tools", 1),
     ("inference", "turn", 1),
-    ("observe", "runtime", 2),
+    ("observe", "runtime", 1),
     ("pack", "plugin", 31),
-    ("pack", "runtime", 1),
-    ("pack", "tools", 3),
+    ("pack", "tools", 2),
     ("plugin", "pack", 40),
-    ("plugin", "runtime", 2),
     ("plugin", "session", 1),
     ("plugin", "tools", 29),
     ("plugin", "triggers", 2),
-    ("request", "goal", 13),
-    ("request", "runtime", 7),
-    ("request", "session", 44),
-    ("request", "tools", 32),
+    ("request", "goal", 10),
+    ("request", "runtime", 3),
+    ("request", "session", 32),
+    ("request", "tools", 24),
     ("request", "triggers", 32),
     ("request", "turn", 1),
-    ("session", "goal", 11),
+    ("session", "goal", 8),
     ("session", "observe", 1),
-    ("session", "request", 53),
-    ("session", "tools", 36),
-    ("session", "turn", 8),
-    ("store", "documents", 46),
-    ("store", "inference", 11),
-    ("store", "runtime", 2),
-    ("store", "tools", 13),
-    ("store", "triggers", 5),
-    ("tools", "goal", 37),
+    ("session", "request", 27),
+    ("session", "tools", 28),
+    ("session", "turn", 4),
+    ("store", "documents", 37),
+    ("store", "inference", 2),
+    ("tools", "goal", 35),
     ("tools", "observe", 4),
     ("tools", "pack", 85),
     ("tools", "plugin", 77),
-    ("tools", "request", 79),
-    ("tools", "runtime", 20),
-    ("tools", "session", 139),
+    ("tools", "request", 44),
+    ("tools", "runtime", 17),
+    ("tools", "session", 93),
     ("tools", "turn", 1),
-    ("triggers", "goal", 28),
+    ("triggers", "goal", 27),
     ("triggers", "plugin", 16),
     ("triggers", "request", 18),
-    ("triggers", "runtime", 45),
-    ("triggers", "session", 3),
-    ("triggers", "tools", 24),
+    ("triggers", "runtime", 11),
+    ("triggers", "session", 1),
+    ("triggers", "tools", 22),
     ("turn", "runtime", 2),
 ];
 

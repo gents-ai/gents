@@ -1,7 +1,8 @@
+use crate::store::config_client::WriteRoute;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use futures::future::BoxFuture;
 use identity::Did;
 
@@ -21,19 +22,59 @@ use super::{
 use crate::store::config_client::write_telemetry::{WriteBackend, WriteOperation};
 
 impl ConfigAccess {
+    /// Bind durable client publication observations to this transaction's
+    /// post-commit Agent relationships.
+    pub async fn transact_write_with_agent_publication<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        observer: Arc<dyn crate::store::config_client::AgentPublicationObserver>,
+        callback: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        if !matches!(self.write_route(), WriteRoute::Http(_)) {
+            return Err(E::from(ConfigClientError::ClientAgentTransportRequired));
+        }
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            TransactionMode::ConflictRetry,
+            move |operation, rollback| {
+                let observer = observer.clone();
+                Box::pin(async move {
+                    let mut txn = self.begin_apply_txn(operation, rollback).await?;
+                    txn.publication_observer = Some(observer);
+                    Ok(txn)
+                })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
     async fn begin_apply_txn(
         &self,
         operation: WriteOperation,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
     ) -> Result<ConfigApplyTxn<'_>> {
-        match self {
-            Self::Graphql(endpoint) => {
-                ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled, false).await
+        match self.write_route() {
+            WriteRoute::Http(endpoint) => {
+                let mut txn =
+                    ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled, false)
+                        .await?;
+                txn.operation = Some(operation.as_str());
+                Ok(txn)
             }
-            Self::Local(local) => {
-                ConfigApplyTxn::begin_local_owned(
+            WriteRoute::Local(local) => {
+                local.require_mutation_signer()?;
+                ConfigApplyTxn::begin_local_owned_with_signer(
                     local.node(),
-                    None,
+                    local.identity().cloned(),
+                    local.agent_signer.clone(),
                     operation,
                     cancellation_rollback_scheduled,
                     EmbeddedTransactionPurpose::Mutation,
@@ -53,10 +94,16 @@ impl ConfigAccess {
         E: TransactionFailure + From<ConfigClientError> + Send + 'a,
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
+        let mode = match self.write_route() {
+            WriteRoute::Http(endpoint) if endpoint.pack_replay.is_some() => {
+                TransactionMode::SingleAttempt
+            }
+            _ => TransactionMode::ConflictRetry,
+        };
         transact_owned(
             operation,
             backend_for_access(self),
-            TransactionMode::ConflictRetry,
+            mode,
             move |operation, rollback| {
                 Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
             },
@@ -64,6 +111,47 @@ impl ConfigAccess {
         )
         .await
         .map(expect_committed)
+    }
+
+    /// Rebuild an explicitly authorized, transaction-only signed operation
+    /// after a confirmed conflict. The callback must re-read its inputs and
+    /// have no effects outside its transaction; every attempt signs afresh.
+    pub async fn transact_signed_conflict_rebuild<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            self.signed_conflict_rebuild_mode(),
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    fn signed_conflict_rebuild_mode(&self) -> TransactionMode {
+        match self.write_route() {
+            WriteRoute::Http(endpoint)
+                if endpoint.pack_replay.is_none()
+                    && endpoint.held_client_signing_capability().is_ok() =>
+            {
+                TransactionMode::SignedConflictRebuild
+            }
+            WriteRoute::Http(endpoint) if endpoint.pack_replay.is_some() => {
+                TransactionMode::SingleAttempt
+            }
+            WriteRoute::Http(_) | WriteRoute::Local(_) => TransactionMode::ConflictRetry,
+        }
     }
 
     pub(crate) async fn transact_write_with_finality<'a, T, E, F>(
@@ -96,6 +184,40 @@ impl ConfigAccess {
             })
     }
 
+    /// [`Self::transact_signed_conflict_rebuild`] that also reports whether a
+    /// failed write's commit may have landed. Only a confirmed abort is
+    /// rebuilt (ClientSubmissionContention.tla); an unconfirmed commit never
+    /// signs a second graph.
+    pub(crate) async fn transact_signed_conflict_rebuild_with_finality<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> std::result::Result<T, TransactionFinalityError<E>>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        let unconfirmed = Arc::new(AtomicBool::new(false));
+        let result = transact_owned_with_finality(
+            operation,
+            backend_for_access(self),
+            self.signed_conflict_rebuild_mode(),
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
+            callback,
+            Some(unconfirmed.clone()),
+        )
+        .await;
+        result
+            .map(expect_committed)
+            .map_err(|error| TransactionFinalityError {
+                error,
+                unconfirmed: unconfirmed.load(Ordering::Acquire),
+            })
+    }
+
     /// Query-only transaction; DefraDB enforces read-only mode on both transports
     /// and embedded access avoids the mutation gate.
     pub async fn transact_readonly<'a, T, E, F>(
@@ -109,9 +231,24 @@ impl ConfigAccess {
         F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
         match self {
-            Self::Local(local) => {
-                Self::transact_local_readonly(local.node(), None, operation, callback).await
-            }
+            Self::Local(local) => transact_owned(
+                operation,
+                WriteBackend::Embedded,
+                TransactionMode::ConflictRetry,
+                move |operation, rollback| {
+                    Box::pin(ConfigApplyTxn::begin_local_owned_with_signer(
+                        local.node(),
+                        local.identity().cloned(),
+                        local.agent_signer.clone(),
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::ReadOnly,
+                    ))
+                },
+                callback,
+            )
+            .await
+            .map(expect_committed),
             Self::Graphql(endpoint) => transact_owned(
                 operation,
                 WriteBackend::Http,
@@ -214,47 +351,6 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    pub(crate) async fn transact_local_write_with_finality<'a, T, E, F>(
-        node: &'a Arc<EmbeddedNode>,
-        identity: Option<Did>,
-        operation: &'static str,
-        callback: F,
-    ) -> std::result::Result<T, TransactionFinalityError<E>>
-    where
-        T: Send + 'a,
-        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
-    {
-        let unconfirmed = Arc::new(AtomicBool::new(false));
-        let result = transact_owned_with_finality(
-            operation,
-            WriteBackend::Embedded,
-            TransactionMode::ConflictRetry,
-            move |operation, rollback| {
-                let identity = identity.clone();
-                Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(
-                        node,
-                        identity,
-                        operation,
-                        rollback,
-                        EmbeddedTransactionPurpose::Mutation,
-                    )
-                    .await
-                })
-            },
-            callback,
-            Some(unconfirmed.clone()),
-        )
-        .await;
-        result
-            .map(expect_committed)
-            .map_err(|error| TransactionFinalityError {
-                error,
-                unconfirmed: unconfirmed.load(Ordering::Acquire),
-            })
-    }
-
     /// Native snapshot reads retain the supplied ACP DID without taking the mutation gate.
     pub async fn transact_local_readonly<'a, T, E, F>(
         node: &'a Arc<EmbeddedNode>,
@@ -294,8 +390,10 @@ impl ConfigAccess {
     /// ordinary writes under the mutation gate. Authorization is re-checked
     /// before commit admission; native commit does not atomically check wall
     /// clock, so this is not a durable-commit-before-expiry guarantee.
-    pub(crate) async fn renew_execution_lease<'a, T, E, F>(
+    pub(crate) async fn renew_execution_lease_with_signer<'a, T, E, F>(
         node: &'a Arc<EmbeddedNode>,
+        identity: Option<Did>,
+        signer: Option<crate::store::identity::ManagedAgentSigner>,
         renew: F,
     ) -> Result<T, E>
     where
@@ -310,9 +408,10 @@ impl ConfigAccess {
             WriteBackend::Embedded,
             TransactionMode::Idempotent(IdempotentTransactionRetry::Standard),
             move |operation, rollback| {
-                Box::pin(ConfigApplyTxn::begin_local_owned(
+                Box::pin(ConfigApplyTxn::begin_local_owned_with_signer(
                     node,
-                    None,
+                    identity.clone(),
+                    signer.clone(),
                     operation,
                     rollback,
                     EmbeddedTransactionPurpose::ExecutionRenewal(Arc::clone(

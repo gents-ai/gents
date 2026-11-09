@@ -40,7 +40,7 @@ fn removed_authority_collections_are_absent_from_schema_and_replication_inventor
 }
 
 #[test]
-fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
+fn pairing_inventory_and_cli_sources_cannot_reference_removed_authorities() {
     let production = [
         include_str!("../../src/runtime/agent/p2p_reconcile/engine.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/desired.rs"),
@@ -50,7 +50,8 @@ fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/store.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/sweep.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/enrollment_reconcile.rs"),
-        include_str!("../../src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs"),
+        include_str!("../../src/file_inventory.rs"),
+        include_str!("../../src/file_inventory/selection.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/mod.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/network.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/pairings.rs"),
@@ -61,7 +62,7 @@ fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
     for removed in REMOVED_COLLECTIONS {
         assert!(
             !production.contains(removed),
-            "removed authority {removed} returned to hydration, repair, or CLI production code"
+            "removed authority {removed} returned to pairing, inventory, or CLI production code"
         );
     }
 }
@@ -182,7 +183,14 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert!(!signed_direct_materializer.contains("add_AgentRequest(input:"));
     assert!(!signed_direct_materializer.contains("status: \"processing\""));
     assert!(signed_direct_materializer.contains("Arc<dyn crate::store::identity::NodeIdentity>"));
-    assert!(signed_direct_materializer.contains("build_signed_request"));
+    assert!(signed_direct_materializer.contains("build_signed_client_request"));
+    assert!(signed_direct_materializer.contains("submit_client_request"));
+    assert!(
+        signed_direct_materializer.contains("AgentRequestAdmissionRecord::local_self(&agent_did)")
+    );
+    assert!(signed_direct_materializer.contains("RequestSigner::Identity(identity.as_ref())"));
+    assert!(signed_direct_materializer.contains("ConfigAccess::local_managed_agent"));
+    assert!(signed_direct_materializer.contains("identity::Did::new(agent_did.clone())"));
     assert!(signed_direct_materializer.contains("verify_fresh_local_self_request"));
     assert!(signed_direct_materializer.contains("claim_with_identity"));
     assert!(!oneshot.contains("add_AgentRequest(input:"));
@@ -222,8 +230,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             );
         }
         assert!(
-            production.contains("build_signed_request("),
-            "{name} lost the shared builder"
+            production.contains("gents::request::lifecycle::build_signed_client_request"),
+            "{name} lost the shared client request builder"
         );
     }
     assert_eq!(
@@ -297,7 +305,8 @@ fn session_message_admission_has_no_child_or_bridge_authority() {
                 .next()
         })
         .expect("peer admission branch");
-    assert!(peer_verifier.contains("fresh_member_authorized_for_agent"));
+    assert!(peer_verifier.contains("observation.signer_matches_requester"));
+    assert!(peer_verifier.contains("observation.requester_matches_target"));
     assert!(verifier.contains("request_hop_admitted"));
     assert!(request_schema.contains("runtime_source_kind: String @index @immutable"));
     assert!(!request_schema.contains("runtime_bridge_author_did"));

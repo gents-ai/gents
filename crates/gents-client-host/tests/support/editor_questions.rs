@@ -194,7 +194,7 @@ pub async fn verify(
             && worker.lifecycle_state == Some(RequestLifecycleState::Completed),
         "delegation must use the existing authenticated tool owner after the answer"
     );
-    let goal_rows = access.execute(&format!("{{ Goal(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ intent_json }} }}", escape(node), escape(session), gents::goal::GOAL_FIELDS, escape(node), escape(session))).await?;
+    let goal_rows = access.execute(&format!("{{ Goal(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ intent_json }} }}", escape(node), escape(session), gents_protocol::goal::GOAL_FIELDS, escape(node), escape(session))).await?;
     let goals = goal_rows["data"]["Goal"]
         .as_array()
         .context("question Goal rows")?;
