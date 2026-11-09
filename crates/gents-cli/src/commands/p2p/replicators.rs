@@ -133,7 +133,10 @@ pub(super) fn parse_replicator_filters(filters: &[String]) -> Result<PairingFilt
         let predicate = equality_filter(field, value);
         match map.remove(collection) {
             Some(existing) => {
-                map.insert(collection.to_string(), combine_filters(existing, predicate));
+                let combined = combine_filters(existing, predicate).ok_or_else(|| {
+                    anyhow::anyhow!("invalid --filter {raw:?}: only predicate filters combine")
+                })?;
+                map.insert(collection.to_string(), combined);
             }
             None => {
                 map.insert(collection.to_string(), predicate);

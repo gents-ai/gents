@@ -704,7 +704,8 @@ fn adapter_preserves_conjunctive_filters_as_conditions() {
         combine_filters(
             equality_filter("requester_did", "did:key:phone"),
             equality_filter("lifecycle_state", "pending"),
-        ),
+        )
+        .expect("predicates combine"),
     )]
     .into_iter()
     .collect();
