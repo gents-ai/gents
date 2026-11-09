@@ -194,6 +194,16 @@ test("a page landing while the reader scrolls is not put back with a write until
   }
   await expect
     .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __writes: { by: number }[] }).__writes.filter(
+            (write) => Math.abs(write.by) > 450,
+          ).length,
+      ),
+    )
+    .toBeGreaterThan(0);
+  await expect
+    .poll(() =>
       panel.evaluate(
         (node) =>
           getComputedStyle(node.closest<HTMLElement>("[data-transcript-content]")!)
