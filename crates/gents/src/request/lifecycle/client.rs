@@ -637,6 +637,56 @@ pub async fn send_client_request(
     }
 }
 
+/// Send a signed client retry of a failed turn, idempotent on its parent:
+/// the `retry:doc:<parent>` key is a unique index, so a repeat of the retry
+/// (another click, another window, a resend after a lost reply, a concurrent
+/// retry under another successor identity) returns the one successor the
+/// runtime holds ([`reconcile_client_retry`]) instead of creating a second.
+/// A failure with no successor held is the retry's failure.
+pub async fn send_client_retry(
+    access: &ConfigAccess,
+    create: &AgentRequestCreate,
+) -> Result<String, ClientSubmissionError> {
+    let parent_doc_id = create
+        .retry_parent_request_doc_id
+        .as_deref()
+        .filter(|parent| !parent.is_empty())
+        .ok_or_else(|| {
+            ClientSubmissionError::Rejected(anyhow::anyhow!(
+                "a client retry must name its parent document"
+            ))
+        })?;
+    if create.retry_key.as_deref() != Some(format!("retry:doc:{parent_doc_id}").as_str()) {
+        return Err(ClientSubmissionError::Rejected(anyhow::anyhow!(
+            "a client retry's idempotency key must be its parent's retry key"
+        )));
+    }
+    let held = || {
+        reconcile_client_retry(
+            access,
+            &create.node_did,
+            &create.session_id,
+            &create.requester_did,
+            parent_doc_id,
+        )
+    };
+    if let Some(successor) = held().await? {
+        return Ok(successor);
+    }
+    let error = match submit_client_request(access, create).await {
+        Ok(()) => return Ok(create.request_id.clone()),
+        Err(error) => error,
+    };
+    match held().await {
+        Ok(Some(successor)) => Ok(successor),
+        Ok(None) => Err(error),
+        Err(ClientSubmissionError::Unconfirmed(read)) => Err(ClientSubmissionError::Unconfirmed(
+            anyhow::Error::from(error).context(format!("{read:#}")),
+        )),
+        Err(other) => Err(other),
+    }
+}
+
 /// The request the runtime holds under a client send's identity, with its
 /// relationships completed. It is found by `request_id`, so a request
 /// committed before its idempotency key existed is found too. A request

@@ -164,7 +164,7 @@ pub(super) async fn retry_request_with_request_id(
         RequestSigner::Identity(signer),
     )
     .await?;
-    let held = gents::request::lifecycle::send_client_request(access, &create).await?;
+    let held = gents::request::lifecycle::send_client_retry(access, &create).await?;
     Ok(submitted(held))
 }
 

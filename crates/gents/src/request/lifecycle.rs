@@ -10,8 +10,8 @@ pub(crate) use client::{
 pub use client::{
     build_signed_client_request, build_signed_client_request_in_txn, client_request_key,
     held_client_request, reconcile_client_request, reconcile_client_retry, reserve_goal_session,
-    send_client_request, submit_client_request, ClientRequestScope, ClientSubmissionError,
-    HeldClientRequest,
+    send_client_request, send_client_retry, submit_client_request, ClientRequestScope,
+    ClientSubmissionError, HeldClientRequest,
 };
 use std::sync::Arc;
 
