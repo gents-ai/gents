@@ -268,9 +268,15 @@ pub async fn build_session_snapshot_for_node(
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
+    // The desktop holds no replica: it reads the routed runtime as the User.
+    let access = node_did
+        .map(|node_did| crate::snapshot::node_reads(core, node_did))
+        .transpose()
+        .expect("routed runtime reads")
+        .unwrap_or_else(|| ConfigAccess::local(core.node_arc()));
     build_session_snapshot_for_node_with_transcript(
         core,
-        &ConfigAccess::local(core.node_arc()),
+        &access,
         node_did,
         session_id,
         preferred_request_id,

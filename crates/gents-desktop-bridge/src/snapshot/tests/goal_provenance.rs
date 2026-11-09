@@ -6,53 +6,33 @@ use gents_protocol::request_admission::{
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use std::sync::Arc;
 
 #[tokio::test]
 async fn goal_provenance_agrees_before_transcript_publication_and_after_reload() {
+    // A served runtime whose User published a real provisioned Agent; a
+    // guest may write the Agent's sessions.
+    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start().await;
+    let binding = runtime.publish_chat_agent().await;
+    let identity = runtime.runtime().clone();
+    let user = runtime.user().clone();
     let home = tempfile::tempdir().unwrap();
-    let identity = gents::KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
-    let user = gents::KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let guest = gents::KeyIdentity::load_or_create(home.path().join("guest.key"), None).unwrap();
-    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
-    let agent = gents::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-    let node = Arc::new(
-        gents::defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(user.did()).unwrap());
-    let (node_doc, agent_doc) = access.transact_write("goal_provenance.identities", |txn| Box::pin(async {
-        let node_row = txn.execute_with_variables(
-            "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-            &serde_json::json!({"input": {"node_did": identity.did()}}),
-        ).await?;
-        let node_doc = gents::store::graphql::created_doc_id(&node_row, "Node")?;
-        let agent_row = txn.execute_with_variables(
-            "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-            &serde_json::json!({"input": {"node_did": identity.did(), "agent_did": binding.agent_did,
-                "creation_nonce": binding.creation_nonce}}),
-        ).await?;
-        let agent_doc = gents::store::graphql::created_doc_id(&agent_row, "Agent")?;
-        Ok::<_, anyhow::Error>((node_doc, agent_doc))
-    })).await.unwrap();
-    access
-        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
-        .await
-        .unwrap();
-    access
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "executor",
-            &::identity::Did::new(&binding.agent_did).unwrap(),
+    // The guest is a second enrolled User whom the Agent lets write its
+    // sessions.
+    gents::store::identity::GrantSet::OperatorUser
+        .grant(
+            &runtime.runtime_access(),
+            &::identity::Did::new(guest.did()).unwrap(),
         )
         .await
         .unwrap();
-    access
+    let agent =
+        gents::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+    // The desktop reads its runtime as the User.
+    let access = runtime.user_access();
+    let agent_doc = runtime.agent_doc_id(&binding).await;
+    runtime
+        .user_access()
         .add_actor_relationship(
             "Agent",
             &agent_doc,
@@ -76,10 +56,7 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
     let session_doc = gents::request::lifecycle::reserve_goal_session(&access, &reservation)
         .await
         .unwrap();
-    let agent_access = ConfigAccess::local_as(
-        node.clone(),
-        ::identity::Did::new(&binding.agent_did).unwrap(),
-    );
+    let agent_access = runtime.agent_access(&binding).await;
     let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let modeled = contract["goal_client_start_cases"]
         .as_array()
@@ -106,9 +83,20 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         (12, None, false, false, None),
     ] {
         let goal_id = format!("goal-{index}");
-        let author: &dyn gents::NodeIdentity = if index >= 11 { &guest } else { &user };
-        let author_access =
-            ConfigAccess::local_as(node.clone(), ::identity::Did::new(author.did()).unwrap());
+        let author: &dyn gents::NodeIdentity = if index >= 11 { &guest } else { user.as_ref() };
+        // Each author writes as itself over the runtime's authenticated HTTP.
+        let author_access = if index >= 11 {
+            ConfigAccess::Graphql(
+                gents::store::config_client::GraphqlEndpoint::as_principal(
+                    runtime.graphql(),
+                    guest.did(),
+                )
+                .with_client_signing_capability(guest.client_signing_capability().unwrap())
+                .unwrap(),
+            )
+        } else {
+            runtime.user_graphql_access()
+        };
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("request-{index}"),
@@ -143,6 +131,25 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
             .await
             .unwrap();
         let doc = gents::store::graphql::created_doc_id(&written, "AgentRequest").unwrap();
+        // The author links its request to the Agent, the session and the
+        // working Agent, as client admission stages a request.
+        author_access
+            .add_resource_relationship("AgentRequest", &doc, "parent", "agents", &agent_doc)
+            .await
+            .unwrap();
+        author_access
+            .add_resource_relationship("AgentRequest", &doc, "session", "sessions", &session_doc)
+            .await
+            .unwrap();
+        author_access
+            .add_actor_relationship(
+                "AgentRequest",
+                &doc,
+                "working_agent",
+                &::identity::Did::new(&binding.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
         if index == 0 {
             opening_doc = Some(doc.clone());
         }
@@ -162,7 +169,13 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
                 gents::store::graphql::escape_graphql_string(&session_doc),
                 gents::store::graphql::escape_graphql_string(&binding.agent_did),
                 gents::store::graphql::escape_graphql_string(request_binding))).await.unwrap();
-            Some(gents::store::graphql::created_doc_id(&goal, "Goal").unwrap())
+            let goal_doc = gents::store::graphql::created_doc_id(&goal, "Goal").unwrap();
+            // A Goal is a session child, as the Goal owner links it.
+            agent_access
+                .add_resource_relationship("Goal", &goal_doc, "parent", "sessions", &session_doc)
+                .await
+                .unwrap();
+            Some(goal_doc)
         } else {
             None
         };
@@ -405,7 +418,8 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         observed.push(rows.requests[0].clone());
         for reload in 0..2 {
             if index == 0 && reload == 1 {
-                access
+                runtime
+                    .user_graphql_access()
                     .write(
                         "goal_provenance.remove",
                         &format!(
@@ -469,5 +483,5 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         measured.queries() <= 2,
         "opening provenance must batch its reads"
     );
-    node.shutdown().await.unwrap();
+    runtime.shutdown().await;
 }

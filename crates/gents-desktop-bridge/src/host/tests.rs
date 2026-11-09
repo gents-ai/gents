@@ -564,13 +564,15 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_provenance_read_reaches_the_existing_lineage_owner() {
-    let (core, _directory, parent_doc_id) = crate::tests::support::seed_provenance_fixture().await;
+    let fixture = crate::tests::support::provenance_fixture().await;
+    let core = fixture.desktop.core.clone();
+    let parent_doc_id = fixture.parent_doc.clone();
     let host = Arc::new(ClientHost::new(core.clone()));
     let wire_command = json!({
         "name": "desktop_session_provenance", "args": { "request": {
-            "nodeDid": crate::tests::support::OPERATOR,
+            "nodeDid": fixture.desktop.node_did(),
             "sessionId": "sess_parent",
-            "requesterDid": crate::tests::support::OPERATOR
+            "requesterDid": fixture.desktop.user_did()
         }}
     });
     let command: protocol::ClientCommand = serde_json::from_value(wire_command.clone()).unwrap();
@@ -617,15 +619,17 @@ async fn session_provenance_read_reaches_the_existing_lineage_owner() {
     .unwrap();
     assert_eq!(observed["sessionId"], "sess_parent");
     let started = observed["started"].as_array().unwrap();
-    assert_eq!(started.len(), 2);
+    assert_eq!(started.len(), 1);
     assert!(started
         .iter()
         .all(|link| link["causeRequestDocId"] == parent_doc_id));
-    assert!(started.iter().any(|link| link["sessionId"] == "sess_child"));
-    assert!(started.iter().any(|link| link["sessionId"] == "sess_peer"));
+    assert!(started
+        .iter()
+        .any(|link| link["sessionId"] == fixture.child_session.as_str()));
     drop(client);
     task.await.unwrap().unwrap();
-    core.shutdown().await.unwrap();
+    drop(core);
+    fixture.shutdown().await;
 }
 
 #[tokio::test]

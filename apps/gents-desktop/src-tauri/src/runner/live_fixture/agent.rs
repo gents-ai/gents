@@ -107,7 +107,7 @@ async fn seed_live_agent_documents(
     use gents::documents::PackConfig;
     use gents::store::config_client::{
         load_inference_backend_in_txn, ConfigAccess, DesiredStateApplyDocument,
-        DesiredStateApplyPlan, GraphqlEndpoint, NodePermission,
+        DesiredStateApplyPlan, GraphqlEndpoint,
     };
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
@@ -124,19 +124,13 @@ async fn seed_live_agent_documents(
         "runtime and User identities must differ"
     );
     let actor_did = config_actor_did.parse()?;
+    // `gents init` makes its User the native admin; publishing an Agent
+    // projects the Agent's baseline grants, which only an authorized actor
+    // may do.
     let runtime_access = ConfigAccess::local_as(home.node.clone(), node_did.parse()?);
-    for permission in [
-        NodePermission::CollectionGet,
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DocumentDelete,
-        NodePermission::DacRelationAdd,
-        NodePermission::DacRelationDelete,
-    ] {
-        runtime_access
-            .grant_node_permission(&actor_did, permission)
-            .await?;
-    }
+    gents::store::identity::GrantSet::HouseholdOwner
+        .grant(&runtime_access, &actor_did)
+        .await?;
     let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
         config_actor.private_key_bytes(),
     )?;

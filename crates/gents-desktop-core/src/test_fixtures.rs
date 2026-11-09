@@ -169,6 +169,99 @@ impl ServedRuntimeHome {
         binding
     }
 
+    /// Provisions a lead and a worker Agent and publishes them as the User on
+    /// an OpenAI-compatible backend at `endpoint` serving `model`. The lead's
+    /// tools may start and message the worker as the target named `worker`.
+    /// Returns `(lead, worker)`.
+    pub async fn publish_delegating_agents(
+        &self,
+        endpoint: &str,
+        model: &str,
+    ) -> (AgentIdentityBinding, AgentIdentityBinding) {
+        let lead = self.provision_agent().await;
+        let worker = self.provision_agent().await;
+        let node_did = self.node_did();
+        let mut lead_value = self.agent_value(&lead, "profile");
+        lead_value["context_id"] = "lead-context".into();
+        let mut worker_value = self.agent_value(&worker, "profile");
+        worker_value["context_id"] = "worker-context".into();
+        self.apply_as_user(
+            "test.served_runtime.delegating_agents",
+            vec![
+                (
+                    Collection::InferenceBackend,
+                    serde_json::json!({
+                        "node_did": node_did, "backend_id": "backend", "name": "Fixture",
+                        "provider_kind": "OpenAiCompatible", "endpoint": endpoint,
+                        "auth": {"kind": "unauthenticated"}, "max_concurrent": 8,
+                    }),
+                ),
+                (
+                    Collection::InferenceProfile,
+                    serde_json::json!({
+                        "node_did": node_did, "profile_id": "profile",
+                        "backend_id": "backend", "model_name": model,
+                    }),
+                ),
+                (
+                    Collection::Tools,
+                    serde_json::json!({
+                        "node_did": node_did, "tools_id": "lead-tools",
+                        "agents": {"target_ids": ["worker-target"], "enabled": true},
+                    }),
+                ),
+                (
+                    Collection::AgentContext,
+                    serde_json::json!({
+                        "node_did": node_did, "context_id": "lead-context",
+                        "tools_id": "lead-tools",
+                    }),
+                ),
+                (
+                    Collection::AgentContext,
+                    serde_json::json!({"node_did": node_did, "context_id": "worker-context"}),
+                ),
+                (
+                    Collection::AgentTarget,
+                    serde_json::json!({
+                        "node_did": node_did, "target_id": "worker-target",
+                        "target_node_did": node_did, "agent_did": worker.agent_did,
+                        "name": "worker",
+                    }),
+                ),
+                (Collection::Agent, lead_value),
+                (Collection::Agent, worker_value),
+            ],
+        )
+        .await;
+        // The User authorizes the lead to write the worker's sessions, as
+        // the runtime's own session-message tests do.
+        let worker_doc = self.agent_doc_id(&worker).await;
+        self.user_access()
+            .add_actor_relationship(
+                "Agent",
+                &worker_doc,
+                "session_writer",
+                &::identity::Did::new(&lead.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+        (lead, worker)
+    }
+
+    /// Runs the runtime over this home until the returned handle is shut
+    /// down, as `gents serve` does, once it reports ready.
+    pub async fn boot(&self) -> gents::eval::runner::embedded::RunningRuntime {
+        gents::eval::runner::embedded::boot_runtime(
+            &self.home,
+            self.runtime().clone(),
+            gents::DocumentRuntimeOptions::default(),
+        )
+        .await
+        .unwrap()
+        .0
+    }
+
     /// The managed Agent's own signed local access, holding the baseline
     /// grants production projects from its Agent document.
     pub async fn agent_access(&self, binding: &AgentIdentityBinding) -> ConfigAccess {

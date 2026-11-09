@@ -746,8 +746,9 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
     let dir = tempfile::tempdir().unwrap();
     let signer = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
     for requester in [None, Some("did:test:source-requester")] {
-        let mut session = canonical_session(None);
-        session.node_did = signer.did().to_owned();
+        // An agent-started session's receipt is signed by its requester, the
+        // Agent that created it.
+        let mut session = canonical_session(Some(signer.did()));
         let source = gents_protocol::session::SessionReference {
             node_did: "did:test:remote-node".into(),
             session_id: "source-session".into(),

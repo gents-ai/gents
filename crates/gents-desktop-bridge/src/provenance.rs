@@ -159,16 +159,6 @@ async fn caused_calls(
     if caused.is_empty() {
         return Ok(Vec::new());
     }
-    let state_of = states
-        .iter()
-        .filter_map(|row| Some((text(row, "_docID")?, row)))
-        .map(|(doc_id, row)| {
-            let state = text(row, "lifecycle_state")
-                .map(|state| RequestLifecycleState::parse(&state))
-                .transpose()?;
-            Ok((doc_id, state))
-        })
-        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
     let call_doc_ids = caused.keys().map(String::as_str).collect::<Vec<_>>();
     let mut calls = Vec::new();
     // Bounded lookups, never an empty list literal in a database operation.
@@ -185,6 +175,27 @@ async fn caused_calls(
             .await?,
         );
     }
+    project_caused_calls(&states, &calls)
+}
+
+/// Each tool call's view of the requests it caused, from the caused request
+/// rows and the calls they name: a session-message call shows its one
+/// unambiguous request, any other call every request it caused.
+pub(crate) fn project_caused_calls(
+    states: &[Value],
+    calls: &[Value],
+) -> anyhow::Result<Vec<CausedCallView>> {
+    let caused = group_caused(states);
+    let state_of = states
+        .iter()
+        .filter_map(|row| Some((text(row, "_docID")?, row)))
+        .map(|(doc_id, row)| {
+            let state = text(row, "lifecycle_state")
+                .map(|state| RequestLifecycleState::parse(&state))
+                .transpose()?;
+            Ok((doc_id, state))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
     Ok(calls
         .iter()
         .filter_map(|call| {
