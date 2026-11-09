@@ -3,7 +3,7 @@ use chrono::Utc;
 use gents_protocol::row::AgentRequestRow;
 
 use super::{
-    agent_did_for_write, ensure_peer_chat_ready_at, find_request_in_scope,
+    agent_did_for_write, ensure_peer_chat_ready, find_request_in_scope,
     observe_submitted_request, ClientCore,
 };
 use crate::client::mutations::{self, SubmissionError, SubmitRequestOptions, SubmittedRequest};
@@ -56,7 +56,7 @@ impl ClientCore {
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let (signer, admission, requester_did) = self
             .request_authority(node_did, peer_record.as_ref())
             .await?;
@@ -136,7 +136,7 @@ impl ClientCore {
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let (signer, admission, _) = self
             .request_authority(node_did, peer_record.as_ref())
             .await?;
@@ -199,7 +199,7 @@ impl ClientCore {
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let request_doc_id = request
             .doc_id
             .as_deref()
@@ -235,7 +235,7 @@ impl ClientCore {
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         crate::local_runtime::ensure_request_input_supported(
             peer_record.as_ref(),
             &parent.input.clone().unwrap_or_default(),

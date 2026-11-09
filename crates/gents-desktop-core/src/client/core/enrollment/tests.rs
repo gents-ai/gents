@@ -710,7 +710,11 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         )
         .await
         .unwrap();
-    assert!(!configured.is_chat_ready_at(Utc::now()));
+    assert!(!configured.is_enrollment_ready_at(Utc::now()));
+    assert_eq!(
+        configured.chat_refusal(),
+        Some(crate::client::ChatRouteCause::EndpointNotAdvertised)
+    );
     let ready = combined_route_readiness(
         RouteReconcileState::Ready,
         enrollment_remote_route_state(true),
@@ -725,11 +729,22 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         ready_record.is_enrollment_ready_at(Utc::now()),
         "the route gate opens only after both legs"
     );
-    // Chat writes also need the HTTP write path the enrollment never supplies.
+    // The P2P route legs are not a write path: chat waits for the runtime's
+    // signed HTTP advertisement, which the enrollment reconcile records.
     assert_eq!(
-        ready_record.chat_refusal_at(Utc::now()),
-        Some(crate::client::ChatRouteCause::NoEndpoint)
+        ready_record.chat_refusal(),
+        Some(crate::client::ChatRouteCause::EndpointNotAdvertised)
     );
+    sync_state
+        .remember_enrollment_endpoint(
+            &approved.server_peer,
+            &approved.owner_node,
+            &approved.request_digest,
+            &approved.authorization_expires_at,
+            "http://127.0.0.1:9391/api/v0/graphql",
+        )
+        .await
+        .unwrap();
     let stable = sync_state
         .upsert_enrollment_peer(
             &approved.server_peer,
@@ -748,6 +763,10 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
     assert!(
         stable.pairing_ready,
         "exact idempotent generation stays ready"
+    );
+    assert!(
+        stable.is_chat_ready(),
+        "the recorded advertisement opens the HTTP write path"
     );
 
     let mut revoked = revision;
@@ -779,9 +798,12 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
     demote_enrollment_peer(&sync_state, &approved.server_peer).await;
     let revoked_record = sync_state.records().into_iter().next().unwrap();
     assert!(
-        !revoked_record.is_chat_ready_at(Utc::now()),
-        "revocation closes the send gate"
+        !revoked_record.is_enrollment_ready_at(Utc::now()),
+        "revocation closes the enrollment route gate"
     );
+    // The runtime's ACP refuses a revoked device's signed write; the desktop
+    // does not keep a parallel authorization fence on its route observation.
+    assert!(revoked_record.is_chat_ready());
     let replacement = sync_state
         .upsert_enrollment_peer(
             &approved.server_peer,
@@ -798,7 +820,7 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         .await
         .unwrap();
     assert!(
-        !replacement.is_chat_ready_at(Utc::now()),
+        !replacement.is_enrollment_ready_at(Utc::now()),
         "a new authorization generation must prove both route legs again"
     );
 }
@@ -1711,8 +1733,8 @@ async fn revoked_enrollment_ends_the_active_request_listing() {
         core.peer_records()
             .await
             .iter()
-            .all(|record| !record.is_chat_ready_at(Utc::now())),
-        "no configured peer is chat-ready before the route is finished"
+            .all(|record| !record.is_enrollment_ready_at(Utc::now())),
+        "no configured peer is route-ready before the route is finished"
     );
     let listed = core.active_status_enrollment_requests().await.unwrap();
     assert_eq!(listed.len(), 1, "{listed:?}");

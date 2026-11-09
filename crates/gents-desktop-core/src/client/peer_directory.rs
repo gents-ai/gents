@@ -15,16 +15,39 @@ use uuid::Uuid;
 mod enrollment_endpoints;
 use enrollment_endpoints::EnrollmentEndpoint;
 
-/// Why a saved route refuses a chat write. Tokens and next actions are the
-/// Lean `ClientChatReadiness.causeToken` and `nextAction`.
+/// Why a saved route refuses a chat write: the Lean
+/// `ClientChatReadiness.Cause`, with its `causeToken` and `nextAction`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatRouteCause {
     NoRoute,
     NoEndpoint,
-    UnownedRoute,
-    LeaseExpired,
-    EnrollmentIncomplete,
-    PairingPending,
+    EndpointNotAdvertised,
+}
+
+/// What a refused send tells the user to do: the Lean
+/// `ClientChatReadiness.NextAction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatNextAction {
+    ConnectRuntime,
+    AwaitEndpointAdvertisement,
+}
+
+impl ChatNextAction {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::ConnectRuntime => "connect_runtime",
+            Self::AwaitEndpointAdvertisement => "await_endpoint_advertisement",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::ConnectRuntime => "connect this runtime with its authenticated endpoint",
+            Self::AwaitEndpointAdvertisement => {
+                "waiting for the enrolled runtime to advertise its signed HTTP endpoint; check that it is running"
+            }
+        }
+    }
 }
 
 impl ChatRouteCause {
@@ -32,26 +55,26 @@ impl ChatRouteCause {
         match self {
             Self::NoRoute => "no_route",
             Self::NoEndpoint => "no_endpoint",
-            Self::UnownedRoute => "unowned_route",
-            Self::LeaseExpired => "lease_expired",
-            Self::EnrollmentIncomplete => "enrollment_incomplete",
-            Self::PairingPending => "pairing_pending",
+            Self::EndpointNotAdvertised => "endpoint_not_advertised",
         }
     }
 
-    pub fn next_action(self) -> &'static str {
+    pub fn next_action(self) -> ChatNextAction {
         match self {
-            Self::NoRoute | Self::UnownedRoute => "add a deployment for this runtime",
-            Self::NoEndpoint => "reconnect the runtime so it advertises its authenticated endpoint",
-            Self::LeaseExpired | Self::EnrollmentIncomplete => "renew this device's enrollment",
-            Self::PairingPending => "wait for pairing repair or inspect pairing status",
+            Self::NoRoute | Self::NoEndpoint => ChatNextAction::ConnectRuntime,
+            Self::EndpointNotAdvertised => ChatNextAction::AwaitEndpointAdvertisement,
         }
     }
 }
 
 impl std::fmt::Display for ChatRouteCause {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}: {}", self.token(), self.next_action())
+        write!(
+            formatter,
+            "{}: {}",
+            self.token(),
+            self.next_action().description()
+        )
     }
 }
 
@@ -115,38 +138,22 @@ impl PeerRecord {
         .then_some(graphql)
     }
 
-    /// The chat write fence, `ClientChatReadiness.enrollmentFenceRequired`:
-    /// the operator endpoint is the only write path, and the saved route's
-    /// own fence must also be open. `None` is ready.
-    pub fn chat_refusal_at(&self, now: DateTime<Utc>) -> Option<ChatRouteCause> {
-        if self.operator_graphql().is_none() {
-            return Some(ChatRouteCause::NoEndpoint);
-        }
-        match self.source.as_deref() {
-            Some("local-standard") => {
-                (!self.pairing_ready).then_some(ChatRouteCause::PairingPending)
-            }
-            Some("enrollment") => {
-                if !self
-                    .enrollment_authorization_expires_at
-                    .as_deref()
-                    .is_some_and(|expires_at| authorization_lease_is_fresh_at(expires_at, now))
-                {
-                    Some(ChatRouteCause::LeaseExpired)
-                } else if !self.enrollment_generation_complete() {
-                    Some(ChatRouteCause::EnrollmentIncomplete)
-                } else if !self.pairing_ready {
-                    Some(ChatRouteCause::PairingPending)
-                } else {
-                    None
-                }
-            }
-            _ => Some(ChatRouteCause::UnownedRoute),
+    /// The chat write fence, `ClientChatReadiness.chatReadiness`: the
+    /// operator endpoint is the only write path, and the runtime's ACP decides
+    /// whether the signed write is admitted. Pairing and the enrollment lease
+    /// are P2P route observations and do not gate it. `None` is ready.
+    pub fn chat_refusal(&self) -> Option<ChatRouteCause> {
+        if self.operator_graphql().is_some() {
+            None
+        } else if self.is_enrollment() && !self.is_managed_runtime() {
+            Some(ChatRouteCause::EndpointNotAdvertised)
+        } else {
+            Some(ChatRouteCause::NoEndpoint)
         }
     }
 
-    pub fn is_chat_ready_at(&self, now: DateTime<Utc>) -> bool {
-        self.chat_refusal_at(now).is_none()
+    pub fn is_chat_ready(&self) -> bool {
+        self.chat_refusal().is_none()
     }
 
     fn enrollment_generation_complete(&self) -> bool {
@@ -853,7 +860,7 @@ pub(crate) mod tests {
     #[test]
     fn source_less_peer_is_not_an_immediate_chat_authority() {
         let unscoped = PeerRecord::new("Unscoped bridge", "iroh://unscoped", "did:test:unscoped");
-        assert!(!unscoped.is_chat_ready_at(Utc::now()));
+        assert!(!unscoped.is_chat_ready());
         assert!(validate_fresh_directory(&StoredPeerDirectory {
             peers: vec![unscoped],
             enrollment_endpoints: Vec::new(),
@@ -864,7 +871,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn restart_clears_persisted_managed_readiness_before_chat_reopens() {
+    async fn startup_clears_persisted_enrollment_pairing_readiness() {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().join("peers.json");
         let mut directory = PeerDirectory::load(&path).await.unwrap();
@@ -880,7 +887,7 @@ pub(crate) mod tests {
             .find(|record| record.peer_id == managed.peer_id)
             .unwrap();
         assert!(!record.pairing_ready);
-        assert!(!record.is_chat_ready_at(Utc::now()));
+        assert!(!record.is_enrollment_ready_at(Utc::now()));
 
         let reloaded = load_peer_records(&path).await.unwrap();
         assert!(!reloaded[0].pairing_ready);
@@ -975,49 +982,60 @@ pub(crate) mod tests {
         }
     }
 
-    /// Replays every Lean `ClientChatReadiness` route against the native fence.
+    /// The instant a Lean `ClientChatReadiness` case offset names.
+    pub(crate) fn chat_case_instant(offset: i64) -> DateTime<Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+            + chrono::Duration::seconds(offset)
+    }
+
+    /// Materializes a Lean `ClientChatReadiness.Route` as the record the
+    /// native directory holds; `null` is no route.
+    pub(crate) fn chat_case_record(route: &serde_json::Value) -> Option<PeerRecord> {
+        if route.is_null() {
+            return None;
+        }
+        let flag = |name: &str| route[name].as_bool().unwrap();
+        let mut peer = PeerRecord::base("runtime", "peer", "did:key:runtime");
+        peer.source = route["source"].as_str().map(str::to_owned);
+        peer.graphql = match (flag("operator_endpoint"), flag("managed")) {
+            (true, _) => Some("http://127.0.0.1:9191/api/v0/graphql".into()),
+            (false, true) => Some("http://127.0.0.1:9191/graphql".into()),
+            (false, false) => None,
+        };
+        peer.local_node_home = flag("managed").then(|| "/runtime/home".into());
+        peer.pairing_ready = flag("pairing_ready");
+        peer.pairing_network_id = flag("network_id").then(|| "network".into());
+        peer.enrollment_request_digest = flag("request_digest").then(|| "digest".into());
+        peer.enrollment_authorization_sequence = Some(u64::from(flag("sequence_positive")));
+        let lease = &route["lease"];
+        peer.enrollment_authorization_expires_at = match lease["kind"].as_str().unwrap() {
+            "absent" => None,
+            "malformed" => Some("not-a-timestamp".into()),
+            "at" => Some(
+                chat_case_instant(lease["offset"].as_i64().unwrap())
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ),
+            other => panic!("unknown lease kind {other}"),
+        };
+        assert_eq!(peer.operator_graphql().is_some(), flag("operator_endpoint"));
+        assert_eq!(peer.is_managed_runtime(), flag("managed"));
+        Some(peer)
+    }
+
+    /// Every Lean `ClientChatReadiness` fence case as (record, now, refusal).
     pub(crate) fn chat_readiness_cases() -> Vec<(Option<PeerRecord>, DateTime<Utc>, Option<String>)>
     {
         let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let base = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let at =
-            |offset: &serde_json::Value| base + chrono::Duration::seconds(offset.as_i64().unwrap());
         snapshot["client_chat_readiness_cases"]
             .as_array()
             .unwrap()
             .iter()
             .map(|case| {
-                let route = &case["route"];
-                let record = (!route.is_null()).then(|| {
-                    let flag = |name: &str| route[name].as_bool().unwrap();
-                    let mut peer = PeerRecord::base("runtime", "peer", "did:key:runtime");
-                    peer.source = route["source"].as_str().map(str::to_owned);
-                    peer.graphql = Some(if flag("operator_endpoint") {
-                        "http://127.0.0.1:9191/api/v0/graphql".into()
-                    } else {
-                        "http://127.0.0.1:9191/graphql".into()
-                    });
-                    peer.pairing_ready = flag("pairing_ready");
-                    if flag("generation_complete") {
-                        peer.pairing_network_id = Some("network".into());
-                        peer.enrollment_request_digest = Some("digest".into());
-                        peer.enrollment_authorization_sequence = Some(1);
-                    } else {
-                        peer.enrollment_authorization_sequence = Some(0);
-                    }
-                    peer.enrollment_authorization_expires_at =
-                        Some(match route["lease_expires_at_offset"].as_i64() {
-                            Some(_) => at(&route["lease_expires_at_offset"])
-                                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                            None => "not-a-timestamp".into(),
-                        });
-                    peer
-                });
                 (
-                    record,
-                    at(&case["now_offset"]),
+                    chat_case_record(&case["route"]),
+                    chat_case_instant(case["now_offset"].as_i64().unwrap()),
                     case["refusal"].as_str().map(str::to_owned),
                 )
             })
@@ -1026,46 +1044,51 @@ pub(crate) mod tests {
 
     #[test]
     fn chat_readiness_matches_lean() {
-        let cases = chat_readiness_cases();
-        assert!(cases.len() > 50);
-        for (record, now, refusal) in cases {
-            let Some(record) = record else {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["client_chat_readiness_cases"].as_array().unwrap();
+        assert!(cases.len() > 1000, "{}", cases.len());
+        let mut sources = std::collections::BTreeSet::new();
+        for case in cases {
+            let Some(record) = chat_case_record(&case["route"]) else {
+                assert_eq!(case["refusal"], "no_route");
                 continue;
             };
+            sources.insert(record.source.clone());
+            let now = chat_case_instant(case["now_offset"].as_i64().unwrap());
+            let refusal = case["refusal"].as_str();
             assert_eq!(
-                record
-                    .chat_refusal_at(now)
-                    .map(|cause| cause.token().to_owned()),
+                record.chat_refusal().map(ChatRouteCause::token),
                 refusal,
                 "{record:?}"
             );
+            assert_eq!(record.is_chat_ready(), refusal.is_none(), "{record:?}");
             assert_eq!(
-                record.is_chat_ready_at(now),
-                refusal.is_none(),
+                record
+                    .enrollment_authorization_expires_at
+                    .as_deref()
+                    .is_some_and(|expires_at| authorization_lease_is_fresh_at(expires_at, now)),
+                case["lease_fresh"].as_bool().unwrap(),
                 "{record:?}"
             );
         }
+        assert_eq!(sources.len(), 4, "{sources:?}");
     }
 
     #[test]
-    fn chat_refusal_tokens_match_lean() {
+    fn chat_refusal_causes_match_lean() {
         let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
         let causes = snapshot["client_chat_readiness_causes"].as_array().unwrap();
         let native = [
             ChatRouteCause::NoRoute,
             ChatRouteCause::NoEndpoint,
-            ChatRouteCause::UnownedRoute,
-            ChatRouteCause::LeaseExpired,
-            ChatRouteCause::EnrollmentIncomplete,
-            ChatRouteCause::PairingPending,
+            ChatRouteCause::EndpointNotAdvertised,
         ];
-        let tokens: Vec<_> = causes
-            .iter()
-            .map(|case| case["cause"].as_str().unwrap())
-            .collect();
-        assert_eq!(tokens, native.map(ChatRouteCause::token));
-        for case in causes {
-            assert_eq!(case["recovery_cause"], case["cause"]);
+        assert_eq!(causes.len(), native.len());
+        for (case, cause) in causes.iter().zip(native) {
+            assert_eq!(case["cause"], cause.token());
+            assert_eq!(case["next_action"], cause.next_action().token());
+            assert_eq!(case["recovery_cause"], cause.token());
+            assert_eq!(case["settled_recovery_reads_fence"], false);
         }
     }
 
@@ -1239,7 +1262,9 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-        assert!(!managed.is_chat_ready_at(Utc::now()));
+        // Discovery-only P2P pairing does not gate the local HTTP write path.
+        assert!(!managed.pairing_ready);
+        assert!(managed.is_chat_ready());
 
         let enrolled = directory
             .upsert_enrollment_peer(

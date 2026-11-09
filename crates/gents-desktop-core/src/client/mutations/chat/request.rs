@@ -67,7 +67,7 @@ pub async fn submit_request(
             return Err(anyhow::anyhow!("caller submission belongs to another node").into());
         }
         if let Some(record) = receipt::journal::caller::recover(node, intent).await? {
-            return receipt::delivery::reconcile(node, Ok(access), record).await;
+            return receipt::delivery::reconcile(node, receipt::delivery::OwnerAccess::Granted(access), record).await;
         }
     }
     let (result, create) = prepare_request_submission(
@@ -94,7 +94,7 @@ pub async fn submit_request(
     if let Some(intent) = caller_intent {
         let proposal = receipt::correlated::Record::proposal(intent, pending);
         let record = receipt::journal::caller::reserve(node, &proposal).await?;
-        return receipt::delivery::reconcile(node, Ok(access), record).await;
+        return receipt::delivery::reconcile(node, receipt::delivery::OwnerAccess::Granted(access), record).await;
     }
     receipt::journal::save(node, signer.did(), &pending).await?;
     let result = match receipt::commit_signed_submission(access, pending.clone()).await {

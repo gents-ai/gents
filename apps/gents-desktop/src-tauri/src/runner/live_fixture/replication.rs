@@ -117,7 +117,7 @@ pub(super) async fn wait_for_ready_peer_status(
         let durable_ready = snapshot
             .directory
             .iter()
-            .any(|peer| peer.peer_id == peer_id && peer.is_chat_ready_at(chrono::Utc::now()));
+            .any(|peer| peer.peer_id == peer_id && peer.is_chat_ready());
         if dial_ready && durable_ready {
             return Ok(());
         }

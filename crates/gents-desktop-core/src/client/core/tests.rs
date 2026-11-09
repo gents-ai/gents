@@ -1402,9 +1402,9 @@ async fn bootstrap_connect_waits_for_the_peer_connection_event() {
 }
 
 /// A hosted enrollment route commits chat to its owner over the User's signed
-/// HTTP endpoint with client admission and keeps nothing in a local replica;
-/// clearing its pairing readiness closes submit and resend
-/// (`ClientChatReadiness.enrollmentFenceRequired`).
+/// HTTP endpoint with client admission and keeps nothing in a local replica.
+/// Clearing its pairing readiness leaves writes open; losing its operator
+/// endpoint closes submit and resend (`ClientChatReadiness.chatReadiness`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
@@ -1477,7 +1477,13 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         .into_iter()
         .find(|record| record.node_did == owner)
         .unwrap();
-    core.sync_state.set_pairing_ready(&record, false).await?;
+    let mut endpointless = record.clone();
+    endpointless.graphql = Some(runtime.graphql().replace("/api/v0/graphql", "/graphql"));
+    let endpointless = core
+        .sync_state
+        .replace_record(&record, endpointless)
+        .await?
+        .expect("route remains saved");
     let denied = core
         .submit_request(
             "denied-session",
@@ -1486,28 +1492,42 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             Some(&agent.agent_did),
         )
         .await;
-    let denied = denied.expect_err("a closed route must refuse the direct owner write");
+    let denied = denied.expect_err("a route without an operator endpoint has no write path");
     assert!(
-        denied
-            .to_string()
-            .contains(crate::client::peer_directory::ChatRouteCause::PairingPending.token()),
-        "the direct owner route must not bypass the write fence: {denied:#}"
+        denied.to_string().contains(
+            crate::client::peer_directory::ChatRouteCause::NoEndpoint.token()
+        ),
+        "{denied:#}"
     );
-    let denied_resend = core
-        .resend_request_in_scope(&submitted.request_id, Some(&owner))
+    // Losing the endpoint also detaches the route's projection, so resend
+    // refuses before it can name the fence; either way nothing is written.
+    core.resend_request_in_scope(&submitted.request_id, Some(&owner))
         .await
-        .expect_err("resend must preserve the write fence");
-    assert!(
-        denied_resend.to_string().contains("pairing_pending"),
-        "{denied_resend:#}"
-    );
+        .expect_err("resend has no write path");
+
+    // Pairing records the discovery-only P2P legs, not the HTTP write path.
+    let mut unpaired = record.clone();
+    unpaired.pairing_ready = false;
+    core.sync_state
+        .replace_record(&endpointless, unpaired)
+        .await?
+        .expect("route remains saved");
+    let unpaired_submit = core
+        .submit_request(
+            "unpaired-session",
+            &owner,
+            "pairing is not a write authority",
+            Some(&agent.agent_did),
+        )
+        .await?;
+    assert_eq!(owner_request(unpaired_submit.request_id.clone()).await?.len(), 1);
     let all = runtime
         .user_access()
         .execute("{ AgentRequest { request_id } }")
         .await?;
     assert_eq!(
         all["data"]["AgentRequest"].as_array().map(Vec::len),
-        Some(1),
+        Some(2),
         "no refused write reached the owner: {all}"
     );
     core.shutdown().await?;
@@ -1701,17 +1721,33 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
         )
         .await?,
     );
-    let cases = crate::client::peer_directory::tests::chat_readiness_cases();
-    assert!(cases.len() > 50);
-    for (index, (record, now, refusal)) in cases.into_iter().enumerate() {
+    // The fence ignores generation and lease fields (checked over every
+    // generated case in `peer_directory`); selection runs one complete,
+    // fresh generation per remaining route shape.
+    let cases: Vec<_> = crate::client::peer_directory::tests::chat_readiness_cases()
+        .into_iter()
+        .filter(|(record, _, _)| {
+            record.as_ref().is_none_or(|record| {
+                record.pairing_network_id.is_some()
+                    && record.enrollment_request_digest.is_some()
+                    && record.enrollment_authorization_sequence == Some(1)
+                    && record.enrollment_authorization_expires_at.as_deref()
+                        == Some("2026-01-01T00:00:08Z")
+            })
+        })
+        .collect();
+    assert_eq!(cases.len(), 1 + 4 * 2 * 2 * 2, "{}", cases.len());
+    for (index, (record, _, refusal)) in cases.into_iter().enumerate() {
         let node_did = format!("did:key:runtime-{index}");
         if let Some(mut record) = record.clone() {
             record.node_did = node_did.clone();
             core.sync_state.upsert_for_test(record).await?;
         }
-        let selected = core.peer_record_for_chat_write(&node_did, now).await;
+        let selected = core
+            .peer_record_for_chat_write(&node_did, chrono::Utc::now())
+            .await;
         let gated = selected.and_then(|peer| {
-            super::writes::ensure_peer_chat_ready_at(&node_did, peer.as_ref(), now).map(|()| peer)
+            super::writes::ensure_peer_chat_ready(&node_did, peer.as_ref()).map(|()| peer)
         });
         match refusal {
             None => assert!(gated?.is_some_and(|peer| peer.node_did == node_did)),
@@ -1731,10 +1767,10 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `ClientChatReadiness.restart_closes_writes`: a managed runtime restart
-/// closes writes although the record keeps its operator endpoint.
+/// Replays every Lean `ClientChatReadiness.step` case through the native
+/// durable writer it names, then compares the written route and the fence.
 #[tokio::test]
-async fn managed_runtime_restart_closes_chat_writes_until_pairing_repair() -> anyhow::Result<()> {
+async fn chat_route_writers_match_lean() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
@@ -1743,46 +1779,114 @@ async fn managed_runtime_restart_closes_chat_writes_until_pairing_repair() -> an
         )
         .await?,
     );
-    let node_did = "did:key:managed-runtime";
-    let home = temp.path().join("runtime");
-    core.add_managed_enrollment_peer_for_test(
-        node_did,
-        "http://127.0.0.1:9191/api/v0/graphql",
-        home.to_str().unwrap(),
-        1,
-    )
-    .await?;
-    let now = chrono::Utc::now();
-    let ready = core.peer_record_for_chat_write(node_did, now).await?;
-    assert!(ready
-        .as_ref()
-        .is_some_and(|peer| peer.operator_graphql().is_some()));
-
-    core.mark_managed_runtime_restarting(node_did).await?;
-    let refused = core
-        .peer_record_for_chat_write(node_did, now)
-        .await
-        .expect_err("a restarting runtime must not accept chat writes");
-    assert_eq!(
-        refused
-            .downcast_ref::<super::writes::ChatRouteRefusal>()
-            .map(super::writes::ChatRouteRefusal::cause),
-        Some(crate::client::peer_directory::ChatRouteCause::PairingPending),
-        "{refused:#}"
-    );
-    assert!(refused.to_string().contains("pairing_pending"));
-    let record = core
-        .sync_state
-        .records()
-        .into_iter()
-        .find(|record| record.node_did == node_did)
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot()?;
+    let cases = snapshot["client_chat_readiness_transitions"]
+        .as_array()
         .unwrap();
-    assert!(record.operator_graphql().is_some());
-    core.sync_state.set_pairing_ready(&record, true).await?;
-    assert!(core
-        .peer_record_for_chat_write(node_did, now)
-        .await?
-        .is_some());
+    assert!(cases.len() > 100, "{}", cases.len());
+    let mut kinds = std::collections::BTreeSet::new();
+    for (index, case) in cases.iter().enumerate() {
+        let mut record = crate::client::peer_directory::tests::chat_case_record(&case["route"])
+            .expect("transition cases name a saved route");
+        record.peer_id = format!("peer-{index}");
+        record.node_did = format!("did:key:runtime-{index}");
+        record.enrollment_request_id = Some(format!("request-{index}"));
+        record.enrollment_admin_did = Some("did:key:admin".into());
+        let token = |record: &crate::client::PeerRecord| {
+            record.chat_refusal().map(|cause| cause.token().to_owned())
+        };
+        assert_eq!(
+            token(&record).as_deref(),
+            case["refusal_before"].as_str(),
+            "{case}"
+        );
+        core.sync_state.upsert_for_test(record.clone()).await?;
+        let event = &case["event"];
+        let kind = event["kind"].as_str().unwrap();
+        kinds.insert(kind.to_owned());
+        match kind {
+            "restart" => core.mark_managed_runtime_restarting(&record.node_did).await?,
+            "authority_failure" => {
+                super::supervisor::demote_enrollment_readiness_after_authority_failure(
+                    &core.sync_state,
+                )
+                .await;
+            }
+            "reconciled" => {
+                if let Some(ready) = event["outcome"].as_bool() {
+                    core.sync_state.set_pairing_ready(&record, ready).await?;
+                }
+            }
+            "generation_rotation" => {
+                core.sync_state
+                    .upsert_enrollment_peer(
+                        &record.peer_id,
+                        &record.label,
+                        &record.addr,
+                        &record.node_did,
+                        record.pairing_network_id.as_deref().unwrap(),
+                        record.enrollment_request_id.as_deref().unwrap(),
+                        record.enrollment_request_digest.as_deref().unwrap(),
+                        "did:key:admin",
+                        record.enrollment_authorization_sequence.unwrap() + 1,
+                        record.enrollment_authorization_expires_at.as_deref().unwrap(),
+                    )
+                    .await?;
+            }
+            other => panic!("no native writer for {other}"),
+        }
+        let after = core
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|saved| saved.peer_id == record.peer_id)
+            .expect("writers keep the route");
+        assert_eq!(
+            Some(after.pairing_ready),
+            case["after_pairing_ready"].as_bool(),
+            "{case}"
+        );
+        assert_eq!(
+            Some(after.operator_graphql().is_some()),
+            case["after_operator_endpoint"].as_bool(),
+            "{case}"
+        );
+        assert_eq!(
+            token(&after).as_deref(),
+            case["refusal_after"].as_str(),
+            "{case}"
+        );
+    }
+    assert_eq!(
+        kinds.into_iter().collect::<Vec<_>>(),
+        [
+            "authority_failure",
+            "generation_rotation",
+            "reconciled",
+            "restart"
+        ]
+    );
     core.shutdown().await?;
     Ok(())
+}
+
+#[test]
+fn route_leg_combination_matches_lean() {
+    use super::route_manager::{combined_route_readiness, RouteReconcileState};
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = snapshot["client_chat_readiness_legs"].as_array().unwrap();
+    assert_eq!(cases.len(), 9);
+    let leg = |value: &serde_json::Value| match value.as_str().unwrap() {
+        "ready" => RouteReconcileState::Ready,
+        "drifted" => RouteReconcileState::Drifted,
+        "unavailable" => RouteReconcileState::Unavailable,
+        other => panic!("unknown leg {other}"),
+    };
+    for case in cases {
+        assert_eq!(
+            combined_route_readiness(leg(&case["outbound"]), leg(&case["inbound"])),
+            case["combined"].as_bool(),
+            "{case}"
+        );
+    }
 }

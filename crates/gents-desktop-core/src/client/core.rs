@@ -493,8 +493,9 @@ impl ClientCore {
         self.sync_state.subscribe()
     }
 
-    // The signed enrollment remains durable; the replacement process must
-    // re-establish both route legs before chat writes reopen.
+    /// The signed enrollment remains durable; the replacement process must
+    /// re-establish both P2P route legs. Chat writes ride the operator
+    /// endpoint and are not gated here (`ClientChatReadiness.step .restart`).
     pub async fn mark_managed_runtime_restarting(&self, node_did: &str) -> Result<()> {
         let records = self.peer_records().await;
         for record in records.into_iter().filter(|record| {

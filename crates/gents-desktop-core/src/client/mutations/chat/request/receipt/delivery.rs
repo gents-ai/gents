@@ -9,11 +9,20 @@ use super::{
     SubmissionNotDelivered, SubmittedRequest,
 };
 
+/// The owner access a reconcile may replay through. `NotRequested` is a record
+/// the caller judged settled; reaching replay with it keeps the submission
+/// unknown without a cause, so no fence refusal is invented.
+pub(crate) enum OwnerAccess<'a> {
+    Granted(&'a ConfigAccess),
+    Refused(anyhow::Error),
+    NotRequested,
+}
+
 /// A retained preparation is the only replay source. Confirmed outcomes are
 /// persisted before returning them through the outer caller transport.
 pub(crate) async fn reconcile(
     node: &Arc<EmbeddedNode>,
-    access: std::result::Result<&ConfigAccess, anyhow::Error>,
+    access: OwnerAccess<'_>,
     record: Record,
 ) -> std::result::Result<SubmittedRequest, SubmissionError> {
     match record.result() {
@@ -33,8 +42,9 @@ pub(crate) async fn reconcile(
         .as_ref()
         .context("unresolved caller receipt omitted its signed preparation")?;
     let access = match access {
-        Ok(access) => access,
-        Err(cause) => return Err(pending.unknown(Some(cause)).into()),
+        OwnerAccess::Granted(access) => access,
+        OwnerAccess::Refused(cause) => return Err(pending.unknown(Some(cause)).into()),
+        OwnerAccess::NotRequested => return Err(pending.unknown(None).into()),
     };
     let delivered = resolve_unresolved_submission(access, pending).await;
     let (outcome, rejection) = match delivered {

@@ -5,7 +5,7 @@ use gents_protocol::request_input::RequestInput;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
 use super::{
-    agent_did_for_write, ensure_peer_chat_ready_at, observe_submitted_request, ClientCore,
+    agent_did_for_write, ensure_peer_chat_ready, observe_submitted_request, ClientCore,
 };
 use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
 
@@ -43,7 +43,7 @@ impl ClientCore {
         let peer_record = self
             .peer_record_for_chat_write(&invocation.node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(&invocation.node_did, peer_record.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready(&invocation.node_did, peer_record.as_ref())?;
         let (signer, admission, requester_did) = self
             .request_authority(&invocation.node_did, peer_record.as_ref())
             .await?;

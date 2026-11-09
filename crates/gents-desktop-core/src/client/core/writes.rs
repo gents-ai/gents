@@ -102,14 +102,13 @@ impl ChatRouteRefusal {
     }
 }
 
-pub(super) fn chat_route_refusal_at(
+pub(super) fn chat_route_refusal(
     node_did: &str,
     peer_record: Option<&PeerRecord>,
-    now: DateTime<Utc>,
 ) -> Option<ChatRouteRefusal> {
     match peer_record {
         Some(record) => record
-            .chat_refusal_at(now)
+            .chat_refusal()
             .map(|cause| ChatRouteRefusal::NotReady { cause }),
         None => Some(ChatRouteRefusal::NoRoute {
             node_did: node_did.to_owned(),
@@ -118,26 +117,21 @@ pub(super) fn chat_route_refusal_at(
     }
 }
 
-pub(super) fn ensure_peer_chat_ready_at(
+pub(super) fn ensure_peer_chat_ready(
     node_did: &str,
     peer_record: Option<&PeerRecord>,
-    now: DateTime<Utc>,
 ) -> Result<()> {
-    match chat_route_refusal_at(node_did, peer_record, now) {
+    match chat_route_refusal(node_did, peer_record) {
         Some(refusal) => Err(refusal.into()),
         None => Ok(()),
     }
 }
 
-fn peer_record_owning_node_at(
-    records: &[PeerRecord],
-    node_did: &str,
-    now: DateTime<Utc>,
-) -> Option<PeerRecord> {
+fn peer_record_owning_node(records: &[PeerRecord], node_did: &str) -> Option<PeerRecord> {
     records
         .iter()
         .find(|record| record.node_did == node_did)
-        .filter(|record| record.is_chat_ready_at(now))
+        .filter(|record| record.is_chat_ready())
         .cloned()
 }
 
@@ -181,7 +175,7 @@ impl ClientCore {
         now: DateTime<Utc>,
     ) -> Result<Option<PeerRecord>> {
         let records = self.sync_state.records();
-        let record = peer_record_owning_node_at(&records, node_did.trim(), now);
+        let record = peer_record_owning_node(&records, node_did.trim());
         if record.is_some() {
             return Ok(record);
         }
@@ -197,7 +191,7 @@ impl ClientCore {
                     .await
                     .context("persisting expired enrollment write fence")?;
             }
-            ensure_peer_chat_ready_at(node_did, Some(&stale), now)?;
+            ensure_peer_chat_ready(node_did, Some(&stale))?;
         }
         Ok(None)
     }

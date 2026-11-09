@@ -80,17 +80,20 @@ impl ClientCore {
         };
         // Replay needs owner access, granted by the same send-time fence; a
         // refusal keeps the submission unknown and carries the fence's cause.
-        let access = if record.needs_reconciliation() {
-            self.reconciliation_access(&intent.node_did).await
+        let (granted, refused) = if record.needs_reconciliation() {
+            match self.reconciliation_access(&intent.node_did).await {
+                Ok(access) => (Some(access), None),
+                Err(cause) => (None, Some(cause)),
+            }
         } else {
-            Err(anyhow::anyhow!(
-                "caller submission needs no owner reconciliation"
-            ))
+            (None, None)
         };
-        let receipt = match access {
-            Ok(access) => submission_delivery::reconcile(&self.node, Ok(&access), record).await?,
-            Err(cause) => submission_delivery::reconcile(&self.node, Err(cause), record).await?,
+        let access = match (&granted, refused) {
+            (Some(access), _) => submission_delivery::OwnerAccess::Granted(access),
+            (None, Some(cause)) => submission_delivery::OwnerAccess::Refused(cause),
+            (None, None) => submission_delivery::OwnerAccess::NotRequested,
         };
+        let receipt = submission_delivery::reconcile(&self.node, access, record).await?;
         self.store.request_resync(Some(&receipt.node_did));
         Ok(Some(receipt))
     }
@@ -101,7 +104,7 @@ impl ClientCore {
     ) -> Result<gents::store::config_client::ConfigAccess> {
         let now = chrono::Utc::now();
         let peer = self.peer_record_for_chat_write(node_did, now).await?;
-        if let Some(refusal) = super::chat_route_refusal_at(node_did, peer.as_ref(), now) {
+        if let Some(refusal) = super::chat_route_refusal(node_did, peer.as_ref()) {
             return Err(refusal.into());
         }
         let peer = peer.context("chat target has no current owned peer route")?;

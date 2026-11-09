@@ -145,7 +145,7 @@ impl ClientCore {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        super::ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        super::ensure_peer_chat_ready(node_did, peer.as_ref())?;
         let (signer, _, _) = self.request_authority(node_did, peer.as_ref()).await?;
         let receipt = gents::goal::submit_prepared_session_goal_control(
             &self.session_queue_access(node_did)?,
