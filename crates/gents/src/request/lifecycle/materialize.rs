@@ -1535,7 +1535,19 @@ pub(crate) async fn write_trigger_delivery_with_identity(
             })
         })
         .await?;
-    Ok(admitted?)
+    match admitted {
+        Ok(admitted) => Ok(admitted),
+        Err(stop) => {
+            crate::documents::stop_trigger_for_budget(
+                node,
+                &prepared.receipt.identity.owner_did,
+                &prepared.receipt.identity.trigger_id,
+                &stop.reason,
+            )
+            .await?;
+            Err(stop.into())
+        }
+    }
 }
 
 #[doc(hidden)]

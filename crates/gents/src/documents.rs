@@ -125,8 +125,8 @@ pub use skill::SkillDocument;
 pub(crate) use event_trigger::count_trigger_cursor_batch_queries;
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{
-    load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
-    TRIGGER_CURSOR_BATCH_SIZE,
+    load_trigger_next_run_at_batch, stop_trigger_for_budget, update_trigger_runtime_fields,
+    TriggerRuntimeUpdate, TRIGGER_CURSOR_BATCH_SIZE,
 };
 pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};

@@ -49,14 +49,15 @@ pub(crate) fn fire_budget_exhausted(budget: u32, admitted_in_window: usize) -> b
 /// gents-ai/gents#3548 owns stopping an accepted backlog.
 fn budget_stop_reason(trigger_id: &str, budget: u32) -> String {
     format!(
-        "Trigger {trigger_id} admitted its budget of {budget} fires within one hour, so it was disabled.          Find out why it fires this often with trigger explain; a Task writing its own event-source collection is the usual cause.          Then raise max_fires_per_hour, or wait for the hour to pass, and set enabled to true."
+        "Trigger {trigger_id} admitted its budget of {budget} fires within one hour, so it was disabled. Find out why it fires this often with trigger explain; a Task writing its own event-source collection is the usual cause. Then raise max_fires_per_hour, or wait for the hour to pass, and set enabled to true."
     )
 }
 
 impl PreparedFire {
     /// Counts this Trigger's receipts in the budget window inside the admission
-    /// transaction and, when the budget is spent, records the stop in that same
-    /// transaction. A replayed fire spends nothing. The caller must commit a stop.
+    /// transaction and returns the stop when the budget is spent. A replayed
+    /// fire spends nothing. The caller admits nothing on a stop and records it
+    /// through [`crate::documents::stop_trigger_for_budget`].
     pub(crate) async fn stage_budget(
         &self,
         txn: &ConfigApplyTxn<'_>,
@@ -95,12 +96,6 @@ impl PreparedFire {
             return Ok(None);
         }
         let reason = budget_stop_reason(&fire.identity.trigger_id, budget);
-        let status = crate::documents::BUDGET_EXHAUSTED_STATUS;
-        txn.execute(&format!(
-            "mutation {{ update_Trigger(filter: {{node_did: {{_eq: \"{owner}\"}}, trigger_id: {{_eq: \"{trigger_id}\"}}}}, input: {{enabled: false, last_status: \"{status}\", last_error: \"{}\"}}) {{ _docID }} }}",
-            escape_graphql_string(&reason)
-        ))
-        .await?;
         Ok(Some(super::MaterializeBudgetExhausted { reason }))
     }
 }

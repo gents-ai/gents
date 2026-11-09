@@ -7,7 +7,13 @@ one Trigger are not modeled. Exhaustion stops the Trigger through `enabled`,
 the existing owner of "no further delivery": the cursor keeps its position and
 re-enabling resumes exactly the undelivered arrivals. Requests already admitted
 are not this budget's concern; gents-ai/gents#3548 owns stopping an accepted
-backlog. The budget bounds that backlog at admission. -/
+backlog. The budget bounds that backlog at admission.
+
+Natively the admitting Agent decides exhaustion from its own receipts, and the
+owner of the Trigger's runtime fields records the stop: document ACP gives that
+Agent no write on the Trigger (`configuration.update` is its writers and its
+Node). A stop lost between the two is decided again by the next fire, which
+admits nothing either. -/
 namespace Triggers.FireBudget
 
 open Triggers.Durable

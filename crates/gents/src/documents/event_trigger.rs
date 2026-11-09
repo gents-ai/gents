@@ -32,6 +32,33 @@ fn render_trigger_runtime_mutation(
     )
 }
 
+/// Disables a Trigger whose fire budget is spent and records why. Document
+/// ACP gives the admitting Agent no write on the Trigger, so the stop is
+/// written here, by the owner of the Trigger's runtime fields.
+pub(crate) async fn stop_trigger_for_budget(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    trigger_id: &str,
+    reason: &str,
+) -> Result<()> {
+    let mutation = render_trigger_runtime_mutation(
+        &escape_graphql_string(node_did),
+        &escape_graphql_string(trigger_id),
+        &[
+            "enabled: false".to_owned(),
+            format!("last_status: \"{}\"", super::BUDGET_EXHAUSTED_STATUS),
+            format!("last_error: \"{}\"", escape_graphql_string(reason)),
+        ],
+    );
+    crate::store::config_client::ConfigAccess::write_local(
+        node,
+        "document.stop_trigger_for_budget",
+        &mutation,
+    )
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
     scopes: &[(String, String)],
