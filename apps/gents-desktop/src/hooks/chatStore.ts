@@ -18,6 +18,9 @@ export type ChatState = {
     nodeDid: string;
     sessionId: string | null;
     message: string;
+    /** The saved send the error is about, when one was saved: its later
+        confirmation or observation makes the error stale. */
+    requestId?: string;
   } | null;
   optimisticPendingTurn: OptimisticPendingTurn | null;
   /** the messages sent from here, newest last, and whether each queued

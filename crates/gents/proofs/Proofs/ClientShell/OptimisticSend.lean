@@ -37,6 +37,10 @@ Code owners of each action:
 * `receive true` marks the message confirmed before the view applies the
   reply; a failure to update the view is reported as such and never shows a
   confirmed message as failed.
+* `observe` is the client reading the selected session
+  (`observeLandedChatSends` in `chatDelivery.ts`): a failed message whose
+  identity the session holds is confirmed. A pending one waits for its reply
+  or deadline, so the reply still updates the view that sent it.
 
 Decisions (#3538, user):
 * No receipt journal, no reconcile of an unknown outcome and no
@@ -51,6 +55,11 @@ Decisions (#3538, user):
   pending, failed or confirmed: a second answer to one question is a new
   authored answer, not a retry, and a confirmed answer stays shown until the
   question is observed closed (the runtime claims it after the reply).
+* `compose` moves the authored text out of the composer into the kept
+  message, which shows it with Retry and Discard. The composer therefore never
+  holds text that a second send would author again under a fresh identity
+  (TLA RED `RetryFreshId`), whether the first send is pending, failed after a
+  slow commit, or confirmed late.
 
 TLA `ClientSubmissionContention` checks the same flow with the runtime's
 conflict rebuild, and its REDs show that a retry under a fresh identity
@@ -118,6 +127,8 @@ inductive Action where
   | retry (id : Nat)
   /-- The person discards a failed message. -/
   | discard (id : Nat)
+  /-- The client observes the session holding a failed message's identity. -/
+  | observe (id : Nat)
   deriving DecidableEq, Repr
 
 def onReply (ok : Bool) (message : Message) : Message :=
@@ -134,6 +145,10 @@ def onRetry (message : Message) : Message := { message with status := .pending }
 
 def onDiscard (message : Message) : Message :=
   { message with status := .discarded, payload := false }
+
+def onObserve (message : Message) : Message :=
+  if message.status = .failed then { message with status := .confirmed, payload := false }
+  else message
 
 def step (s : State) : Action → Option State
   | .compose id =>
@@ -169,6 +184,10 @@ def step (s : State) : Action → Option State
   | .discard id =>
     if statusOf s.messages id = some .failed then
       some { s with messages := update s.messages id onDiscard }
+    else none
+  | .observe id =>
+    if id ∈ s.turns ∧ statusOf s.messages id = some .failed then
+      some { s with messages := update s.messages id onObserve }
     else none
 
 inductive Reachable : State → Prop where
@@ -280,6 +299,8 @@ theorem onTimeout_id (m : Message) : (onTimeout m).id = m.id := by
   unfold onTimeout; split <;> rfl
 theorem onRetry_id (m : Message) : (onRetry m).id = m.id := rfl
 theorem onDiscard_id (m : Message) : (onDiscard m).id = m.id := rfl
+theorem onObserve_id (m : Message) : (onObserve m).id = m.id := by
+  unfold onObserve; split <;> rfl
 
 theorem init_inv : Inv init := by
   refine ⟨by simp [init], by simp [init], ⟨by simp [init], by simp [init]⟩, by simp [init, retained]⟩
@@ -441,6 +462,24 @@ theorem step_inv (s s' : State) (action : Action) (inv : Inv s) (h : step s acti
       intro m _ _ active
       simp [onDiscard] at active
     · contradiction
+  | observe id =>
+    simp only [step] at h
+    split at h
+    · cases h
+      refine ⟨by simpa [update_ids _ _ _ onObserve_id] using ids, turns,
+        ⟨fun x hx => known_update _ _ _ onObserve_id x (wire x hx),
+         fun x hx => known_update _ _ _ onObserve_id x (held x hx)⟩, ?_⟩
+      apply retained_update s id _ kept
+      intro m mem _ active
+      unfold onObserve at active ⊢
+      split
+      · rename_i failed
+        simp only [failed, ↓reduceIte] at active
+        simp at active
+      · rename_i notFailed
+        simp only [notFailed, ↓reduceIte] at active
+        exact kept m mem (Or.inl (active.resolve_right (fun f => f)))
+    · contradiction
 
 theorem reachable_inv {s : State} (h : Reachable s) : Inv s := by
   induction h with
@@ -529,6 +568,20 @@ theorem failed_offers_retry {s : State} (h : Reachable s) (m : Message) (mem : m
     rw [List.any_eq_true]
     exact ⟨m, mem, by simp [failed, payload]⟩
   simp only [step, offered, ↓reduceIte, Option.isSome_some]
+
+/-- A failed message the runtime holds is confirmed once the client observes
+it in the session, so a landed send never stays shown as failed. -/
+theorem observed_failure_confirms {s : State} (h : Reachable s) (m : Message)
+    (mem : m ∈ s.messages) (held : m.id ∈ s.turns) (failed : m.status = .failed) :
+    ∃ s', step s (.observe m.id) = some s' ∧ statusOf s'.messages m.id = some .confirmed := by
+  have inv := reachable_inv h
+  have current := statusOf_of_mem inv.ids mem
+  rw [failed] at current
+  refine ⟨{ s with messages := update s.messages m.id onObserve }, ?_, ?_⟩
+  · simp only [step]
+    rw [if_pos ⟨held, current⟩]
+  · rw [statusOf_update_self onObserve onObserve_id inv.ids mem]
+    simp [onObserve, failed]
 
 /-- The runtime never refuses an identity it holds: a resend of a held
 identity (a retry after a lost reply, a retry after the question it answers
@@ -622,11 +675,12 @@ def actionJson : Action → Json
   | .timeout id => Json.mkObj [("kind", toJson "timeout"), ("id", toJson id)]
   | .retry id => Json.mkObj [("kind", toJson "retry"), ("id", toJson id)]
   | .discard id => Json.mkObj [("kind", toJson "discard"), ("id", toJson id)]
+  | .observe id => Json.mkObj [("kind", toJson "observe"), ("id", toJson id)]
 
 /-- The actions on one message `1` the generated traces explore. -/
 def traceActions : List Action :=
   [.compose 1, .commit 1, .refuse 1, .drop 1, .loseReply 1 true, .loseReply 1 false,
-   .receive 1 true, .receive 1 false, .timeout 1, .retry 1, .discard 1]
+   .receive 1 true, .receive 1 false, .timeout 1, .retry 1, .discard 1, .observe 1]
 
 /-- Every enabled trace of `depth` actions from `s`, with its end state. -/
 def traces : Nat → State → List (List Action × State)

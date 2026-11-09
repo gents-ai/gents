@@ -124,24 +124,27 @@ export function useComposerSend(agentDid: string | null | undefined) {
       supplied ?? selected.flatMap((a) => (a.content ? [a.content] : []));
     const ids = new Set(selected.map((a) => a.id));
     const clientDid = stores.client.getState().snapshot?.client?.clientDid;
+    /* the saved message takes the text, shown with its status and Retry or
+       Discard, so the composer cannot send it again under a new identity */
+    const handOver = () => {
+      if (supplied) return;
+      setDraft((current) => (current === text ? "" : current));
+      writeAttachments(drafts, draftKey, (current) =>
+        current.filter((a) => !ids.has(a.id)),
+      );
+    };
     const pending = sendMessage(
       content,
       agentDid,
       attachments,
       followUp,
       () => mounted.current,
+      handOver,
     );
     const intentGeneration = captureComposeIntent();
     const result = await pending;
     if (stores.client.getState().snapshot?.client?.clientDid !== clientDid)
       return Boolean(result);
-    if (result) {
-      if (!supplied) setDraft((current) => (current === text ? "" : current));
-      if (!supplied)
-        writeAttachments(drafts, draftKey, (current) =>
-          current.filter((a) => !ids.has(a.id)),
-        );
-    }
     follow(intentGeneration, result);
     return Boolean(result);
   };

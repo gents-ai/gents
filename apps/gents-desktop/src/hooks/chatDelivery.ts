@@ -15,10 +15,15 @@ import {
   validateChatResult,
   type ChatDraft,
 } from "./chatDrafts";
-import { deliveryAffordances, sendStatus } from "./chatDeliveryView";
+import { deliveryAffordances, nextSendDeadline, sendStatus } from "./chatDeliveryView";
+import type { ChatStore } from "./chatStore";
 import type { ShellStores } from "./shellProjection";
+import { heldFor, sessionShowsRequest } from "./sessionStore";
 
 type Applied = (result: ChatSendResult, draft: ChatDraft) => Promise<boolean>;
+/** Called once the payload is saved, before dispatch: from then on the saved
+ * message holds the authored input. */
+type Saved = (draft: ChatDraft) => void;
 
 /** The client deadline of one send (Lean `ClientOptimisticSend.timeout`).
  * Neither the bridge nor the runtime bounds a create, so a send with no reply
@@ -43,6 +48,20 @@ export class ChatViewUpdateError extends Error {
 }
 
 type Reply = { ok: true; result: ChatSendResult } | { ok: false; error: unknown };
+
+/** The runtime holds the message (Lean `onReply true`, `onObserve`). A chat
+ * message keeps no payload; a mailbox answer stays saved, confirmed, until its
+ * question is observed closed. */
+function confirm(store: ChatStore, current: ChatDraft) {
+  if (current.mailbox)
+    saveChatDraft(store, {
+      ...current,
+      confirmed: true,
+      pendingUntil: undefined,
+      failure: undefined,
+    });
+  else removeChatDraft(store, current);
+}
 
 /** The optimistic send (Lean `ClientOptimisticSend`): the message gets its
  * request identity and a kept payload before dispatch, is pending until its
@@ -100,16 +119,8 @@ export function createChatDelivery(
       return reply.result;
     }
     // Confirmed before the view applies it: a view failure never shows a
-    // confirmed message as failed. A mailbox answer stays saved, confirmed,
-    // until its question is observed closed.
-    if (current.mailbox)
-      saveChatDraft(stores.chat, {
-        ...current,
-        confirmed: true,
-        pendingUntil: undefined,
-        failure: undefined,
-      });
-    else removeChatDraft(stores.chat, current);
+    // confirmed message as failed.
+    confirm(stores.chat, current);
     try {
       await applied(reply.result, current);
     } catch (error) {
@@ -117,7 +128,7 @@ export function createChatDelivery(
     }
     return reply.result;
   }
-  async function send(draft: ChatDraft, applied: Applied) {
+  async function send(draft: ChatDraft, applied: Applied, saved?: Saved) {
     if (clientDid() !== draft.clientDid)
       throw new Error("The selected client changed before dispatch.");
     const attempt: ChatDraft = {
@@ -126,6 +137,7 @@ export function createChatDelivery(
       pendingUntil: now() + CHAT_SEND_DEADLINE_MS,
     };
     saveChatDraft(stores.chat, attempt);
+    saved?.(attempt);
     const reply: Promise<Reply> = (async () => {
       try {
         const result = await api.sendChatMessage(chatDraftRequest(attempt));
@@ -159,6 +171,7 @@ export function createChatDelivery(
       queued: boolean,
       applied: Applied,
       mailbox?: ChatDraft["mailbox"],
+      saved?: Saved,
     ) {
       const actor = clientDid();
       if (request.clientDid && request.clientDid !== actor)
@@ -190,7 +203,7 @@ export function createChatDelivery(
         queued,
         mailbox,
       );
-      return send(draft, applied);
+      return send(draft, applied, saved);
     },
     /** Resend a failed message: the same payload under the same identity. */
     async retry(requestId: string, applied: Applied) {
@@ -209,5 +222,82 @@ export function createChatDelivery(
         throw new Error("Only a message that wasn't sent can be discarded.");
       removeChatDraft(stores.chat, draft);
     },
+  };
+}
+
+/** Lean `observe`: a failed message that the selected session shows has
+ * landed (its reply was lost, came after the deadline, or the app restarted),
+ * so it is confirmed instead of offering Retry. A pending message waits for
+ * its reply or deadline, so the reply still updates the view that sent it; the
+ * sweep runs again when the next saved deadline passes. A submission error
+ * about a request the session shows is stale too. */
+export function observeLandedChatSends(
+  stores: Pick<ShellStores, "chat" | "client" | "session">,
+  now: () => number = Date.now,
+) {
+  let disposed = false;
+  let scheduled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  function schedule() {
+    if (disposed || scheduled) return;
+    scheduled = true;
+    queueMicrotask(() => {
+      scheduled = false;
+      if (!disposed) sweep();
+    });
+  }
+  function sweep() {
+    clearTimeout(timer);
+    timer = undefined;
+    const session = stores.session.getState().session;
+    const clientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const at = now();
+    if (session && clientDid) {
+      for (const draft of stores.chat.getState().chatDrafts) {
+        if (
+          draft.clientDid !== clientDid ||
+          sendStatus(draft, at) !== "failed" ||
+          !heldFor(session, draft.sessionId, draft.nodeDid) ||
+          !sessionShowsRequest(session, draft.requestId)
+        )
+          continue;
+        try {
+          const current = savedChatDraft(draft);
+          if (current && sendStatus(current, at) === "failed")
+            confirm(stores.chat, current);
+        } catch {
+          // An unreadable or unwritable draft keeps showing Retry and Discard.
+        }
+      }
+      const stale = stores.chat.getState().submissionError;
+      if (
+        stale?.requestId &&
+        (!session.nodeDid || session.nodeDid === stale.nodeDid) &&
+        sessionShowsRequest(session, stale.requestId)
+      )
+        stores.chat.setState({ submissionError: null });
+    }
+    const next = nextSendDeadline(stores.chat.getState().chatDrafts, at);
+    if (next !== null) timer = setTimeout(schedule, Math.max(0, next - now()));
+  }
+  const stop = [
+    stores.session.subscribe(schedule),
+    stores.client.subscribe((state, previous) => {
+      if (state.snapshot?.client?.clientDid !== previous.snapshot?.client?.clientDid)
+        schedule();
+    }),
+    stores.chat.subscribe((state, previous) => {
+      if (
+        state.chatDrafts !== previous.chatDrafts ||
+        state.submissionError !== previous.submissionError
+      )
+        schedule();
+    }),
+  ];
+  schedule();
+  return () => {
+    disposed = true;
+    clearTimeout(timer);
+    stop.forEach((unsubscribe) => unsubscribe());
   };
 }

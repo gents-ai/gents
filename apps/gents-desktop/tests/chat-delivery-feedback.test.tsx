@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatSendRequest } from "@source-inc/gents-desktop-client";
 import { ChatDeliveryFeedback } from "../src/ui/screens/session/ChatDeliveryFeedback";
@@ -8,6 +8,8 @@ import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { loadChatDrafts } from "../src/hooks/chatDrafts";
 import { navigate } from "../src/ui/lib/router";
 import { node, testApp, withApp } from "./app-fixture";
+import { writeSession } from "../src/hooks/sessionStore";
+import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 
 vi.mock("@/lib/router", async (original) => ({
   ...(await original<typeof import("../src/ui/lib/router")>()),
@@ -123,4 +125,25 @@ it("retries without navigating once its view closes", async () => {
   await waitFor(() => expect(loadChatDrafts().chatDrafts).toEqual([]));
   expect(f.app.stores.selection.getState().sessionId).toBeNull();
   expect(navigate).not.toHaveBeenCalled();
+});
+
+it("stops showing a failed message as unsent once its session shows it", async () => {
+  const f = fixture();
+  await screen.findByText("The message wasn't sent");
+  act(() =>
+    writeSession(f.app.stores.session, {
+      sessionId: f.request.sessionId!,
+      nodeDid: f.request.nodeDid,
+      latestRequestId: f.request.requestId!,
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      timelineItems: [],
+    } as unknown as DesktopSessionSnapshot),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull(),
+  );
+  expect(f.control).not.toHaveBeenCalled();
+  expect(loadChatDrafts().chatDrafts).toEqual([]);
 });

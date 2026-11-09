@@ -167,6 +167,25 @@ export function holdsRequest(
   );
 }
 
+export function sessionShowsRequest(
+  session: DesktopSessionSnapshot | null,
+  requestId: string,
+): boolean {
+  if (!session) return false;
+  return (
+    session.latestRequestId === requestId ||
+    session.pendingTurn?.requestId === requestId ||
+    session.queuedTurns.some((turn) => turn.requestId === requestId) ||
+    session.foldedInputs.some((input) => input.requestId === requestId) ||
+    (session.pendingQueue ?? []).some((entry) => entry.requestId === requestId) ||
+    session.timelineItems.some(
+      (item) =>
+        item.kind === "userMessage" &&
+        (item.requestId === requestId || item.inputRequestId === requestId),
+    )
+  );
+}
+
 export type SessionHeader = Pick<
   DesktopSessionSnapshot,
   | "sessionId"

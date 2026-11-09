@@ -47,25 +47,6 @@ type ChatActionParams = {
   reportFailure: (message: string) => void;
 };
 
-export function sessionShowsRequest(
-  session: DesktopSessionSnapshot | null,
-  requestId: string,
-): boolean {
-  if (!session) return false;
-  return (
-    session.latestRequestId === requestId ||
-    session.pendingTurn?.requestId === requestId ||
-    session.queuedTurns.some((turn) => turn.requestId === requestId) ||
-    session.foldedInputs.some((input) => input.requestId === requestId) ||
-    (session.pendingQueue ?? []).some((entry) => entry.requestId === requestId) ||
-    session.timelineItems.some(
-      (item) =>
-        item.kind === "userMessage" &&
-        (item.requestId === requestId || item.inputRequestId === requestId),
-    )
-  );
-}
-
 function queueEditFailure(
   after: DesktopSessionSnapshot | null,
   requestIds: string[],
@@ -273,6 +254,9 @@ export function createChatActions({
     attachments: RequestAttachment[] = [],
     followUp?: QueueDelivery,
     acceptsView: () => boolean = () => true,
+    /** Called once the message is saved, before dispatch: the saved message
+        now holds the input, with Retry and Discard if it fails. */
+    saved?: () => void,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
     const node = nodeOrFirst(stores.fleet.getState(), store.getState().nodeDid);
@@ -281,12 +265,14 @@ export function createChatActions({
     const callerDid = stores.client.getState().snapshot?.client?.clientDid;
     const cwd = folderFor(node.nodeDid, selectedSessionId);
     const intent = selection.captureIntent(store);
+    let savedRequestId: string | undefined;
     const reportSendFailure = (message: string) => {
       stores.chat.setState({
         submissionError: {
           nodeDid: node.nodeDid,
           sessionId: selectedSessionId,
           message,
+          requestId: savedRequestId,
         },
       });
       reportFailure(message);
@@ -329,7 +315,17 @@ export function createChatActions({
         },
         selectedSessionId,
         status.kind === "queue",
-        (result, draft) => applyChatResult(result, draft, intent, acceptsView),
+        (result, draft) => {
+          // A reply after the deadline confirms the message the error was about.
+          if (stores.chat.getState().submissionError?.requestId === draft.requestId)
+            stores.chat.setState({ submissionError: null });
+          return applyChatResult(result, draft, intent, acceptsView);
+        },
+        undefined,
+        (draft) => {
+          savedRequestId = draft.requestId;
+          saved?.();
+        },
       );
       return result;
     } catch (error) {
