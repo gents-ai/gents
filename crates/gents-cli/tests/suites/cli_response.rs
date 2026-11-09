@@ -80,7 +80,7 @@ async fn create_fixture_request(
     let request = graphql_query(
         &runtime.graphql,
         &format!(
-            r#"mutation{{create_AgentRequest(input:{{purpose: "normal", request_id:"{}",node_did:"{}",requester_did:null,session_id:"{}",agent_id:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
+            r#"mutation{{create_AgentRequest(input:{{purpose: "normal", request_id:"{}",node_did:"{}",requester_did:null,session_id:"{}",agent_did:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
             escape_graphql_string(request_id),
             escape_graphql_string(&runtime.node_did),
             escape_graphql_string(session_id),
@@ -130,11 +130,11 @@ async fn insert_materialized_response(
     runtime: &ResponseTestRuntime,
     fixture: MaterializedResponse<'_>,
 ) -> Result<String> {
-    use gents::session::canonical_rows::{
+    use gents::store::config_client::ConfigAccess;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use gents::store::config_client::ConfigAccess;
 
     let MaterializedResponse {
         request_id,

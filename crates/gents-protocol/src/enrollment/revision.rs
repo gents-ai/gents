@@ -32,7 +32,7 @@ pub struct AuthorizationRevisionRecord {
     pub admin_did: String,
     pub member_did: String,
     pub member_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub sequence: u64,
     pub authorization_expires_at: String,
     pub kind: AuthorizationRevisionKind,
@@ -56,7 +56,7 @@ impl AuthorizationRevisionRecord {
                 &self.admin_did,
                 &self.member_did,
                 &self.member_peer,
-                &self.owner_agent,
+                &self.owner_node_did,
                 sequence.as_str(),
                 &self.authorization_expires_at,
                 self.kind.as_str(),
@@ -97,8 +97,8 @@ impl AuthorizationRevisionRecord {
         if self.member_peer != request.candidate_peer {
             return Err(EnrollmentError::RevisionMemberPeerMismatch);
         }
-        if self.owner_agent != request.owner_agent {
-            return Err(EnrollmentError::RevisionOwnerAgentMismatch);
+        if self.owner_node_did != request.owner_node_did {
+            return Err(EnrollmentError::RevisionOwnerNodeMismatch);
         }
         if self.signer_did != request.admin_did {
             return Err(EnrollmentError::RevisionSignerMismatch);

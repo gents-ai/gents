@@ -5,4 +5,4 @@ import type { JobState } from "./JobState.js";
  * The result of controlling a job row. Control is local-only: it runs on
  * the runtime that drives the row, while the view also works remotely.
  */
-export type JobControlOutcome = { "Applied": { state: JobState, killed_children: number, } } | { "AlreadyTerminal": { state: JobState, } };
+export type JobControlOutcome = { "Queued": { intent_doc_id: string, } } | { "Applied": { state: JobState, killed_children: number, } } | { "AlreadyTerminal": { state: JobState, } };

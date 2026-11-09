@@ -1,10 +1,6 @@
-//! Live compatibility of the collection versions two running nodes replicate.
-//! DefraDB resolves every merged block by `schema_version_id` and rejects
-//! versions the receiver does not hold; a peer whose active versions differ can
-//! never merge the other side's writes and must be reported instead.
+//! The active collection versions a runtime publishes on its `/status`.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,17 +8,6 @@ use serde_json::Value;
 /// Top-level `/status` field carrying the runtime's [`ReplicatedSchema`] for
 /// the client route. `null` means the runtime could not read its own node yet.
 pub const STATUS_REPLICATED_SCHEMA_FIELD: &str = "replicated_schema";
-
-/// Prevent app routes from bypassing protocol schema compatibility checks.
-pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
-    let overlaps_protocol_catalog = requested.iter().any(|requested| {
-        crate::schemas::ALL_COLLECTION_NAMES
-            .iter()
-            .chain(crate::schemas::RUNTIME_COLLECTION_NAMES.iter())
-            .any(|protocol| requested == protocol)
-    });
-    (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
-}
 
 /// What a merge depends on for one collection: DefraDB's content-addressed
 /// active version ID, plus the branchable and policy settings that version
@@ -64,63 +49,3 @@ impl ReplicatedCollectionIdentity {
 
 /// Active identities by collection name, as read from one node.
 pub type ReplicatedSchema = BTreeMap<String, ReplicatedCollectionIdentity>;
-
-/// A peer whose replicated collections differ from this node's.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ReplicatedSchemaSkew {
-    /// Collections that are missing on either side or whose identities differ.
-    pub collections: Vec<String>,
-    /// `false` when the peer published no readable schema at all.
-    pub advertised: bool,
-}
-
-impl fmt::Display for ReplicatedSchemaSkew {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "this app and the agent runtime have different schema identities, so their synced data is incompatible; use matching Gents versions"
-        )?;
-        if self.advertised {
-            write!(
-                f,
-                " (collections that differ: {})",
-                self.collections.join(", ")
-            )
-        } else {
-            write!(f, " (the runtime does not advertise its replicated schema)")
-        }
-    }
-}
-
-impl std::error::Error for ReplicatedSchemaSkew {}
-
-pub fn compare_replicated_schema(
-    expected: &[&str],
-    local: &ReplicatedSchema,
-    remote: Option<&ReplicatedSchema>,
-) -> Result<(), ReplicatedSchemaSkew> {
-    let Some(remote) = remote else {
-        return Err(ReplicatedSchemaSkew {
-            collections: expected.iter().map(|name| (*name).to_string()).collect(),
-            advertised: false,
-        });
-    };
-    let mut collections = expected
-        .iter()
-        .filter(|name| match (local.get(**name), remote.get(**name)) {
-            (Some(local), Some(remote)) => local != remote,
-            _ => true,
-        })
-        .map(|name| (*name).to_string())
-        .collect::<Vec<_>>();
-    collections.sort();
-    collections.dedup();
-    if collections.is_empty() {
-        Ok(())
-    } else {
-        Err(ReplicatedSchemaSkew {
-            collections,
-            advertised: true,
-        })
-    }
-}

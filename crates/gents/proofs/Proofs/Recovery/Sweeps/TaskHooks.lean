@@ -9,22 +9,35 @@ namespace Recovery
 
 
 
+/-- A native ACP read can hide an existing request. Absence from an Agent's
+view, a missing signer, or a failed read cannot prove terminality. -/
+inductive TaskHookRequestObservation where
+  | terminal
+  | active
+  | hidden
+  | unavailable
+  deriving DecidableEq, Repr
+
 structure TaskHookRecordRow where
   recorded : Bool
-  requestResolved : Bool
+  requestObservation : TaskHookRequestObservation
   liveExecution : Bool
   deriving DecidableEq, Repr
 
-
-
-
 def taskHookRecordStale (row : TaskHookRecordRow) : Prop :=
-  row.recorded = true ∧ row.requestResolved = true ∧ row.liveExecution = false
+  row.recorded = true ∧ row.requestObservation = .terminal ∧ row.liveExecution = false
 
 instance (row : TaskHookRecordRow) : Decidable (taskHookRecordStale row) := by
   unfold taskHookRecordStale
   infer_instance
 
+theorem taskHookRecord_hidden_not_stale (row : TaskHookRecordRow)
+    (h : row.requestObservation = .hidden) : ¬ taskHookRecordStale row := by
+  simp [taskHookRecordStale, h]
+
+theorem taskHookRecord_unavailable_not_stale (row : TaskHookRecordRow)
+    (h : row.requestObservation = .unavailable) : ¬ taskHookRecordStale row := by
+  simp [taskHookRecordStale, h]
 
 def taskHookRecordRecover (row : TaskHookRecordRow) : TaskHookRecordRow :=
   if taskHookRecordStale row then { row with recorded := false } else row

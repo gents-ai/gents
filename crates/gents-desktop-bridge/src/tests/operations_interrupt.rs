@@ -1,199 +1,148 @@
 use crate::interrupt::interrupt_request;
-use crate::tests::support::{fetch_request_row, seed_provenance_fixture, seed_standalone_fixture};
+use crate::tests::support::{
+    reject_admission, served_desktop, served_desktop_pair, submit_request, try_submit_request,
+};
 use crate::types::DesktopInterruptRequest;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
+use gents_desktop_core::client::ClientCore;
 
-fn user_cancel(request_id: &str) -> DesktopInterruptRequest {
+fn user_cancel(request_id: &str, node: Option<&str>) -> DesktopInterruptRequest {
     DesktopInterruptRequest {
         request_id: request_id.into(),
-        node_did: None,
+        node_did: node.map(str::to_owned),
         cause: "userCancelled".into(),
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_writes_the_owner_latch_and_reports_its_timestamp() {
-    let (core, _tmp) = seed_standalone_fixture().await;
-    assert!(fetch_request_row(&core, "req_solo")
-        .await
-        .interrupt_requested_at
-        .is_none());
-
-    let result = interrupt_request(&core, &user_cancel("req_solo"))
-        .await
-        .expect("interrupt");
-    let stored = fetch_request_row(&core, "req_solo").await;
-    assert!(stored.interrupt_requested_at.is_some());
-    assert_eq!(result.interrupt_requested_at, stored.interrupt_requested_at);
+async fn seed(access: &ConfigAccess, node: &str, request: &str, session: &str, state: &str) {
+    access.write("test.interrupt.seed", &format!(
+        "mutation {{ create_AgentRequest(input: {{ purpose: \"normal\", request_id: \"{}\", node_did: \"{}\", agent_did: \"did:test:agent\", session_id: \"{}\", content: \"interrupt fixture\", lifecycle_state: \"{}\", created_at: \"2026-11-04T00:00:00Z\" }}) {{ _docID }} }}",
+        escape_graphql_string(request), escape_graphql_string(node),
+        escape_graphql_string(session), escape_graphql_string(state),
+    )).await.unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_refuses_a_logical_id_carried_by_two_physical_requests() {
-    let (core, _tmp) = seed_standalone_fixture().await;
-    let duplicate = r#"mutation {
-        create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_solo",
-            node_did: "did:test:operator",
-            agent_id: "test-agent",
-            session_id: "sess_other",
-            content: "duplicate logical root",
-            lifecycle_state: "processing",
-            backend_id: "",
-            created_at: "2026-05-20T00:00:01Z",
-            retry_count: 0
-        }) { _docID }
-    }"#;
-    let response = core.node().execute(duplicate).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+async fn latch(core: &ClientCore, node: &str, request: &str) -> Option<String> {
+    core.operator_access(node).unwrap().execute(&format!(
+        "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ interrupt_requested_at }} }}",
+        escape_graphql_string(request),
+    )).await.unwrap()["data"]["AgentRequest"][0]["interrupt_requested_at"]
+        .as_str().map(str::to_owned)
+}
 
-    let error = interrupt_request(&core, &user_cancel("req_solo"))
+#[tokio::test]
+async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
+    let served = served_desktop().await;
+    let (core, node) = (&served.core, served.node_did());
+    submit_request(
+        core,
+        &served.runtime,
+        &served.agent,
+        "parent-session",
+        "parent",
+    )
+    .await;
+    submit_request(
+        core,
+        &served.runtime,
+        &served.agent,
+        "child-session",
+        "child",
+    )
+    .await;
+    let first = interrupt_request(core, &user_cancel("parent", Some(node)))
         .await
-        .expect_err("ambiguous logical root");
-    assert!(error.contains("ambiguous"), "{error}");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_request_returns_accepted() {
-    let (core, _tmp) = seed_standalone_fixture().await;
-    let result = interrupt_request(
-        &core,
-        &DesktopInterruptRequest {
-            request_id: "req_solo".into(),
-            node_did: None,
-            cause: "userCancelled".into(),
-        },
-    )
-    .await
-    .expect("ok");
-    assert!(result.accepted);
-    assert!(!result.already_interrupted);
-    assert!(result.interrupt_requested_at.is_some());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_request_returns_already_interrupted_for_second_call() {
-    let (core, _tmp) = seed_standalone_fixture().await;
-    let first = interrupt_request(
-        &core,
-        &DesktopInterruptRequest {
-            request_id: "req_solo".into(),
-            node_did: None,
-            cause: "userCancelled".into(),
-        },
-    )
-    .await
-    .expect("first");
-    let second = interrupt_request(
-        &core,
-        &DesktopInterruptRequest {
-            request_id: "req_solo".into(),
-            node_did: None,
-            cause: "userCancelled".into(),
-        },
-    )
-    .await
-    .expect("second");
-    assert!(second.accepted);
+        .unwrap();
+    assert!(first.accepted);
+    assert!(!first.already_interrupted);
+    assert_eq!(
+        first.interrupt_requested_at,
+        latch(core, node, "parent").await
+    );
+    assert!(first.interrupt_requested_at.is_some());
+    assert!(latch(core, node, "child").await.is_none());
+    let second = interrupt_request(core, &user_cancel("parent", Some(node)))
+        .await
+        .unwrap();
     assert!(second.already_interrupted);
     assert_eq!(second.interrupt_requested_at, first.interrupt_requested_at);
+    served.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_request_rejects_terminal_request_without_latching_it() {
-    let (core, _tmp) = seed_standalone_fixture().await;
-    let terminalize = r#"mutation {
-        update_AgentRequest(
-            filter: { request_id: { _eq: "req_solo" } },
-            input: { lifecycle_state: "completed" }
-        ) { _docID }
-    }"#;
-    let response = core.node().execute(terminalize).await;
-    assert!(
-        !response.has_errors(),
-        "terminalize fixture failed: {:?}",
-        response.errors
-    );
-
-    let error = interrupt_request(
-        &core,
-        &DesktopInterruptRequest {
-            request_id: "req_solo".into(),
-            node_did: None,
-            cause: "userCancelled".into(),
-        },
-    )
-    .await
-    .expect_err("terminal request must reject stale interrupt");
-
-    assert!(error.contains("already terminal"));
-    let after = fetch_request_row(&core, "req_solo").await;
-    assert!(
-        after.interrupt_requested_at.is_none(),
-        "rejected terminal interrupt must not corrupt the audit latch"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_request_rejects_non_user_cancelled_cause() {
-    let (core, _tmp) = seed_standalone_fixture().await;
-    let err = interrupt_request(
-        &core,
-        &DesktopInterruptRequest {
-            request_id: "req_solo".into(),
-            node_did: None,
-            cause: "deadline".into(),
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(err.contains("userCancelled"));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_request_reaches_only_the_named_request() {
-    let (core, _tmp, _) = seed_provenance_fixture().await;
-    let result = interrupt_request(
-        &core,
-        &DesktopInterruptRequest {
-            request_id: "req_parent".into(),
-            node_did: Some(crate::tests::support::OPERATOR.into()),
-            cause: "userCancelled".into(),
-        },
-    )
-    .await
-    .expect("interrupt parent");
-    assert!(result.accepted);
-
-    assert!(fetch_request_row(&core, "req_parent")
+#[tokio::test]
+async fn interrupt_refuses_ambiguous_terminal_and_non_user_causes() {
+    let served = served_desktop().await;
+    let (core, node) = (&served.core, served.node_did());
+    // Client admission refuses a second request under an identity the User
+    // already holds, so the interrupt owner's ambiguity refusal can no longer
+    // be reached through a desktop submission; the twin is refused instead.
+    submit_request(core, &served.runtime, &served.agent, "one", "twins").await;
+    let twin = try_submit_request(core, &served.runtime, &served.agent, "two", "twins")
         .await
-        .interrupt_requested_at
-        .is_some());
-    for caused in ["req_child_2", "req_peer"] {
-        assert!(
-            fetch_request_row(&core, caused)
-                .await
-                .interrupt_requested_at
-                .is_none(),
-            "{caused} was caused by the interrupted request and must keep running"
-        );
-    }
+        .unwrap_err();
+    assert!(format!("{twin:#}").contains("already held"), "{twin:#}");
+    assert!(
+        interrupt_request(core, &user_cancel("twins", Some(node)))
+            .await
+            .unwrap()
+            .accepted
+    );
+    let done = submit_request(core, &served.runtime, &served.agent, "done-session", "done").await;
+    reject_admission(&served.runtime, &served.agent, &done, "fixture rejection").await;
+    assert!(interrupt_request(core, &user_cancel("done", Some(node)))
+        .await
+        .unwrap_err()
+        .contains("already terminal"));
+    assert!(latch(core, node, "done").await.is_none());
+    let mut invalid = user_cancel("done", Some(node));
+    invalid.cause = "deadline".into();
+    assert!(interrupt_request(core, &invalid)
+        .await
+        .unwrap_err()
+        .contains("userCancelled"));
+    assert!(
+        interrupt_request(core, &user_cancel("done", None))
+            .await
+            .unwrap_err()
+            .contains("Select the hosting runtime"),
+        "the owner never falls back to the core's shared selection"
+    );
+    served.shutdown().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn interrupt_request_stops_a_caused_request_on_its_own_node() {
-    let (core, _tmp, _) = seed_provenance_fixture().await;
-    let result = interrupt_request(
-        &core,
-        &DesktopInterruptRequest {
-            request_id: "req_peer".into(),
-            node_did: Some(crate::tests::support::OTHER.into()),
-            cause: "userCancelled".into(),
-        },
-    )
-    .await
-    .expect("interrupt caused request");
-    assert!(result.accepted);
-    assert!(fetch_request_row(&core, "req_parent")
+#[tokio::test]
+async fn interrupt_routes_same_logical_id_to_the_explicit_runtime() {
+    let (served, second, second_agent) = served_desktop_pair().await;
+    let core = &served.core;
+    let (first_did, second_did) = (served.node_did(), second.node_did());
+    submit_request(core, &served.runtime, &served.agent, "one", "same-id").await;
+    submit_request(core, &second, &second_agent, "two", "same-id").await;
+    interrupt_request(core, &user_cancel("same-id", Some(second_did)))
         .await
-        .interrupt_requested_at
-        .is_none());
+        .unwrap();
+    assert!(latch(core, first_did, "same-id").await.is_none());
+    assert!(latch(core, second_did, "same-id").await.is_some());
+    second.shutdown().await;
+    served.shutdown().await;
+}
+
+#[tokio::test]
+async fn interrupt_refuses_a_missing_runtime_without_using_the_client_store() {
+    let (core, _directory) = crate::tests::support::boot_core().await;
+    // A stray client-store row the owner must never consult.
+    seed(
+        &ConfigAccess::local(core.node_arc()),
+        "did:test:missing",
+        "local-only",
+        "stale",
+        "processing",
+    )
+    .await;
+    assert!(
+        interrupt_request(&core, &user_cancel("local-only", Some("did:test:missing")))
+            .await
+            .is_err()
+    );
+    core.shutdown().await.unwrap();
 }

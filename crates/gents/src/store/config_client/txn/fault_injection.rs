@@ -32,6 +32,7 @@ tokio::task_local! {
 
 struct SuccessfulMutationPause {
     after: usize,
+    every: bool,
     reached: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
     fired: AtomicBool,
@@ -47,16 +48,33 @@ tokio::task_local! {
     pub(super) static SUCCESSFUL_MUTATION_FAULT: Arc<SuccessfulMutationFault>;
 }
 
-pub(super) async fn after_successful_mutation_for_test() -> Result<()> {
+tokio::task_local! {
+    static SUCCESSFUL_MUTATION_TRACE: Arc<std::sync::Mutex<Vec<Option<&'static str>>>>;
+}
+
+pub(super) async fn after_successful_mutation_for_test(
+    operation: Option<&'static str>,
+) -> Result<()> {
     let Ok(fault) = SUCCESSFUL_MUTATION_FAULT.try_with(Arc::clone) else {
         return Ok(());
     };
+    let _ = SUCCESSFUL_MUTATION_TRACE.try_with(|trace| {
+        trace
+            .lock()
+            .expect("mutation trace lock is never poisoned")
+            .push(operation)
+    });
     let count = fault.count.fetch_add(1, Ordering::Relaxed) + 1;
     if fault.fail_after == Some(count) {
         return Err(ConfigClientError::InjectedMutationFailure { count });
     }
     if let Some(pause) = fault.pause.as_ref() {
-        if pause.after == count && !pause.fired.swap(true, Ordering::Relaxed) {
+        let due = if pause.every {
+            count >= pause.after
+        } else {
+            pause.after == count
+        };
+        if due && (!pause.fired.swap(true, Ordering::Relaxed) || pause.every) {
             pause.reached.notify_one();
             pause.release.notified().await;
         }
@@ -113,6 +131,7 @@ tokio::task_local! {
         EmbeddedFinalizationBoundary,
         Arc<tokio::sync::Notify>,
     );
+    static EMBEDDED_FINALIZATION_RELEASE: (Arc<tokio::sync::Notify>, Arc<AtomicBool>);
 }
 
 pub(super) async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoundary) {
@@ -121,12 +140,42 @@ pub(super) async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinal
         .ok()
         .flatten();
     if let Some(reached) = reached {
+        let release = EMBEDDED_FINALIZATION_RELEASE
+            .try_with(|(release, fired)| (Arc::clone(release), Arc::clone(fired)))
+            .ok();
+        if release
+            .as_ref()
+            .is_some_and(|(_, fired)| fired.swap(true, Ordering::Relaxed))
+        {
+            return;
+        }
         reached.notify_one();
-        std::future::pending::<()>().await;
+        if let Some((release, _)) = release {
+            release.notified().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
     }
 }
 
 impl ConfigApplyTxn<'_> {
+    pub(crate) async fn with_embedded_before_commit_pause<F>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output
+    where
+        F: Future,
+    {
+        EMBEDDED_FINALIZATION_PAUSE
+            .scope(
+                (EmbeddedFinalizationBoundary::BeforeCommit, reached),
+                EMBEDDED_FINALIZATION_RELEASE
+                    .scope((release, Arc::new(AtomicBool::new(false))), future),
+            )
+            .await
+    }
+
     pub(crate) async fn with_embedded_commit_ack_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         future: F,
@@ -178,6 +227,30 @@ impl ConfigApplyTxn<'_> {
                 future,
             )
             .await
+    }
+
+    /// Like [`Self::with_successful_mutation_failure_at`], also returning the
+    /// transaction operation of each successful mutation in order, so a test
+    /// can target a mutation by the owner that issued it.
+    pub(crate) async fn with_successful_mutation_failure_and_trace<F>(
+        fail_after: Option<usize>,
+        future: F,
+    ) -> (F::Output, Vec<Option<&'static str>>)
+    where
+        F: Future,
+    {
+        let trace = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (output, _) = SUCCESSFUL_MUTATION_TRACE
+            .scope(
+                Arc::clone(&trace),
+                Self::with_successful_mutation_failure_at(fail_after, future),
+            )
+            .await;
+        let trace = trace
+            .lock()
+            .expect("mutation trace lock is never poisoned")
+            .clone();
+        (output, trace)
     }
 
     pub(crate) async fn with_successful_mutation_failure_at<F>(
@@ -305,6 +378,48 @@ impl ConfigApplyTxn<'_> {
     where
         F: Future,
     {
+        let (output, fired, _) =
+            Self::with_successful_mutation_pause_and_count(after, reached, release, future).await;
+        (output, fired)
+    }
+
+    pub(crate) async fn with_successful_mutation_pause_and_count<F>(
+        after: usize,
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> (F::Output, bool, usize)
+    where
+        F: Future,
+    {
+        Self::with_successful_mutation_pauses(after, false, reached, release, future).await
+    }
+
+    /// Pauses after every successful mutation of `future`'s transactions, every
+    /// attempt included, until each pause is released.
+    pub(crate) async fn with_each_successful_mutation_pause<F>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> (F::Output, usize)
+    where
+        F: Future,
+    {
+        let (output, _, count) =
+            Self::with_successful_mutation_pauses(1, true, reached, release, future).await;
+        (output, count)
+    }
+
+    async fn with_successful_mutation_pauses<F>(
+        after: usize,
+        every: bool,
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> (F::Output, bool, usize)
+    where
+        F: Future,
+    {
         assert!(after > 0);
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
@@ -314,6 +429,7 @@ impl ConfigApplyTxn<'_> {
             receipt_fired: AtomicBool::new(false),
             pause: Some(SuccessfulMutationPause {
                 after,
+                every,
                 reached,
                 release,
                 fired: AtomicBool::new(false),
@@ -337,6 +453,7 @@ impl ConfigApplyTxn<'_> {
                 .expect("pause configured")
                 .fired
                 .load(Ordering::Relaxed),
+            fault.count.load(Ordering::Relaxed),
         )
     }
 

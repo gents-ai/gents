@@ -3,8 +3,8 @@
 //! policy: a duplicate create is an error.
 
 use anyhow::{ensure, Context, Result};
-use gents::defra_node::{EmbeddedNode, QueryRequest, QueryResponse};
-use gents::session::canonical_rows::{
+use gents::defra_node::{Node as EmbeddedNode, QueryRequest, QueryResponse};
+use gents_protocol::output::rows::{
     decode_output_segment_row, output_segment_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };

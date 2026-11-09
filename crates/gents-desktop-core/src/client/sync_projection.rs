@@ -1,28 +1,95 @@
-#[cfg(test)]
-use gents::P2pSyncStatusSnapshot;
+use super::core::{ClientSyncStateSnapshot, EnrollmentActivationStage, P2PHealthStatus};
+use super::RuntimeConnectionStatus;
 
-use gents::runtime::agent::p2p_reconcile::PairingDirection;
-use gents_protocol::client_protocol::PairingSignal;
-
-use super::core::{ClientSyncStateSnapshot, P2PHealthStatus};
-
+/// `ClientSyncHealth.State`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncHealthState {
     Healthy,
-    Syncing,
-    Offline,
-    Failed,
-    Incompatible,
+    Waiting,
+    Blocked,
 }
 
 impl SyncHealthState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",
-            Self::Syncing => "syncing",
-            Self::Offline => "offline",
-            Self::Failed => "failed",
-            Self::Incompatible => "incompatible",
+            Self::Waiting => "waiting",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+/// `ClientSyncHealth.Cause`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncHealthCause {
+    RuntimeConnecting,
+    RuntimeDisconnected,
+    RuntimeRefused,
+    RuntimeNoEndpoint,
+    EnrollmentAuthentication,
+    EnrollmentRoute,
+    DiscoveryDegraded,
+    DiscoveryOffline,
+}
+
+impl SyncHealthCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RuntimeConnecting => "runtime_connecting",
+            Self::RuntimeDisconnected => "runtime_disconnected",
+            Self::RuntimeRefused => "runtime_refused",
+            Self::RuntimeNoEndpoint => "runtime_no_endpoint",
+            Self::EnrollmentAuthentication => "enrollment_authentication",
+            Self::EnrollmentRoute => "enrollment_route",
+            Self::DiscoveryDegraded => "discovery_degraded",
+            Self::DiscoveryOffline => "discovery_offline",
+        }
+    }
+
+    pub fn next_action(self) -> SyncNextAction {
+        match self {
+            Self::RuntimeConnecting
+            | Self::RuntimeDisconnected
+            | Self::EnrollmentRoute
+            | Self::DiscoveryDegraded => SyncNextAction::Wait,
+            Self::RuntimeRefused => SyncNextAction::RestoreAccess,
+            Self::RuntimeNoEndpoint => SyncNextAction::ConnectRuntime,
+            Self::EnrollmentAuthentication => SyncNextAction::EnrollAgain,
+            Self::DiscoveryOffline => SyncNextAction::CheckNetwork,
+        }
+    }
+
+    fn state(self) -> SyncHealthState {
+        if self.next_action() == SyncNextAction::Wait {
+            SyncHealthState::Waiting
+        } else {
+            SyncHealthState::Blocked
+        }
+    }
+
+    fn is_discovery(self) -> bool {
+        matches!(self, Self::DiscoveryDegraded | Self::DiscoveryOffline)
+    }
+}
+
+/// `ClientSyncHealth.NextAction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncNextAction {
+    Wait,
+    RestoreAccess,
+    ConnectRuntime,
+    EnrollAgain,
+    CheckNetwork,
+}
+
+impl SyncNextAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wait => "wait",
+            Self::RestoreAccess => "restore_access",
+            Self::ConnectRuntime => "connect_runtime",
+            Self::EnrollAgain => "enroll_again",
+            Self::CheckNetwork => "check_network",
         }
     }
 }
@@ -30,150 +97,122 @@ impl SyncHealthState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncHealth {
     pub state: SyncHealthState,
+    pub cause: Option<SyncHealthCause>,
+    pub next_action: Option<SyncNextAction>,
     pub last_error: Option<String>,
     pub connected_peer_count: usize,
     pub activation_error_count: usize,
-    pub pending_dag_count: Option<usize>,
-    pub persisted_pending_dag_count: Option<usize>,
-    pub push_retry_marker_count: Option<usize>,
-    pub exhausted_fetch_count: Option<u64>,
-    pub quarantined_dag_count: Option<usize>,
 }
 
-pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth> {
-    let transport = &sync.transport;
-    let database = sync.database_sync.as_ref();
-    let database_error = sync.database_sync_error.as_ref();
-    let schema_skew = sync.peer_schema_skew.values().next();
-    let activation_error_count = sync.enrollment_activation_errors.len();
+/// `ClientSyncHealth.view` over the three facts: `runtimes` holds the runtime
+/// connection of each configured runtime in directory order (`None` before
+/// the observer reconciles it), and the sync owner's snapshot holds the
+/// enrollment activation failures and P2P discovery.
+pub fn project_sync_health<I>(sync: &ClientSyncStateSnapshot, runtimes: I) -> SyncHealth
+where
+    I: IntoIterator<Item = Option<RuntimeConnectionStatus>>,
+{
     let connected_peer_count = sync.peers.iter().filter(|peer| peer.dial_succeeded).count();
-    let offline = is_offline(
-        transport.status,
-        !sync.peers.is_empty(),
+    let causes = runtimes
+        .into_iter()
+        .filter_map(runtime_cause)
+        .chain(
+            sync.enrollment_activation_errors
+                .values()
+                .map(|error| match error.stage {
+                    EnrollmentActivationStage::Authentication => {
+                        SyncHealthCause::EnrollmentAuthentication
+                    }
+                    EnrollmentActivationStage::Route => SyncHealthCause::EnrollmentRoute,
+                }),
+        )
+        .chain(discovery_cause(
+            sync.transport.status,
+            sync.peers.len(),
+            connected_peer_count,
+        ))
+        .collect::<Vec<_>>();
+    let cause = causes
+        .iter()
+        .find(|cause| cause.state() == SyncHealthState::Blocked)
+        .or_else(|| causes.first())
+        .copied();
+    SyncHealth {
+        state: cause.map_or(SyncHealthState::Healthy, SyncHealthCause::state),
+        cause,
+        next_action: cause.map(SyncHealthCause::next_action),
+        last_error: cause
+            .filter(|cause| cause.is_discovery())
+            .and_then(|_| sync.transport.last_error.clone()),
         connected_peer_count,
-    );
-    if schema_skew.is_none()
-        && database.is_none()
-        && database_error.is_none()
-        && activation_error_count == 0
-        && transport.status == P2PHealthStatus::Healthy
-        && !offline
-    {
-        return None;
-    }
-    let failed = database.is_some_and(|status| status.quarantined_pending_dags > 0);
-    let push_retry_marker_count = database.map(|status| {
-        status
-            .push_retry_markers
-            .document_markers
-            .saturating_add(status.push_retry_markers.collection_markers)
-    });
-    let syncing = database.is_some_and(|status| {
-        status.pending_dags > 0
-            || status.persisted_pending_dags > 0
-            || push_retry_marker_count.is_some_and(|count| count > 0)
-            || status.pending_resync_in_flight
-            || status.push_backlog.queued_items > 0
-            || status.push_backlog.active_jobs > 0
-    });
-
-    let state = if schema_skew.is_some() {
-        SyncHealthState::Incompatible
-    } else if failed || database_error.is_some() {
-        SyncHealthState::Failed
-    } else if offline {
-        SyncHealthState::Offline
-    } else if syncing || transport.status == P2PHealthStatus::Degraded {
-        SyncHealthState::Syncing
-    } else {
-        SyncHealthState::Healthy
-    };
-    let last_error = if let Some(skew) = schema_skew {
-        Some(skew.to_string())
-    } else if database_error.is_some() {
-        database_error.cloned()
-    } else if failed {
-        Some("DefraDB quarantined a document DAG that could not be merged".to_string())
-    } else {
-        transport.last_error.clone()
-    };
-
-    Some(SyncHealth {
-        state,
-        last_error,
-        connected_peer_count,
-        activation_error_count,
-        pending_dag_count: database.map(|status| status.pending_dags),
-        persisted_pending_dag_count: database.map(|status| status.persisted_pending_dags),
-        push_retry_marker_count,
-        exhausted_fetch_count: database.map(|status| status.pending_dag_fetch_exhausted),
-        quarantined_dag_count: database.map(|status| status.quarantined_pending_dags),
-    })
-}
-
-/// The pairing signal of the selected-session delivery classification: the
-/// client-to-runtime leg to `node_did` replicates when a peer for that node
-/// dialed and its client-to-runtime route is applied and matches the live
-/// replicator. A node with no listed peer has no such leg.
-pub fn project_client_route(sync: &ClientSyncStateSnapshot, node_did: &str) -> PairingSignal {
-    let outbound = PairingDirection::ClientToRuntime.as_str();
-    let replicating = sync.peers.iter().any(|peer| {
-        peer.node_did == node_did
-            && peer.dial_succeeded
-            && peer
-                .routes
-                .iter()
-                .any(|route| route.direction == outbound && route.applied && route.live_match)
-    });
-    if replicating {
-        PairingSignal::Connected
-    } else {
-        PairingSignal::NotConnected
+        activation_error_count: sync.enrollment_activation_errors.len(),
     }
 }
 
-fn is_offline(
-    transport_status: P2PHealthStatus,
-    any_configured_peer: bool,
-    connected_peer_count: usize,
-) -> bool {
-    match transport_status {
-        P2PHealthStatus::Wedged => true,
-        P2PHealthStatus::Degraded => connected_peer_count == 0,
-        P2PHealthStatus::Healthy => connected_peer_count == 0 && any_configured_peer,
+fn runtime_cause(status: Option<RuntimeConnectionStatus>) -> Option<SyncHealthCause> {
+    match status {
+        None | Some(RuntimeConnectionStatus::Connecting) => {
+            Some(SyncHealthCause::RuntimeConnecting)
+        }
+        Some(RuntimeConnectionStatus::Connected) => None,
+        Some(RuntimeConnectionStatus::Disconnected) => Some(SyncHealthCause::RuntimeDisconnected),
+        Some(RuntimeConnectionStatus::Refused) => Some(SyncHealthCause::RuntimeRefused),
+        Some(RuntimeConnectionStatus::NoEndpoint) => Some(SyncHealthCause::RuntimeNoEndpoint),
+    }
+}
+
+fn discovery_cause(
+    transport: P2PHealthStatus,
+    configured_peers: usize,
+    dialed_peers: usize,
+) -> Option<SyncHealthCause> {
+    match transport {
+        P2PHealthStatus::Wedged => Some(SyncHealthCause::DiscoveryOffline),
+        P2PHealthStatus::Degraded if dialed_peers == 0 => Some(SyncHealthCause::DiscoveryOffline),
+        P2PHealthStatus::Degraded => Some(SyncHealthCause::DiscoveryDegraded),
+        P2PHealthStatus::Healthy if dialed_peers == 0 && configured_peers > 0 => {
+            Some(SyncHealthCause::DiscoveryOffline)
+        }
+        P2PHealthStatus::Healthy => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::core::{
-        ClientPeerStatus, ClientRouteStatus, P2PHealth, PairingCollectionStatus,
-    };
-    use crate::remote_admin::PairingErrorClass;
-    use gents::P2pPushRetryMarkerSnapshot;
-    use std::time::{Duration, SystemTime};
+    use crate::client::core::{ClientPeerStatus, EnrollmentActivationError, P2PHealth};
+    use serde::Deserialize;
 
-    fn t(secs: u64) -> SystemTime {
-        SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SyncHealthCase {
+        runtimes: Vec<Option<String>>,
+        enrollment: Vec<String>,
+        transport: String,
+        configured_peers: usize,
+        dialed_peers: usize,
+        state: String,
+        cause: Option<String>,
+        next_action: Option<String>,
     }
 
-    fn transport(status: P2PHealthStatus) -> P2PHealth {
-        P2PHealth {
-            status,
-            connected_peer_count: usize::from(status == P2PHealthStatus::Healthy),
-            replicator_count: 1,
-            last_ok_at: Some(t(50)),
-            ..P2PHealth::default()
+    fn status(name: &str) -> RuntimeConnectionStatus {
+        match name {
+            "connecting" => RuntimeConnectionStatus::Connecting,
+            "connected" => RuntimeConnectionStatus::Connected,
+            "disconnected" => RuntimeConnectionStatus::Disconnected,
+            "refused" => RuntimeConnectionStatus::Refused,
+            "noEndpoint" => RuntimeConnectionStatus::NoEndpoint,
+            other => panic!("unexpected runtime connection status {other}"),
         }
     }
 
-    fn peer(dial_succeeded: bool) -> ClientPeerStatus {
+    fn peer(index: usize, dial_succeeded: bool) -> ClientPeerStatus {
         ClientPeerStatus {
-            peer_id: "peer-1".into(),
-            label: "Studio".into(),
-            node_did: "did:test:node".into(),
-            addr: "/ip4/10.0.0.1/tcp/1".into(),
+            peer_id: format!("peer-{index}"),
+            label: format!("Peer {index}"),
+            node_did: format!("did:test:{index}"),
+            addr: format!("/ip4/10.0.0.{index}/tcp/1"),
             dial_succeeded,
             last_error: None,
             pairing: Vec::new(),
@@ -181,329 +220,88 @@ mod tests {
         }
     }
 
-    fn project(
-        transport: P2PHealth,
-        peers: Vec<ClientPeerStatus>,
-        database_sync: Option<P2pSyncStatusSnapshot>,
-    ) -> Option<SyncHealth> {
-        project_sync_health(&ClientSyncStateSnapshot {
-            transport,
-            database_sync,
-            database_sync_error: None,
-            enrollment_activation_errors: Default::default(),
-            peer_schema_skew: Default::default(),
+    fn snapshot(case: &SyncHealthCase) -> ClientSyncStateSnapshot {
+        let status = match case.transport.as_str() {
+            "healthy" => P2PHealthStatus::Healthy,
+            "degraded" => P2PHealthStatus::Degraded,
+            "wedged" => P2PHealthStatus::Wedged,
+            other => panic!("unexpected transport {other}"),
+        };
+        ClientSyncStateSnapshot {
+            transport: P2PHealth {
+                status,
+                last_error: Some("probe failed".into()),
+                ..P2PHealth::default()
+            },
+            enrollment_activation_errors: case
+                .enrollment
+                .iter()
+                .enumerate()
+                .map(|(index, stage)| {
+                    (
+                        format!("request-{index}"),
+                        EnrollmentActivationError {
+                            request_digest: format!("digest-{index}"),
+                            authorization_sequence: 1,
+                            authorization_expires_at: "2030-01-01T00:00:00Z".into(),
+                            stage: match stage.as_str() {
+                                "authentication" => EnrollmentActivationStage::Authentication,
+                                "route" => EnrollmentActivationStage::Route,
+                                other => panic!("unexpected stage {other}"),
+                            },
+                        },
+                    )
+                })
+                .collect(),
             directory: Vec::new(),
-            peers,
-        })
-    }
-
-    fn route(direction: PairingDirection, applied: bool, live_match: bool) -> ClientRouteStatus {
-        ClientRouteStatus {
-            route_id: format!("peer-1:{}", direction.as_str()),
-            direction: direction.as_str().into(),
-            directory_id: "peer-1".into(),
-            transport_peer_id: None,
-            address: None,
-            template: None,
-            desired: true,
-            applied,
-            live_match,
-            filter_summary: String::new(),
-            last_error: None,
-            retry_count: 0,
-            last_retry_at: None,
-            last_retry_error_class: None,
+            peers: (0..case.configured_peers)
+                .map(|index| peer(index, index < case.dialed_peers))
+                .collect(),
         }
     }
 
-    fn client_route(dial_succeeded: bool, routes: Vec<ClientRouteStatus>) -> PairingSignal {
-        let sync = ClientSyncStateSnapshot {
-            transport: transport(P2PHealthStatus::Healthy),
-            database_sync: None,
-            database_sync_error: None,
-            enrollment_activation_errors: Default::default(),
-            peer_schema_skew: Default::default(),
-            directory: Vec::new(),
-            peers: vec![ClientPeerStatus {
-                routes,
-                ..peer(dial_succeeded)
-            }],
-        };
-        project_client_route(&sync, "did:test:node")
-    }
-
     #[test]
-    fn only_a_dialed_applied_live_client_to_runtime_route_is_connected() {
-        let outbound = PairingDirection::ClientToRuntime;
-        let inbound = PairingDirection::RuntimeToClient;
-        assert_eq!(
-            client_route(true, vec![route(outbound, true, true)]),
-            PairingSignal::Connected
-        );
-        for (dialed, routes) in [
-            (false, vec![route(outbound, true, true)]),
-            (true, vec![route(outbound, true, false)]),
-            (true, vec![route(outbound, false, true)]),
-            (true, vec![route(inbound, true, true)]),
-            (true, Vec::new()),
-        ] {
-            assert_eq!(
-                client_route(dialed, routes.clone()),
-                PairingSignal::NotConnected,
-                "dialed {dialed}, routes {routes:?}"
+    fn generated_sync_health_cases_match_lean() {
+        let contract: serde_json::Value =
+            gents_lean_contract::load_contract_snapshot().expect("Lean client sync health cases");
+        let cases: Vec<SyncHealthCase> =
+            serde_json::from_value(contract["client_sync_health_cases"].clone())
+                .expect("decode client sync health cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let sync = snapshot(&case);
+            let health = project_sync_health(
+                &sync,
+                case.runtimes
+                    .iter()
+                    .map(|runtime| runtime.as_deref().map(status)),
             );
+            let label = format!(
+                "runtimes={:?} enrollment={:?} transport={} configured={} dialed={}",
+                case.runtimes,
+                case.enrollment,
+                case.transport,
+                case.configured_peers,
+                case.dialed_peers
+            );
+            assert_eq!(health.state.as_str(), case.state, "{label}");
+            assert_eq!(
+                health.cause.map(SyncHealthCause::as_str),
+                case.cause.as_deref(),
+                "{label}"
+            );
+            assert_eq!(
+                health.next_action.map(SyncNextAction::as_str),
+                case.next_action.as_deref(),
+                "{label}"
+            );
+            assert_eq!(
+                health.last_error.is_some(),
+                health.cause.is_some_and(SyncHealthCause::is_discovery),
+                "{label}"
+            );
+            assert_eq!(health.activation_error_count, case.enrollment.len());
+            assert_eq!(health.connected_peer_count, case.dialed_peers);
         }
-        let sync = ClientSyncStateSnapshot {
-            transport: transport(P2PHealthStatus::Healthy),
-            database_sync: None,
-            database_sync_error: None,
-            enrollment_activation_errors: Default::default(),
-            peer_schema_skew: Default::default(),
-            directory: Vec::new(),
-            peers: vec![ClientPeerStatus {
-                routes: vec![route(outbound, true, true)],
-                ..peer(true)
-            }],
-        };
-        assert_eq!(
-            project_client_route(&sync, "did:test:other"),
-            PairingSignal::NotConnected,
-            "another node's route is not this node's pairing"
-        );
-    }
-
-    #[test]
-    fn missing_database_observation_has_no_projected_health() {
-        assert_eq!(
-            project(transport(P2PHealthStatus::Healthy), Vec::new(), None),
-            None
-        );
-    }
-
-    #[test]
-    fn database_decode_error_is_visible_without_reclassifying_transport() {
-        let health = project_sync_health(&ClientSyncStateSnapshot {
-            transport: transport(P2PHealthStatus::Healthy),
-            database_sync: None,
-            database_sync_error: Some("incompatible sync status".into()),
-            enrollment_activation_errors: Default::default(),
-            peer_schema_skew: Default::default(),
-            directory: Vec::new(),
-            peers: Vec::new(),
-        })
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Failed);
-        assert_eq!(
-            health.last_error.as_deref(),
-            Some("incompatible sync status")
-        );
-        assert_eq!(health.pending_dag_count, None);
-    }
-
-    #[test]
-    fn peer_schema_skew_projects_incompatible_over_every_other_fact() {
-        let skew = gents_protocol::peer_schema::ReplicatedSchemaSkew {
-            collections: vec!["AgentSession".to_string()],
-            advertised: true,
-        };
-        let health = project_sync_health(&ClientSyncStateSnapshot {
-            transport: transport(P2PHealthStatus::Wedged),
-            database_sync: Some(P2pSyncStatusSnapshot {
-                quarantined_pending_dags: 1,
-                ..P2pSyncStatusSnapshot::default()
-            }),
-            database_sync_error: Some("decode failure".into()),
-            enrollment_activation_errors: Default::default(),
-            peer_schema_skew: [("peer-1".to_string(), skew.clone())].into(),
-            directory: Vec::new(),
-            peers: vec![peer(false)],
-        })
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Incompatible);
-        assert_eq!(health.state.as_str(), "incompatible");
-        assert_eq!(health.last_error, Some(skew.to_string()));
-        assert!(health
-            .last_error
-            .unwrap()
-            .contains("use matching Gents versions"));
-        assert_eq!(health.quarantined_dag_count, Some(1));
-
-        let before_database_observation = project_sync_health(&ClientSyncStateSnapshot {
-            transport: transport(P2PHealthStatus::Healthy),
-            database_sync: None,
-            database_sync_error: None,
-            enrollment_activation_errors: Default::default(),
-            peer_schema_skew: [("peer-1".to_string(), skew)].into(),
-            directory: Vec::new(),
-            peers: Vec::new(),
-        })
-        .expect("schema skew is visible before the first database observation");
-        assert_eq!(
-            before_database_observation.state,
-            SyncHealthState::Incompatible
-        );
-    }
-
-    #[test]
-    fn no_configured_peer_is_healthy_not_offline() {
-        let health = project(
-            transport(P2PHealthStatus::Healthy),
-            Vec::new(),
-            Some(P2pSyncStatusSnapshot::default()),
-        )
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Healthy);
-    }
-
-    #[test]
-    fn configured_peer_connectivity_not_unrelated_global_connections_owns_offline() {
-        let mut observed = transport(P2PHealthStatus::Healthy);
-        observed.connected_peer_count = 7;
-        let health = project(
-            observed,
-            vec![peer(false)],
-            Some(P2pSyncStatusSnapshot::default()),
-        )
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Offline);
-        assert_eq!(health.connected_peer_count, 0);
-        assert_eq!(health.pending_dag_count, Some(0));
-    }
-
-    #[test]
-    fn degraded_transport_with_a_live_peer_is_syncing() {
-        let mut observed = transport(P2PHealthStatus::Degraded);
-        observed.last_error = Some("probe failed".into());
-        let health = project(
-            observed,
-            vec![peer(true)],
-            Some(P2pSyncStatusSnapshot::default()),
-        )
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Syncing);
-        assert_eq!(health.last_error.as_deref(), Some("probe failed"));
-    }
-
-    #[test]
-    fn wedged_transport_is_visible_before_database_observation() {
-        let mut observed = transport(P2PHealthStatus::Wedged);
-        observed.last_ok_at = None;
-        observed.last_error = Some("probe failed".into());
-        let health = project(observed, Vec::new(), None).unwrap();
-        assert_eq!(health.state, SyncHealthState::Offline);
-        assert_eq!(health.last_error.as_deref(), Some("probe failed"));
-        assert_eq!(health.pending_dag_count, None);
-    }
-
-    #[test]
-    fn pairing_retry_does_not_rebuild_database_sync_state() {
-        let mut retry = PairingCollectionStatus::new("AgentSession");
-        retry.record_retry(PairingErrorClass::RpcTimeout);
-        let mut configured = peer(true);
-        configured.pairing.push(retry);
-        let health = project(
-            transport(P2PHealthStatus::Healthy),
-            vec![configured],
-            Some(P2pSyncStatusSnapshot::default()),
-        )
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Healthy);
-    }
-
-    #[test]
-    fn enrollment_activation_failure_is_visible_beside_a_healthy_local_peer() {
-        use crate::client::core::{EnrollmentActivationError, EnrollmentActivationStage};
-
-        for database_sync in [None, Some(P2pSyncStatusSnapshot::default())] {
-            let mut unavailable = peer(false);
-            unavailable.peer_id = "remote-peer".into();
-            let mut sync = ClientSyncStateSnapshot {
-                transport: transport(P2PHealthStatus::Healthy),
-                database_sync,
-                database_sync_error: None,
-                enrollment_activation_errors: [(
-                    "remote-enrollment".into(),
-                    EnrollmentActivationError {
-                        request_digest: "private-enrollment-digest".into(),
-                        authorization_sequence: 1,
-                        authorization_expires_at: "2030-01-01T00:00:00Z".into(),
-                        stage: EnrollmentActivationStage::Authentication,
-                    },
-                )]
-                .into(),
-                peer_schema_skew: Default::default(),
-                directory: Vec::new(),
-                peers: vec![peer(true), unavailable],
-            };
-            let health = project_sync_health(&sync).expect("activation failure is observable");
-            assert_eq!(health.state, SyncHealthState::Healthy);
-            assert_eq!(health.connected_peer_count, 1);
-            assert_eq!(health.activation_error_count, 1);
-            assert_eq!(health.last_error, None);
-
-            sync.enrollment_activation_errors.clear();
-            assert!(project_sync_health(&sync)
-                .is_none_or(|health| health.state == SyncHealthState::Healthy));
-        }
-    }
-
-    #[test]
-    fn database_pending_work_is_syncing_and_copies_exact_gauges() {
-        let health = project(
-            transport(P2PHealthStatus::Healthy),
-            Vec::new(),
-            Some(P2pSyncStatusSnapshot {
-                pending_dags: 2,
-                persisted_pending_dags: 3,
-                pending_resync_in_flight: true,
-                push_retry_markers: P2pPushRetryMarkerSnapshot {
-                    document_markers: 4,
-                    collection_markers: 5,
-                    ..Default::default()
-                },
-                ..P2pSyncStatusSnapshot::default()
-            }),
-        )
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Syncing);
-        assert_eq!(health.pending_dag_count, Some(2));
-        assert_eq!(health.persisted_pending_dag_count, Some(3));
-        assert_eq!(health.push_retry_marker_count, Some(9));
-    }
-
-    #[test]
-    fn historical_provider_exhaustion_does_not_invent_a_stalled_state() {
-        let health = project(
-            transport(P2PHealthStatus::Healthy),
-            Vec::new(),
-            Some(P2pSyncStatusSnapshot {
-                pending_dags: 1,
-                pending_dag_fetch_exhausted: 3,
-                push_retry_markers: P2pPushRetryMarkerSnapshot {
-                    scheduled_peers: 1,
-                    ..Default::default()
-                },
-                ..P2pSyncStatusSnapshot::default()
-            }),
-        )
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Syncing);
-        assert_eq!(health.exhausted_fetch_count, Some(3));
-        assert_eq!(health.last_error, None);
-    }
-
-    #[test]
-    fn database_quarantine_is_failed() {
-        let health = project(
-            transport(P2PHealthStatus::Healthy),
-            Vec::new(),
-            Some(P2pSyncStatusSnapshot {
-                quarantined_pending_dags: 2,
-                ..P2pSyncStatusSnapshot::default()
-            }),
-        )
-        .unwrap();
-        assert_eq!(health.state, SyncHealthState::Failed);
-        assert_eq!(health.quarantined_dag_count, Some(2));
     }
 }

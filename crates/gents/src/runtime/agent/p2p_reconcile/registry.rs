@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
 use crate::store::graphql::escape_graphql_string;
@@ -39,7 +39,7 @@ pub fn resolve_network_id() -> String {
         .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_string())
 }
 
-pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["conversation", "agent-config"];
+pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["machine", "client"];
 
 pub fn validate_offered_templates<I, S>(offered: I) -> Result<Vec<String>>
 where
@@ -100,7 +100,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
     let update_block = match kind {
         UpsertKind::Full => format!(
             r#"update: {{
-                    node_did: "{node_did}",
                     addresses: {addresses},
                     templates: {templates},
                     display_name: {display_name},
@@ -122,7 +121,7 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
     format!(
         r#"mutation {{
             upsert_PeerRegistry(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{ _eq: "{node_did}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
                     node_did: "{node_did}",
@@ -138,6 +137,49 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
             ) {{ _docID }}
         }}"#
     )
+}
+
+/// A signed endpoint can create the row first; initialize absent heartbeat
+/// metadata in the same transaction without overwriting operator edits.
+pub(super) async fn publish_registry_heartbeat(
+    node: &Arc<EmbeddedNode>,
+    entry: &RegistryEntry,
+    now: &str,
+) -> Result<()> {
+    let mutation = registry_upsert_mutation(entry, now, UpsertKind::Heartbeat);
+    let peer_id = escape_graphql_string(&entry.peer_id);
+    let node_did = escape_graphql_string(&entry.node_did);
+    let network_id = escape_graphql_string(&entry.network_id);
+    let now = escape_graphql_string(now);
+    let network = format!(
+        r#"mutation {{
+        update_PeerRegistry(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{ _eq: "{node_did}" }}, network_id: {{ _eq: null }} }},
+            input: {{ network_id: "{network_id}" }}) {{ _docID }}
+    }}"#
+    );
+    let registered = format!(
+        r#"mutation {{
+        update_PeerRegistry(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{ _eq: "{node_did}" }}, registered_at: {{ _eq: null }} }},
+            input: {{ registered_at: "{now}" }}) {{ _docID }}
+    }}"#
+    );
+    crate::store::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "p2p.upsert_registry_heartbeat",
+        |txn| {
+            let mutation = &mutation;
+            let network = &network;
+            let registered = &registered;
+            Box::pin(async move {
+                txn.execute(mutation).await?;
+                txn.execute(network).await?;
+                txn.execute(registered).await?;
+                Ok(())
+            })
+        },
+    )
+    .await
 }
 
 pub async fn run_registry_heartbeat(
@@ -263,6 +305,10 @@ async fn tick_registry(
         .collect();
     addresses.sort();
     addresses.dedup();
+    anyhow::ensure!(
+        !addresses.is_empty(),
+        "P2P node has no listen address to publish in PeerRegistry"
+    );
 
     let entry = RegistryEntry {
         peer_id: peer_id.clone(),
@@ -288,13 +334,7 @@ async fn tick_registry(
     };
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "p2p.upsert_registry_heartbeat",
-        &mutation,
-    )
-    .await?;
+    publish_registry_heartbeat(node, &entry, &now).await?;
     *published = Some(PublishedRegistryEntry {
         entry,
         at: Instant::now(),
@@ -398,12 +438,8 @@ mod tests {
 
     #[test]
     fn validate_offered_templates_keeps_known_and_dedups() {
-        let out =
-            validate_offered_templates(["conversation", "agent-config", "conversation"]).unwrap();
-        assert_eq!(
-            out,
-            vec!["conversation".to_string(), "agent-config".to_string()]
-        );
+        let out = validate_offered_templates(["machine", "client", "machine"]).unwrap();
+        assert_eq!(out, vec!["machine".to_string(), "client".to_string()]);
     }
 
     #[test]
@@ -414,7 +450,7 @@ mod tests {
 
     #[test]
     fn validate_offered_templates_rejects_unknown_and_blank_values() {
-        assert!(validate_offered_templates(["conversation", "nope"]).is_err());
-        assert!(validate_offered_templates(["conversation", "  "]).is_err());
+        assert!(validate_offered_templates(["machine", "nope"]).is_err());
+        assert!(validate_offered_templates(["machine", "  "]).is_err());
     }
 }

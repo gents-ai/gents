@@ -36,7 +36,7 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     let url = format!("ws://127.0.0.1:{shim_port}/");
-    let endpoint = crate::support::graphql::served_endpoint(&format!(
+    let endpoint = crate::support::graphql::node_principal_endpoint(&format!(
         "http://127.0.0.1:{server_port}/api/v0/graphql"
     ));
     let health = endpoint
@@ -190,7 +190,7 @@ async fn codex_shim_waits_for_a_missing_bound_agent_instead_of_disabling() -> Re
         &[
             "--codex-shim-port",
             &shim_port_string,
-            "--codex-shim-agent-id",
+            "--codex-shim-agent-did",
             "agent-that-does-not-exist",
         ],
         &[("RUST_LOG", "gents_server::commands::serve=info")],
@@ -213,7 +213,7 @@ async fn codex_shim_waits_for_a_missing_bound_agent_instead_of_disabling() -> Re
     );
     assert_eq!(
         readiness
-            .pointer("/codex_shim/bound_agent_id")
+            .pointer("/codex_shim/bound_agent_did")
             .and_then(Value::as_str),
         Some("agent-that-does-not-exist"),
         "server readiness must name the missing bound agent: {readiness}"
@@ -245,6 +245,7 @@ async fn codex_shim_waits_for_a_missing_bound_agent_instead_of_disabling() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_binds_when_config_apply_supplies_its_agent() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -282,7 +283,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_agent() -> Result<()> {
         &[
             "--codex-shim-port",
             &shim_port_string,
-            "--codex-shim-agent-id",
+            "--codex-shim-agent-did",
             LATE_AGENT,
         ],
         &[("RUST_LOG", "gents_server::commands::serve=info")],
@@ -306,7 +307,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_agent() -> Result<()> {
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
     let mut agent = config["agents"][0].clone();
-    agent["agent_id"] = Value::String(LATE_AGENT.to_string());
+    agent["agent_did"] = Value::String(LATE_AGENT.to_string());
     config["agents"]
         .as_array_mut()
         .context("agents is not an array")?

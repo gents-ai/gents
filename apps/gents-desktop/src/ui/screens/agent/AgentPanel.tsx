@@ -22,7 +22,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
      from them, so nothing reads as missing or could be saved over them */
   const readOnly = useNodeConfigReadOnly(deployment);
   const agents = deployment.agents.map((b) => ({
-    value: b.agentId,
+    value: b.agentDid,
     pack: packOrigin(b.tags),
     label: b.enabled
       ? b.displayName
@@ -33,21 +33,21 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const d = useDraft(
     {
       displayName: agent.displayName ?? "",
-      defaultAgentId: agent.defaultAgentId ?? "",
+      defaultAgentDid: agent.defaultAgentDid ?? "",
       enabled: agent.enabled ?? true,
       maxRequestHop: deployment.nodeConfig?.max_request_hop?.toString() ?? "",
       tags: deployment.nodeConfig?.tags ?? [],
       avatar: deployment.nodeConfig?.avatar ?? "",
     },
     async (next) => {
-      if (next.defaultAgentId !== agent.defaultAgentId)
-        await saveDefault(changeConfig, deployment, next.defaultAgentId);
+      if (next.defaultAgentDid !== agent.defaultAgentDid)
+        await saveDefault(changeConfig, deployment, next.defaultAgentDid);
       await changeConfig("saveNodeConfig", {
         document: {
           node_did: agent.nodeDid,
           display_name: next.displayName.trim(),
           avatar: next.avatar || null,
-          default_agent_id: next.defaultAgentId,
+          default_agent_did: next.defaultAgentDid,
           enabled: next.enabled,
           max_request_hop:
             next.maxRequestHop.trim() === "" ? null : Number(next.maxRequestHop),
@@ -60,7 +60,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
     {
       problems: (next) => ({
         displayName: next.displayName.trim() ? undefined : "Display name is required",
-        defaultAgentId: next.defaultAgentId ? undefined : "Default agent is required",
+        defaultAgentDid: next.defaultAgentDid ? undefined : "Default agent is required",
         maxRequestHop:
           next.maxRequestHop.trim() === "" ||
           (/^\d+$/.test(next.maxRequestHop) && Number(next.maxRequestHop) <= 2147483647)
@@ -129,16 +129,16 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
               id="agent-default"
               label="Default agent"
               description="Used when a session does not choose one."
-              value={d.draft.defaultAgentId}
-              onChange={(v) => d.set("defaultAgentId", v)}
-              error={d.problems.defaultAgentId}
+              value={d.draft.defaultAgentDid}
+              onChange={(v) => d.set("defaultAgentDid", v)}
+              error={d.problems.defaultAgentDid}
               items={agents}
               createLabel="New agent…"
-              openRoute={(agentId) => ({
+              openRoute={(agentDid) => ({
                 name: "agent",
                 nodeDid: deployment.nodeDid,
                 section: "agents",
-                item: agentId,
+                item: agentDid,
               })}
             />
             <NumberRow
@@ -154,7 +154,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
             draft={d}
             fields={{
               displayName: "agent-name",
-              defaultAgentId: "agent-default",
+              defaultAgentDid: "agent-default",
               maxRequestHop: "agent-max-request-hop",
             }}
           />
@@ -222,9 +222,9 @@ function SharedDetails({ deployment }: { deployment: NodeView }) {
   const node = deployment.node;
   const config = deployment.nodeConfig;
   const unshared = "Not shared by this node";
-  const defaultId = node.defaultAgentId;
+  const defaultId = node.defaultAgentDid;
   const defaultName =
-    deployment.agents.find((a) => a.agentId === defaultId)?.displayName ?? defaultId;
+    deployment.agents.find((a) => a.agentDid === defaultId)?.displayName ?? defaultId;
   return (
     <Group title="Node details">
       <Row label="Default agent" description="Used when a session does not choose one.">

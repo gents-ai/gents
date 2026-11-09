@@ -77,12 +77,12 @@ fn decodes_pairing_reconcile_samples_with_stable_desired_resources() {
     );
     for case in cases {
         assert_eq!(
-            case.before.desired_collections, case.after.desired_collections,
+            case.before.desired_replicators, case.after.desired_replicators,
             "pairing case {} must keep the desired resource set stable",
             case.name
         );
         assert!(
-            !case.before.desired_collections.is_empty(),
+            !case.before.desired_replicators.is_empty(),
             "pairing case {} must target at least one resource",
             case.name
         );

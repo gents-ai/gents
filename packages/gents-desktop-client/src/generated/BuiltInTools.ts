@@ -11,7 +11,7 @@ enable_goal_tools?: boolean | null,
 /**
  * Additional opt-in for model-facing goal creation. Unset is disabled.
  */
-enable_goal_creation?: boolean | null, enable_memory?: boolean | null,
+enable_goal_creation?: boolean | null,
 /**
  * The `sessions` read tool. Unset is enabled: compaction stubs name its
  * `output` read as the way to recover a trimmed tool result.
@@ -32,9 +32,4 @@ enable_p2p_tool?: boolean | null,
  * Native P2P changes also require enable_p2p_tool. Enrollment and DefraDB
  * remain the authorization owners. Unset is disabled.
  */
-enable_p2p_mutations?: boolean | null,
-/**
- * Exact collection names allowed for application pairing overlays and sync.
- * Missing or empty grants no collections; the policy ceiling can only narrow.
- */
-p2p_collections?: Array<string> | null, enable_context_budget?: boolean | null, };
+enable_p2p_mutations?: boolean | null, enable_context_budget?: boolean | null, };

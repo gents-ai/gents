@@ -175,7 +175,7 @@ fn scenario_allowed_folders_are_written_inside_the_tool_root() {
 }
 
 #[test]
-fn scenario_staging_explicitly_binds_the_initialized_profile() {
+fn scenario_staging_preserves_slots_until_runtime_installation() {
     let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs/documents_fixture");
     let distribution = read_distribution_manifest(&pack).unwrap();
@@ -184,25 +184,23 @@ fn scenario_staging_explicitly_binds_the_initialized_profile() {
         &distribution,
         "did:key:scenario-owner",
         "default-profile",
-        "did:key:scenario-owner:default",
+        "did:key:scenario-default",
     )
     .unwrap();
-    let (config, report) = crate::desired_state::load_manifest_root(staged.path());
-    assert!(report.errors.is_empty(), "{:?}", report.errors);
-    let config = config.unwrap();
-    assert_eq!(
-        config.node.default_agent_id.as_deref(),
-        Some("did:key:scenario-owner:default"),
-    );
-    assert!(config
-        .agents
-        .iter()
-        .all(|agent| agent.inference_profile_id == "default-profile"));
-    assert!(config.agents.iter().all(|agent| agent
-        .tags
-        .contains(&"gents:pack:documents_fixture".to_owned())));
-    assert!(config.inference_profiles.is_empty());
-    assert!(config.inference_backends.is_empty());
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(staged.path().join(distribution.config.as_ref().unwrap())).unwrap(),
+    )
+    .unwrap();
+    assert!(config["node"]["default_agent_did"].is_null());
+    assert!(staged.path().join("manifest.json").is_file());
+    for agent in config["agents"].as_array().unwrap() {
+        assert!(agent["agent_slot"].is_string());
+        assert!(agent.get("agent_did").is_none());
+        assert!(agent["inference_profile_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("gents:inference-slot:"));
+    }
 }
 
 #[test]
@@ -225,7 +223,7 @@ fn scenario_refuses_a_pack_that_selects_the_default_agent() {
     validate_scenario_defaults(authored_pack.path()).unwrap();
     let config_path = authored_pack.path().join("pack_config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    config["node"]["default_agent_id"] = json!("fixture-worker");
+    config["node"]["default_agent_did"] = json!("fixture-worker");
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
     let error = format!(
@@ -289,14 +287,21 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
         .expect("staged pack must have schemas");
     assert_eq!(phase.schema_files.len(), schema_assets.len());
 
-    let (config, report) = crate::desired_state::load_manifest_root(staged.path());
-    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let config = gents::pack::load_pack_authoring_config(
+        &distribution,
+        &gents::pack::PackInstallOptions {
+            node_did: "did:key:scenario-owner".to_owned(),
+        },
+        &|path| Ok(std::fs::read(staged.path().join(path))?),
+        &|_| None,
+    )
+    .unwrap();
     let errors =
-        crate::desired_state::validate::validate_manifest_against_live(&config.unwrap(), &access)
+        crate::desired_state::validate::validate_manifest_against_live(&config.documents, &access)
             .await
             .unwrap();
     assert!(errors.is_empty(), "{errors:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 const COLOURED: &str = "\u{1b}[32m INFO\u{1b}[0m \u{1b}[2mgents::triggers::engine::event_source\u{1b}[0m\u{1b}[2m:\u{1b}[0m event source now observing source collection \u{1b}[3msource_collection\u{1b}[0m\u{1b}[2m=\u{1b}[0mExperimentJob \u{1b}[3mgeneration\u{1b}[0m\u{1b}[2m=\u{1b}[0m3";

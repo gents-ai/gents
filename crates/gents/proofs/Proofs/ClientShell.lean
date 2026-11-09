@@ -1,13 +1,17 @@
 import Proofs.ClientShell.Types
 import Proofs.ClientShell.SessionTurn
 import Proofs.ClientShell.Submission
-import Proofs.ClientShell.SubmissionReceipt
+import Proofs.ClientShell.OptimisticSend
+import Proofs.ClientShell.ChatReadiness
+import Proofs.ClientShell.RoutePairing
 import Proofs.ClientShell.Transition
 import Proofs.ClientShell.Projection
 import Proofs.ClientShell.PresentationAgreement
 import Proofs.ClientShell.Timeline
 import Proofs.ClientShell.Theorems
 import Proofs.ClientShell.ObservationOrdering
+import Proofs.ClientShell.SyncHealth
+import Proofs.ClientShell.SessionLoad
 import Proofs.ClientShell.InferenceObservation
 import Proofs.ClientShell.RequestCacheIdentity
 import Proofs.ClientShell.ObservationScope
@@ -15,5 +19,7 @@ import Proofs.ClientShell.Installation
 import Proofs.ClientShell.Voice
 import Proofs.ClientShell.Settings
 import Proofs.ClientShell.InterruptControl
+import Proofs.ClientShell.PackWatch
+import Proofs.ClientShell.AuthorityRestart
 
 import Proofs.ClientShell.Telemetry

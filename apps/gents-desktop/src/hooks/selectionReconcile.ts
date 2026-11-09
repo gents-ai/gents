@@ -1,4 +1,4 @@
-import { selectedAgentIdForDeployment } from "@source-inc/gents-desktop-client";
+import { selectedAgentDidForDeployment } from "@source-inc/gents-desktop-client";
 
 import { toast } from "sonner";
 import { routeMoves } from "../ui/lib/router";
@@ -85,7 +85,7 @@ export function reconcileSelection(
   };
 
   const settle = () => {
-    const { nodeDid, agentId, composingFor } = store.getState();
+    const { nodeDid, agentDid, composingFor } = store.getState();
     const fleet = stores.fleet.getState();
     if (!nodeDid) {
       const home = stores.client?.getState().snapshot?.bootstrap?.initNodeDid;
@@ -114,7 +114,7 @@ export function reconcileSelection(
     const node = nodeOf(fleet, nodeDid);
     if (!node) return;
     if (composingFor === node.nodeDid) return;
-    selection.settleAgent(store, selectedAgentIdForDeployment(node, agentId));
+    selection.settleAgent(store, selectedAgentDidForDeployment(node, agentDid));
   };
   stores.fleet.subscribe(() => {
     watch();

@@ -68,30 +68,39 @@ pub(crate) async fn apply_bound_desired_manifest(
     let desired_bundle =
         desired_state::export_bundle_from_manifest(desired_manifest, access.mode())?;
 
-    let live_bundle = build_desired_state_live_bundle(access, desired_manifest).await?;
-    let (live_node, live_manifest) = live_manifest_from_bundle(desired_manifest, &live_bundle)?;
-    let planned = desired_state::diff_manifests(
-        root,
-        access.mode(),
-        desired_manifest,
-        live_node.as_ref(),
-        &live_manifest,
-        prune,
-    );
-
-    anyhow::ensure!(
-        planned.live_validation_errors.is_empty(),
-        "cannot apply invalid config diff: {}",
-        planned.live_validation_errors.join("; ")
-    );
     let desired_bundle_ref = &desired_bundle;
-    let planned_ref = &planned;
-    let (applied, pruned) = access
-        .transact_write("cli.config.apply", move |txn| {
+    let access_mode = access.mode().to_owned();
+    let access_mode_ref = &access_mode;
+    // The plan is derived from the snapshot it commits against: a confirmed
+    // conflict re-reads the live configuration, re-plans and re-signs.
+    let (planned, applied, pruned) = access
+        .transact_signed_conflict_rebuild("cli.config.apply", move |txn| {
             Box::pin(async move {
+                let live_bundle = crate::config_bundle::read_owned_config_bundle_in_txn(
+                    txn,
+                    &desired_manifest.node.node_did,
+                    access_mode_ref.clone(),
+                )
+                .await?;
+                let (live_node, live_manifest) =
+                    live_manifest_from_bundle(desired_manifest, &live_bundle)?;
+                let planned = desired_state::diff_manifests(
+                    root,
+                    access_mode_ref,
+                    desired_manifest,
+                    live_node.as_ref(),
+                    &live_manifest,
+                    prune,
+                );
+                anyhow::ensure!(
+                    planned.live_validation_errors.is_empty(),
+                    "cannot apply invalid config diff: {}",
+                    planned.live_validation_errors.join("; ")
+                );
                 let applied_total =
-                    apply_desired_state_changes(txn, desired_bundle_ref, planned_ref).await?;
-                Ok::<_, anyhow::Error>(split_apply_counts(applied_total, planned_ref, prune))
+                    apply_desired_state_changes(txn, desired_bundle_ref, &planned).await?;
+                let (applied, pruned) = split_apply_counts(applied_total, &planned, prune);
+                Ok::<_, anyhow::Error>((planned, applied, pruned))
             })
         })
         .await

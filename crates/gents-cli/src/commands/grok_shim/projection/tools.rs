@@ -2,7 +2,7 @@ use rapidhash::RapidHashMap;
 use std::{char::REPLACEMENT_CHARACTER, sync::Arc};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::tools::call::lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};
@@ -747,7 +747,7 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
 }
 
 fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
-    let scope = gents::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         request.node_did.as_deref().context("tool node missing")?,
         request
             .session_id
@@ -794,7 +794,7 @@ mod tests {
         id: &str,
         session: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
+        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_did: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
         ensure_no_errors(&response, "seed projection request").unwrap();
         let physical = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":response.data}),
@@ -1670,11 +1670,11 @@ mod tests {
         (dir, node)
     }
 
-    use gents::session::canonical_rows::{
+    use gents::store::graphql::single_mutation_document;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use gents::store::graphql::single_mutation_document;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,

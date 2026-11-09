@@ -48,7 +48,7 @@ export function buildInferenceSetupPlan({
   recommendation: InferenceModelRecommendation;
   settings: InferenceSetupSettings;
   purpose?: "onboarding" | "add-backend" | "select-model";
-}): { document: PackConfig; profileId: string; defaultAgentId: string | null } {
+}): { document: PackConfig; profileId: string; defaultAgentDid: string | null } {
   const addingBackend = purpose === "add-backend";
   const normalizedEndpoint = (endpoint: string | null) =>
     endpoint?.trim().replace(/\/+$/, "") ?? "";
@@ -92,8 +92,8 @@ export function buildInferenceSetupPlan({
     recommendation.temperature || recommendation.topP
       ? (existingProfile?.sampling_id ?? `${profileId}-sampling`)
       : null;
-  const defaultAgentId = deployment.node.defaultAgentId;
-  if (!defaultAgentId && !addingBackend) {
+  const defaultAgentDid = deployment.node.defaultAgentDid;
+  if (!defaultAgentDid && !addingBackend) {
     throw new Error("The node has no default agent to activate for Setup");
   }
   const shouldRebindDefault =
@@ -102,9 +102,9 @@ export function buildInferenceSetupPlan({
   const agentConfigs = (addingBackend ? [] : deployment.agentConfigs)
     .filter((agent) =>
       purpose === "select-model"
-        ? agent.agent_id === defaultAgentId
+        ? agent.agent_did === defaultAgentDid
         : !agent.inference_profile_id ||
-          (agent.agent_id === defaultAgentId && shouldRebindDefault),
+          (agent.agent_did === defaultAgentDid && shouldRebindDefault),
     )
     .map((agent) => ({
       ...agent,
@@ -113,7 +113,7 @@ export function buildInferenceSetupPlan({
 
   return {
     profileId,
-    defaultAgentId,
+    defaultAgentDid,
     document: {
       node: { node_did: deployment.nodeDid },
       inference_backends: [

@@ -1,5 +1,4 @@
 import Proofs.SelfConfig.Types
-import Proofs.PluginJob.Types
 
 namespace SelfConfig
 
@@ -88,70 +87,47 @@ def keepsControl (decode : Doc → Option Control) (stored candidate : Doc) : Bo
         && retained old.toolsAuthority new.toolsAuthority
   | _, _ => false
 
-/-- A plugin's job block: its typed ceiling and its operator-owned policy. -/
-structure JobGrant where
-  ceiling : PluginJob.Ceiling
-  policy : PluginJob.Policy
-  deriving DecidableEq
-
-instance : Repr JobGrant := ⟨fun _ _ => Std.Format.text "JobGrant"⟩
-
 /-- Operator-managed grants projected from a Tools document by the canonical
-typed decoder; absent flags are false. -/
+typed decoder; absent flags are false. A grant is an operator grant when the
+Tools document carries it, and a write may carry it forward only when the
+stored Tools or the invoker already holds it (`Grants.boundedBy`). -/
 structure Grants where
   /-- `self_config.enable_pack_install`. -/
   packInstall : Bool
-  /-- `integrations.plugins[].job` by plugin coordinate (`PluginToolRef.plugin`).
-  A plugin with no entry has the empty ceiling (`PluginJob.Ceiling.empty`). -/
-  job : List (String × JobGrant) := []
+  /-- The `policy` self-config category: the policy resource and its
+  grant and revoke commands. Held-bounded like pack installation, so an Agent
+  cannot select it for itself or a sibling without holding it. -/
+  policy : Bool
   deriving DecidableEq, Repr
 
-def Grants.bot : Grants := { packInstall := false }
+def Grants.bot : Grants := { packInstall := false, policy := false }
 
-def Grants.le (a b : Grants) : Bool := (!a.packInstall || b.packInstall)
+def Grants.le (a b : Grants) : Bool :=
+  (!a.packInstall || b.packInstall) && (!a.policy || b.policy)
 
 /-- Whether each grant the candidate `c` carries stays within its own bound
 against the stored Tools `s` and the invoker's `held` grants; each grant is
 judged on its own, never as a whole vector. -/
 def Grants.boundedBy (c s held : Grants) : Bool :=
-  (!c.packInstall || s.packInstall || held.packInstall)
-
-/-- Adding a block widens: an absent block is the empty ceiling and carries no
-policy to keep. -/
-def JobGrant.narrows : Option JobGrant → Option JobGrant → Bool
-  | none, _ => true
-  | some _, none => false
-  | some c, some s => decide (c.ceiling ≤ s.ceiling) && decide (c.policy = s.policy)
-
-/-- The job grant is stored-bounded, never held-bounded: every job block the
-candidate `c` carries, every entry of a repeated plugin coordinate included,
-narrows the block the stored Tools `s` carry for the same plugin and keeps its
-policy. It is a conjunct of its own beside
-`Grants.boundedBy`, whose held bound (and `Grants.le`) covers pack installation
-only; inside it, holding a job block would let a holder grant one to a document
-that has none. -/
-def keepsJobGrants (c s : Grants) : Bool :=
-  c.job.all fun e => JobGrant.narrows (some e.2) (s.job.lookup e.1)
+  (!c.packInstall || s.packInstall || held.packInstall) &&
+    (!c.policy || s.policy || held.policy)
 
 /-- A self-config write is accepted when every operator-managed grant of the
 candidate stays within its own bound against the Tools document it replaces;
 pack installation is held-bounded, so a holder may grant it to a sibling and
 nobody else can. Unlike `keepsControl` this guard always runs: the native owner
 calls it from the shared validate slot, not the opt-in no-lockout slot.
-Job grants are bounded by the stored Tools alone (`keepsJobGrants`): a model write
-may narrow a plugin's job ceiling but cannot widen it, add a block or edit its
-policy, whatever the invoker holds.
-Operator writes (the desktop, `config apply`) do not pass through this guard. -/
+Job settings are configuration data: their validity and execution bounds are
+checked by their owners, and native document authorization governs publication. -/
 def keepsGrants (decode : Doc → Option Grants) (held : Grants) (stored candidate : Doc) :
     Bool :=
   match decode stored, decode candidate with
-  | some s, some c => c.boundedBy s held && keepsJobGrants c s
+  | some s, some c => c.boundedBy s held
   | _, _ => false
 
 /-- The grant bound across a reselection: bounded like `keepsGrants` from the
 previously selected Tools; with no previous selection, bounded against
-`Grants.bot`, so pack installation needs the invoker to hold it, and a job block
-is refused (`Grants.bot` carries none). A direct clone is checked against the
+`Grants.bot`, so pack installation needs the invoker to hold it. A direct clone is checked against the
 invoking agent's held grants in the same transaction that reads the source and
 publishes the candidate. -/
 def reselectionKeepsGrants (decode : Doc → Option Grants) (held : Grants)
@@ -161,7 +137,7 @@ def reselectionKeepsGrants (decode : Doc → Option Grants) (held : Grants)
   | some storedTools, some candidateTools =>
       keepsGrants decode held storedTools candidateTools
   | none, some candidateTools => (decode candidateTools).any
-      (fun c => c.boundedBy Grants.bot held && keepsJobGrants c Grants.bot)
+      (fun c => c.boundedBy Grants.bot held)
 
 /-- `reselectionKeepsGrants` on the Tools documents a Context or Agent
 selects; `none` includes a reference to a missing document, which the reference

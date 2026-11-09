@@ -8,6 +8,9 @@ use tempfile::tempdir;
 
 fn run_validate(root: &std::path::Path) -> Result<Value> {
     let output = Command::new(env!("CARGO_BIN_EXE_gents"))
+        .env("HOME", root)
+        .env("GENTS_HOME", root.join("runtime-home"))
+        .env("GENTS_DESKTOP_HOME", root.join("desktop-home"))
         .args(["config", "validate", "--root"])
         .arg(root)
         .output()?;

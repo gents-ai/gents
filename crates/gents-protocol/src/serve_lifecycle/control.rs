@@ -205,7 +205,7 @@ pub fn current_capabilities() -> BTreeMap<String, u64> {
         ),
         (
             "file_inventory",
-            u64::from(crate::file_inventory::FILE_INVENTORY_RECEIPT_VERSION),
+            u64::from(crate::file_inventory::FILE_INVENTORY_CONTRACT_VERSION),
         ),
     ]
     .into_iter()

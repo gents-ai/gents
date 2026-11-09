@@ -1,0 +1,4 @@
+---- MODULE MCPackUxWatchStaleEndpoint ----
+EXTENDS PackUxWatch
+
+====

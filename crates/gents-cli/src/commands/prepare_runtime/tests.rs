@@ -489,7 +489,7 @@ fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
             graphql: node.endpoint.to_string(),
             node_name: config.node_name.clone(),
             node_did: config.node_did.clone(),
-            default_agent_id: "fixture".into(),
+            default_agent_did: "fixture".into(),
             p2p_transport: "none".into(),
             p2p_peer_id: None,
             p2p_listen_addresses: Vec::new(),

@@ -12,8 +12,14 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+acp.workspace = true
 chrono.workspace = true
+crypto.workspace = true
+defra-core.workspace = true
 defra-node = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 gents-schemas.workspace = true
+hex = "0.4"
+identity.workspace = true
+tempfile = "3"
 tokio.workspace = true

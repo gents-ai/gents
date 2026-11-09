@@ -104,9 +104,14 @@ fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
         Some(gents::store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
     );
 
-    let (error, store) =
-        classify_client_start_error(&anyhow::anyhow!("peer directory is locked"), node);
+    let refused =
+        anyhow::anyhow!("peer directory is locked").context("starting embedded desktop node");
+    let (error, store) = classify_client_start_error(&refused, node);
     assert_eq!(error.code, BridgeErrorCode::Unknown);
+    assert_eq!(
+        error.message,
+        "starting embedded desktop node: peer directory is locked"
+    );
     assert!(store.is_none());
 }
 
@@ -314,13 +319,13 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
 async fn a_plaintext_client_upgrade_returns_a_started_core_with_lifecycle_exclusion() {
     let temp = tempfile::tempdir().expect("tempdir");
     let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
-    let legacy = gents::defra_node::EmbeddedNode::builder()
+    let legacy = gents::defra_node::Node::builder()
         .data_path(paths.node_data_dir())
         .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
         .build()
         .await
         .expect("legacy client store");
-    legacy.shutdown().await;
+    legacy.shutdown().await.unwrap();
     drop(legacy);
 
     let lifecycle_owner = Arc::new(tokio::sync::Mutex::new(()));

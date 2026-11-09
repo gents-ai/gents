@@ -26,7 +26,7 @@ type InferenceCallDiagnostics = {
   requestDocId: string;
   nodeDid: string;
   backendId: string | null;
-  agentId: string | null;
+  agentDid: string | null;
   callKind: string;
   callState: string;
 };

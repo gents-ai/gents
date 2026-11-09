@@ -26,7 +26,7 @@ async fn fresh_inference_usage_keeps_its_canonical_root_and_single_indexes() {
             1
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -44,5 +44,5 @@ async fn incompatible_inference_usage_stays_refused_without_schema_changes() {
     let versions = node.get_all_collection_versions().await.unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].version_id, before.version_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

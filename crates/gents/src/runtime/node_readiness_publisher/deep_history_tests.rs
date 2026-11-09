@@ -8,7 +8,7 @@ use gents_protocol::node_readiness::{
     NODE_READINESS_FORMAT_VERSION,
 };
 
-use crate::defra_node::{EmbeddedNode, P2PConfig};
+use crate::defra_node::{Node as EmbeddedNode, P2PConfig};
 use crate::eval::runner::embedded::EmbeddedHome;
 use crate::store::graphql::{
     decode_composite_commits, escape_graphql_string, graphql_with_transaction_retry,
@@ -19,21 +19,21 @@ use super::upsert_node_readiness;
 
 fn loopback_config(path: &std::path::Path) -> P2PConfig {
     P2PConfig {
-        port: 0,
+        port: Some(0),
         bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
         relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
         discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(path.join("p2p.key")),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: true,
-        max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-        max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        // This qualifies history depth, independently of the peer intake-rate budget.
-        rate_limit_burst: 100_000,
-        rate_limit_rate: 10_000.0,
-        max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+        sync: defra_node::SyncTuning {
+            // This qualifies history depth, independently of the peer intake-rate budget.
+            rate_limit_burst: 100_000,
+            rate_limit_rate: 10_000.0,
+            ..Default::default()
+        },
         rebroadcast_on_merge: false,
     }
 }
@@ -136,9 +136,9 @@ async fn fresh_peer_receives_readiness_past_8192_revisions_and_keeps_following()
         process_state: NodeReadinessProcessState::Ready,
         active_generation: 1,
         router_generation: 0,
-        default_agent_id: "default".into(),
+        default_agent_did: "default".into(),
         agents: vec![AgentReadinessEntry {
-            agent_id: "default".into(),
+            agent_did: "default".into(),
             state: AgentReadinessState::Ready,
             reason: None,
         }],
@@ -217,7 +217,7 @@ async fn fresh_peer_receives_readiness_past_8192_revisions_and_keeps_following()
     )
     .await?;
     await_snapshot(&receiver.node, source.did(), doc_id, &snapshot).await?;
-    receiver.node.shutdown().await;
-    source.node.shutdown().await;
+    receiver.node.shutdown().await.expect("node shutdown");
+    source.node.shutdown().await.expect("node shutdown");
     Ok(())
 }

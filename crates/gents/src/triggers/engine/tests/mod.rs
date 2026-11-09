@@ -13,6 +13,8 @@ use tokio::sync::{mpsc, watch, Notify};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
+use crate::documents::automation::{ResolvedEventTrigger, ResolvedSchedule, ResolvedTask};
+use crate::documents::{ConcurrencyMode, ScheduleCadence};
 use crate::ensure_runtime_schemas;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
 use crate::lean_vocab_test::{
@@ -20,15 +22,11 @@ use crate::lean_vocab_test::{
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
     LeanVocabulary,
 };
-use crate::runtime::snapshot::{
-    ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
-    ResolvedSchedule, ResolvedTask, ScheduleCadence,
-};
+use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
 use crate::triggers::engine::event_source::EventSource;
-use crate::triggers::engine::manual_source::ManualSource;
 use crate::triggers::engine::production_materializer::{
     execution_origin_for_trigger_kind, ProductionMaterializer,
 };
@@ -72,7 +70,7 @@ fn stub_principal() -> Arc<crate::store::identity::RuntimeNode> {
     Arc::new(crate::store::identity::RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: String::new(),
+        default_agent_did: String::new(),
         display_name: None,
         enabled: true,
     })
@@ -84,12 +82,14 @@ const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Triggers/Types
 
 #[test]
 fn durable_fire_keys_are_unambiguous_across_component_delimiters() {
-    let left = crate::triggers::engine::durable_fire_key("event-document", &["trigger:a", "doc"]);
-    let right = crate::triggers::engine::durable_fire_key("event-document", &["trigger", "a:doc"]);
+    let left =
+        gents_protocol::trigger_delivery::durable_fire_key("event-document", &["trigger:a", "doc"]);
+    let right =
+        gents_protocol::trigger_delivery::durable_fire_key("event-document", &["trigger", "a:doc"]);
     assert_ne!(left, right);
     assert_ne!(
         left,
-        crate::triggers::engine::durable_fire_key("event-group", &["trigger:a", "doc"])
+        gents_protocol::trigger_delivery::durable_fire_key("event-group", &["trigger:a", "doc"])
     );
 }
 
@@ -415,19 +415,20 @@ impl MaterializerHandle for SpyMaterializer {
 fn snapshot_with_schedules(
     schedules: RapidHashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        "general".to_string(),
-        vec![integration_test_agent("general")],
-        RapidHashMap::new(),
-        RapidHashMap::new(),
-        RapidHashMap::new(),
-    )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
-        schedules,
-        ..Default::default()
-    })
-    .with_node(stub_principal());
-    Arc::new(resolved.activate(1, RapidHashMap::new()))
+    snapshot_with_agent_and_schedules(spy_test_agent(), schedules)
+}
+
+fn spy_test_agent() -> Arc<ResolvedAgent> {
+    static AGENT: std::sync::OnceLock<Arc<ResolvedAgent>> = std::sync::OnceLock::new();
+    AGENT
+        .get_or_init(|| integration_test_agent("trigger-spy"))
+        .clone()
+}
+
+fn spy_resolved_task(prompt_template: &str) -> ResolvedTask {
+    let mut task = resolved_task(prompt_template);
+    task.agent_did = spy_test_agent().agent_did.clone();
+    task
 }
 
 fn resolved_task(prompt_template: &str) -> ResolvedTask {
@@ -435,7 +436,7 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         emit_outcome: false,
         task_id: "t1".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: spy_test_agent().agent_did.clone(),
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -448,6 +449,7 @@ fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule 
     ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id: format!("{schedule_id}-doc"),
+        schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -465,6 +467,7 @@ fn resolved_schedule_with_concurrency(
     ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id: format!("{schedule_id}-doc"),
+        schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -480,6 +483,9 @@ fn resolved_event_trigger_with_concurrency(
     concurrency: ConcurrencyMode,
 ) -> ResolvedEventTrigger {
     ResolvedEventTrigger {
+        event_source_id: "source".into(),
+        event_source_doc_id: "source-doc".into(),
+        task_doc_id: "task-doc".into(),
         session_id_template: None,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
@@ -490,7 +496,7 @@ fn resolved_event_trigger_with_concurrency(
         filter: None,
         enabled: true,
         concurrency,
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -539,23 +545,25 @@ fn snapshot_from_trigger_contract(
             )
         })
         .collect();
+    let agent = spy_test_agent();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        "general".to_string(),
-        vec![integration_test_agent("general")],
+        agent.agent_did.clone(),
+        vec![agent.clone()],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         schedules: active_schedules,
         event_triggers: active_event_triggers,
         ..Default::default()
     })
-    .with_node(stub_principal());
+    .with_node(agent.node.clone())
+    .with_local_did(agent.node_did().to_string());
     Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
-fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
+pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     let identity: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
@@ -566,15 +574,23 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     let principal = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: String::new(),
+        default_agent_did: String::new(),
         display_name: None,
         enabled: true,
     });
+    let binding =
+        crate::store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+            .unwrap();
+    let agent_did = binding.agent_did;
     Arc::new(ResolvedAgent {
+        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
         profile_id: None,
         skills: Vec::new(),
         oauth_pool: Vec::new(),
-        agent_id: behavior_name.to_string(),
+        agent_did,
+        agent_identity,
         node: principal,
         backend_id: Some("backend-it".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -610,20 +626,94 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     })
 }
 
-fn snapshot_with_agent_and_schedules(
+/// A signed fixture Node whose default Agent is derived from the node's own
+/// runtime key, so the materializer can act as that Agent's managed signer.
+pub(super) async fn signed_materializer_agent(
+    name: &str,
+) -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    crate::ConfigAccess,
+    Arc<ResolvedAgent>,
+) {
+    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+    let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
+        .await
+        .expect("build test agent template");
+    let identity =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            .expect("derive the fixture's held Agent from its runtime key");
+    let mut agent = (*template).clone();
+    agent.agent_did = binding.agent_did.clone();
+    agent.agent_identity = identity;
+    agent.node = Arc::new(crate::store::identity::RuntimeNode {
+        node_did: db.node_identity.did().to_owned(),
+        identity: db.node_identity.clone(),
+        default_agent_did: binding.agent_did,
+        display_name: None,
+        enabled: true,
+    });
+    (db, user, access, Arc::new(agent))
+}
+
+/// The fixture Agent's managed access, which owns and reads its rows.
+pub(super) fn agent_access(
+    node: &Arc<defra_node::Node>,
+    agent: &ResolvedAgent,
+) -> crate::ConfigAccess {
+    crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.agent_did.parse().unwrap(),
+        agent.agent_identity.as_ref(),
+    )
+    .unwrap()
+}
+
+/// Applies `config` as the operator User, who owns configuration, and returns
+/// the document identity of `trigger_id`.
+pub(super) async fn apply_user_config(
+    client: &crate::ConfigAccess,
+    config: &crate::documents::PackConfig,
+    trigger_id: &str,
+) -> String {
+    let owner = config.node.node_did.clone();
+    let plan =
+        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(config).unwrap();
+    client
+        .transact_write("test.trigger_config", |txn| {
+            let plan = &plan;
+            let owner = &owner;
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Trigger,
+                    owner,
+                    trigger_id,
+                )
+                .await?
+                .expect("created trigger");
+                Ok::<_, anyhow::Error>(id)
+            })
+        })
+        .await
+        .unwrap()
+}
+
+pub(super) fn snapshot_with_agent_and_schedules(
     behavior: Arc<ResolvedAgent>,
     schedules: RapidHashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let principal = behavior.node.clone();
     let local_did = behavior.node_did().to_string();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        behavior.agent_id.clone(),
+        behavior.agent_did.clone(),
         vec![behavior],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         schedules,
         ..Default::default()
     })

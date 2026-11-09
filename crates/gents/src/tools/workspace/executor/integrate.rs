@@ -341,6 +341,7 @@ fn integrate_workspace_action(
         seal_hash: seal_hash.clone(),
         work_unit_id: Some(workspace.work_unit_id.clone()),
         caused_by_correlation: Some(workspace.caused_by_correlation.clone()),
+        route: workspace.route.clone(),
         head_sha: Some(effect.head_sha.clone()),
         changed_files: changed_files_json(&effect.changed_files),
         diff_artifact: bound_diff_artifact(&effect.diff),

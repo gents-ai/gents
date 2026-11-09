@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { useFollowRoute } from "../src/ui/hooks/useFollowRoute";
 import { node, renderIn, testApp } from "./app-fixture";
 
-const session = (nodeDid: string, sessionId: string, agentId = "default") => ({
+const session = (nodeDid: string, sessionId: string, agentDid = "default") => ({
   nodeDid,
   sessionId,
-  agentId,
+  agentDid,
 });
 
 describe("startup under a route", () => {
@@ -25,7 +25,7 @@ describe("startup under a route", () => {
     expect(app.stores.selection.getState()).toMatchObject({
       nodeDid: "did:key:b",
       sessionId: "b-1",
-      agentId: "ops",
+      agentDid: "ops",
     });
   });
 });
