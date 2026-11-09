@@ -86,8 +86,8 @@ async fn skewed_managed_runtime(
             .await
             .expect("local collection versions");
     next_release
-        .get_mut("AgentSession")
-        .expect("client route replicates AgentSession")
+        .get_mut("PeerRegistry")
+        .expect("client route replicates PeerRegistry")
         .version_id = "bafy-next-release".to_string();
     let server = StatusServer::start(
         serde_json::json!({
@@ -148,7 +148,7 @@ async fn paired_managed_runtime_with_skewed_schema_projects_incompatible_sync() 
     assert!(health
         .last_error
         .as_deref()
-        .is_some_and(|error| error.contains("AgentSession")));
+        .is_some_and(|error| error.contains("PeerRegistry")));
 
     drain_managed_runtime_pairing(&state).await;
     assert!(state
@@ -284,7 +284,7 @@ async fn managed_schema_fetched_across_a_route_change_is_ignored() {
         .store(false, std::sync::atomic::Ordering::SeqCst);
     server.release.notify_one();
     let late = in_flight.await.expect("observation task");
-    assert!(late.is_err_and(|error| error.contains("AgentSession")));
+    assert!(late.is_err_and(|error| error.contains("PeerRegistry")));
     assert!(
         core.sync_state().peer_schema_skew.is_empty(),
         "a response fetched for the replaced generation is not recorded"
