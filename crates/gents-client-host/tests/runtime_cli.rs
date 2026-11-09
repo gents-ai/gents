@@ -175,6 +175,59 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
             assert!(child.try_wait().unwrap().is_none());
         }
     }
+    // An unpublished folder is refused against the running runtime before it is retired:
+    // the runtime keeps serving, and neither its saved configuration nor its route changes.
+    let unpublished = root.path().join("unpublished-workspace");
+    std::fs::create_dir(&unpublished).unwrap();
+    let saved_config = std::fs::read(home.join("init.json")).unwrap();
+    let saved_route = std::fs::read(home.join("runtime.json")).unwrap();
+    let unpublished_change = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new(executable)
+            .envs(homes.env())
+            .args(["prepare-runtime", "--home"])
+            .arg(&home)
+            .arg("--change-tool-root")
+            .arg(&unpublished)
+            .args(["--no-keychain-prompts"])
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!unpublished_change.status.success());
+    let refused: RuntimePreparationReport = serde_json::from_slice(&unpublished_change.stdout)
+        .unwrap_or_else(|error| {
+            panic!(
+                "{error}: {}",
+                String::from_utf8_lossy(&unpublished_change.stderr)
+            )
+        });
+    let RuntimePreparationResult::Refused {
+        reason: RuntimePreparationRefusal::Failed,
+        message,
+    } = &refused.result
+    else {
+        panic!("{refused:?}");
+    };
+    assert!(
+        message.contains("is not published as a WorkspaceRoot")
+            && message.contains("gents config workspace-root set"),
+        "{message}"
+    );
+    assert_eq!(std::fs::read(home.join("init.json")).unwrap(), saved_config);
+    assert_eq!(
+        std::fs::read(home.join("runtime.json")).unwrap(),
+        saved_route
+    );
+    let started = if outcomes[0] == RuntimePreparationOutcome::Started {
+        &mut service
+    } else {
+        &mut contender
+    };
+    assert!(started.try_wait().unwrap().is_none());
     let changed_root = root.path().canonicalize().unwrap();
     // Serve admits a configured host tool root only once a WorkspaceRoot published for the
     // Node covers it, so the operator publishes the new folder before retargeting the runtime.

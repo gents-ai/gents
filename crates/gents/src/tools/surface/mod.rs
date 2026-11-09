@@ -60,8 +60,8 @@ pub(crate) fn configured_plugin_refs(
 #[doc(hidden)]
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, ensure_configured_root_published,
-    load_workspace_root_policy, project_workspace_root_policy, resolve_configured_tool_root,
-    WorkspaceRootDocument, WorkspaceRootPolicy,
+    ensure_root_published_for_node, load_workspace_root_policy, project_workspace_root_policy,
+    resolve_configured_tool_root, WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
