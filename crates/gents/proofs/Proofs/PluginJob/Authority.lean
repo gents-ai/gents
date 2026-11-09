@@ -7,7 +7,8 @@ import Proofs.PluginJob.Admission
 Origin is a host fact decided by the call (`callOrigin`): a call that carries a
 `script` runs model-authored code and is `dynamic`; any other call runs the
 plugin artifact itself and is `installed`. The artifact's pack must be
-operator-installed, or every step is refused. The dynamic policy gates
+operator-installed or installed under pack authority (`installerProvenance`),
+or every step is refused. The dynamic policy gates
 dynamic-origin scripts, pack-shipped job blocks stay within what the operator
 installed, a job-descended caller cannot start a job, and a script reaches
 child requests and data only through admission.
@@ -76,6 +77,34 @@ def recordAfterInstall (prior : Record) (kind : PackKind) (explicit : Bool)
   else if provenanceOf kind prior = .operator then .written .operator
   else .written via
 
+/-- The provenance an install records. An installer that holds pack authority
+(`SelfConfig.Grants.packAuthority`) records `operator`; any other installer
+records its own.
+
+Maintainer decision (2026-11-09): the Engineer installs any pack, workflow
+packs included. Reason: pack authority is the node owner's standing consent to
+what a pack's plugins ask for, so an install made under it stands where an
+operator install stands. Its engine passes the guard (`admitStep`) and its job
+block is admitted within the same closure and dynamic bounds
+(`packJobBlockAdmissible`); a separate operator step stopped an Engineer that
+wrote a workflow pack at the last call. An agent without the grant still
+records `selfConfig`, and `self_config_engine_refused` holds for its installs.
+A node owner narrows this by clearing the flag. -/
+def installerProvenance (via : InstallProvenance) (packAuthority : Bool) : InstallProvenance :=
+  if packAuthority then .operator else via
+
+theorem install_without_authority_records_installer (via : InstallProvenance) :
+    installerProvenance via false = via := by
+  simp [installerProvenance]
+
+/-- An explicit install under pack authority reads `operator` whatever was
+recorded before, so its engine is not refused by `self_config_engine_refused`. -/
+theorem authority_install_reads_operator (prior : Record) (k : PackKind)
+    (via : InstallProvenance) :
+    provenanceOf k (recordAfterInstall prior k true (installerProvenance via true)) =
+      .operator := by
+  simp [recordAfterInstall, provenanceOf, installerProvenance]
+
 /-- The origin of one call: a call that carries a `script`
 (`CallArgs.carriesScript`) runs model-authored code and is `dynamic`; any
 other call runs the operator-installed artifact the engine guard and
@@ -132,9 +161,10 @@ structure PackJobBlock where
   dynamic : DynamicMode
   deriving DecidableEq, Repr
 
-/-- A pack-shipped block installs only through an operator install; its
-targets and trusted packs come from `closure`, the pack and its dependencies;
-and it never runs dynamic scripts. -/
+/-- A pack-shipped block installs only through an install that records
+`operator` (`installerProvenance`): an operator's, or one made under pack
+authority. Its targets and trusted packs come from `closure`, the pack and its
+dependencies; and it never runs dynamic scripts. -/
 def packJobBlockAdmissible (via : InstallProvenance) (closure : List String)
     (b : PackJobBlock) : Bool :=
   decide (via = .operator ∧ b.targetsFrom ⊆ closure ∧ b.trusted ⊆ closure ∧
@@ -257,6 +287,14 @@ theorem pack_job_block_requires_operator_install (via : InstallProvenance)
     via = .operator := by
   simp only [packJobBlockAdmissible, decide_eq_true_eq] at h
   exact h.1
+
+/-- Pack authority admits a pack-shipped block exactly where an operator
+install admits it: the closure and dynamic bounds still hold. -/
+theorem authority_install_admits_block_as_operator (via : InstallProvenance)
+    (closure : List String) (b : PackJobBlock) :
+    packJobBlockAdmissible (installerProvenance via true) closure b =
+      packJobBlockAdmissible .operator closure b := by
+  simp [installerProvenance]
 
 theorem pack_job_block_within_closure (via : InstallProvenance) (closure : List String)
     (b : PackJobBlock) (h : packJobBlockAdmissible via closure b = true) :

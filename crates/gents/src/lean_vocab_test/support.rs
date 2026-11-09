@@ -1406,6 +1406,12 @@ pub(crate) enum LeanPluginJobAuthorityCase {
         via: String,
         expected: Box<LeanPluginJobInstallExpected>,
     },
+    Installer {
+        name: String,
+        via: String,
+        pack_authority: bool,
+        expected: Box<LeanPluginJobProvenanceExpected>,
+    },
     Origin {
         name: String,
         call: LeanPluginJobCall,
@@ -1445,6 +1451,7 @@ impl LeanPluginJobAuthorityCase {
         match self {
             Self::Provenance { name, .. }
             | Self::Install { name, .. }
+            | Self::Installer { name, .. }
             | Self::Origin { name, .. }
             | Self::PackJobBlock { name, .. }
             | Self::PolicyValid { name, .. }

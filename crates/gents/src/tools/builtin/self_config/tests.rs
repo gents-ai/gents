@@ -1444,25 +1444,29 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
     pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_did": "fixture-worker", "name": "wf-run"}]);
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (fixture, tools) = signed_pack_tool("pack-job-block", plugins).await;
+    let (fixture, tools) = signed_pack_tool("pack-job-block", plugins.clone()).await;
     let slot = format!("worker={}:inference", fixture.agent_did());
-    let error = format!(
-        "{:#}",
-        config_call(
-            &tools,
-            &[
-                "pack",
-                "preview",
-                "install",
-                "fixture/documents_fixture",
-                "--inference-slot",
-                &slot,
-            ],
-        )
-        .await
-        .unwrap_err()
-    );
+    let argv = [
+        "pack",
+        "preview",
+        "install",
+        "fixture/documents_fixture",
+        "--inference-slot",
+        &slot,
+    ];
+    let error = format!("{:#}", config_call(&tools, &argv).await.unwrap_err());
     assert!(error.contains("operator install"), "{error}");
+
+    // Under pack authority the block is judged as an operator install's: the
+    // refusal that remains is the plugin this fixture never installs.
+    let mut tool_config = config(&[]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
+    tool_config.enable_pack_install = true;
+    tool_config.enable_pack_authority = true;
+    let tools = fixture.tools_with_plugins(&tool_config, plugins);
+    let error = format!("{:#}", config_call(&tools, &argv).await.unwrap_err());
+    assert!(!error.contains("operator install"), "{error}");
+    assert!(error.contains("acme/runner"), "{error}");
 }
 
 #[tokio::test]

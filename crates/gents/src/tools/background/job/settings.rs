@@ -32,7 +32,7 @@ pub fn policy_valid(agent_targets: &[String], policy: &JobPolicy) -> bool {
 }
 
 /// Lean `packJobBlockAdmissible`: a pack-shipped job block installs only on an
-/// operator install, with targets and trusted packs drawn from the pack and its
+/// install that records `Operator` (`installer_provenance`), with targets and trusted packs drawn from the pack and its
 /// dependencies, and dynamic scripts off or check.
 pub fn job_block_admissible(
     via: InstalledVia,
@@ -92,7 +92,8 @@ pub fn pack_job_block_admissible(
                 job.policy.dynamic,
             ),
             "plugin {:?} ships a job block this install cannot grant. A pack-shipped job \
-             block needs an operator install, job.agent_targets that name AgentTargets shipped \
+             block needs an operator install or an agent install under pack authority \
+             (self_config.enable_pack_authority), job.agent_targets that name AgentTargets shipped \
              by {coordinate} or its dependencies, job.policy.trusted_packs within {coordinate} \
              and its dependencies, and job.policy.dynamic off or check. Next: drop the job \
              block from the pack, or install the \

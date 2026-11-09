@@ -995,6 +995,10 @@ def installCases : List InstallCase :=
   , ⟨"explicit_self_config_lowers_operator", .written .operator, .plugins, true, .selfConfig⟩
   , ⟨"explicit_operator_raises_self_config", .written .selfConfig, .assets, true, .operator⟩ ]
 
+/-- Every installer with and without pack authority. -/
+def installerCases : List (InstallProvenance × Bool) :=
+  [(.operator, false), (.operator, true), (.selfConfig, false), (.selfConfig, true)]
+
 private def fixturePack : String := "job_plugin_fixture"
 private def scriptDigest : String := "sha256-flow"
 
@@ -1078,6 +1082,8 @@ theorem authority_regressions :
     installCases.map (fun c => recordAfterInstall c.prior c.kind c.explicit c.via) =
       [ .written .operator, .written .operator, .written .selfConfig, .written .operator
       , .written .selfConfig, .written .operator ] ∧
+    installerCases.map (fun c => installerProvenance c.1 c.2) =
+      [.operator, .operator, .selfConfig, .operator] ∧
     originCases.map originVerdict = [.installed, .installed, .dynamic, .installed] ∧
     packBlockCases.map (fun c => packJobBlockAdmissible c.via blockClosure c.block) =
       [true, false, false, false, false] ∧
@@ -1123,6 +1129,13 @@ private def renderInstall (c : InstallCase) : Json :=
     ("expected", Json.mkObj [("record", recordJson r),
       ("provenance", provenanceJson (provenanceOf c.kind r))])]
 
+private def renderInstaller (c : InstallProvenance × Bool) : Json :=
+  let name := (if c.1 = .operator then "operator" else "self_config") ++
+    (if c.2 then "_with_pack_authority" else "_without_pack_authority")
+  Json.mkObj [("name", toJson name), ("kind", toJson "installer"),
+    ("via", provenanceJson c.1), ("pack_authority", toJson c.2),
+    ("expected", Json.mkObj [("provenance", provenanceJson (installerProvenance c.1 c.2))])]
+
 private def renderOrigin (c : OriginCase) : Json :=
   Json.mkObj [("name", toJson c.name), ("kind", toJson "origin"), ("call", callArgsJson c.call),
     ("expected", Json.mkObj [("origin", originJson (originVerdict c))])]
@@ -1156,7 +1169,7 @@ private def renderPublishedRead (publicationInProgress : Bool) : Json :=
 
 def authorityCasesJson : String :=
   (toJson (provenanceCases.map renderProvenance ++ installCases.map renderInstall ++
-    originCases.map renderOrigin ++ packBlockCases.map renderPackBlock ++
+    installerCases.map renderInstaller ++ originCases.map renderOrigin ++ packBlockCases.map renderPackBlock ++
     policyCases.map renderPolicy ++ wireCases.map renderWire ++
     [true, false].map renderPublishedRead)).compress
 

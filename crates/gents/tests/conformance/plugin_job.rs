@@ -22,7 +22,9 @@ use crate::lean_vocab_test::{
     LeanPluginJobResume, LeanPluginJobRootCall, LeanPluginJobRow, LeanPluginJobScope,
     LeanPluginJobTarget, LeanPluginJobToolCall, LeanPluginJobWireCase, LeanPluginJobWireKind,
 };
-use gents::pack::home_install::{record_after_install_via, recorded_provenance, InstalledVia};
+use gents::pack::home_install::{
+    installer_provenance, record_after_install_via, recorded_provenance, InstalledVia,
+};
 use gents::pack::PackKind;
 use gents::plugin::data::StampContext;
 use gents::plugin::job_calls;
@@ -1045,10 +1047,10 @@ fn home_record(r: &LeanPluginJobRecord) -> Option<Option<InstalledVia>> {
     }
 }
 
-/// Lean `callOrigin`, `provenanceOf`, `recordAfterInstall`,
+/// Lean `callOrigin`, `provenanceOf`, `installerProvenance`, `recordAfterInstall`,
 /// `packJobBlockAdmissible`, `Policy.valid` and `wireTargetsFrom` through the
 /// pure cores `origin::call_origin`,
-/// `home_install::{recorded_provenance, record_after_install_via}` and
+/// `home_install::{recorded_provenance, installer_provenance, record_after_install_via}` and
 /// `settings::{job_block_admissible, policy_valid, wire_targets_from}`.
 #[test]
 fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
@@ -1093,6 +1095,19 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
                     recorded_provenance(kind, record),
                     spelled::<InstalledVia>(&expected.provenance),
                     "{name}: provenance after install"
+                );
+            }
+            LeanPluginJobAuthorityCase::Installer {
+                name,
+                via,
+                pack_authority,
+                expected,
+            } => {
+                *kinds.entry("installer").or_default() += 1;
+                assert_eq!(
+                    installer_provenance(spelled(via), *pack_authority),
+                    spelled::<InstalledVia>(&expected.provenance),
+                    "{name}: installer provenance"
                 );
             }
             LeanPluginJobAuthorityCase::Origin {
@@ -1193,6 +1208,7 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
         kinds,
         BTreeMap::from([
             ("install", 6),
+            ("installer", 4),
             ("origin", 4),
             ("pack_job_block", 5),
             ("policy_valid", 4),

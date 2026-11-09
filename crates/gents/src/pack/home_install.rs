@@ -7,8 +7,9 @@ use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
 use crate::pack::archive::PackArchive;
 use crate::store::local::file_lock::FileLock;
 
-/// Who installed a pack: the operator through the CLI, or the model through
-/// self-configuration.
+/// The provenance an install records ([`installer_provenance`]): `Operator`
+/// for the operator's CLI and for an agent holding pack authority,
+/// `SelfConfig` for any other agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstalledVia {
@@ -51,6 +52,16 @@ pub fn recorded_provenance(kind: PackKind, record: Option<Option<InstalledVia>>)
         (Some(Some(via)), _) => via,
         (Some(None), PackKind::Assets | PackKind::Plugins) => InstalledVia::Operator,
         _ => InstalledVia::SelfConfig,
+    }
+}
+
+/// Lean `installerProvenance`: an installer holding pack authority
+/// (`self_config.enable_pack_authority`) records `Operator`.
+pub fn installer_provenance(via: InstalledVia, pack_authority: bool) -> InstalledVia {
+    if pack_authority {
+        InstalledVia::Operator
+    } else {
+        via
     }
 }
 

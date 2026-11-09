@@ -32,7 +32,7 @@ pub mod resolve;
 pub mod store;
 mod ux;
 pub use home_install::{
-    forget_home_install, list_home_installs, list_home_installs_with_skips,
+    forget_home_install, installer_provenance, list_home_installs, list_home_installs_with_skips,
     list_readable_home_installs, read_home_install, record_after_install, write_home_install,
     HomePackInstall, InstalledVia, SkippedHomeInstall,
 };
