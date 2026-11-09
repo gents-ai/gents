@@ -23,9 +23,10 @@ Decisions (#3538, user):
   and the owner's create is idempotent on it.
 * A late reply is still applied: a confirmed reply after a client timeout
   confirms the message, because the runtime holds it.
-* Chat sends never block the composer; a mailbox answer does while it is
-  pending or failed, because a second answer to one question is a new
-  authored answer, not a retry.
+* Chat sends never block the composer. A mailbox answer does while it is
+  pending, failed or confirmed: a second answer to one question is a new
+  authored answer, not a retry, and a confirmed answer stays shown until the
+  question is observed closed (the runtime claims it after the reply).
 
 TLA `ClientSubmissionContention` checks the same flow with the runtime's
 conflict rebuild, and its REDs show that a retry under a fresh identity
@@ -517,7 +518,7 @@ structure View where
 def view (status : Status) (mailbox : Bool) : View :=
   match status with
   | .pending => ⟨.sending, false, false, mailbox⟩
-  | .confirmed => ⟨.delivered, false, false, false⟩
+  | .confirmed => ⟨.delivered, false, false, mailbox⟩
   | .failed => ⟨.failed, true, true, mailbox⟩
   | .discarded => ⟨.hidden, false, false, false⟩
 
@@ -529,11 +530,12 @@ theorem view_progresses_or_acts (status : Status) (mailbox : Bool) :
       ((view status mailbox).retry = true ∧ (view status mailbox).discard = true) := by
   cases status <;> simp [view]
 
-/-- A blocked composer is a mailbox answer that is still sending or offers
-Retry; a chat send never blocks the composer. -/
+/-- A blocked composer is a mailbox answer that is sending, delivered, or
+offers Retry; a chat send never blocks the composer. -/
 theorem composer_blocks_only_mailbox (status : Status) (mailbox : Bool)
     (blocks : (view status mailbox).blocksComposer = true) :
-    mailbox = true ∧ ((view status mailbox).shown = .sending ∨ (view status mailbox).retry = true) := by
+    mailbox = true ∧ ((view status mailbox).shown = .sending ∨
+      (view status mailbox).shown = .delivered ∨ (view status mailbox).retry = true) := by
   cases status <;> cases mailbox <;> simp_all [view]
 
 /-! ### Conformance cases -/
