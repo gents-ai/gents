@@ -704,7 +704,7 @@ pub async fn held_client_request(
 enum SignedClientRow {
     /// Created and natively owned by the actor, with a valid creation receipt.
     Owned {
-        row: gents_protocol::row::AgentRequestRow,
+        row: Box<gents_protocol::row::AgentRequestRow>,
         relationships_pending: Option<bool>,
     },
     /// Another signer's or owner's request, or more than one request.
@@ -776,7 +776,7 @@ async fn find_signed_client_request(
     }
     Ok(Some(SignedClientRow::Owned {
         relationships_pending: value["relationships_pending"].as_bool(),
-        row,
+        row: Box::new(row),
     }))
 }
 
