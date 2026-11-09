@@ -1,43 +1,12 @@
 use super::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingObservation {
-    Desired,
-    Applied,
-}
+pub use gents_protocol::pairing_reader::{PairingObservation, PairingReadReason};
 
-impl PairingObservation {
-    pub fn collection(self) -> &'static str {
-        match self {
-            Self::Desired => "PeerPairingDesired",
-            Self::Applied => "PeerPairingApplied",
-        }
-    }
-}
-
-/// An explicit native grant for one physical pairing observation. Enabling a
-/// tool or choosing an Agent does not itself publish or revoke this grant.
-/// Either reason grants native read access to the complete document; the
-/// relation records independent revocation reasons, not field-level access.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingReadReason {
-    RouteAdmission,
-    ToolView,
-}
-
-impl PairingReadReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::RouteAdmission => "route-admission",
-            Self::ToolView => "tool-view",
-        }
-    }
-
-    pub(super) fn relation(self) -> &'static str {
-        match self {
-            Self::RouteAdmission => "route_reader",
-            Self::ToolView => "tool_reader",
-        }
+/// The native relation that records `reason`'s reader grant.
+pub(super) fn reader_relation(reason: PairingReadReason) -> &'static str {
+    match reason {
+        PairingReadReason::RouteAdmission => "route_reader",
+        PairingReadReason::ToolView => "tool_reader",
     }
 }
 
@@ -45,9 +14,10 @@ impl ConfigApplyTxn<'_> {
     /// Stage a reader change with other authorized configuration writes
     /// (`Identity.OwnerStaged`, pairing readers). The runtime that owns the
     /// observation stages it for a caller that may update the runtime's own
-    /// Node; over HTTP the caller's own change is sent and native ACP decides
-    /// it. This does not authorize enrollment or permit writing the pairing
-    /// observation.
+    /// Node. Only an embedded transaction decides it: a client reaches the
+    /// same decision through the runtime's signed pairing-reader route
+    /// (`pairing_outcome_is_transport_independent`). This does not authorize
+    /// enrollment or permit writing the pairing observation.
     pub async fn set_pairing_reader(
         &self,
         observation: PairingObservation,
@@ -77,6 +47,31 @@ impl ConfigAccess {
                     .await
             })
         })
+        .await
+    }
+
+    /// [`Self::set_pairing_reader`] for the client this embedded access names,
+    /// whose signed pairing-reader command the runtime has authenticated. The
+    /// runtime holds no key for that client, so the transaction carries the
+    /// client's DID without a signer; the change is still decided by the same
+    /// `authorized` and owner checks, as that client.
+    pub async fn set_verified_client_pairing_reader(
+        &self,
+        observation: PairingObservation,
+        doc_id: &str,
+        reason: PairingReadReason,
+        agent: &identity::Did,
+        grant: bool,
+    ) -> Result<(), ConfigClientError> {
+        self.transact_verified_client_pairing_reader(
+            "p2p.set_verified_client_pairing_reader",
+            |txn| {
+                Box::pin(async move {
+                    txn.set_pairing_reader(observation, doc_id, reason, agent, grant)
+                        .await
+                })
+            },
+        )
         .await
     }
 }

@@ -187,6 +187,30 @@ impl EnrollmentDecisionService {
         );
         consume_operator_nonce(&self.node, signer_did, nonce, Utc::now()).await
     }
+
+    /// Verify `signer_did`'s signature over `payload`, then consume its nonce
+    /// once; what the signer may do is decided by the command's own owner.
+    pub(crate) async fn authenticate_signer(
+        &self,
+        signer_did: &str,
+        payload: &[u8],
+        sig: &[u8],
+        nonce: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.identity.verify(signer_did, payload, sig).await?,
+            "client command signature is invalid"
+        );
+        consume_operator_nonce(&self.node, signer_did, nonce, Utc::now()).await
+    }
+
+    /// Embedded access on this runtime's node acting as an authenticated client.
+    pub(crate) fn client_access(
+        &self,
+        client: identity::Did,
+    ) -> gents::store::config_client::ConfigAccess {
+        gents::store::config_client::ConfigAccess::local_as(self.node.clone(), client)
+    }
 }
 
 const OPERATOR_NONCE_RETENTION_SECONDS: i64 = 5 * 60;

@@ -19,6 +19,7 @@ pub mod message;
 pub mod network_token;
 pub mod node_readiness;
 pub mod output;
+pub mod pairing_reader;
 pub mod peer_schema;
 pub mod plugin;
 pub mod process_control;

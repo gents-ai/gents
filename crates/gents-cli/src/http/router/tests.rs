@@ -1,3 +1,4 @@
+mod pairing_reader;
 #[cfg(unix)]
 mod process_control_acceptance;
 

@@ -413,7 +413,7 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
         .iter()
         .filter(|case| case["path"] == "pairing_reader")
         .collect();
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 12);
     for case in cases {
         let key = match case["requester"].as_str().unwrap() {
             "user" => &user,
@@ -458,26 +458,7 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
                 true,
             )
             .await;
-        match case["outcome"].as_str().unwrap() {
-            "staged" => assert!(staged.is_ok(), "{case}: {staged:?}"),
-            "denied" => assert!(
-                matches!(
-                    &staged,
-                    Err(ConfigClientError::OwnerStagedRelationshipDenied { doc_id, .. })
-                        if doc_id == doc
-                ),
-                "{case}: {staged:?}"
-            ),
-            "unmanaged" => assert!(
-                matches!(
-                    &staged,
-                    Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { doc_id, .. })
-                        if doc_id == doc
-                ),
-                "{case}: {staged:?}"
-            ),
-            other => panic!("unexpected modeled outcome {other}"),
-        }
+        assert_modeled_outcome(case, "outcome", doc, &staged);
         // A refused request staged nothing, even once its transaction commits.
         txn.commit().await?;
         let expected = case["staged"].as_bool().unwrap();
@@ -494,7 +475,76 @@ async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyh
             .await?;
             txn.commit().await?;
         }
+        // The runtime's pairing-reader route runs the same request as the
+        // authenticated client, without its key
+        // (`pairing_outcome_is_transport_independent`).
+        let routed_access = ConfigAccess::local_as(node.clone(), did(key.did())?);
+        let routed = routed_access
+            .set_verified_client_pairing_reader(
+                PairingObservation::Desired,
+                doc,
+                PairingReadReason::RouteAdmission,
+                &target_did,
+                true,
+            )
+            .await;
+        assert_eq!(case["http"], case["outcome"], "{case}");
+        assert_modeled_outcome(case, "http", doc, &routed);
+        assert_eq!(readable().await? == vec![doc.clone()], expected, "{case}");
+        if expected {
+            routed_access
+                .set_verified_client_pairing_reader(
+                    PairingObservation::Desired,
+                    doc,
+                    PairingReadReason::RouteAdmission,
+                    &target_did,
+                    false,
+                )
+                .await?;
+            assert!(readable().await?.is_empty(), "{case}");
+        }
     }
+    // A route transaction never runs as the runtime itself.
+    assert!(matches!(
+        ConfigAccess::local_as(node.clone(), did(runtime.did())?)
+            .set_verified_client_pairing_reader(
+                PairingObservation::Desired,
+                &route,
+                PairingReadReason::RouteAdmission,
+                &target_did,
+                true,
+            )
+            .await,
+        Err(ConfigClientError::TransactionActorMismatch)
+    ));
     node.shutdown().await?;
     Ok(())
+}
+
+fn assert_modeled_outcome(
+    case: &serde_json::Value,
+    field: &str,
+    doc: &str,
+    result: &Result<(), ConfigClientError>,
+) {
+    match case[field].as_str().unwrap() {
+        "staged" => assert!(result.is_ok(), "{case}: {result:?}"),
+        "denied" => assert!(
+            matches!(
+                result,
+                Err(ConfigClientError::OwnerStagedRelationshipDenied { doc_id, .. })
+                    if doc_id == doc
+            ),
+            "{case}: {result:?}"
+        ),
+        "unmanaged" => assert!(
+            matches!(
+                result,
+                Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { doc_id, .. })
+                    if doc_id == doc
+            ),
+            "{case}: {result:?}"
+        ),
+        other => panic!("unexpected modeled outcome {other}"),
+    }
 }

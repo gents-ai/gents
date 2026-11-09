@@ -4,17 +4,23 @@
 //! every public route, so Gents never relies on that admission: the actor
 //! stages the change when it owns the document; otherwise the embedding
 //! runtime stages it as the owner, in the same transaction, for a requester
-//! that the modeled authority admits. Over HTTP no runtime participates, so
-//! the requester's own change is sent and native ACP decides it.
+//! that the modeled authority admits. A pairing reader is decided only in an
+//! embedded transaction; a client reaches it through the runtime's signed
+//! route. A document-update change over HTTP still sends the requester's own
+//! change and native ACP decides it.
 
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
 use serde_json::Value;
 
-use super::apply_txn::TxnBackend;
+use super::apply_txn::{EmbeddedTransactionPurpose, TxnBackend};
 use super::execute::native_relationship_error;
 use super::native::execute_owned_native;
-use super::{ConfigApplyTxn, ConfigClientError, Result};
+use super::transact::{expect_committed, transact_owned, TransactionMode};
+use super::{ConfigAccess, ConfigApplyTxn, ConfigClientError, Result};
+use crate::store::config_client::pairing_reader::reader_relation;
+use crate::store::config_client::write_telemetry::WriteBackend;
 use crate::store::config_client::{PairingObservation, PairingReadReason};
 use crate::store::graphql::escape_graphql_string;
 
@@ -91,7 +97,7 @@ impl ConfigApplyTxn<'_> {
         self.change_owner_staged(
             observation.collection(),
             doc_id,
-            reason.relation(),
+            reader_relation(reason),
             reader.as_str(),
             delete,
             Authority::PairingNode,
@@ -109,7 +115,10 @@ impl ConfigApplyTxn<'_> {
         authority: Authority,
     ) -> Result<()> {
         crate::store::graphql::validate_collection_identifier(collection)?;
-        if self.has_pack_interpreter() || matches!(self.backend, TxnBackend::Http { .. }) {
+        if self.has_pack_interpreter()
+            || (authority == Authority::DocumentUpdate
+                && matches!(self.backend, TxnBackend::Http { .. }))
+        {
             return self
                 .change_document_relationship(collection, doc_id, relation, target, delete)
                 .await;
@@ -178,7 +187,7 @@ impl ConfigApplyTxn<'_> {
         // the runtime itself owns.
         let managed = match authority {
             Authority::DocumentUpdate => {
-                owner == runtime || self.configures_agent(runtime.as_str(), &owner).await?
+                owner == runtime || self.configures_agent(&runtime, &owner).await?
             }
             Authority::PairingNode => owner == runtime,
         };
@@ -289,18 +298,76 @@ impl ConfigApplyTxn<'_> {
     }
 
     /// Whether `agent` is an Agent configured on the runtime's Node, as the
-    /// requesting actor observes it in this transaction.
-    async fn configures_agent(&self, runtime: &str, agent: &identity::Did) -> Result<bool> {
+    /// runtime observes it in this transaction (`stagesAs`): the requester's
+    /// read access never decides which owners the runtime manages.
+    async fn configures_agent(
+        &self,
+        runtime: &identity::Did,
+        agent: &identity::Did,
+    ) -> Result<bool> {
         let response = self
-            .execute(&format!(
-                r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 1) {{_docID}} }}"#,
-                escape_graphql_string(runtime),
-                escape_graphql_string(agent.as_str()),
-            ))
+            .execute_local_response_with_actor(
+                &format!(
+                    r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 1) {{_docID}} }}"#,
+                    escape_graphql_string(runtime.as_str()),
+                    escape_graphql_string(agent.as_str()),
+                ),
+                Some(runtime.clone()),
+                None,
+            )
             .await?;
-        Ok(response["data"]["Agent"]
-            .as_array()
+        Ok(response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("Agent"))
+            .and_then(Value::as_array)
             .is_some_and(|rows| !rows.is_empty()))
+    }
+}
+
+impl ConfigAccess {
+    /// Begin a transaction as the non-runtime client this access names, for
+    /// an operation the runtime authenticated from that client's signed
+    /// command. Only the pairing-reader decision runs in it.
+    pub(in crate::store::config_client) async fn transact_verified_client_pairing_reader<'a, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<()>> + Send + 'a,
+    {
+        let Self::Local(local) = self else {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        };
+        let actor = local
+            .identity()
+            .cloned()
+            .ok_or(ConfigClientError::RelationshipActorRequired)?;
+        if local.node().node_identity_did() == Some(actor.as_str()) {
+            return Err(ConfigClientError::TransactionActorMismatch);
+        }
+        transact_owned(
+            operation,
+            WriteBackend::Embedded,
+            TransactionMode::ConflictRetry,
+            move |operation, rollback| {
+                let actor = actor.clone();
+                Box::pin(async move {
+                    ConfigApplyTxn::begin_local_owned(
+                        local.node(),
+                        Some(actor),
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::VerifiedClient,
+                    )
+                    .await
+                })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
     }
 }
 
