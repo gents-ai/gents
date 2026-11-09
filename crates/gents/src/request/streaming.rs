@@ -266,7 +266,7 @@ impl DefraStreamWriter {
 
     async fn flush_owned_partial_with_stop(
         &self,
-        request: &crate::request::watcher::AgentRequest,
+        request: &gents_protocol::row::AgentRequest,
         generation: &str,
         message: &gents_protocol::message::Message,
         stop: Option<u32>,

@@ -611,7 +611,7 @@ pub(super) fn recovered_provider_provenance(
 #[cfg(test)]
 mod recovered_provenance_tests {
     use super::*;
-    use crate::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
+    use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
     use gents_protocol::output::{
         OutputSegment, SegmentRun, StreamDeclaration, StreamPayload, TranscriptMessage,
     };

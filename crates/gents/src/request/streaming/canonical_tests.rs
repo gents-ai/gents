@@ -1827,7 +1827,7 @@ async fn partial_recovery_keeps_stopped_reasoning_but_not_the_following_open_blo
         panic!("recovery header missing")
     };
     let (_, recovered) = crate::session::load_canonical_message(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &fixture_access(&node, &lifecycle),
         &message_doc_id,
         &request.node_did,
         request.requester_did.as_deref(),
@@ -1835,8 +1835,8 @@ async fn partial_recovery_keeps_stopped_reasoning_but_not_the_following_open_blo
     .await
     .unwrap();
     assert_eq!(recovered, snapshot(vec![first]));
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(path);
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
 }
 
 #[tokio::test]
