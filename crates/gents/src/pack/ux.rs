@@ -54,9 +54,7 @@ pub struct PackUxPlugin {
     pub data: Vec<UxDataSurface>,
 }
 
-pub use crate::documents::{
-    is_valid_ux_data_tool_name, UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN,
-};
+pub use crate::documents::{is_valid_ux_data_tool_name, UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN};
 
 /// What a UX plugin declares it contributes: the gate the desktop's
 /// plugin context enforces on every `register` call.

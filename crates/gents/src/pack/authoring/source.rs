@@ -230,7 +230,10 @@ mod tests {
         materialize_plugin_source(&dir, &source, "0.1.3").unwrap();
 
         assert!(!dir.join("stale.txt").exists());
-        assert!(dir.join("target/plugins").is_dir(), "the compiler cache stays");
+        assert!(
+            dir.join("target/plugins").is_dir(),
+            "the compiler cache stays"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.join("plugins/double/source/main.js")).unwrap(),
             source.source
@@ -273,7 +276,10 @@ mod tests {
         let cobol = document(json!({
             "plugin_id": "ledger", "node_did": "did:key:n", "language": "cobol", "source": "x",
         }));
-        let error = format!("{:#}", prepare_plugin_source(home.path(), &cobol).unwrap_err());
+        let error = format!(
+            "{:#}",
+            prepare_plugin_source(home.path(), &cobol).unwrap_err()
+        );
         assert!(error.contains("supported languages"), "{error}");
         assert!(!plugin_source_build_root(home.path(), "ledger").exists());
     }

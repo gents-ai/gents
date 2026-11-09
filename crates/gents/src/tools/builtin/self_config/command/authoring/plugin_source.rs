@@ -131,7 +131,11 @@ impl ConfigCommandTool {
         };
         let receipt = installer
             .plugins_pack(
-                if prepared.installed { "update" } else { "install" },
+                if prepared.installed {
+                    "update"
+                } else {
+                    "install"
+                },
                 &PackInstallParams {
                     package: coordinate.clone(),
                     variables: BTreeMap::new(),

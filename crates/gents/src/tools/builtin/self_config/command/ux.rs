@@ -82,7 +82,11 @@ impl ConfigCommandTool {
             bail!("ux module requires exactly one listed ID; see [\"ux\",\"list\"]");
         };
         let module = if ux::page::page_id(id).is_some() {
-            ux::page::module(&self.page_document(ux::page::page_id(id).unwrap_or(id)).await?)
+            ux::page::module(
+                &self
+                    .page_document(ux::page::page_id(id).unwrap_or(id))
+                    .await?,
+            )
         } else {
             let listing = ux::find(home, id)?;
             let plugins = self.plugins.clone();

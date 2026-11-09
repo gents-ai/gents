@@ -135,7 +135,9 @@ mod tests {
     #[test]
     fn an_edit_changes_the_listing_digest() {
         let before = listing(&page("export default {}")).unwrap().digest;
-        let after = listing(&page("export default { id: 'board' }")).unwrap().digest;
+        let after = listing(&page("export default { id: 'board' }"))
+            .unwrap()
+            .digest;
         assert_ne!(before, after);
         let mut restyled = page("export default {}");
         restyled.css = Some(".a{}".into());

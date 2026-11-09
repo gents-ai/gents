@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use super::*;
 use crate::pack::authoring::{
     check_dir, pack_built, pack_name, plugins_with_source, read_manifest, scaffold,
-    source as source_pack,
-    verify_pack_file, CheckReport, Kind, PackAddition, PackEdit, ScaffoldInput, Template,
+    source as source_pack, verify_pack_file, CheckReport, Kind, PackAddition, PackEdit,
+    ScaffoldInput, Template,
 };
 
 mod plugin_source;

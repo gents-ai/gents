@@ -61,7 +61,10 @@ fn page_data_admission_matches_lean() {
                 "enabled": enabled,
             }))
             .unwrap();
-            crate::plugin::ux::page::listing(&page).unwrap().default_enabled == Some(true)
+            crate::plugin::ux::page::listing(&page)
+                .unwrap()
+                .default_enabled
+                == Some(true)
         } else {
             first
         };
@@ -109,9 +112,14 @@ async fn a_page_document_calls_only_what_it_declares_while_enabled() {
         format!("{undeclared:#}").contains("not declared"),
         "{undeclared:#}"
     );
-    let listed = surfaces(fixture.home.path(), &fixture.access, PAGE, &fixture.node_did)
-        .await
-        .unwrap();
+    let listed = surfaces(
+        fixture.home.path(),
+        &fixture.access,
+        PAGE,
+        &fixture.node_did,
+    )
+    .await
+    .unwrap();
     assert_eq!(listed["surfaces"][0]["surface"], "board");
     assert_eq!(listed["surfaces"][0]["tools"].as_array().unwrap().len(), 2);
 
@@ -120,14 +128,31 @@ async fn a_page_document_calls_only_what_it_declares_while_enabled() {
         .call_as(PAGE, &fixture.node_did, "board", "list_tasks", json!({}))
         .await
         .unwrap_err();
-    assert!(format!("{disabled:#}").contains("is disabled"), "{disabled:#}");
-    let disabled = surfaces(fixture.home.path(), &fixture.access, PAGE, &fixture.node_did)
-        .await
-        .unwrap_err();
-    assert!(format!("{disabled:#}").contains("is disabled"), "{disabled:#}");
+    assert!(
+        format!("{disabled:#}").contains("is disabled"),
+        "{disabled:#}"
+    );
+    let disabled = surfaces(
+        fixture.home.path(),
+        &fixture.access,
+        PAGE,
+        &fixture.node_did,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{disabled:#}").contains("is disabled"),
+        "{disabled:#}"
+    );
 
     let missing = fixture
-        .call_as("page/absent", &fixture.node_did, "board", "list_tasks", json!({}))
+        .call_as(
+            "page/absent",
+            &fixture.node_did,
+            "board",
+            "list_tasks",
+            json!({}),
+        )
         .await
         .unwrap_err();
     assert!(format!("{missing:#}").contains("no page"), "{missing:#}");

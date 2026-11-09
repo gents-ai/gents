@@ -79,12 +79,7 @@ async fn listing_with_data(
     Ok((listing, enabled))
 }
 
-fn refuse_undeclared(
-    listing: &UxListing,
-    enabled: bool,
-    surface: &str,
-    tool: &str,
-) -> Result<()> {
+fn refuse_undeclared(listing: &UxListing, enabled: bool, surface: &str, tool: &str) -> Result<()> {
     let document = listing.door == crate::plugin::ux::UxDoor::Document;
     let declared = manifest_allows_tool(listing, surface, tool);
     anyhow::ensure!(
@@ -377,7 +372,11 @@ pub async fn watch_local(
     let declaration = watch_declaration(home, &access, &request).await?;
     let changes = crate::subscribe_collections(
         &node,
-        [declaration.collection.as_str(), "DatastoreToolSurface", "Page"],
+        [
+            declaration.collection.as_str(),
+            "DatastoreToolSurface",
+            "Page",
+        ],
     )?;
     let last = call(home, &access, request.clone()).await?;
     anyhow::ensure!(

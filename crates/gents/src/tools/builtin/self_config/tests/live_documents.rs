@@ -71,13 +71,20 @@ async fn a_fileless_agent_creates_edits_lints_disables_and_removes_a_page() {
 
     let read = ok(&tools, json!({"argv":["page","get"],"target_id":"notes"})).await;
     assert_eq!(read["document"]["module"], MODULE, "{read}");
-    assert_eq!(read["document"]["data"], json!({"surfaces": data}), "{read}");
+    assert_eq!(
+        read["document"]["data"],
+        json!({"surfaces": data}),
+        "{read}"
+    );
     let listed = ok(&tools, json!({"argv":["page","list"]})).await;
     assert!(listed.to_string().contains("\"notes\""), "{listed}");
 
     let lint = ok(&tools, json!({"argv":["page","lint"],"target_id":"notes"})).await;
     assert_eq!(lint["admitted"], true, "{lint}");
-    assert_eq!(lint["next_call"]["argv"], json!(["ux","preview","page/notes"]));
+    assert_eq!(
+        lint["next_call"]["argv"],
+        json!(["ux", "preview", "page/notes"])
+    );
     assert_eq!(
         ok(&tools, json!({"argv":["ux","lint","page/notes"]})).await["admitted"],
         true
@@ -125,8 +132,14 @@ async fn a_fileless_agent_creates_edits_lints_disables_and_removes_a_page() {
     assert_eq!(lint["admitted"], false, "{lint}");
 
     for (set, expected) in [
-        (json!({"module": "x".repeat(1024 * 1024 + 1)}), "at most 1024 KiB"),
-        (json!({"module": MODULE, "data": [{"surface":"s","tools":[]}]}), "with no tools"),
+        (
+            json!({"module": "x".repeat(1024 * 1024 + 1)}),
+            "at most 1024 KiB",
+        ),
+        (
+            json!({"module": MODULE, "data": [{"surface":"s","tools":[]}]}),
+            "with no tools",
+        ),
         (json!({"css": "p{}"}), "module"),
     ] {
         let error = call(
@@ -179,7 +192,9 @@ async fn page_and_plugin_help_name_the_document_verbs() {
         index.as_str().unwrap().contains("plugin-source:"),
         "{index}"
     );
-    let plugin = call(&tools, json!({"argv":["help","plugin"]})).await.unwrap();
+    let plugin = call(&tools, json!({"argv":["help","plugin"]}))
+        .await
+        .unwrap();
     let plugin = plugin.as_str().unwrap();
     assert!(plugin.contains("plugin build NAME"), "{plugin}");
     assert!(plugin.contains("\"plugin\",\"build\""), "{plugin}");

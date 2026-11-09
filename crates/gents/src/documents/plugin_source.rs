@@ -200,7 +200,9 @@ mod tests {
     #[test]
     fn cases_read_the_bare_list_and_the_stored_envelope_alike() {
         let cases = json!([{"name":"echo","input":{"a":1},"expect":{"a":1}}]);
-        let bare = document(json!({"plugin_id":"echo","node_did":"did:key:n","language":"js","source":"module.exports = (i) => i;","tests":cases}));
+        let bare = document(
+            json!({"plugin_id":"echo","node_did":"did:key:n","language":"js","source":"module.exports = (i) => i;","tests":cases}),
+        );
         let stored = serde_json::to_value(&bare).unwrap();
         assert_eq!(stored["tests"], json!({"cases": cases}));
         assert_eq!(document(stored), bare);
@@ -216,11 +218,17 @@ mod tests {
             ("plugin_id", json!("Echo Tool"), "snake_case"),
             ("language", json!(" "), "needs a language"),
             ("source", json!(" "), "needs source"),
-            ("source", json!("x".repeat(MAX_PLUGIN_SOURCE_BYTES + 1)), "at most 1024 KiB"),
+            (
+                "source",
+                json!("x".repeat(MAX_PLUGIN_SOURCE_BYTES + 1)),
+                "at most 1024 KiB",
+            ),
             ("input_schema", json!([1]), "object input_schema"),
             (
                 "tests",
-                json!((0..=MAX_PLUGIN_SOURCE_CASES).map(|_| json!({"input":{}})).collect::<Vec<_>>()),
+                json!((0..=MAX_PLUGIN_SOURCE_CASES)
+                    .map(|_| json!({"input":{}}))
+                    .collect::<Vec<_>>()),
                 "the limit is 64",
             ),
         ] {

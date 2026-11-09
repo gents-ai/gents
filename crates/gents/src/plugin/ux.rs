@@ -272,7 +272,10 @@ pub(crate) fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -
         ),
         (UxDoor::Pack, None) => None,
         (UxDoor::Document, _) => {
-            anyhow::bail!("page document {} is read from its node, not a file", listing.id)
+            anyhow::bail!(
+                "page document {} is read from its node, not a file",
+                listing.id
+            )
         }
     };
     let css = css_path

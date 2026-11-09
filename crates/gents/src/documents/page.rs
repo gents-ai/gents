@@ -213,10 +213,7 @@ impl PageDocument {
     /// admit the same declarations.
     pub fn validate(&self) -> Result<()> {
         let id = &self.page_id;
-        anyhow::ensure!(
-            is_snake_case_name(id),
-            "page id must be snake_case: {id:?}"
-        );
+        anyhow::ensure!(is_snake_case_name(id), "page id must be snake_case: {id:?}");
         for (what, text) in [
             ("module", Some(self.module.as_str())),
             ("css", self.css.as_deref()),
@@ -241,7 +238,8 @@ impl PageDocument {
 /// decides what the reader sees.
 pub async fn list_pages(access: &ConfigAccess, node_did: &str) -> Result<Vec<PageDocument>> {
     anyhow::ensure!(!node_did.trim().is_empty(), "page owner is required");
-    let (fields, _) = crate::store::config_client::config_projection(crate::Collection::Page, None)?;
+    let (fields, _) =
+        crate::store::config_client::config_projection(crate::Collection::Page, None)?;
     let owner = escape_graphql_string(node_did);
     let query = format!(
         "{{ Page(filter: {{ node_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
@@ -277,7 +275,9 @@ mod tests {
     #[test]
     fn data_reads_the_bare_list_and_the_stored_envelope_alike() {
         let surfaces = json!([{"surface": "board", "tools": ["list_cards"]}]);
-        let bare = page(json!({"page_id":"board","node_did":"did:key:n","module":"export default {}","data":surfaces}));
+        let bare = page(
+            json!({"page_id":"board","node_did":"did:key:n","module":"export default {}","data":surfaces}),
+        );
         let stored = serde_json::to_value(&bare).unwrap();
         assert_eq!(stored["data"], json!({"surfaces": surfaces}));
         assert_eq!(page(stored), bare);
@@ -293,10 +293,26 @@ mod tests {
         for (field, replacement, expected) in [
             ("page_id", json!("Board Page"), "snake_case"),
             ("module", json!("  "), "needs a module"),
-            ("module", json!("x".repeat(MAX_PAGE_SOURCE_BYTES + 1)), "at most 1024 KiB"),
-            ("css", json!("x".repeat(MAX_PAGE_SOURCE_BYTES + 1)), "at most 1024 KiB"),
-            ("data", json!([{"surface":"board","tools":[]}]), "with no tools"),
-            ("data", json!([{"surface":"board","tools":["Bad Tool"]}]), "tool name"),
+            (
+                "module",
+                json!("x".repeat(MAX_PAGE_SOURCE_BYTES + 1)),
+                "at most 1024 KiB",
+            ),
+            (
+                "css",
+                json!("x".repeat(MAX_PAGE_SOURCE_BYTES + 1)),
+                "at most 1024 KiB",
+            ),
+            (
+                "data",
+                json!([{"surface":"board","tools":[]}]),
+                "with no tools",
+            ),
+            (
+                "data",
+                json!([{"surface":"board","tools":["Bad Tool"]}]),
+                "tool name",
+            ),
         ] {
             let mut document = base.clone();
             document[field] = replacement;
