@@ -1,10 +1,11 @@
 //! `config ux preview`: a pack's UI page, rendered in the real sandbox on
-//! this node (`crate::plugin::ux::preview`), reported as text the model
+//! this node (`ux_preview`), reported as text the model
 //! reads top to bottom. A read: it writes only its report files.
 
 use super::*;
 
-use crate::plugin::ux::preview::{self, PreviewRequest, Viewport};
+use crate::observe::ux_preview::{self as preview, PreviewRequest, Viewport};
+use crate::plugin::{ux::producer_input, PluginVerdict};
 
 const HELP: &str = r#"ux preview: render a UX plugin's page in the real sandbox frame with this node's real data, at light and dark, and report what it shows.
 
@@ -50,12 +51,9 @@ impl ConfigCommandTool {
         let target = preview::resolve_target(home, plugin, |namespace, name| async move {
             let coordinate = format!("{namespace}/{name}");
             let record = self.plugins.resolve(&coordinate, None)?;
-            let call = self
-                .plugins
-                .call(&record, crate::plugin::ux::producer_input())
-                .await?;
+            let call = self.plugins.call(&record, producer_input()).await?;
             anyhow::ensure!(
-                matches!(call.outcome.verdict, crate::plugin::PluginVerdict::Success),
+                matches!(call.outcome.verdict, PluginVerdict::Success),
                 "the ux producer {coordinate} did not succeed: {}",
                 call.outcome.diagnostics
             );

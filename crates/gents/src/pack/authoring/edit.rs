@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 
 use super::names::Names;
 use super::scaffold::{tool_markdown, ux_plugin, write_plugin_source};
-use crate::tools::native::ToolContext;
+use super::ToolContext;
 
 const CONFIG: &str = "pack_config.json";
 

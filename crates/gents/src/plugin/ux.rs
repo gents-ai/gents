@@ -35,7 +35,6 @@ use crate::pack::{
 };
 
 pub mod lint;
-pub mod preview;
 pub mod reference;
 
 /// The entry file a dev plugin folder must hold.
@@ -243,7 +242,7 @@ fn digest_of(source: &str) -> String {
 
 /// Reads a file-produced module: the entry, and the css beside it when
 /// the listing (dev) or the manifest (pack) names one.
-fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -> Result<UxModule> {
+pub(crate) fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -> Result<UxModule> {
     let entry = PathBuf::from(&listing.file);
     let source = read_bounded(&entry, "ux plugin entry")?;
     let css_path = match (listing.door, css) {

@@ -70,7 +70,7 @@ pub(crate) struct UxPreviewArgs {
         default_value = "1280x800",
         help = "Size of the pane the page draws in"
     )]
-    pub(crate) viewport: gents::plugin::ux::preview::Viewport,
+    pub(crate) viewport: gents::observe::ux_preview::Viewport,
 }
 
 #[derive(clap::Args)]

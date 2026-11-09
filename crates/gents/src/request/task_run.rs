@@ -10,6 +10,10 @@ use serde_json::Value;
 
 use crate::documents::template::{render_template, task_node_ctx, TemplateScope};
 use crate::documents::{Agent, Task};
+use crate::goal::{
+    load_canonical_goal_in_txn, prepare_client_goal_input, task_assignment_goal_id,
+    validate_task_goal_declaration,
+};
 use crate::store::config_client::{read_desired_state_record_in_txn, ConfigAccess};
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
@@ -108,10 +112,7 @@ pub async fn enqueue_task_run(
     let prompt_template = task.prompt_template;
     let goal_objective_template = task.goal_objective_template;
     let goal_token_budget = task.goal_token_budget;
-    crate::goal::validate_task_goal_declaration(
-        goal_objective_template.as_deref(),
-        goal_token_budget,
-    )?;
+    validate_task_goal_declaration(goal_objective_template.as_deref(), goal_token_budget)?;
 
     let invocation_key = resolve_invocation_key(
         &task_id,
@@ -346,7 +347,7 @@ pub async fn prepare_task_run_input(
     if goal_backed || !continue_existing {
         return Ok(input);
     }
-    crate::goal::prepare_client_goal_input(access, verifier, node_did, session_id, input).await
+    prepare_client_goal_input(access, verifier, node_did, session_id, input).await
 }
 
 /// Duplicate admission preserves the stored fire, so an untagged signed receipt
@@ -371,9 +372,8 @@ pub async fn prepare_task_run_goal_id(
     access
         .transact_readonly("cli.task_run.goal_identity", |txn| {
             Box::pin(async move {
-                let current =
-                    crate::goal::load_canonical_goal_in_txn(txn, node_did, session_id).await?;
-                Ok(Some(crate::goal::task_assignment_goal_id(
+                let current = load_canonical_goal_in_txn(txn, node_did, session_id).await?;
+                Ok(Some(task_assignment_goal_id(
                     current.as_ref().map(|goal| goal.goal_id.as_str()),
                     node_did,
                     session_id,

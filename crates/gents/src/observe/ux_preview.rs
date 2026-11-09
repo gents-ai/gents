@@ -6,7 +6,7 @@
 //! page makes (the prebuilt page, the plugin's module, each `ctx.data` call)
 //! is intercepted in the DevTools session and fulfilled here, so there is no
 //! listening socket and a page's data goes through
-//! [`crate::observe::ux_data`] exactly as the desktop's does. A preview
+//! [`super::ux_data`] exactly as the desktop's does. A preview
 //! writes nothing: a page's create tools and `ctx.plugin` are refused at the
 //! door and reported.
 
@@ -26,11 +26,11 @@ use tokio::sync::{mpsc, OnceCell};
 
 use self::browser::{Browser, Cdp, Event};
 use self::report::{Audit, ConsoleEntry, DoorCall, PageStatus, ThemeReport, UxPreviewReport};
-use super::{file_module, UxDoor, UxListing, UxModule, UxProducer};
-use crate::observe::ux_data::{self, UxDataCall};
+use super::ux_data::{self, UxDataCall};
+use crate::plugin::ux::{self, file_module, UxDoor, UxListing, UxModule, UxProducer};
 use crate::store::config_client::ConfigAccess;
 
-const AUDIT_JS: &str = include_str!("preview/audit.js");
+const AUDIT_JS: &str = include_str!("ux_preview/audit.js");
 const PAGE_ORIGIN: &str = "https://ux-preview.gents.invalid";
 const PAGE_ENTRY: &str = "ux-preview.html";
 const DOOR_PREFIX: &str = "/__preview/";
@@ -95,21 +95,21 @@ fn declared_plugin_id(listing: &UxListing) -> &str {
 }
 
 fn listing_named(home: &Path, id: &str) -> Result<Option<UxListing>> {
-    Ok(super::list(home)?
+    Ok(ux::list(home)?
         .into_iter()
         .find(|listing| listing.id == id || declared_plugin_id(listing) == id))
 }
 
 /// Resolves `target` (a listing id, a plugin's bare name or a `plugin.js`
 /// path) and produces its module; `run_afb` runs a pack's `.afb` producer as
-/// in [`super::resolve_module`].
+/// in [`ux::resolve_module`].
 pub async fn resolve_target<F, Fut>(home: &Path, target: &str, run_afb: F) -> Result<PreviewTarget>
 where
     F: FnOnce(String, String) -> Fut,
     Fut: std::future::Future<Output = Result<Value>>,
 {
     if let Some(listing) = listing_named(home, target)? {
-        let module = super::resolve_module(home, &listing, run_afb).await?;
+        let module = ux::resolve_module(home, &listing, run_afb).await?;
         return Ok(PreviewTarget {
             label: listing.id.clone(),
             file: listing.file.clone(),
@@ -802,7 +802,7 @@ mod tests {
             .join(crate::store::local::home::UX_PLUGINS_DIR_NAME)
             .join("hello");
         std::fs::create_dir_all(&dev).unwrap();
-        std::fs::write(dev.join(super::super::DEV_ENTRY), "export default {}").unwrap();
+        std::fs::write(dev.join(ux::DEV_ENTRY), "export default {}").unwrap();
         let target = resolve_target(home.path(), "hello", no_afb).await.unwrap();
         assert_eq!(target.label, "hello");
     }

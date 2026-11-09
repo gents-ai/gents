@@ -1,4 +1,5 @@
 use super::*;
+use crate::request::task_run;
 
 impl ConfigCommandTool {
     pub(super) async fn mcp_service(&self, argv: &[String]) -> Result<String> {
@@ -50,15 +51,14 @@ impl ConfigCommandTool {
         };
         let signer = self.core.agent_signer()?;
         let access = self.core.access()?;
-        let task =
-            crate::request::task_run::read_runnable_task(&access, &self.node_did, task_id).await?;
+        let task = task_run::read_runnable_task(&access, &self.node_did, task_id).await?;
         self.execution.enter_mutation();
-        let output = crate::request::task_run::enqueue_task_run(
+        let output = task_run::enqueue_task_run(
             &access,
             &self.node_did,
             &signer,
             task,
-            &crate::request::task_run::TaskRunOptions {
+            &task_run::TaskRunOptions {
                 args,
                 session_id: parsed.one("session-id")?.map(ToOwned::to_owned),
                 continue_session: parsed.one("continue-session")?.map(ToOwned::to_owned),

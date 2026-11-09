@@ -30,7 +30,7 @@ async fn module(args: UxModuleArgs) -> Result<()> {
 }
 
 async fn preview(args: UxPreviewArgs) -> Result<()> {
-    use gents::plugin::ux::preview;
+    use gents::observe::ux_preview as preview;
     use std::io::Write as _;
 
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());

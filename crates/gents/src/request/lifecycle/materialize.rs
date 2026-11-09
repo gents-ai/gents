@@ -1,4 +1,5 @@
 use super::*;
+use crate::goal::{prepare_goal_input_in_txn, validate_task_goal_identity_in_txn};
 use anyhow::Context;
 use gents_protocol::request_lifecycle::{
     EnqueuedAgentRequest, SessionMessageCause, SessionMessageTarget,
@@ -1500,7 +1501,7 @@ pub(crate) async fn write_trigger_delivery_with_identity(
                 let mut create = create.clone();
                 if fresh {
                     if prepared.target_existing && prepared.receipt.goal_id.is_none() {
-                        create.input = crate::goal::prepare_goal_input_in_txn(
+                        create.input = prepare_goal_input_in_txn(
                             txn,
                             &create.node_did,
                             &create.session_id,
@@ -1669,7 +1670,7 @@ async fn stage_task_delivery_with_receipt(
         );
         match &fire.goal_id {
             Some(goal_id) => {
-                crate::goal::validate_task_goal_identity_in_txn(
+                validate_task_goal_identity_in_txn(
                     txn,
                     &create.node_did,
                     &create.session_id,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugin::store;
 
 impl ConfigCommandTool {
     pub(super) fn plugin(&self, argv: &[String]) -> Result<String> {
@@ -24,7 +25,7 @@ impl ConfigCommandTool {
                 );
                 let limit = parse_limit(&parsed)?;
                 let cursor = parsed.one("cursor")?;
-                let mut records = crate::plugin::store::list_records(home)?;
+                let mut records = store::list_records(home)?;
                 records.sort_by_key(|record| format!("{}/{}", record.namespace, record.name));
                 let mut items = records.into_iter().filter(|record| cursor.is_none_or(|cursor| format!("{}/{}", record.namespace, record.name).as_str() > cursor)).take(limit + 1).map(|record| json!({"plugin":format!("{}/{}",record.namespace,record.name),"version":record.version,"digest":record.digest,"owner_pack_coordinate":record.owner_pack_coordinate})).collect::<Vec<_>>();
                 let truncated = items.len() > limit;
@@ -40,8 +41,8 @@ impl ConfigCommandTool {
                 ordered! {"items": items, "next_cursor": next_cursor, "next_call": json!({"argv":["plugin","get","<PLUGIN>"]})}.pretty()
             }
             Some("get") if argv.len() == 2 => {
-                let (namespace, name) = crate::plugin::store::parse_coordinate(&argv[1])?;
-                let record = crate::plugin::store::read_record(home, namespace, name)?;
+                let (namespace, name) = store::parse_coordinate(&argv[1])?;
+                let record = store::read_record(home, namespace, name)?;
                 ordered! {
                     "plugin": argv[1],
                     "selection": json!({"plugin":argv[1],"digest":record.digest}),
