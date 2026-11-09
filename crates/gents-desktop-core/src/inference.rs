@@ -253,7 +253,7 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
 
 /// A failed model discovery's kind, whether the provider answered, and whether the user may
 /// type a model id it did not advertise.
-pub fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
+fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
     let http_error = error.chain().find_map(|cause| {
         cause.downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
     });
@@ -271,6 +271,176 @@ pub fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool,
     } else {
         ("connection", false, false)
     }
+}
+
+const DISCOVERY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Why a model discovery stopped before the provider answered.
+#[derive(Debug, thiserror::Error)]
+pub enum ModelDiscoveryError {
+    #[error(transparent)]
+    Connection(anyhow::Error),
+    #[error("API key is required")]
+    KeyRequired,
+    /// A sign-in needs the node's configuration, which the caller could not reach.
+    #[error("node configuration is not reachable")]
+    NoAccess,
+    #[error(transparent)]
+    Accounts(anyhow::Error),
+    #[error("the selected provider account is not connected")]
+    NotConnected,
+    #[error(transparent)]
+    Client(reqwest::Error),
+    #[error(transparent)]
+    Model(anyhow::Error),
+}
+
+/// What the provider answered: the connection asked, its models, or why there are none.
+pub struct ModelDiscovery {
+    pub spec: gents::inference::backends::setup::InferenceConnectionSpec,
+    pub reachable: bool,
+    pub models: Vec<gents::inference::backends::setup::InferenceModelOption>,
+    /// The failure's kind and text, which may carry what the provider echoed.
+    pub failure: Option<(&'static str, String)>,
+    pub manual_entry_allowed: bool,
+}
+
+/// The connection test of inference setup: lists the provider's models with the key or the
+/// node's stored sign-in, and records them on that connection's backends. Without `access` a
+/// sign-in cannot be read and nothing is recorded.
+pub async fn discover_models(
+    access: Option<&gents::ConfigAccess>,
+    node_did: &str,
+    provider: gents::inference::backends::setup::InferenceProviderId,
+    method: gents::inference::backends::setup::InferenceAuthMethod,
+    endpoint: &str,
+    api_key: Option<&str>,
+    account_ref: Option<&str>,
+) -> Result<ModelDiscovery, ModelDiscoveryError> {
+    use gents::inference::backends::setup::{connection_spec, model_option};
+    let spec =
+        connection_spec(provider, method, endpoint).map_err(ModelDiscoveryError::Connection)?;
+    let api_key = api_key.map(str::trim).filter(|key| !key.is_empty());
+    if spec.api_key_required && api_key.is_none() {
+        return Err(ModelDiscoveryError::KeyRequired);
+    }
+    let (credential, oauth_auth) = match spec.oauth_provider {
+        Some(oauth) => {
+            let access = access.ok_or(ModelDiscoveryError::NoAccess)?;
+            let (credential, auth) = discovery_account(access, node_did, oauth, account_ref)
+                .await
+                .map_err(ModelDiscoveryError::Accounts)?;
+            let credential = credential.ok_or(ModelDiscoveryError::NotConnected)?;
+            (Some(credential), Some(auth))
+        }
+        None => (None, None),
+    };
+    let client = reqwest::Client::builder()
+        .connect_timeout(DISCOVERY_WAIT)
+        .timeout(DISCOVERY_WAIT)
+        .build()
+        .map_err(ModelDiscoveryError::Client)?;
+    let found = gents::discover_backend_models(
+        &client,
+        spec.provider_kind,
+        &spec.endpoint,
+        api_key,
+        credential.as_ref(),
+    )
+    .await;
+    let models = match found {
+        Ok(models) => models,
+        Err(error) => {
+            let (kind, reachable, manual_entry_allowed) = classify_discovery_failure(&error);
+            return Ok(ModelDiscovery {
+                spec,
+                reachable,
+                models: Vec::new(),
+                failure: Some((kind, format!("{error:#}"))),
+                manual_entry_allowed,
+            });
+        }
+    };
+    if let Some(access) = access {
+        use gents::documents::BackendAuth;
+        let auth = match (oauth_auth, api_key) {
+            (Some(auth), _) => auth,
+            (None, Some(key)) => BackendAuth::ApiKey {
+                key: key.to_string(),
+            },
+            (None, None) => BackendAuth::Unauthenticated,
+        };
+        let recorded = gents::inference::backends::registry::record_connection_catalog_on(
+            access,
+            node_did,
+            spec.provider_kind,
+            &spec.endpoint,
+            &auth,
+            models.clone(),
+        )
+        .await;
+        if let Err(error) = recorded {
+            let mut error = format!("{error:#}");
+            // A store refusal may echo the backend's key.
+            if let Some(key) = api_key {
+                error = error.replace(key, "…");
+            }
+            tracing::warn!(
+                node_did,
+                %error,
+                "recording the discovered model catalog failed; the previous catalog is kept"
+            );
+        }
+    }
+    if models.is_empty() {
+        return Ok(ModelDiscovery {
+            spec,
+            reachable: true,
+            models: Vec::new(),
+            failure: Some((
+                "empty_catalog",
+                "The connection succeeded, but the provider advertised no models.".into(),
+            )),
+            manual_entry_allowed: true,
+        });
+    }
+    let models = models
+        .into_iter()
+        .map(|model| model_option(provider, method, model))
+        .collect::<anyhow::Result<_>>()
+        .map_err(ModelDiscoveryError::Model)?;
+    Ok(ModelDiscovery {
+        spec,
+        reachable: true,
+        models,
+        failure: None,
+        manual_entry_allowed: false,
+    })
+}
+
+/// The stored sign-in a discovery on `account_ref` uses, and the auth its backends record.
+pub async fn discovery_account(
+    access: &gents::ConfigAccess,
+    node_did: &str,
+    provider: &str,
+    account_ref: Option<&str>,
+) -> anyhow::Result<(
+    Option<gents::inference::auth::credential::OAuthCredential>,
+    gents::documents::BackendAuth,
+)> {
+    let credential = gents::inference::auth::credential::resolve_oauth_credential(
+        access,
+        node_did,
+        provider,
+        gents::inference::auth::credential::AccountPick::Reference(account_ref),
+    )
+    .await?;
+    Ok((
+        credential,
+        gents::documents::BackendAuth::NodeOAuth {
+            account_ref: account_ref.map(str::to_owned),
+        },
+    ))
 }
 
 pub async fn load_inference_setup_state(

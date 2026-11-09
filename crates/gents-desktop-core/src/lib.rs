@@ -1,4 +1,5 @@
 pub mod agent_identity;
+pub mod ansi;
 pub mod client;
 pub mod error;
 pub mod home_reset;

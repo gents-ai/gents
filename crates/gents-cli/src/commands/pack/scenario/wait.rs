@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
+use gents_desktop_core::ansi::strip_ansi;
 use serde_json::Value;
 
 pub(super) async fn wait_for_event_source(
@@ -72,26 +73,6 @@ pub(super) fn event_source_ready(log: &str, collection: &str) -> bool {
         subscription_open |= line.contains("event source opened global Update subscription");
     }
     observes_target && subscription_open
-}
-
-pub(super) fn strip_ansi(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut chars = line.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '\u{1b}' {
-            out.push(ch);
-            continue;
-        }
-        if chars.peek() == Some(&'[') {
-            chars.next();
-        }
-        for next in chars.by_ref() {
-            if ('@'..='~').contains(&next) {
-                break;
-            }
-        }
-    }
-    out
 }
 
 pub(super) fn observes_collection(line: &str, collection: &str) -> bool {

@@ -334,30 +334,7 @@ fn capped(output: &str) -> String {
 }
 
 fn clean(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\r' => {}
-            '\u{1b}' => match chars.next() {
-                Some('[') => {
-                    let _ = chars.by_ref().find(|c| ('@'..='~').contains(c));
-                }
-                Some(']') => {
-                    let mut escaped = false;
-                    for c in chars.by_ref() {
-                        if c == '\u{7}' || (escaped && c == '\\') {
-                            break;
-                        }
-                        escaped = c == '\u{1b}';
-                    }
-                }
-                _ => {}
-            },
-            c => out.push(c),
-        }
-    }
-    out
+    gents_desktop_core::ansi::strip_ansi(text).replace('\r', "")
 }
 
 #[cfg(test)]

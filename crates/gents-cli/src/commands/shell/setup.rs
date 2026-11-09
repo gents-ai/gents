@@ -3,10 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use gents::documents::{AdvertisedModel, BackendAuth, PackConfig};
-use gents::inference::auth::credential::{
-    effective_account_label, resolve_oauth_credential, AccountPick,
-};
-use gents::inference::backends::registry::record_connection_catalog_on;
+use gents::inference::auth::credential::effective_account_label;
 use gents::inference::backends::setup::{
     connection_spec, inference_setup_catalog, model_option, InferenceAuthMethod,
     InferenceConnectionSpec, InferenceModelOption, InferenceModelRecommendation,
@@ -15,7 +12,7 @@ use gents::inference::backends::setup::{
 };
 use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::apply_config_components_on;
-use gents_desktop_core::inference::{classify_discovery_failure, load_inference_setup_state};
+use gents_desktop_core::inference::{discover_models, load_inference_setup_state};
 use gents_shell::source::{
     Discovered, SavedAccount, SettingKey, SetupAuth, SetupConnection, SetupMethod, SetupModel,
     SetupProvider, SetupSetting,
@@ -31,9 +28,7 @@ use crate::commands::codex_login::{run_codex_login, CodexLoginOptions};
 use crate::commands::grok_login::{run_grok_login, GrokLoginOptions};
 
 pub(super) const ALREADY_WAITING: &str = "A sign-in is already waiting. Finish or cancel it first.";
-const NO_MODELS: &str = "The connection succeeded, but the provider advertised no models.";
 const SIGN_IN_WAIT: Duration = Duration::from_secs(300);
-const DISCOVERY_WAIT: Duration = Duration::from_secs(10);
 
 /// The desktop's add-backend choices, each sign-in with its provider's enabled accounts.
 pub(super) fn catalog(accounts: &[AccountRow]) -> Vec<SetupProvider> {
@@ -105,72 +100,20 @@ async fn discovered(
     connection: &SetupConnection,
 ) -> anyhow::Result<Discovered> {
     let (provider, method) = choice(&connection.provider, &connection.method)?;
-    let spec = connection_spec(provider, method, &connection.endpoint)?;
-    let key = key(connection);
-    anyhow::ensure!(
-        !spec.api_key_required || key.is_some(),
-        "API key is required"
-    );
-    let credential = match spec.oauth_provider {
-        Some(oauth) => {
-            let pick = AccountPick::Reference(account(connection));
-            let stored = resolve_oauth_credential(access, node_did, oauth, pick).await?;
-            Some(stored.context("the selected provider account is not connected")?)
-        }
-        None => None,
-    };
-    let client = reqwest::Client::builder()
-        .connect_timeout(DISCOVERY_WAIT)
-        .timeout(DISCOVERY_WAIT)
-        .build()?;
-    let found = gents::discover_backend_models(
-        &client,
-        spec.provider_kind,
-        &spec.endpoint,
-        key,
-        credential.as_ref(),
-    )
-    .await;
-    let models = match found {
-        Ok(models) => models,
-        Err(error) => {
-            let (_, _, manual) = classify_discovery_failure(&error);
-            return Ok(Discovered {
-                models: Vec::new(),
-                failure: Some(redact(format!("{error:#}"), connection)),
-                manual,
-            });
-        }
-    };
-    let auth = backend_auth(&spec, connection);
-    let recorded = record_connection_catalog_on(
-        access,
+    let found = discover_models(
+        Some(access),
         node_did,
-        spec.provider_kind,
-        &spec.endpoint,
-        &auth,
-        models.clone(),
+        provider,
+        method,
+        &connection.endpoint,
+        key(connection),
+        account(connection),
     )
-    .await;
-    if let Err(error) = recorded {
-        let error = redact(format!("{error:#}"), connection);
-        tracing::warn!(%error, "recording the discovered model catalog failed; the previous catalog is kept");
-    }
-    if models.is_empty() {
-        return Ok(Discovered {
-            models: Vec::new(),
-            failure: Some(NO_MODELS.to_string()),
-            manual: true,
-        });
-    }
-    let models = models
-        .into_iter()
-        .map(|model| model_option(provider, method, model).map(setup_model))
-        .collect::<anyhow::Result<_>>()?;
+    .await?;
     Ok(Discovered {
-        models,
-        failure: None,
-        manual: false,
+        models: found.models.into_iter().map(setup_model).collect(),
+        failure: found.failure.map(|(_, text)| redact(text, connection)),
+        manual: found.manual_entry_allowed,
     })
 }
 
