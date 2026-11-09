@@ -1,35 +1,35 @@
 {
   "agents": [
     {
-      "agent_did": "change-unit-writer",
+      "agent_slot": "change-unit-writer",
       "context_id": "change-unit-writer-context",
       "description": "Implements one exact-path change in a host-sealed isolated workspace.",
       "display_name": "Change Writer",
       "inference_profile_id": "gents:inference-slot:writer"
     },
     {
-      "agent_did": "change-unit-reviewer",
+      "agent_slot": "change-unit-reviewer",
       "context_id": "change-unit-reviewer-context",
       "description": "Independently reviews the sealed workspace and binds acceptance to its writer receipt.",
       "display_name": "Change Reviewer",
       "inference_profile_id": "gents:inference-slot:reviewer"
     },
     {
-      "agent_did": "change-unit-integrator",
+      "agent_slot": "change-unit-integrator",
       "context_id": "change-unit-integrator-context",
       "description": "Acknowledges host-owned integration of an accepted sealed workspace.",
       "display_name": "Change Integrator",
       "inference_profile_id": "gents:inference-slot:integrator"
     },
     {
-      "agent_did": "change-unit-record",
+      "agent_slot": "change-unit-record",
       "context_id": "change-unit-record-context",
       "description": "Records host-confirmed integration from the integrator receipt.",
       "display_name": "Integration Recorder",
       "inference_profile_id": "gents:inference-slot:integrator"
     },
     {
-      "agent_did": "change-unit-rejected",
+      "agent_slot": "change-unit-rejected",
       "context_id": "change-unit-rejected-context",
       "description": "Records a rejected review as a terminal result.",
       "display_name": "Rejection Recorder",
@@ -40,6 +40,7 @@
   "callback_bindings": [
     {
       "binding_id": "change-unit-workspace",
+      "agent_did": "gents:agent-slot:change-unit-writer",
       "callback_id": "change-unit-workspace",
       "event_source_id": "change-unit-workspace",
       "input_fields": [
@@ -66,7 +67,15 @@
       "display_name": "Create isolated workspace",
       "handler": {
         "emitter": "create_workspace",
-        "kind": "built_in"
+        "kind": "built_in",
+        "workspace_agents": {
+          "writer_agent_did": "gents:agent-slot:change-unit-writer",
+          "integrator_agent_did": "gents:agent-slot:change-unit-integrator",
+          "readers": [
+            { "agent_did": "gents:agent-slot:change-unit-reviewer" },
+            { "agent_did": "gents:agent-slot:change-unit-rejected" }
+          ]
+        }
       }
     }
   ],
@@ -787,34 +796,34 @@
   "agent_targets": [],
   "tasks": [
     {
-      "agent_did": "change-unit-writer",
+      "agent_did": "gents:agent-slot:change-unit-writer",
       "display_name": "Implement Change",
       "prompt_template": "./tasks/change_unit_writer_task/prompt.md",
       "task_id": "change-unit-writer-task",
       "emit_outcome": true
     },
     {
-      "agent_did": "change-unit-reviewer",
+      "agent_did": "gents:agent-slot:change-unit-reviewer",
       "display_name": "Review Sealed Change",
       "prompt_template": "./tasks/change_unit_review_task/prompt.md",
       "task_id": "change-unit-review-task",
       "emit_outcome": true
     },
     {
-      "agent_did": "change-unit-integrator",
+      "agent_did": "gents:agent-slot:change-unit-integrator",
       "display_name": "Integrate Accepted Change",
       "prompt_template": "./tasks/change_unit_integrate_task/prompt.md",
       "task_id": "change-unit-integrate-task",
       "emit_outcome": true
     },
     {
-      "agent_did": "change-unit-record",
+      "agent_did": "gents:agent-slot:change-unit-record",
       "display_name": "Record Integration",
       "prompt_template": "./tasks/change_unit_record_task/prompt.md",
       "task_id": "change-unit-record-task"
     },
     {
-      "agent_did": "change-unit-rejected",
+      "agent_did": "gents:agent-slot:change-unit-rejected",
       "display_name": "Record Rejection or Failure",
       "prompt_template": "./tasks/change_unit_rejected_task/prompt.md",
       "task_id": "change-unit-rejected-task"

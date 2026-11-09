@@ -4,12 +4,15 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use gents::pack::archive::{pack_dir, PackArchive};
 use gents::pack::{
-    bind_pack_install_config, declared_paths, digest_declared_assets, document_pack_schema_paths,
-    install_pack_documents, load_pack_config, DriftPolicy, PackIdentity, PackInstallOptions,
-    PackManifest,
+    install_prepared_document_pack, prepare_document_pack_archive, DriftPolicy, InstalledVia,
+    PackAgentBindings,
 };
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::config_client::{
+    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
+};
 use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::{json, Value};
@@ -17,7 +20,7 @@ use serde_json::{json, Value};
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
 };
-use crate::support::{interrupt::BootedAgent, test_db};
+use crate::support::{interrupt::BootedAgent, test_db, TestDb};
 
 const WORK_UNIT: &str = "change-unit:cycle-accepted";
 const WRITER_TASK_MARK: &str = "Implement one requested change";
@@ -28,6 +31,88 @@ const RECORD_PLAN: &str = RECORD_TASK_MARK;
 const REJECT_TASK_MARK: &str = "Record terminal outcome";
 const FAILURE_UNIT: &str = "change-unit:cycle-inbox";
 const MODEL: &str = "workspace-cycle-script";
+
+const WRITER: &str = "change-unit-writer";
+const REVIEWER: &str = "change-unit-reviewer";
+const INTEGRATOR: &str = "change-unit-integrator";
+const RECORDER: &str = "change-unit-record";
+const REJECTER: &str = "change-unit-rejected";
+
+/// A node whose enrolled User installs the change-unit pack, as `gents pack
+/// install` does: the User signs every configuration write, the install
+/// provisions one managed Agent per slot, and the User authors work units.
+struct Cycle {
+    db: TestDb,
+    user: gents::KeyIdentity,
+    access: ConfigAccess,
+    owner: String,
+    agents: PackAgentBindings,
+}
+
+impl Cycle {
+    async fn install(name: &str, endpoint: &str, root: &Path, repo: &Path) -> Self {
+        let db = test_db(name).await;
+        let owner = db.node_identity.did().to_owned();
+        let user = crate::support::managed_fixture_user(&db).await;
+        // The init User administers its node, including the pack's schemas.
+        crate::support::grant_household_owner(&db, &user).await;
+        let access = db.client_access(&user);
+        apply_documents(
+            &access,
+            "workspace_cycle.node",
+            vec![(Collection::Node, json!({"node_did": owner}))],
+        )
+        .await;
+        install_inference(&access, &owner, endpoint).await;
+        let agents = install_pack(&access, &owner, repo).await;
+        let cycle = Self {
+            db,
+            user,
+            access,
+            owner,
+            agents,
+        };
+        select_default_agent(&cycle.access, &cycle.owner, cycle.agent(WRITER)).await;
+        gents::inference::backends::registry::set_backend_probe_status_as(
+            &cycle.access,
+            &cycle.owner,
+            "workspace-cycle-backend",
+            gents::HEALTHY_PROBE_STATUS,
+        )
+        .await
+        .unwrap();
+        install_workspace_root(&cycle, root).await;
+        grant_repository_readers(&cycle).await;
+        cycle
+    }
+
+    /// The provisioned Agent DID bound to a pack slot.
+    fn agent(&self, slot: &str) -> &str {
+        &self
+            .agents
+            .get(slot)
+            .unwrap_or_else(|| panic!("pack slot {slot} is unbound: {:?}", self.agents))
+            .agent_did
+    }
+
+    fn agents(&self, slots: &[&str]) -> Vec<&str> {
+        slots.iter().map(|slot| self.agent(slot)).collect()
+    }
+
+    async fn runtime(&self, root: &Path) -> Gents {
+        Gents::from_default_agent_documents(
+            self.db.node.clone(),
+            self.db.node_identity.clone(),
+            DocumentRuntimeOptions {
+                backend_admission: Some(self.db.home.backend_admission()),
+                tool_ceiling: ToolCeiling::readwrite(root),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("the installed change-unit pack routes its tasks")
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
@@ -40,55 +125,46 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let _p2p = super::P2P_E2E_LOCK.lock().await;
     ensure_native_fs_runner_for_test();
     let backend = scripted_backend();
-    let db = test_db("workspace-change-unit-cycle").await;
-    let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, base_tree) = create_repository(&repo);
-
-    install_inference(&access, &owner, backend.endpoint()).await;
-    install_pack(&access, &owner, &repo).await;
-    select_default_agent(&access, &db.node, &owner).await;
-    gents::inference::backends::registry::set_backend_probe_status_as(
-        &gents::ConfigAccess::local(db.node.clone()),
-        &owner,
-        "workspace-cycle-backend",
-        gents::HEALTHY_PROBE_STATUS,
+    let cycle = Cycle::install(
+        "workspace-change-unit-cycle",
+        backend.endpoint(),
+        root.path(),
+        &repo,
     )
-    .await
-    .unwrap();
-    install_workspace_root(&access, root.path()).await;
+    .await;
+    let (db, owner, access) = (&cycle.db, cycle.owner.clone(), &cycle.access);
     let configured = access
         .execute(
-            "{ Node { node_did default_agent_did enabled } Agent { agent_did enabled inference_profile_id } InferenceProfile { profile_id backend_id model_name } WorkspaceRoot { root_path enabled } }",
+            "{ Node { node_did default_agent_did enabled } Agent { agent_did creation_nonce enabled inference_profile_id } InferenceProfile { profile_id backend_id model_name } WorkspaceRoot { root_path enabled } }",
         )
         .await
         .unwrap();
     assert_eq!(
-        configured["data"]["Node"][0]["default_agent_did"], "change-unit-writer",
+        configured["data"]["Node"][0]["default_agent_did"],
+        cycle.agent(WRITER),
         "installed principal/default behavior: {configured:#}"
     );
-    assert!(
-        configured["data"]["Agent"]
-            .as_array()
-            .is_some_and(|rows| rows
-                .iter()
-                .any(|row| row["agent_did"] == "change-unit-writer")),
-        "installed behavior missing: {configured:#}"
-    );
+    for slot in [WRITER, REVIEWER, INTEGRATOR, RECORDER, REJECTER] {
+        let binding = &cycle.agents[slot];
+        assert!(
+            binding.agent_did.starts_with("did:key:"),
+            "{slot} is a derived Agent DID: {binding:?}"
+        );
+        assert!(
+            configured["data"]["Agent"]
+                .as_array()
+                .is_some_and(
+                    |rows| rows.iter().any(|row| row["agent_did"] == binding.agent_did
+                        && row["creation_nonce"] == binding.creation_nonce)
+                ),
+            "installed {slot} Agent missing its provisioned identity: {configured:#}"
+        );
+    }
 
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
-        db.node_identity.clone(),
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: ToolCeiling::readwrite(root.path()),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("the installed change-unit pack routes its tasks");
+    let agent = cycle.runtime(root.path()).await;
     assert!(
         agent.unavailable_agents().is_empty(),
         "change-unit pack behavior resolution failed: {:#?}",
@@ -114,9 +190,9 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         .expect("runtime readiness snapshot after initial convergence");
     tracing::info!(?readiness, "workspace cycle runtime readiness");
 
-    create_work_unit(&access, &owner, WORK_UNIT, &base_sha, "accepted").await;
+    create_work_unit(access, WORK_UNIT, &base_sha, "accepted").await;
 
-    let writer = wait_for_writer(&access, &backend, WORK_UNIT).await;
+    let writer = wait_for_writer(access, &backend, WORK_UNIT).await;
     assert_eq!(writer.len(), 1, "{writer:#?}");
     assert_eq!(writer[0]["status"], "ready", "{writer:#?}");
     assert_eq!(
@@ -138,6 +214,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         "ChangeUnitClosure",
         WORK_UNIT,
         "_docID closure_id work_unit_id handoff_id reply_session_id attempt implementation_id review_id workspace_id writer_receipt_id writer_seal_hash status",
+        &[],
         |rows| rows.iter().any(|row| row["status"] == "accepted"),
     )
     .await;
@@ -194,7 +271,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let writer_request = request_for_receipt(writer_receipt);
     let review_requests = requests
         .iter()
-        .filter(|request| request["agent_did"] == "change-unit-reviewer")
+        .filter(|request| request["agent_did"] == cycle.agent(REVIEWER))
         .collect::<Vec<_>>();
     assert!(!review_requests.is_empty(), "reviewer request exists");
     let integration_request = request_for_receipt(integration_receipt);
@@ -288,6 +365,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         "ChangeUnitResult",
         WORK_UNIT,
         "result_id work_unit_id handoff_id reply_session_id attempt closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary",
+        &cycle.agents(&[RECORDER, REJECTER]),
         |rows| rows.iter().any(|row| row["status"] == "integrated"),
     )
     .await;
@@ -313,12 +391,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     wait_cycle_requests_completed(
         &access,
         WORK_UNIT,
-        &[
-            "change-unit-writer",
-            "change-unit-reviewer",
-            "change-unit-integrator",
-            "change-unit-record",
-        ],
+        &cycle.agents(&[WRITER, REVIEWER, INTEGRATOR, RECORDER]),
     )
     .await;
 
@@ -336,36 +409,18 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     let _p2p = super::P2P_E2E_LOCK.lock().await;
     ensure_native_fs_runner_for_test();
     let backend = rejected_backend();
-    let db = test_db("workspace-change-unit-rejected-cycle").await;
-    let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, _) = create_repository(&repo);
-
-    install_inference(&access, &owner, backend.endpoint()).await;
-    install_pack(&access, &owner, &repo).await;
-    select_default_agent(&access, &db.node, &owner).await;
-    gents::inference::backends::registry::set_backend_probe_status_as(
-        &gents::ConfigAccess::local(db.node.clone()),
-        &owner,
-        "workspace-cycle-backend",
-        gents::HEALTHY_PROBE_STATUS,
+    let cycle = Cycle::install(
+        "workspace-change-unit-rejected-cycle",
+        backend.endpoint(),
+        root.path(),
+        &repo,
     )
-    .await
-    .unwrap();
-    install_workspace_root(&access, root.path()).await;
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
-        db.node_identity.clone(),
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: ToolCeiling::readwrite(root.path()),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("the installed change-unit pack routes its tasks");
+    .await;
+    let (db, owner, access) = (&cycle.db, cycle.owner.clone(), &cycle.access);
+    let agent = cycle.runtime(root.path()).await;
     assert!(agent.unavailable_agents().is_empty());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -375,12 +430,13 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
 
     const REJECTED_UNIT: &str = "change-unit:cycle-rejected";
-    create_work_unit(&access, &owner, REJECTED_UNIT, &base_sha, "rejected").await;
+    create_work_unit(access, REJECTED_UNIT, &base_sha, "rejected").await;
     let implementations = wait_rows(
         &access,
         "ChangeUnitImplementation",
         REJECTED_UNIT,
         "implementation_id work_unit_id workspace_id status changed_files",
+        &[],
         |rows| rows.iter().any(|row| row["status"] == "ready"),
     )
     .await;
@@ -392,6 +448,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
         "ChangeUnitReview",
         REJECTED_UNIT,
         "review_id work_unit_id implementation_id workspace_id writer_receipt_id writer_seal_hash verdict findings summary",
+        &cycle.agents(&[REVIEWER]),
         |rows| rows.iter().any(|row| row["verdict"] == "rejected"),
     )
     .await;
@@ -401,6 +458,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
         "ChangeUnitClosure",
         REJECTED_UNIT,
         "closure_id work_unit_id handoff_id reply_session_id attempt implementation_id review_id workspace_id writer_receipt_id writer_seal_hash status",
+        &[],
         |rows| rows.iter().any(|row| row["status"] == "rejected"),
     )
     .await;
@@ -444,11 +502,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     wait_cycle_requests_completed(
         &access,
         REJECTED_UNIT,
-        &[
-            "change-unit-writer",
-            "change-unit-reviewer",
-            "change-unit-rejected",
-        ],
+        &cycle.agents(&[WRITER, REVIEWER, REJECTER]),
     )
     .await;
     assert!(results[0]["integrator_receipt_id"].is_null());
@@ -495,58 +549,46 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let _p2p = super::P2P_E2E_LOCK.lock().await;
     ensure_native_fs_runner_for_test();
     let backend = failure_inbox_backend();
-    let db = test_db("workspace-change-unit-failure-inbox").await;
-    let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, _) = create_repository(&repo);
-
-    install_inference(&access, &owner, backend.endpoint()).await;
-    install_pack(&access, &owner, &repo).await;
-    select_default_agent(&access, &db.node, &owner).await;
-    gents::inference::backends::registry::set_backend_probe_status_as(
-        &gents::ConfigAccess::local(db.node.clone()),
-        &owner,
-        "workspace-cycle-backend",
-        gents::HEALTHY_PROBE_STATUS,
+    let cycle = Cycle::install(
+        "workspace-change-unit-failure-inbox",
+        backend.endpoint(),
+        root.path(),
+        &repo,
     )
-    .await
-    .unwrap();
-    install_workspace_root(&access, root.path()).await;
-    disable_pack_writer_trigger(&access).await;
+    .await;
+    let (db, owner, access) = (&cycle.db, cycle.owner.clone(), &cycle.access);
+    disable_pack_writer_trigger(access, &owner).await;
 
-    let desktop =
-        gents::KeyIdentity::load_or_create(root.path().join("supervisor.key"), None).unwrap();
+    let supervisor = install_failure_inbox_triggers(&cycle).await;
+    select_default_agent(access, &owner, cycle.agent(WRITER)).await;
+    // The supervisor's session already exists: the User opened it with the
+    // supervisor Agent, so the User is its requester.
     let supervisor_session = "workspace-cycle-lead";
     let created_at = crate::support::agent_requests::canonical_now();
-    access
-        .write(
-            "workspace_cycle.create_supervisor_session",
-            &format!(
-                "mutation {{ create_AgentSession(input: {{ session_id: \"{}\", requester_did: \"{}\", node_did: \"{}\", agent_did: \"change-unit-test-supervisor\", created_at: \"{}\" }}) {{ _docID }} }}",
-                escape_graphql_string(supervisor_session),
-                escape_graphql_string(desktop.did()),
-                escape_graphql_string(&owner),
-                escape_graphql_string(&created_at),
+    gents::request::lifecycle::reserve_goal_session(
+        access,
+        &gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "workspace-cycle-lead-opening",
+            &owner,
+            cycle.user.did(),
+            &supervisor,
+            supervisor_session,
+            "Supervise the change unit",
+            "interactive",
+            &created_at,
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+                cycle.user.did(),
             ),
-        )
-        .await
-        .expect("create the existing supervisor session");
-    install_failure_inbox_triggers(&access, &owner).await;
-    select_default_agent(&access, &db.node, &owner).await;
-
-    let agent = Gents::from_default_agent_documents(
-        db.node.clone(),
-        db.node_identity.clone(),
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: ToolCeiling::readwrite(root.path()),
-            ..Default::default()
-        },
+        ),
     )
     .await
-    .expect("test triggers resolve to installed behavior");
+    .expect("open the existing supervisor session as the User");
+
+    let agent = cycle.runtime(root.path()).await;
     assert!(agent.unavailable_agents().is_empty());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handle = tokio::spawn(agent.run(shutdown_rx));
@@ -562,7 +604,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     }
     let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
 
-    create_work_unit(&access, &owner, FAILURE_UNIT, &base_sha, "inbox").await;
+    create_work_unit(access, FAILURE_UNIT, &base_sha, "inbox").await;
     let callback = wait_callback_result(&access, FAILURE_UNIT).await;
     assert_eq!(callback["work_unit_id"], FAILURE_UNIT);
     let failed = wait_failure_outcome(&access, FAILURE_UNIT).await;
@@ -576,8 +618,8 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
 
     let inbox = wait_supervisor_inbox(&access, &backend, FAILURE_UNIT).await;
     assert_eq!(inbox["session_id"], supervisor_session);
-    assert_eq!(inbox["agent_did"], "change-unit-test-supervisor");
-    assert_eq!(inbox["requester_did"], desktop.did());
+    assert_eq!(inbox["agent_did"], supervisor);
+    assert_eq!(inbox["requester_did"], cycle.user.did());
     assert_eq!(inbox["lifecycle_state"], "completed");
     assert!(inbox["content"].as_str().unwrap().contains(FAILURE_UNIT));
 
@@ -643,27 +685,69 @@ fn ensure_native_fs_runner_for_test() {
     });
 }
 
-async fn select_default_agent(
+/// Applies `documents` as the User through the desired-state owner.
+async fn apply_documents(
     access: &ConfigAccess,
-    node: &std::sync::Arc<gents::defra_node::Node>,
-    owner: &str,
+    operation: &'static str,
+    documents: Vec<(Collection, Value)>,
 ) {
-    let mut principal = gents::ensure_node(node, owner).await.unwrap();
-    principal.default_agent_did = Some("change-unit-writer".to_owned());
-    let value = serde_json::to_value(principal).unwrap();
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Node,
-        add: value.clone(),
-        update: value,
-    }])
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
     .unwrap();
     access
-        .transact_write("workspace_cycle.select_default_agent", |txn| {
+        .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
-        .unwrap();
+        .unwrap_or_else(|error| {
+            panic!(
+                "{operation}: {}",
+                gents_protocol::error_chain::ErrorChain(error.as_ref())
+            )
+        });
+}
+
+/// Rewrites one published document as the User, as `gents config` edits it.
+async fn update_document(
+    access: &ConfigAccess,
+    operation: &'static str,
+    collection: Collection,
+    owner: &str,
+    id: &str,
+    edit: impl Fn(&mut Value),
+) {
+    let (_, mut document) = access
+        .transact_readonly(operation, |txn| {
+            Box::pin(
+                async move { read_desired_state_record_in_txn(txn, collection, owner, id).await },
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap_or_else(|| panic!("{operation}: {collection:?} {id} is not published"));
+    edit(&mut document);
+    apply_documents(access, operation, vec![(collection, document)]).await;
+}
+
+async fn select_default_agent(access: &ConfigAccess, owner: &str, agent_did: &str) {
+    update_document(
+        access,
+        "workspace_cycle.select_default_agent",
+        Collection::Node,
+        owner,
+        owner,
+        |node| node["default_agent_did"] = agent_did.into(),
+    )
+    .await;
 }
 
 fn scripted_backend() -> MockStreamingBackend {
@@ -981,52 +1065,17 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
         .unwrap();
 }
 
-async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) {
-    let pack_dir =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace_cycle_pack");
-    let manifest: PackManifest =
-        serde_json::from_slice(&std::fs::read(pack_dir.join("manifest.json")).unwrap()).unwrap();
-    let assets: BTreeMap<_, _> = declared_paths(&manifest)
-        .into_iter()
-        .map(|path| (path.clone(), std::fs::read(pack_dir.join(&path)).unwrap()))
-        .collect();
-    let read = |path: &str| {
-        assets
-            .get(path)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("missing fixture asset {path}"))
-    };
-    let config = load_pack_config(
-        &manifest,
-        &PackInstallOptions {
-            node_did: owner.to_owned(),
-        },
-        &read,
-        &|name| (name == "GENTS_CHANGE_UNIT_ROOT").then(|| repo.to_string_lossy().into_owned()),
+/// Installs the fixture pack as `gents pack install` does for the User: the
+/// install provisions each slot's managed Agent and returns their bindings.
+async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAgentBindings {
+    let (bytes, _) = pack_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace_cycle_pack"),
     )
     .unwrap();
-    let expected_root = repo.to_string_lossy();
-    for id in ["change-unit-writer-tools", "change-unit-review-tools"] {
-        let tools = config
-            .tools
-            .iter()
-            .find(|tools| tools.tools_id == id)
-            .unwrap_or_else(|| panic!("pack is missing {id}"));
-        assert_eq!(
-            tools.host.as_ref().and_then(|host| host.root.as_deref()),
-            Some(expected_root.as_ref()),
-            "the pack loader must resolve {id} from GENTS_CHANGE_UNIT_ROOT"
-        );
-    }
-
-    for path in document_pack_schema_paths(&manifest).unwrap() {
-        access
-            .add_collection(std::str::from_utf8(assets[path].as_slice()).unwrap())
-            .await
-            .unwrap();
-    }
-
-    let bindings = BTreeMap::from([
+    let archive = PackArchive::from_bytes(&bytes).unwrap();
+    let root = repo.to_string_lossy().into_owned();
+    let environment = move |name: &str| (name == "GENTS_CHANGE_UNIT_ROOT").then(|| root.clone());
+    let inference = BTreeMap::from([
         ("writer".to_string(), "workspace-cycle-profile".to_string()),
         (
             "reviewer".to_string(),
@@ -1037,52 +1086,132 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) {
             "workspace-cycle-profile".to_string(),
         ),
     ]);
-    let bound = bind_pack_install_config(&manifest, &config, &bindings).unwrap();
-    let digest = digest_declared_assets(&manifest, |path| {
-        assets
-            .get(path)
-            .map(Vec::as_slice)
-            .ok_or_else(|| anyhow::anyhow!("missing fixture asset {path}"))
-    })
-    .unwrap();
-    let identity = PackIdentity::new(&manifest, digest, Vec::new());
-    install_pack_documents(access, owner, &identity, &bound, DriftPolicy::Refuse)
-        .await
-        .expect("canonical pack installer accepts the unit pack");
+    let prepared = prepare_document_pack_archive(
+        access,
+        owner,
+        &archive,
+        &inference,
+        &[],
+        InstalledVia::Operator,
+        None,
+        &environment,
+    )
+    .await
+    .expect("prepare the change-unit pack as the User");
+    let expected_root = repo.to_string_lossy();
+    for id in ["change-unit-writer-tools", "change-unit-review-tools"] {
+        let tools = prepared
+            .config
+            .tools
+            .iter()
+            .find(|tools| tools.tools_id == id)
+            .unwrap_or_else(|| panic!("pack is missing {id}"));
+        assert_eq!(
+            tools.host.as_ref().and_then(|host| host.root.as_deref()),
+            Some(expected_root.as_ref()),
+            "the pack loader must resolve {id} from GENTS_CHANGE_UNIT_ROOT"
+        );
+    }
+    install_prepared_document_pack(
+        access,
+        owner,
+        &archive,
+        &[],
+        &prepared,
+        None,
+        false,
+        InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .expect("canonical pack installer accepts the unit pack");
+    prepared.agent_bindings
 }
 
-async fn install_workspace_root(access: &ConfigAccess, root: &Path) {
-    let root = escape_graphql_string(root.to_str().unwrap());
-    let updated_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{ create_WorkspaceRoot(input: {{
-            root_path: "{root}", display_name: "Change cycle fixture", enabled: true,
-            updated_at: "{updated_at}"
-        }}) {{ _docID }} }}"#
-    );
-    access
-        .write("workspace_cycle.install_workspace_root", &mutation)
-        .await
-        .unwrap();
+/// Publishes the repository's workspace root as the User, readable by every
+/// pack Agent whose host tools run under it.
+async fn install_workspace_root(cycle: &Cycle, root: &Path) {
+    let readers = cycle
+        .agents(&[WRITER, REVIEWER, INTEGRATOR, RECORDER, REJECTER])
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    gents::tools::surface::set_workspace_root_with_readers(
+        &cycle.access,
+        &cycle.owner,
+        root.to_str().unwrap(),
+        Some("Change cycle fixture"),
+        true,
+        &readers,
+    )
+    .await
+    .expect("publish the workspace root as the User");
 }
 
-async fn disable_pack_writer_trigger(access: &ConfigAccess) {
-    access
-        .write(
-            "workspace_cycle.disable_pack_writer_trigger",
-            r#"mutation { update_Trigger(filter: { trigger_id: { _eq: "change-unit-write" } }, input: { enabled: false }) { _docID } }"#,
-        )
+/// The User grants the callback's workspace Agents read on the repository
+/// placement it authored, as the quickstart owner does when it publishes one
+/// (`WorkspaceAndFileRequests.workspaceRepositoryFixture`); a pack install
+/// selects those Agents but grants no placement reader.
+async fn grant_repository_readers(cycle: &Cycle) {
+    let (owner, access) = (cycle.owner.as_str(), &cycle.access);
+    let (placement, _) = access
+        .transact_readonly("workspace_cycle.read_repository", |txn| {
+            Box::pin(async move {
+                read_desired_state_record_in_txn(
+                    txn,
+                    Collection::RepositoryPlacement,
+                    owner,
+                    "change-unit-repository",
+                )
+                .await
+            })
+        })
         .await
-        .expect("disable only the normal writer task for the inbox fixture");
+        .unwrap()
+        .expect("the pack publishes its repository placement");
+    for agent in cycle.agents(&[WRITER, INTEGRATOR, REVIEWER, REJECTER]) {
+        access
+            .add_actor_relationship(
+                "RepositoryPlacement",
+                &placement,
+                "reader",
+                &identity::Did::new(agent).unwrap(),
+            )
+            .await
+            .expect("grant a workspace Agent the repository placement as the User");
+    }
 }
 
-async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
+async fn disable_pack_writer_trigger(access: &ConfigAccess, owner: &str) {
+    update_document(
+        access,
+        "workspace_cycle.disable_pack_writer_trigger",
+        Collection::Trigger,
+        owner,
+        "change-unit-write",
+        |trigger| trigger["enabled"] = false.into(),
+    )
+    .await;
+}
+
+/// Publishes, as the User, a provisioned supervisor Agent and the test-only
+/// failure-outcome and inbox triggers. Returns the supervisor's DID.
+async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
+    let (owner, writer) = (cycle.owner.as_str(), cycle.agent(WRITER));
+    let supervisor = gents::store::identity::provision_agent_identity_authorized(
+        &cycle.db.node,
+        cycle.db.node_identity.as_ref(),
+        &identity::Did::new(cycle.user.did()).unwrap(),
+    )
+    .await
+    .expect("provision the supervisor Agent for the User");
     let config = json!({
-        "node": {"node_did": owner, "default_agent_did": "change-unit-writer"},
+        "node": {"node_did": owner, "default_agent_did": writer},
         "agents": [
             {
                 "node_did": owner,
-                "agent_did": "change-unit-test-supervisor",
+                "agent_did": supervisor.agent_did,
+                "creation_nonce": supervisor.creation_nonce,
                 "display_name": "Test Supervisor Inbox",
                 "inference_profile_id": "workspace-cycle-profile"
             }
@@ -1091,14 +1220,14 @@ async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
             {
                 "node_did": owner,
                 "task_id": "change-unit-test-failure-task",
-                "agent_did": "change-unit-writer",
+                "agent_did": writer,
                 "prompt_template": "Test failure stage for {{ doc.work_unit_id }}.",
                 "emit_outcome": true
             },
             {
                 "node_did": owner,
                 "task_id": "change-unit-supervisor-inbox-task",
-                "agent_did": "change-unit-test-supervisor",
+                "agent_did": supervisor.agent_did,
                 "prompt_template": "Supervisor inbox delivery: stage {{ doc.trigger_id }} for {{ doc.source_handoff_id }} failed: {{ doc.reason }}.",
                 "emit_outcome": false
             }
@@ -1144,13 +1273,15 @@ async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
         serde_json::from_value(config).expect("test event and Task documents deserialize");
     let plan = DesiredStateApplyPlan::from_pack_config(&config)
         .expect("test event and Task documents validate");
-    access
+    cycle
+        .access
         .transact_write("workspace_cycle.install_failure_inbox_triggers", |txn| {
             let plan = &plan;
             Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
         })
         .await
         .expect("install test-only failure outcome and inbox triggers");
+    supervisor.agent_did
 }
 
 fn create_repository(repo: &Path) -> (String, String) {
@@ -1189,46 +1320,46 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
+/// Authors the work unit as the User against the pack's installed schema.
 async fn create_work_unit(
     access: &ConfigAccess,
-    owner: &str,
     work_unit_id: &str,
     base_sha: &str,
     attempt: &str,
 ) {
     let branch = format!("cycle-{attempt}");
-    let fields = [
-        ("work_unit_id", work_unit_id),
-        ("repository_id", "change-unit-repository"),
-        ("base_sha", base_sha),
-        ("branch", branch.as_str()),
-        ("title", "Scripted change cycle"),
-        (
-            "instructions",
-            "Set cycle_result to 7 in src/lib.rs and run git diff --check.",
-        ),
-        ("owned_files", "[\"src/lib.rs\"]"),
-        ("status", "ready"),
-        ("caused_by_correlation", work_unit_id),
-        ("handoff_id", work_unit_id),
-        ("reply_session_id", "workspace-cycle-lead"),
-    ];
-    let fields = fields
-        .into_iter()
-        .map(|(key, value)| format!("{key}: \"{}\"", escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(",");
-    let mutation =
-        format!("mutation {{ create_ChangeUnitWork(input: {{{fields},attempt:1}}) {{ _docID }} }}");
-    access
-        .write("workspace_cycle.seed_work", &mutation)
-        .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "create work unit for {owner}: {}",
-                gents_protocol::error_chain::ErrorChain(&error)
-            )
-        });
+    let sdl = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/workspace_cycle_pack/schemas/change_unit_work.graphql"),
+    )
+    .unwrap();
+    gents::store::config_client::create_authored_document(
+        access,
+        "ChangeUnitWork",
+        &json!({
+            "work_unit_id": work_unit_id,
+            "repository_id": "change-unit-repository",
+            "base_sha": base_sha,
+            "branch": branch,
+            "title": "Scripted change cycle",
+            "instructions": "Set cycle_result to 7 in src/lib.rs and run git diff --check.",
+            "owned_files": "[\"src/lib.rs\"]",
+            "status": "ready",
+            "caused_by_correlation": work_unit_id,
+            "handoff_id": work_unit_id,
+            "reply_session_id": "workspace-cycle-lead",
+            "attempt": 1,
+        }),
+        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        &sdl,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "create work unit {work_unit_id} as the User: {}",
+            gents_protocol::error_chain::ErrorChain(&error)
+        )
+    });
 }
 
 async fn wait_integrator_outcome(
@@ -1274,11 +1405,14 @@ async fn query_rows(
         .clone()
 }
 
+/// Waits for `collection` rows of the unit; a request of one of the
+/// `writing_agents` that terminated before writing them fails the wait.
 async fn wait_rows(
     access: &ConfigAccess,
     collection: &str,
     work_unit_id: &str,
     fields: &str,
+    writing_agents: &[&str],
     ready: impl Fn(&[Value]) -> bool,
 ) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(90);
@@ -1287,13 +1421,8 @@ async fn wait_rows(
         if ready(&rows) {
             return rows;
         }
-        if matches!(collection, "ChangeUnitReview" | "ChangeUnitResult") {
-            let agents: &[&str] = if collection == "ChangeUnitReview" {
-                &["change-unit-reviewer"]
-            } else {
-                &["change-unit-record", "change-unit-rejected"]
-            };
-            let failures = cycle_failure_diagnostics(access, work_unit_id, agents).await;
+        if !writing_agents.is_empty() {
+            let failures = cycle_failure_diagnostics(access, work_unit_id, writing_agents).await;
             if !failures.is_empty() {
                 panic!("cycle request terminated before writing {collection}: {failures:#?}");
             }
