@@ -1032,7 +1032,7 @@ fn two_slot_dependee(dir: &std::path::Path) -> Result<std::path::PathBuf> {
     Ok(pack)
 }
 
-fn slot<'a>(needs: &'a Value, name: &str) -> Result<&'a Value> {
+fn slot<'a>(needs: &'a serde_json::Value, name: &str) -> Result<&'a serde_json::Value> {
     needs["slots"]
         .as_array()
         .and_then(|slots| slots.iter().find(|slot| slot["name"] == name))
@@ -1241,7 +1241,7 @@ fn pack_install_preview_reports_a_dependencys_slots_still_to_bind() -> Result<()
         needs["unbound"] == serde_json::json!(["worker", "checker"])
             && slot(needs, "worker")?["packs"]
                 == serde_json::json!(["fixture/dependent_fixture", "fixture/dependee_fixture"])
-            && slot(needs, "worker")?["profile"] == Value::Null
+            && slot(needs, "worker")?["profile"] == serde_json::Value::Null
             && slot(needs, "checker")?["packs"] == serde_json::json!(["fixture/dependee_fixture"]),
         "the preview does not report the dependency's slots: {preview}"
     );
