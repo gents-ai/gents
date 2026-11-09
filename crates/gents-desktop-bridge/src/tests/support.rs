@@ -163,7 +163,6 @@ pub struct RunningDesktop {
     pub core: Arc<ClientCore>,
     pub runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
     pub lead: gents_protocol::agent_identity::AgentIdentityBinding,
-    pub worker: gents_protocol::agent_identity::AgentIdentityBinding,
     pub provider: super::streaming_backend::MockStreamingBackend,
     running: Option<gents::eval::runner::embedded::RunningRuntime>,
     _directory: TempDir,
@@ -188,7 +187,7 @@ impl RunningDesktop {
         )
         .await;
         runtime.publish_node(serde_json::json!({})).await;
-        let (lead, worker) = runtime
+        let (lead, _worker) = runtime
             .publish_delegating_agents(provider.endpoint(), SCRIPTED_MODEL)
             .await;
         runtime
@@ -201,7 +200,6 @@ impl RunningDesktop {
             core,
             runtime,
             lead,
-            worker,
             provider,
             running: Some(running),
             _directory: directory,
@@ -558,10 +556,9 @@ pub async fn reject_admission(
     lifecycle.reject_admission(reason).await.unwrap();
 }
 
-/// The DIDs of [`fixture_signer`]`(7)` and `(9)`; the sessions they start
-/// carry receipts those keys signed.
+/// The DID of [`fixture_signer`]`(7)`; the sessions it starts carry
+/// receipts that key signed.
 pub const OPERATOR: &str = "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z";
-pub const OTHER: &str = "did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3";
 
 /// A fixed test key, so fixture rows can name its DID as a constant.
 pub fn fixture_signer(seed: u8) -> gents::KeyIdentity {
@@ -802,39 +799,6 @@ pub async fn create_session(
         "AgentSession",
     )
     .await;
-}
-
-pub async fn create_tool_call(core: &Arc<ClientCore>, call: &str, tool: &str) -> String {
-    created_doc_id(
-        core,
-        &format!(
-            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "sess_parent:{call}", node_did: "{OPERATOR}", requester_did: "{OPERATOR}", session_id: "sess_parent", request_id: "req_parent", message_sequence: 1, tool_name: "{tool}", tool_call_id: "{call}", status: "called", lifecycle_state: "running", await_mode: "background" }}) {{ _docID }} }}"#
-        ),
-        "AgentToolCall",
-    )
-    .await
-}
-
-/// Seed one plugin job row of a fresh request, optionally with the closed
-/// terminal output a failed or timed-out job carries. Returns the row's `_docID`.
-pub async fn seed_job_row(
-    core: &Arc<ClientCore>,
-    session_id: &str,
-    tool_call_id: &str,
-    lifecycle_state: &str,
-    progress: &JobProgress,
-    coded_output: Option<(&str, &str)>,
-) -> String {
-    seed_job_row_for_node(
-        core,
-        OPERATOR,
-        session_id,
-        tool_call_id,
-        lifecycle_state,
-        progress,
-        coded_output,
-    )
-    .await
 }
 
 pub async fn seed_job_row_for_node(
