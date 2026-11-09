@@ -155,7 +155,6 @@ impl LiveBox {
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_RUNTIME_DIR")
             .env_remove("GENTS_CODEX_BIN")
-            .env_remove("GENTS_GROK_BIN")
             .env_remove("INFERENCE_ENDPOINT");
         command
     }
@@ -280,16 +279,6 @@ impl LiveBox {
         let mut command = self.gents();
         command
             .env("GENTS_CODEX_BIN", interface)
-            .arg("--home")
-            .arg(home);
-        command
-    }
-
-    /// `gents --home <home>`, opening `interface` as its Grok binary.
-    pub(super) fn bare_gents_grok(&self, interface: &str, home: &Path) -> Command {
-        let mut command = self.gents();
-        command
-            .env("GENTS_GROK_BIN", interface)
             .arg("--home")
             .arg(home);
         command
@@ -614,8 +603,7 @@ impl Terminal {
 
 impl Drop for Terminal {
     /// The child leads its PTY session, so its group also holds the interface `gents`
-    /// started. Real Grok still running when its runtime stops starts a detached stock
-    /// leader on the socket, so the interface must be gone before `LiveBox` stops it.
+    /// started.
     fn drop(&mut self) {
         // A reaped child's group may no longer be ours to signal. Until it is reaped, its
         // PID and so its group stay reserved.

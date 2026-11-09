@@ -28,33 +28,6 @@ fn access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
     ConfigAccess::local(node.clone())
 }
 
-#[cfg(unix)]
-pub(crate) async fn load_direct_caused_sessions(
-    node: &Arc<EmbeddedNode>,
-    cause: &AgentRequestRow,
-) -> Result<Vec<CausedSession>> {
-    let parent = row_scope(cause)?;
-    let mut caused = Vec::new();
-    for (link, first) in started_by_request(&access(node), cause).await? {
-        let latest = load_session_head(node, &link.scope)
-            .await?
-            .unwrap_or_else(|| first.clone());
-        let Some(agent_did) = first.agent_did.clone() else {
-            continue;
-        };
-        caused.push(CausedSession {
-            scope: link.scope,
-            agent_did,
-            root_session_id: parent.session_id.clone(),
-            caused_by_scope: parent.clone(),
-            depth: 1,
-            first,
-            latest,
-        });
-    }
-    Ok(caused)
-}
-
 pub(crate) async fn load_caused_sessions(
     node: &Arc<EmbeddedNode>,
     roots: &[SessionScope],

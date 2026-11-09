@@ -18,8 +18,6 @@ use uuid::Uuid;
 
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
-#[cfg(unix)]
-use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
 use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
@@ -663,11 +661,6 @@ async fn serve_foreground(
     mut startup: Option<super::prepare_runtime::PreparedStartup>,
     store_lifetime: &mut Option<gents::store::config_client::ConfigAccess>,
 ) -> Result<()> {
-    #[cfg(not(unix))]
-    anyhow::ensure!(
-        !args.grok_shim,
-        "--grok-shim requires Unix; omit it to run the server on this platform"
-    );
     args.codex_shim_public_url = args
         .codex_shim_public_url
         .as_deref()
@@ -719,12 +712,6 @@ async fn serve_foreground(
     )
     .await?;
     crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
-    crate::client_settings::apply_home_client_setting(
-        &mut args,
-        &home_dir,
-        startup.is_some(),
-        cfg!(unix),
-    )?;
     let http_ip = args
         .http_addr
         .unwrap_or(crate::network_settings::DEFAULT_HTTP_ADDR);
@@ -960,8 +947,6 @@ async fn serve_foreground(
         );
         listener.spawn(scrape_state, runtime.shutdown_tx.subscribe())
     });
-    #[cfg(unix)]
-    let mut grok_shim_handle = None;
     let serve_result: Result<()> = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
         if let Err(error) = gents::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await {
@@ -995,7 +980,6 @@ async fn serve_foreground(
         );
         let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
         let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
-        let grok_socket_held = Arc::new(std::sync::OnceLock::new());
         let (configuration_tx, mut configuration_rx) =
             watch::channel::<Option<RuntimeConfigurationObservation>>(None);
 
@@ -1098,7 +1082,6 @@ async fn serve_foreground(
                 agent_routes: args.codex_shim_agent_did.is_none()
                     && args.codex_shim_public_url.is_none(),
                 has_public_url: args.codex_shim_public_url.is_some(),
-                grok_socket: grok_socket_held.clone(),
             };
             let mut codex_shim_handle = if args.no_codex_shim {
                 None
@@ -1354,49 +1337,6 @@ async fn serve_foreground(
             }
             serve_lifecycle.mark_ready();
 
-            #[cfg(unix)]
-            let grok_shim_output = {
-                let grok_shim_socket_path = args
-                    .grok_shim
-                    .then(|| resolve_grok_shim_socket_path(args.grok_shim_socket_path.as_deref()));
-                if let Some(socket_path) = grok_shim_socket_path.as_ref() {
-                    match bind_grok_shim(GrokShimBindArgs {
-                        background_executions: background_execution_registry.clone(),
-                        node: node.clone(),
-                        runtime_identity: identity.clone(),
-                        graphql_url: graphql_url.clone(),
-                        agent_did: args.grok_shim_agent_did.clone(),
-                        node_did: identity.did().to_string(),
-                        node_name: node_name.clone(),
-                        socket_path: socket_path.clone(),
-                        home: home_dir.clone(),
-                    })
-                    .await
-                    {
-                        Ok(handle) => {
-                            grok_shim_handle = Some(handle);
-                            grok_socket_held.set(socket_path.clone()).ok();
-                        }
-                        Err(error) => {
-                            tracing::error!(
-                                socket = %socket_path.display(),
-                                error = %format!("{error:#}"),
-                                "Grok TUI endpoint disabled: the leader could not bind"
-                            );
-                        }
-                    }
-                }
-                grok_shim_socket_path.as_ref().map(|socket_path| {
-                    let bound = grok_shim_handle.is_some();
-                    json!({
-                        "socket": socket_path,
-                        "bound": bound,
-                    })
-                })
-            };
-            #[cfg(not(unix))]
-            let grok_shim_output: Option<Value> = None;
-
             let output = json!({
                 "status": "serving",
                 "node_readiness": node_readiness,
@@ -1415,7 +1355,6 @@ async fn serve_foreground(
                 "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
                 "p2p_admission": p2p_status.get("p2p_admission").cloned().unwrap_or(Value::Null),
                 "codex_shim": codex_shim_output,
-                "grok_shim": grok_shim_output,
                 "apply_root": pack_apply,
             });
             drop(native_reservation.take());
@@ -1498,23 +1437,6 @@ async fn serve_foreground(
     let runtime_result = runtime.finish(serve_result).await;
     tracing::info!(target: "gents::shutdown", stage = "agent_drain", "server shutdown stage completed");
 
-    #[cfg(unix)]
-    let runtime_result = {
-        let mut grok_shutdown_error = None;
-        if let Some(handle) = grok_shim_handle.as_mut() {
-            if let Err(error) = handle.shutdown().await {
-                if runtime_result.is_ok() {
-                    grok_shutdown_error = Some(error.context("shutting down the Grok shim leader"));
-                } else {
-                    tracing::warn!(
-                        error = %format!("{error:#}"),
-                        "Grok shim leader shutdown also failed while the server was exiting with an error"
-                    );
-                }
-            }
-        }
-        grok_shutdown_error.map_or(runtime_result, Err)
-    };
     tracing::info!(target: "gents::shutdown", stage = "node_close", "server shutdown stage started");
     runtime.shutdown_node().await;
     tracing::info!(target: "gents::shutdown", stage = "node_close", "server shutdown stage completed");
@@ -1982,21 +1904,8 @@ fn display_shim_host(host: IpAddr) -> String {
     }
 }
 
-#[cfg(unix)]
-pub(crate) fn resolve_grok_shim_socket_path(explicit: Option<&Path>) -> PathBuf {
-    if let Some(path) = explicit {
-        return path.to_path_buf();
-    }
-    match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(runtime_dir) if !runtime_dir.is_empty() => {
-            PathBuf::from(runtime_dir).join("gents").join("grok.sock")
-        }
-        _ => PathBuf::from("/tmp/gents-grok.sock"),
-    }
-}
-
 #[cfg(all(test, unix))]
-mod grok_shim_tests {
+mod server_key_tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use clap::Parser;

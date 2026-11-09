@@ -16,7 +16,7 @@ use super::transcript::{insert_output_segment, insert_transcript_header, next_re
 /// Seed one physical tool row through a matching canonical ToolCall admission
 /// and, for terminal lifecycle states, one exact ToolDelivery observation.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn seed_canonical_tool_call(
+pub(super) async fn seed_canonical_tool_call(
     node: &Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequestRow,
     tool_call_id: &str,
@@ -147,7 +147,7 @@ pub(crate) async fn seed_canonical_tool_call(
     let tool_doc_id = gents::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
-        "grok.seed_canonical_tool_call",
+        "test.seed_canonical_tool_call",
         move |txn| {
             let tool_mutation = tool_mutation.clone();
             let admitted_variables = admitted_variables.clone();

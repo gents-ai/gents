@@ -226,16 +226,16 @@ fn config_client_set_and_show() -> Result<()> {
 
     let set = run_gents(
         user_home.path(),
-        &["config", "client", "set", "grok", "--home", &home_arg],
+        &["config", "client", "set", "codex", "--home", &home_arg],
     )?;
 
     let stderr = stderr_of(&set);
     assert!(set.status.success(), "stderr:\n{stderr}");
     assert!(
-        stderr.contains("gents runtime service restart"),
-        "stderr:\n{stderr}"
+        stderr.contains(&format!("the next `gents --home {home_arg}` opens it")),
+        "only `gents` reads the setting, so nothing needs a restart:\n{stderr}"
     );
-    assert_eq!(show()?.trim(), "grok");
+    assert_eq!(show()?.trim(), "codex");
     assert!(
         !home.path().join("runtime.json").exists(),
         "setting the client must not start a runtime"
@@ -250,7 +250,7 @@ fn config_client_refuses_an_uninitialized_home() -> Result<()> {
     let home_arg = home.path().to_string_lossy();
 
     for args in [
-        &["config", "client", "set", "grok", "--home", &home_arg][..],
+        &["config", "client", "set", "codex", "--home", &home_arg][..],
         &["config", "client", "show", "--home", &home_arg][..],
     ] {
         let output = run_gents(user_home.path(), args)?;

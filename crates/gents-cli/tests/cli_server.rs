@@ -685,103 +685,6 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "grok shim is being removed"]
-async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
-    const APPLIED_BACKEND: &str = "fresh-applied-grok-backend";
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    let root = tempdir.path().join("pack");
-    fs::create_dir_all(&home_dir)?;
-    let model_name = format!("mock-grok-apply-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
-    let agent_name = format!("cli-grok-apply-{}", Uuid::new_v4().simple());
-    let init = run_init_json(
-        &home_dir,
-        &[
-            "--node-name",
-            &agent_name,
-            "--model-name",
-            &model_name,
-            "--inference-url",
-            mock_endpoint.endpoint(),
-        ],
-    )?;
-    // The applied Agent is a new Node-derived identity, published by the
-    // pack with its creation nonce.
-    let grok_agent = gents::store::identity::provision_agent_identity(&identity_from_init(&init)?)?;
-    run_cli_text(
-        &home_dir,
-        &["config", "export", "--root", &root.to_string_lossy()],
-    )?;
-    let config_path = root.join("pack_config.json");
-    let mut config = read_json_file(&config_path)?;
-    let mut backend = config["inference_backends"][0].clone();
-    backend["backend_id"] = Value::String(APPLIED_BACKEND.to_string());
-    if let Some(object) = backend.as_object_mut() {
-        object.remove("probe_status");
-        object.remove("last_probe");
-    }
-    config["inference_backends"]
-        .as_array_mut()
-        .context("inference_backends is not an array")?
-        .push(backend);
-    let mut profile = config["inference_profiles"][0].clone();
-    let applied_profile = format!("{APPLIED_BACKEND}:profile");
-    profile["profile_id"] = Value::String(applied_profile.clone());
-    profile["backend_id"] = Value::String(APPLIED_BACKEND.to_string());
-    config["inference_profiles"]
-        .as_array_mut()
-        .context("inference_profiles is not an array")?
-        .push(profile);
-    let mut agent = config["agents"][0].clone();
-    agent["agent_did"] = Value::String(grok_agent.agent_did.clone());
-    agent["creation_nonce"] = Value::String(grok_agent.creation_nonce.clone());
-    agent["inference_profile_id"] = Value::String(applied_profile);
-    config["agents"]
-        .as_array_mut()
-        .context("agents is not an array")?
-        .push(agent);
-    write_json_file(&config_path, &config)?;
-    let port = allocate_port()?;
-    let socket_path = tempdir.path().join("grok.sock");
-    let (mut serve, readiness) = spawn_server_with_ready_json(
-        &home_dir,
-        port,
-        &[
-            "--p2p-transport",
-            "none",
-            "--apply-root",
-            root.to_str().context("pack root path is not UTF-8")?,
-            "--grok-shim",
-            "--grok-shim-socket-path",
-            socket_path.to_str().context("socket path is not UTF-8")?,
-            "--grok-shim-agent-did",
-            &grok_agent.agent_did,
-        ],
-        &[],
-    )?;
-    wait_for_port(port, &mut serve)?;
-    let (_stdout, stderr) = serve.captured_output()?;
-    assert_eq!(
-        readiness.pointer("/apply_root/ok").and_then(Value::as_bool),
-        Some(true),
-        "the pack must apply before readiness: {readiness}"
-    );
-    assert_eq ! (readiness . pointer ("/grok_shim/bound") . and_then (Value :: as_bool) , Some (true) , "the agent supplied by --apply-root must bind in the same invocation: {readiness}; stderr: {stderr}");
-    assert_eq!(
-        readiness
-            .pointer("/grok_shim/socket")
-            .and_then(Value::as_str),
-        socket_path.to_str()
-    );
-    assert!(
-        socket_path.exists(),
-        "the bound Grok leader must publish its socket"
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -2072,8 +1975,8 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     Ok(())
 }
 
-#[cfg(unix)]
-fn readiness_of_a_fresh_home(client: Option<&str>, runtime_dir: &std::path::Path) -> Result<Value> {
+#[test]
+fn a_home_still_set_to_grok_serves() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -2086,44 +1989,26 @@ fn readiness_of_a_fresh_home(client: Option<&str>, runtime_dir: &std::path::Path
             "m",
         ],
     )?;
-    if let Some(client) = client {
-        run_cli_text(&home_dir, &["config", "client", "set", client])?;
-    }
+    fs::write(
+        home_dir
+            .join(".gents")
+            .join(gents::store::local::home::CLIENT_CONFIG_FILE_NAME),
+        r#"{"client":"grok"}"#,
+    )?;
+    let refusal = run_cli_failure_stderr(&home_dir, &["config", "client", "show"])?;
+    assert!(
+        refusal.contains("gents config client set shell"),
+        "the file must be the one `gents` reads: {refusal}"
+    );
+
     let (_serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         allocate_port()?,
         &["--p2p-transport", "none"],
-        &[(
-            "XDG_RUNTIME_DIR",
-            runtime_dir.to_str().context("runtime dir is not UTF-8")?,
-        )],
+        &[],
     )?;
-    Ok(readiness)
-}
 
-#[cfg(unix)]
-#[test]
-fn only_a_home_set_to_grok_serves_the_grok_socket() -> Result<()> {
-    // Under /tmp because a Unix socket path has a short length limit.
-    let runtime_dir = tempfile::Builder::new()
-        .prefix("gents-")
-        .tempdir_in("/tmp")
-        .context("creating runtime dir")?;
-
-    let grok = readiness_of_a_fresh_home(Some("grok"), runtime_dir.path())?;
-    assert_eq!(
-        grok.pointer("/grok_shim/bound").and_then(Value::as_bool),
-        Some(true),
-        "{grok}"
-    );
-    assert_eq!(
-        grok.pointer("/grok_shim/socket").and_then(Value::as_str),
-        runtime_dir.path().join("gents/grok.sock").to_str(),
-        "{grok}"
-    );
-
-    let unset = readiness_of_a_fresh_home(None, runtime_dir.path())?;
-    assert_eq!(unset.get("grok_shim"), Some(&Value::Null), "{unset}");
+    assert_eq!(readiness["status"], "serving", "{readiness}");
     Ok(())
 }
 

@@ -21,7 +21,7 @@ pub(crate) async fn configure_runtime_agent(
     let agent_did = binding.agent_did.as_str();
     seed_test_agent_configuration(node, node_did, binding, agent_did, model, true).await;
     runtime_access(node, node_did)
-        .transact_write("grok.runtime_fixture", |txn| {
+        .transact_write("test.runtime_agent_fixture", |txn| {
             Box::pin(async move {
                 use gents::store::config_client::read_desired_state_record_in_txn as read;
                 let (_, mut agent) = read(txn, Collection::Agent, node_did, agent_did)
@@ -75,7 +75,7 @@ pub(crate) async fn configure_runtime_agent(
                 let backend = serde_json::json!({
                     "node_did": node_did,
                     "backend_id": backend_id,
-                    "name": "grok runtime fixture",
+                    "name": "runtime agent fixture",
                     "provider_kind": "OpenAiCompatible",
                     "openai_wire_api": "chat_completions",
                     "endpoint": endpoint,
@@ -98,7 +98,7 @@ pub(crate) async fn configure_runtime_agent(
                             target_node_did: node_did.into(),
                             agent_did: agent_did.into(),
                             name: agent_did.into(),
-                            description: Some("self target for Grok control fixture".into()),
+                            description: Some("self target for the runtime agent fixture".into()),
                             tags: Vec::new(),
                         })?,
                     ));
@@ -122,7 +122,7 @@ pub(crate) async fn configure_runtime_agent(
 }
 
 #[cfg(unix)]
-pub(in crate::commands) async fn seed_test_agent_configuration(
+async fn seed_test_agent_configuration(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -133,7 +133,7 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
     let agent_did = binding.agent_did.as_str();
     crate::shared::test_support::publish_test_node_as(node, node_did).await;
     runtime_access(node, node_did)
-        .transact_write("grok.test_agent_configuration", |txn| {
+        .transact_write("test.agent_configuration", |txn| {
             Box::pin(async move {
                 use gents::documents::apply_desired_state_plan;
                 use gents::store::config_client::{

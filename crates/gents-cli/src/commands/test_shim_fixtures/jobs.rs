@@ -85,7 +85,7 @@ pub(crate) async fn seed_job_row(
         }}) {{ _docID }} }}"#
     );
     let variables = json!({ "job_pin": pin, "job_progress": progress });
-    ConfigAccess::transact_local_write(node, None, "test.grok.workflow.job", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.workflow.job", |txn| {
         let (mutation, variables) = (&mutation, &variables);
         Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
     })

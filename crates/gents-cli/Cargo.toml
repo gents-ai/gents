@@ -56,7 +56,6 @@ gents-shell.workspace = true
 defra-node = { workspace = true, features = ["http"] }
 defra-http.workspace = true
 defra-p2p-adapter.workspace = true
-events.workspace = true
 futures-util = "0.3"
 flate2 = "1"
 iana-time-zone = "0.1"

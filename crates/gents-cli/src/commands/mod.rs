@@ -21,8 +21,6 @@ pub(crate) mod fleet;
 pub(crate) mod goal;
 pub(crate) mod grok_auth_probe;
 pub(crate) mod grok_login;
-#[cfg(unix)]
-pub(crate) mod grok_shim;
 pub(crate) mod inference_binding;
 pub(crate) mod init;
 pub(crate) mod job;

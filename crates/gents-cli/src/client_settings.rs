@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::args::{ClientConfigCommand, ServeArgs};
+use crate::cli::args::ClientConfigCommand;
 use crate::home_state::{read_init_config, resolve_home_dir};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
@@ -14,7 +14,6 @@ pub(crate) enum InterfaceClient {
     #[default]
     Shell,
     Codex,
-    Grok,
 }
 
 impl InterfaceClient {
@@ -22,13 +21,12 @@ impl InterfaceClient {
         match self {
             Self::Shell => "shell",
             Self::Codex => "codex",
-            Self::Grok => "grok",
         }
     }
 }
 
 /// The interface a home opens. It lives in a file because `gents` needs it
-/// before the runtime is up and the native service definition carries no flags.
+/// before the runtime is up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ClientSettings {
@@ -52,8 +50,13 @@ impl ClientSettings {
                     .with_context(|| format!("reading client settings {}", path.display()))
             }
         };
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("decoding client settings {}", path.display()))
+        serde_json::from_slice(&bytes).with_context(|| {
+            format!(
+                "decoding client settings {}; `gents config client set shell --home {}` replaces it",
+                path.display(),
+                crate::shell_word(home)
+            )
+        })
     }
 
     /// Writes the setting, or removes the file for the default. Returns whether
@@ -76,44 +79,14 @@ impl ClientSettings {
     }
 }
 
-pub(crate) fn ensure_client_supported(client: InterfaceClient, unix: bool) -> Result<()> {
-    if client == InterfaceClient::Grok && !unix {
-        bail!("the grok interface requires Unix; use codex on this platform");
-    }
-    Ok(())
-}
-
-/// Prepared startup keeps the shim off, as `prepare_runtime` set it, so it reads no setting:
-/// a corrupt file must not stop a path that would ignore what it says.
-pub(crate) fn apply_home_client_setting(
-    args: &mut ServeArgs,
-    home: &Path,
-    prepared: bool,
-    unix: bool,
-) -> Result<()> {
-    if !prepared {
-        apply_client_setting(args, &ClientSettings::read(home)?, unix);
-    }
-    Ok(())
-}
-
-/// A home set to Grok serves as if `--grok-shim` were passed.
-fn apply_client_setting(args: &mut ServeArgs, settings: &ClientSettings, unix: bool) {
-    if settings.client == InterfaceClient::Grok && unix {
-        args.grok_shim = true;
-    }
-}
-
-/// Reads and writes only the home's file, so it works with no runtime and
-/// leaves restarting to the operator.
+/// Reads and writes only the home's file, so it works with no runtime.
 pub(crate) fn config_client(command: ClientConfigCommand) -> Result<()> {
     match command {
         ClientConfigCommand::Set { client, home } => {
             let home = initialized_home(home.as_deref())?;
-            ensure_client_supported(client, cfg!(unix))?;
             ClientSettings { client }.persist(&home)?;
             eprintln!(
-                "client set to {}; run `gents runtime service restart --home {}` to apply it",
+                "client set to {}; the next `gents --home {}` opens it",
                 client.name(),
                 crate::shell_word(&home)
             );
@@ -141,40 +114,13 @@ fn initialized_home(explicit: Option<&Path>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{Cli, Command};
-    use clap::Parser;
     use std::fs;
 
-    const GROK: ClientSettings = ClientSettings {
-        client: InterfaceClient::Grok,
-    };
     const CODEX: ClientSettings = ClientSettings {
         client: InterfaceClient::Codex,
     };
-
-    fn serve_args(extra: &[&str]) -> ServeArgs {
-        let mut argv = vec!["gents", "server"];
-        argv.extend_from_slice(extra);
-        match Cli::try_parse_from(argv)
-            .expect("server should parse")
-            .command
-        {
-            Some(Command::Server(args)) => args,
-            _ => panic!("expected `server`"),
-        }
-    }
-
-    #[test]
-    fn grok_round_trips_as_exactly_client_grok() {
-        let home = tempfile::tempdir().unwrap();
-        assert!(GROK.persist(home.path()).unwrap());
-        assert_eq!(
-            fs::read_to_string(client_settings_path(home.path())).unwrap(),
-            r#"{"client":"grok"}"#
-        );
-        assert_eq!(ClientSettings::read(home.path()).unwrap(), GROK);
-        assert!(!GROK.persist(home.path()).unwrap(), "unchanged");
-    }
+    /// What a home set to the removed Grok interface still holds.
+    const GROK_FILE: &str = r#"{"client":"grok"}"#;
 
     const SHELL: ClientSettings = ClientSettings {
         client: InterfaceClient::Shell,
@@ -190,7 +136,7 @@ mod tests {
     fn setting_the_shell_removes_the_file() {
         let home = tempfile::tempdir().unwrap();
         assert!(!SHELL.persist(home.path()).unwrap(), "already the default");
-        GROK.persist(home.path()).unwrap();
+        CODEX.persist(home.path()).unwrap();
         assert!(SHELL.persist(home.path()).unwrap());
         assert!(!client_settings_path(home.path()).exists());
     }
@@ -207,13 +153,12 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_is_named_shell_and_runs_everywhere() {
+    fn the_shell_is_named_shell() {
         assert_eq!(
             InterfaceClient::from_str("shell", false),
             Ok(InterfaceClient::Shell)
         );
         assert_eq!(InterfaceClient::Shell.name(), "shell");
-        ensure_client_supported(InterfaceClient::Shell, false).unwrap();
     }
 
     #[test]
@@ -221,49 +166,22 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         fs::write(
             client_settings_path(home.path()),
-            br#"{"client":"grok","extra":1}"#,
+            br#"{"client":"codex","extra":1}"#,
         )
         .unwrap();
         assert!(ClientSettings::read(home.path()).is_err());
     }
 
     #[test]
-    fn grok_is_refused_off_unix() {
-        assert!(ensure_client_supported(InterfaceClient::Grok, false).is_err());
-        ensure_client_supported(InterfaceClient::Grok, true).unwrap();
-        ensure_client_supported(InterfaceClient::Codex, false).unwrap();
-    }
-
-    #[test]
-    fn grok_enables_the_shim_on_unix() {
-        let mut args = serve_args(&[]);
-        apply_client_setting(&mut args, &GROK, false);
-        assert!(!args.grok_shim, "the shim needs Unix");
-        apply_client_setting(&mut args, &GROK, true);
-        assert!(args.grok_shim);
-    }
-
-    #[test]
-    fn grok_does_not_enable_the_shim_for_prepared_startup() {
+    fn a_grok_file_names_the_command_that_replaces_it() {
         let home = tempfile::tempdir().unwrap();
-        GROK.persist(home.path()).unwrap();
-        let mut args = serve_args(&[]);
-        apply_home_client_setting(&mut args, home.path(), true, true).unwrap();
-        assert!(!args.grok_shim);
-        apply_home_client_setting(&mut args, home.path(), false, true).unwrap();
-        assert!(args.grok_shim);
-    }
+        let path = client_settings_path(home.path());
+        fs::write(&path, GROK_FILE).unwrap();
 
-    #[test]
-    fn a_corrupt_file_stops_only_a_path_that_reads_it() {
-        let home = tempfile::tempdir().unwrap();
-        fs::write(client_settings_path(home.path()), "not json").unwrap();
-        let mut args = serve_args(&[]);
+        let error = format!("{:#}", ClientSettings::read(home.path()).unwrap_err());
 
-        apply_home_client_setting(&mut args, home.path(), true, true)
-            .expect("prepared startup ignores the setting");
-        assert!(!args.grok_shim);
-        assert!(apply_home_client_setting(&mut args, home.path(), false, true).is_err());
+        assert!(error.contains(&path.display().to_string()), "{error}");
+        assert!(error.contains("`gents config client set shell"), "{error}");
     }
 
     #[test]
@@ -271,11 +189,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let path = client_settings_path(home.path());
 
-        fs::write(&path, "not json").unwrap();
-        assert!(GROK.persist(home.path()).unwrap());
-        assert_eq!(ClientSettings::read(home.path()).unwrap(), GROK);
+        fs::write(&path, GROK_FILE).unwrap();
+        assert!(CODEX.persist(home.path()).unwrap());
+        assert_eq!(ClientSettings::read(home.path()).unwrap(), CODEX);
 
-        fs::write(&path, "not json").unwrap();
+        fs::write(&path, GROK_FILE).unwrap();
         assert!(SHELL.persist(home.path()).unwrap());
         assert!(!path.exists());
     }
@@ -289,16 +207,5 @@ mod tests {
             error.contains(&format!("`gents --home '{}'`", home.display())),
             "{error}"
         );
-    }
-
-    #[test]
-    fn codex_leaves_grok_shim_unchanged() {
-        let mut args = serve_args(&[]);
-        apply_client_setting(&mut args, &CODEX, true);
-        assert!(!args.grok_shim);
-
-        let mut args = serve_args(&["--grok-shim"]);
-        apply_client_setting(&mut args, &CODEX, true);
-        assert!(args.grok_shim);
     }
 }

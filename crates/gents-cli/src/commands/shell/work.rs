@@ -52,7 +52,6 @@ pub(super) async fn jobs(
         // ponytail: every finished run of each open session; add a limit if sessions keep hundreds
         let filter = JobFilter {
             session_id: Some(session.clone()),
-            requester: None,
             state: StateFilter::States(vec![
                 JobState::Running,
                 JobState::Paused,

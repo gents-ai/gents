@@ -161,7 +161,6 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
         &access,
         &JobFilter {
             session_id: None,
-            requester: None,
             state: StateFilter::States(vec![JobState::Completed]),
             plugin: None,
         },
@@ -200,7 +199,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
         }));
     }
     workflows.sort_by_key(|workflow| std::cmp::Reverse(workflow["last_run_at"].as_u64()));
-    // Installed workflows are the home's job plugins, as Grok's `/workflows` lists them.
+    // Installed workflows are the home's job plugins.
     let installed: Vec<Value> = gents::plugin::store::list_records(&home)?
         .into_iter()
         .filter(|record| record.declaration.job.0)

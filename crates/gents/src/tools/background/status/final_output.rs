@@ -14,21 +14,6 @@ use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::call::lifecycle::CausedRequestTerminal;
 
-pub async fn load_caused_request_terminal(
-    node: &std::sync::Arc<EmbeddedNode>,
-    caused_request_doc_id: &str,
-) -> Result<Option<CausedRequestTerminal>> {
-    ConfigAccess::transact_local_readonly(node, None, "background.caused_request_terminal", |txn| {
-        Box::pin(async move {
-            let ids = [caused_request_doc_id.to_owned()];
-            Ok(caused_request_terminals_in_txn(txn, &ids)
-                .await?
-                .remove(caused_request_doc_id))
-        })
-    })
-    .await
-}
-
 pub(crate) fn select_folded_outcome(
     folded: bool,
     caused: Option<CausedRequestTerminal>,

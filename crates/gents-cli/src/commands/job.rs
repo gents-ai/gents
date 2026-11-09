@@ -440,7 +440,6 @@ async fn job_list(args: JobListArgs) -> Result<()> {
         &access,
         &JobFilter {
             session_id: args.session,
-            requester: None,
             state: state_filter(&args.state),
             plugin: args.plugin,
         },
@@ -512,7 +511,6 @@ pub(crate) async fn resolve_job(
         access,
         &JobFilter {
             session_id: session.map(Into::into),
-            requester: None,
             state: StateFilter::States(ALL_STATES.to_vec()),
             plugin: None,
         },
@@ -942,9 +940,7 @@ mod tests {
             assert_eq!(state_filter(&[arg]), StateFilter::States(vec![state]));
         }
         let all = JobStateArg::from_str("all", false).unwrap();
-        let StateFilter::States(states) = state_filter(&[all]) else {
-            panic!("all must map to StateFilter::States");
-        };
+        let StateFilter::States(states) = state_filter(&[all]);
         assert_eq!(states.len(), 7);
         assert_eq!(
             state_filter(&[]),

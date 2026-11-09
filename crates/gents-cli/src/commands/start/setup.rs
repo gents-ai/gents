@@ -196,7 +196,7 @@ async fn ask_tool_root(cwd: &Path, user_home: &Path) -> Result<PathBuf> {
             Err(refusal) => eprintln!("{refusal}"),
             Ok(root) if canonical_home.as_deref() == Some(root.as_path()) => {
                 eprintln!(
-                    "{} is your whole home folder. Agents can reach everything in it, and Codex opens every folder under it without asking.",
+                    "{} is your whole home folder. Agents can reach everything in it.",
                     root.display()
                 );
                 if confirm("Use it?", false).await {

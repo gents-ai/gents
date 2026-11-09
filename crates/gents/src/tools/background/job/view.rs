@@ -1,6 +1,6 @@
 //! A client's read of one plugin job row, through any [`ConfigAccess`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use gents_protocol::job::{
     JobChildRow, JobChildView, JobOutcome, JobPin, JobPinSummary, JobProgress, JobReadError,
@@ -233,14 +233,11 @@ pub async fn load_job_view(
     Ok(assemble(decoded, outcome, children))
 }
 
-/// Which job rows [`list_jobs`] returns. Serves L3's Grok discovery
-/// (session, requester, `NotTerminalOrUndelivered`) and `gents automation job list`
-/// (optional session, a `JobState` set, optional plugin). `None` does not filter.
+/// Which job rows [`list_jobs`] returns: an optional session, a `JobState` set and an
+/// optional plugin. `None` does not filter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobFilter {
     pub session_id: Option<String>,
-    /// The requester principal's DID, matched against the row's `requester_did`.
-    pub requester: Option<String>,
     pub state: StateFilter,
     /// `namespace/name`, matched against `JobView.pin.plugin_ref`.
     pub plugin: Option<String>,
@@ -250,19 +247,12 @@ pub struct JobFilter {
 pub enum StateFilter {
     /// Rows whose `JobView.state` is one of these.
     States(Vec<JobState>),
-    /// Rows whose state is `JobState::Running`, and rows in any other state
-    /// whose `row_doc_id` is not in `delivered`. The host records no client
-    /// delivery, so the caller passes the rows it has already delivered.
-    NotTerminalOrUndelivered { delivered: BTreeSet<String> },
 }
 
 impl StateFilter {
     fn keeps(&self, view: &Decoded) -> bool {
         match self {
             StateFilter::States(states) => states.contains(&view.state),
-            StateFilter::NotTerminalOrUndelivered { delivered } => {
-                view.state == JobState::Running || !delivered.contains(&view.stored.doc_id)
-            }
         }
     }
 }
@@ -278,12 +268,6 @@ pub async fn list_jobs(
         clauses.push(format!(
             r#"session_id: {{ _eq: "{}" }}"#,
             escape_graphql_string(session_id)
-        ));
-    }
-    if let Some(requester) = &filter.requester {
-        clauses.push(format!(
-            r#"requester_did: {{ _eq: "{}" }}"#,
-            escape_graphql_string(requester)
         ));
     }
     let response = access

@@ -2,7 +2,6 @@ use super::*;
 use axum::extract::Path as RoutePath;
 use axum::http::header::{HOST, ORIGIN};
 use rapidhash::{HashMapExt, RapidHashMap};
-use std::sync::OnceLock;
 
 #[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
@@ -23,13 +22,11 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) runnable: watch::Receiver<Vec<String>>,
     pub(crate) agent_routes: bool,
     pub(crate) has_public_url: bool,
-    /// Set once this runtime's Grok leader holds its socket.
-    pub(crate) grok_socket: Arc<OnceLock<PathBuf>>,
 }
 
-/// What `GET /runtime` answers: whose home this runtime serves, what it can run, where its
-/// threads may go and which Grok socket it holds. `gents` reads it because no endpoint can say
-/// whose it is by answering, and an interface cannot say why it failed to open.
+/// What `GET /runtime` answers: whose home this runtime serves, what it can run and where its
+/// threads may go. `gents` reads it because no endpoint can say whose it is by answering, and
+/// an interface cannot say why it failed to open.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RuntimeIdentity {
     pub(crate) node_did: String,
@@ -42,9 +39,6 @@ pub(crate) struct RuntimeIdentity {
     pub(crate) tool_root: Option<PathBuf>,
     /// Where a thread starts when its client names no directory.
     pub(crate) default_thread_cwd: PathBuf,
-    /// The Grok socket this runtime holds. A socket answering says nothing about
-    /// whose it is, because a stock Grok leader can hold it too.
-    pub(crate) grok_socket: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -54,7 +48,6 @@ struct RuntimeRouteState {
     agent_routes: bool,
     loopback_host_only: bool,
     runnable: watch::Receiver<Vec<String>>,
-    grok_socket: Arc<OnceLock<PathBuf>>,
     runtime_identity: Arc<dyn gents::NodeIdentity>,
     sidecars: Arc<Mutex<RapidHashMap<String, Arc<Mutex<CodexSidecar>>>>>,
 }
@@ -207,7 +200,6 @@ pub(crate) async fn bind_codex_shim(
         runnable_agents: None,
         tool_root: args.fs_root.clone(),
         default_thread_cwd: thread_cwd.clone(),
-        grok_socket: None,
     };
     let agent_routes = args.agent_routes && args.bind_addr.is_loopback();
 
@@ -244,7 +236,6 @@ pub(crate) async fn bind_codex_shim(
         agent_routes,
         loopback_host_only: args.bind_addr.is_loopback() && !args.has_public_url,
         runnable: args.runnable,
-        grok_socket: args.grok_socket,
         runtime_identity: args.runtime_identity,
         sidecars: Arc::new(Mutex::new(sidecars)),
     });
@@ -422,7 +413,6 @@ async fn runtime_identity(State(state): State<RuntimeRouteState>, headers: Heade
     }
     let mut identity = state.identity;
     identity.runnable_agents = state.agent_routes.then(|| state.runnable.borrow().clone());
-    identity.grok_socket = state.grok_socket.get().cloned();
     Json(identity).into_response()
 }
 

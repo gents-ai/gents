@@ -114,81 +114,6 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn a_listener_on_the_grok_socket_that_is_not_this_runtime_is_refused() -> Result<()> {
-        let live = LiveBox::new()?;
-        let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
-        let home_arg = home.home.to_string_lossy();
-        live.gents_ok(&["config", "client", "set", "grok", "--home", &home_arg])?;
-        let (interface, recorded) = recording_interface(&live)?;
-        // Under /tmp because a Unix socket path has a short length limit.
-        let runtime_dir = tempfile::Builder::new()
-            .prefix("gents-")
-            .tempdir_in("/tmp")?;
-        let socket = runtime_dir.path().join("gents/grok.sock");
-        fs::create_dir_all(socket.parent().context("the socket has a parent")?)?;
-        let _stock_leader = std::os::unix::net::UnixListener::bind(&socket)?;
-        let mut command = live.bare_gents_grok(&interface.to_string_lossy(), &home.home);
-        command.env("XDG_RUNTIME_DIR", runtime_dir.path());
-
-        let mut terminal = Terminal::spawn(&command, &live.log("stock-leader"))?;
-
-        terminal
-            .expect(&socket.to_string_lossy(), RUNTIME_UP)
-            .await?;
-        terminal.expect_exit(1).await?;
-        ensure!(!recorded.exists(), "nothing may open");
-        ensure!(!live.plist().exists(), "nothing may be installed");
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn grok_opens_on_the_socket_the_service_holds_whatever_the_terminal_expects() -> Result<()>
-    {
-        let backend = answering_backend()?;
-        let live = LiveBox::new()?;
-        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
-        live.gents_ok(&[
-            "config",
-            "client",
-            "set",
-            "grok",
-            "--home",
-            &home.home.to_string_lossy(),
-        ])?;
-        let (interface, recorded) = recording_interface(&live)?;
-        let terminal_dir = tempfile::Builder::new()
-            .prefix("gents-")
-            .tempdir_in("/tmp")?;
-        let mut command = live.bare_gents_grok(&interface.to_string_lossy(), &home.home);
-        command.env("XDG_RUNTIME_DIR", terminal_dir.path());
-
-        let mut terminal = Terminal::spawn(&command, &live.log("other-runtime-dir"))?;
-
-        let code = terminal.wait_exit(RUNTIME_UP).await?;
-        ensure!(code == 0, "{}", terminal.transcript());
-        let runtime: serde_json::Value =
-            reqwest::get(format!("http://127.0.0.1:{SHIM_PORT}/runtime"))
-                .await?
-                .json()
-                .await?;
-        let held = runtime["grok_socket"]
-            .as_str()
-            .context("the service holds a socket")?;
-        ensure!(
-            !Path::new(held).starts_with(terminal_dir.path()),
-            "the service must not share the terminal's directory: {held}"
-        );
-        let args = fs::read_to_string(&recorded)?;
-        ensure!(
-            args.contains(&format!("--leader-socket\n{held}\n")),
-            "{args}"
-        );
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn the_first_open_after_a_start_finds_the_default_agent() -> Result<()> {
         let backend = answering_backend()?;
         let live = LiveBox::new()?;
@@ -284,27 +209,18 @@ mod no_model {
     async fn a_home_with_no_runnable_agent_says_so_and_opens_nothing() -> Result<()> {
         let live = LiveBox::new()?;
         let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
-        let home_arg = home.home.to_string_lossy();
         let (interface, recorded) = recording_interface(&live)?;
-        let interface = interface.to_string_lossy();
 
-        for (client, command) in [
-            ("codex", live.bare_gents(&interface, &home.home)),
-            ("grok", live.bare_gents_grok(&interface, &home.home)),
-        ] {
-            live.gents_ok(&["config", "client", "set", client, "--home", &home_arg])?;
-            if client == "grok" {
-                live.gents_ok(&["runtime", "service", "restart", "--home", &home_arg])?;
-            }
+        let mut terminal = Terminal::spawn(
+            &live.bare_gents(&interface.to_string_lossy(), &home.home),
+            &live.log("codex"),
+        )?;
 
-            let mut terminal = Terminal::spawn(&command, &live.log(client))?;
-
-            terminal.expect("no agent can run", RUNTIME_UP).await?;
-            terminal.expect("gents status", EXIT).await?;
-            terminal.expect("gents config backend set", EXIT).await?;
-            terminal.expect_exit(1).await?;
-            ensure!(!recorded.exists(), "{client}: nothing may open");
-        }
+        terminal.expect("no agent can run", RUNTIME_UP).await?;
+        terminal.expect("gents status", EXIT).await?;
+        terminal.expect("gents config backend set", EXIT).await?;
+        terminal.expect_exit(1).await?;
+        ensure!(!recorded.exists(), "nothing may open");
         Ok(())
     }
 
@@ -1337,102 +1253,6 @@ mod with_model {
         assert_eq!(started["cwd"], json!(project.to_string_lossy()));
 
         assert_eq!(live.service_pid(), Some(pid));
-        Ok(())
-    }
-
-    /// Opens Grok through `command`, submits a prompt, and returns the request's agent
-    /// once it completes.
-    async fn turn_in_grok(
-        live: &LiveBox,
-        home: &InitializedHome,
-        command: &Command,
-        log: &str,
-    ) -> Result<String> {
-        let mut terminal = Terminal::spawn(command, &live.log(log))?;
-        terminal.settle().await;
-        let prompt = unique_prompt();
-        terminal.send(&prompt)?;
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        terminal.send("\r")?;
-
-        let graphql = graphql_url(HTTP_PORT);
-        let result: Result<String> = async {
-            let (request, _, agent) = wait_for_request(&graphql, &home.node_did, &prompt).await?;
-            wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
-            Ok(agent)
-        }
-        .await;
-        result.with_context(|| format!("Grok transcript:\n{}", terminal.transcript()))
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "needs a local model, real launchd and real Grok; run through `make live-onboarding`"]
-    async fn real_grok_opens_by_setting_and_by_agent() -> Result<()> {
-        let (endpoint, model) = live_model().await?;
-        let Some(grok) = real_interface("grok") else {
-            return Ok(());
-        };
-        let grok = grok.to_string_lossy();
-        let socket = Path::new("/tmp/gents-grok.sock");
-        ensure!(
-            !socket.exists(),
-            "{} exists, so another runtime holds Grok's socket",
-            socket.display()
-        );
-        let live = LiveBox::new()?;
-        let home = live.init_home("home", &endpoint, &model)?;
-        let home_arg = home.home.to_string_lossy();
-        live.bring_up(&home.home).await?;
-        crate::support::graphql::register_served_home(&live.root, &home.home, &[], HTTP_PORT)?;
-        let b = live.clone_agent(&home, "other").await?;
-        let pid = live.service_pid().context("the service runs")?;
-
-        live.gents_ok(&["config", "client", "set", "grok", "--home", &home_arg])?;
-        let mut refused = Terminal::spawn(
-            &live.bare_gents_grok(&grok, &home.home),
-            &live.log("grok-socket-off"),
-        )?;
-        refused
-            .expect("gents runtime service restart", RUNTIME_UP)
-            .await?;
-        refused.expect_exit(1).await?;
-        assert_eq!(live.service_pid(), Some(pid));
-
-        live.gents_ok(&["runtime", "service", "restart", "--home", &home_arg])?;
-        let agent = turn_in_grok(
-            &live,
-            &home,
-            &live.bare_gents_grok(&grok, &home.home),
-            "grok-default",
-        )
-        .await?;
-        assert_eq!(agent, home.default_agent_did);
-
-        let mut by_agent = live.bare_gents_grok(&grok, &home.home);
-        by_agent.args(["--agent", &b]);
-        let agent = turn_in_grok(&live, &home, &by_agent, "grok-agent").await?;
-        assert_eq!(agent, b);
-
-        // `doctor` is a Grok subcommand, so it reaches the agent only past the separator.
-        let mut by_prompt = live.bare_gents_grok(&grok, &home.home);
-        by_prompt.arg("doctor");
-        let window = Terminal::spawn(&by_prompt, &live.log("grok-prompt"))?;
-        let graphql = graphql_url(HTTP_PORT);
-        let turn: Result<()> = async {
-            let (request, _, _) = wait_for_request(&graphql, &home.node_did, "doctor").await?;
-            wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
-            Ok(())
-        }
-        .await;
-        turn.with_context(|| format!("Grok transcript:\n{}", window.transcript()))?;
-        drop(window);
-
-        drop(live);
-        ensure!(
-            !socket.exists(),
-            "{} outlived the runtime; `lsof` names what holds it",
-            socket.display()
-        );
         Ok(())
     }
 

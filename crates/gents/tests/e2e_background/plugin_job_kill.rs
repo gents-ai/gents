@@ -14,9 +14,7 @@ use gents::tools::background::job::job::{
 };
 use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents::tools::background::status::ProcessControlScope;
-use gents::tools::call::control::{
-    cancel_background_tool_call, cancel_session_background_process, CancelBackgroundToolCallOutcome,
-};
+use gents::tools::call::control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 use gents::{BackgroundExecutionRegistry, DocumentRuntimeOptions, Gents, NodeIdentity};
 use serde_json::{json, Value};
 
@@ -343,7 +341,7 @@ fn parent_scope(h: &JobHarness) -> ProcessControlScope {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancelled() {
+async fn operator_cancel_and_non_job_stop_each_end_the_row_cancelled() {
     // Operator cancel.
     let job = live_job("plugin-job-kill-operator").await;
     let outcome = cancel_background_tool_call(
@@ -359,26 +357,6 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
         "{outcome:?}"
     );
     assert_stopped(&job, "operator").await;
-    job.h.runtime.shutdown().await;
-
-    // Client cancel.
-    let job = live_job("plugin-job-kill-client").await;
-    let did = job.h.db.node_identity.did().to_string();
-    let outcome = cancel_session_background_process(
-        &agent_access(&job),
-        &BackgroundExecutionRegistry::default(),
-        &did,
-        Some(job.h.actors.fixture.user.did()),
-        &job.session_id,
-        TOOL_CALL,
-    )
-    .await
-    .expect("client cancel");
-    assert!(
-        matches!(outcome, CancelBackgroundToolCallOutcome::Cancelled { .. }),
-        "{outcome:?}"
-    );
-    assert_stopped(&job, "client").await;
     job.h.runtime.shutdown().await;
 
     // A later accepted turn stops the row with a non-job call of the plugin.

@@ -549,7 +549,6 @@ fn list_projection_matches(filter: ListStatusFilter, projection: &WaitStatusProj
     }
 }
 
-pub use final_output::load_caused_request_terminal;
 #[cfg(test)]
 pub(crate) use final_output::select_folded_outcome;
 pub(crate) use final_output::{

@@ -146,24 +146,6 @@ pub(crate) struct ServeArgs {
     pub(crate) codex_shim_poll_ms: u64,
     #[arg(
         long,
-        default_value_t = false,
-        help = "Expose the Grok TUI leader socket (Unix only) so stock Grok can attach as the pager client: start this server first, then run `grok --leader --leader-socket <path>`"
-    )]
-    pub(crate) grok_shim: bool,
-    #[arg(
-        long,
-        requires = "grok_shim",
-        help = "Unix socket path for the Grok TUI leader. Defaults to $XDG_RUNTIME_DIR/gents/grok.sock, falling back to /tmp/gents-grok.sock"
-    )]
-    pub(crate) grok_shim_socket_path: Option<PathBuf>,
-    #[arg(
-        long,
-        requires = "grok_shim",
-        help = "Optional GENTS agent override for Grok pager turns"
-    )]
-    pub(crate) grok_shim_agent_did: Option<String>,
-    #[arg(
-        long,
         value_enum,
         default_value_t = P2pTransportArg::Iroh,
         help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL/Codex shim"

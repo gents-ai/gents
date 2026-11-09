@@ -14,10 +14,6 @@ use investigation::{
     ToolCallDetailRow,
 };
 mod observation;
-pub use observation::{
-    load_pinned_request_context_observation, load_request_context_observation,
-    load_session_inference_observation, load_session_request_doc_ids,
-};
 mod snapshot;
 pub use snapshot::{load_session_history_snapshot, load_session_history_snapshot_with_access};
 
@@ -166,20 +162,6 @@ pub struct SessionTokenUsage {
     pub incomplete: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SessionInferenceObservation {
-    pub token_usage: SessionTokenUsage,
-    pub inference_turns: Option<u64>,
-    pub latest_context: Option<super::context_budget::LastRequestContextSnapshot>,
-    pub latest_completion_tokens: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RequestContextObservation {
-    pub context: super::context_budget::LastRequestContextSnapshot,
-    pub completion_tokens: Option<u64>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionCompactionEvent {
     pub scope: String,
@@ -261,8 +243,6 @@ struct InferenceDetailRow {
     started_at: Option<String>,
     #[serde(default)]
     ended_at: Option<String>,
-    #[serde(default)]
-    request_doc_id: Option<String>,
     #[serde(default)]
     call_kind: Option<String>,
     #[serde(default)]

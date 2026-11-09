@@ -9,15 +9,13 @@ use tokio::net::TcpStream;
 use url::{Host, Url};
 
 use crate::cli::args::CodexArgs;
-use crate::client_settings::InterfaceClient;
 use crate::commands::codex_shim::RuntimeIdentity;
-use crate::commands::start::interface_install_message;
 
 pub(crate) mod relay;
 
 const SHIM_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const PUBLISH_WAIT: Duration = Duration::from_secs(5);
-pub(crate) const CODEX_BIN_ENV: &str = "GENTS_CODEX_BIN";
+const CODEX_BIN_ENV: &str = "GENTS_CODEX_BIN";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RemoteEndpoint {
@@ -65,34 +63,22 @@ pub(crate) async fn open_codex(mut args: CodexArgs) -> Result<()> {
         eprintln!("{notice}");
     }
     // Codex takes the screen right after the first notice, which hides it until Codex exits.
-    launch_interface(
-        "Codex",
-        &interface_bin(CODEX_BIN_ENV, "codex"),
+    launch_codex(
         &codex_command_args(&args, cd.as_deref()),
-        &interface_install_message(InterfaceClient::Codex),
         outside_notice.as_deref(),
     )
     .await
 }
 
-pub(crate) fn interface_bin(env_name: &str, default: &str) -> String {
-    std::env::var(env_name)
+async fn launch_codex(args: &[String], notice_after_exit: Option<&str>) -> Result<()> {
+    let bin = std::env::var(CODEX_BIN_ENV)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default.to_string())
-}
-
-pub(crate) async fn launch_interface(
-    name: &str,
-    bin: &str,
-    args: &[String],
-    install_hint: &str,
-    notice_after_exit: Option<&str>,
-) -> Result<()> {
+        .unwrap_or_else(|| "codex".to_string());
     let status =
-        gents::tools::exec::native_spawn::spawn_tokio(tokio::process::Command::new(bin).args(args))
-            .with_context(|| format!("launching `{bin}`: {install_hint}"))?
+        gents::tools::exec::native_spawn::spawn_tokio(tokio::process::Command::new(&bin).args(args))
+            .with_context(|| format!("launching `{bin}`: {}", codex_install_message()))?
             .wait()
             .await
             .with_context(|| format!("waiting for `{bin}`"))?;
@@ -102,8 +88,12 @@ pub(crate) async fn launch_interface(
     if status.success() {
         Ok(())
     } else {
-        bail!("{name} exited with {status}")
+        bail!("Codex exited with {status}")
     }
+}
+
+fn codex_install_message() -> String {
+    format!("Codex was not found. Install it with `brew install codex` or `npm install -g @openai/codex`, or set {CODEX_BIN_ENV} to its path. `gents -p MESSAGE` works without it.")
 }
 
 /// Anything but a decoded success is `None`: nothing here can tell an older
@@ -490,6 +480,14 @@ pub(crate) mod tests {
     use clap::Parser;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+    #[test]
+    fn the_install_text_gives_a_real_line_for_codex() {
+        let codex = codex_install_message();
+        assert!(codex.contains("brew install codex"), "{codex}");
+        assert!(codex.contains("npm install -g @openai/codex"), "{codex}");
+        assert!(codex.contains("GENTS_CODEX_BIN"), "{codex}");
+    }
+
     fn args(remote: &str) -> CodexArgs {
         CodexArgs {
             remote: remote.to_string(),
@@ -510,7 +508,6 @@ pub(crate) mod tests {
                 .map(|agents| agents.iter().map(|agent| agent.to_string()).collect()),
             tool_root: Some(PathBuf::from("/srv/root")),
             default_thread_cwd: PathBuf::from("/srv/root/from-the-runtime"),
-            grok_socket: None,
         }
     }
 

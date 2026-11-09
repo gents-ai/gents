@@ -400,44 +400,6 @@ pub(crate) async fn prepare_cli_goal_input(
     gents::goal::prepare_client_goal_input(access, &verifier, node_did, session_id, input).await
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(unix)]
-pub(crate) async fn create_goal_backed_agent_request_local(
-    node: &std::sync::Arc<defra_node::Node>,
-    actor: identity::Did,
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    objective: &str,
-    token_budget: Option<i64>,
-    session_id: &str,
-    agent_did: &str,
-    request_id: String,
-    mut options: RequestSubmitOptions,
-) -> Result<SubmittedRequest> {
-    options.retry_key = Some(format!("goal-request:{request_id}"));
-    let prepared = prepare_agent_request_with_input(
-        graphql,
-        node_did,
-        objective,
-        Some(session_id),
-        Some(agent_did),
-        Some(request_id),
-        options,
-    )
-    .await?;
-    gents::goal::submit_goal_backed_request_local(
-        node,
-        actor,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        &prepared.create,
-    )
-    .await?;
-    committed_submitted_request(graphql, &prepared.create).await
-}
-
 pub(crate) async fn submit_prepared_agent_request_committed(
     graphql: &GraphqlEndpoint,
     prepared: &PreparedAgentRequest,
@@ -459,16 +421,6 @@ pub(crate) async fn submit_prepared_agent_request_committed(
     let row = matching_prepared_receipt(graphql, &prepared.create)
         .await?
         .context("committed signed request receipt missing")?;
-    submitted_from_receipt(row)
-}
-
-async fn committed_submitted_request(
-    graphql: &GraphqlEndpoint,
-    create: &AgentRequestCreate,
-) -> Result<SubmittedRequest> {
-    let row = read_submitted_receipt(graphql, create)
-        .await?
-        .context("committed signed request receipt is missing")?;
     submitted_from_receipt(row)
 }
 
