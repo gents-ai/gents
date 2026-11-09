@@ -245,4 +245,339 @@ theorem acknowledged_outcome_never_replays (intent : Intent) (prepared : Prepare
     result ⟨intent, prepared, outcome, false, true⟩ = .settled prepared outcome := by
   cases outcome <;> simp_all [result, bound]
 
+/-! ### One journal per client key
+
+A desktop's journal is its embedded local store, whose node identity is the
+client key (`require_client_signer`): only that key's records are written to
+it. The User key is shared by the desktop and the CLI, but they do not share a
+journal, and two keys never do. A family of journals is represented by one
+list partitioned by `caller.requester`; `scope journal key` is the journal of
+`key`. The caller key space is `(requester, request)`: the same request number
+under a different signer is a distinct caller whose record lives in that
+signer's own journal.
+
+External premise: request identity is not unique across signers at the owner
+either. `AgentRequest.request_id` carries no unique index, so both owner reads
+a caller reconciles through are scoped by its own key: with retained bytes,
+`reconcile_client_request` filters node, session and requester and requires
+the retained admission signer and signature; without them,
+`reconcile_unretained_submission` filters node, session, requester and
+admission signer, all the caller's client key. Another signer's request with
+the same identity is therefore never evidence for this caller's send. -/
+
+def scope (journal : Journal) (key : Nat) : Journal :=
+  journal.filter fun record => record.intent.caller.requester == key
+
+/-- The journal of client `key` decides a preparation; a proposal signed by
+another key is refused before any write. A reservation appends to that key's
+journal only, so the family stays partitioned. -/
+def prepareAt (key : Nat) (journal : Journal) (intent : Intent) (proposal : Prepared)
+    (durable : Bool) : Journal × Result :=
+  if intent.caller.requester != key then (journal, .refused) else
+    let mine := scope journal key
+    let (next, output) := prepare mine intent proposal durable
+    (journal ++ next.drop mine.length, output)
+
+/-- Observations and acknowledgements reach only the journal of the caller's
+own key. -/
+def observeAt (key : Nat) (journal : Journal) (caller : Caller) (prepared : Prepared)
+    (outcome : Outcome) : Journal :=
+  if caller.requester != key then journal else observe journal caller prepared outcome
+
+def acknowledgeAt (key : Nat) (journal : Journal) (caller : Caller) (prepared : Prepared) :
+    Journal :=
+  if caller.requester != key then journal else acknowledge journal caller prepared
+
+theorem prepare_shape (journal : Journal) (intent : Intent) (proposal : Prepared)
+    (durable : Bool) :
+    (prepare journal intent proposal durable).1 = journal ∨
+      (prepare journal intent proposal durable).1 =
+        journal ++ [⟨intent, proposal, .unresolved, true, false⟩] := by
+  unfold prepare
+  split
+  · exact Or.inl rfl
+  · split
+    · split <;> exact Or.inl rfl
+    · split
+      · exact Or.inr rfl
+      · exact Or.inl rfl
+
+theorem foreign_signer_cannot_write_a_client_journal (key : Nat) (journal : Journal)
+    (intent : Intent) (proposal : Prepared) (durable : Bool)
+    (foreign : intent.caller.requester ≠ key) :
+    prepareAt key journal intent proposal durable = (journal, .refused) := by
+  simp [prepareAt, foreign]
+
+/-- A reservation writes only its own key's journal. -/
+theorem prepareAt_writes_only_its_signer (key : Nat) (journal : Journal) (intent : Intent)
+    (proposal : Prepared) (durable : Bool) (record : Record)
+    (written : record ∈ (prepareAt key journal intent proposal durable).1) :
+    record ∈ journal ∨ record.intent.caller.requester = key := by
+  unfold prepareAt at written
+  by_cases own : intent.caller.requester = key
+  · simp only [own, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte] at written
+    rcases prepare_shape (scope journal key) intent proposal durable with same | grown
+    · rw [same] at written
+      simp at written
+      exact Or.inl written
+    · rw [grown] at written
+      simp only [List.drop_left, List.mem_append, List.mem_singleton] at written
+      rcases written with old | fresh
+      · exact Or.inl old
+      · exact Or.inr (by rw [fresh]; exact own)
+  · simp only [bne_iff_ne, ne_eq, own, not_false_eq_true, ↓reduceIte] at written
+    exact Or.inl written
+
+/-- A different signer is a distinct caller: records of other keys never
+decide its preparation, so it reserves in its own journal. -/
+theorem different_signer_is_distinct (journal : Journal) (intent : Intent)
+    (proposal : Prepared)
+    (others : ∀ record ∈ journal, record.intent.caller.requester ≠ intent.caller.requester)
+    (identity : proposal.request = intent.caller.request) :
+    prepareAt intent.caller.requester journal intent proposal true =
+      (journal ++ [⟨intent, proposal, .unresolved, true, false⟩], .reconcile proposal) := by
+  have empty : scope journal intent.caller.requester = [] := by
+    unfold scope
+    rw [List.filter_eq_nil_iff]
+    intro record mem
+    simpa using others record mem
+  simp [prepareAt, empty, prepare, lookup, result, bound, identity]
+
+theorem prepare_keeps_reserved_request (journal : Journal) (intent : Intent)
+    (proposal : Prepared) (durable : Bool)
+    (reserved : journal.any (fun record => record.prepared.request == proposal.request) = true) :
+    (prepare journal intent proposal durable).1 = journal := by
+  unfold prepare
+  split
+  · rfl
+  · split
+    · split <;> rfl
+    · rw [if_neg]
+      simp [reserved]
+
+/-- Within one client journal a request identity binds one caller operation:
+no other runtime, envelope or proposal can reserve it again. -/
+theorem request_identity_is_unique_within_a_client_journal (key : Nat) (journal : Journal)
+    (intent : Intent) (proposal : Prepared) (durable : Bool)
+    (reserved : (scope journal key).any
+      (fun record => record.prepared.request == proposal.request) = true) :
+    (prepareAt key journal intent proposal durable).1 = journal := by
+  unfold prepareAt
+  split
+  · rfl
+  · simp only [prepare_keeps_reserved_request _ _ _ _ reserved, List.drop_length,
+      List.append_nil]
+
+/-! ### Unretained unresolved records
+
+A record this journal wrote keeps its signed bytes while its outcome is
+unresolved: `prepare` reserves with bytes, `observe` only settles, and
+`acknowledge` retires bytes only after a settled outcome. The `.refused`
+branch of `result` for an unresolved record without bytes is therefore never
+reached by a journal history; it covers only rows the journal did not write
+(an older uncorrelated send, or a lost or reset journal), which the native
+caller reconciles through the owner's visible request alone. -/
+
+def retainsUnresolved (journal : Journal) : Prop :=
+  ∀ record ∈ journal, record.outcome = .unresolved → record.retainedBytes = true
+
+theorem prepare_retains_unresolved (journal : Journal) (intent : Intent)
+    (proposal : Prepared) (durable : Bool) (inv : retainsUnresolved journal) :
+    retainsUnresolved (prepare journal intent proposal durable).1 := by
+  rcases prepare_shape journal intent proposal durable with same | grown
+  · rw [same]; exact inv
+  · rw [grown]
+    intro record mem
+    simp only [List.mem_append, List.mem_singleton] at mem
+    rcases mem with old | fresh
+    · exact inv record old
+    · intro _; rw [fresh]
+
+theorem observe_retains_unresolved (journal : Journal) (caller : Caller)
+    (prepared : Prepared) (outcome : Outcome) (inv : retainsUnresolved journal) :
+    retainsUnresolved (observe journal caller prepared outcome) := by
+  unfold observe
+  split
+  · exact inv
+  · intro record mem
+    simp only [List.mem_map] at mem
+    obtain ⟨original, member, mapped⟩ := mem
+    subst mapped
+    split
+    · rename_i changed
+      intro settled
+      simp only [Bool.and_eq_true, bne_iff_ne, ne_eq] at changed
+      exact absurd settled changed.2
+    · exact inv original member
+
+theorem acknowledge_retains_unresolved (journal : Journal) (caller : Caller)
+    (prepared : Prepared) (inv : retainsUnresolved journal) :
+    retainsUnresolved (acknowledge journal caller prepared) := by
+  unfold acknowledge
+  split
+  · exact inv
+  · intro record mem
+    simp only [List.mem_map] at mem
+    obtain ⟨original, member, mapped⟩ := mem
+    subst mapped
+    split
+    · rename_i retired
+      intro unresolved
+      simp only [Bool.and_eq_true, bne_iff_ne, ne_eq] at retired
+      exact absurd unresolved retired.2
+    · exact inv original member
+
+theorem prepareAt_retains_unresolved (key : Nat) (journal : Journal) (intent : Intent)
+    (proposal : Prepared) (durable : Bool) (inv : retainsUnresolved journal) :
+    retainsUnresolved (prepareAt key journal intent proposal durable).1 := by
+  unfold prepareAt
+  split
+  · exact inv
+  · intro record mem
+    simp only [List.mem_append] at mem
+    rcases mem with old | fresh
+    · exact inv record old
+    · have mine : retainsUnresolved (scope journal key) := fun r m =>
+        inv r (List.mem_filter.mp m).1
+      exact prepare_retains_unresolved _ _ _ _ mine record (List.mem_of_mem_drop fresh)
+
+/-! ### What the person is shown
+
+`Saved` is what a client knows about one saved send; `affordances` is what it
+shows and offers. It never claims more than the journal and the owner receipt
+prove, and no view leaves the person without a way forward.
+
+An undecided send keeps its signed bytes in the journal (`.retained`): the
+person may check it again or resume it, which replays the identical bytes, and
+it is never discarded while it can still be proven. A send whose bytes are no
+longer retained (`.unretained`: an older uncorrelated send, or a lost or reset
+journal) has only the owner's visible request as evidence, and its absence
+proves nothing because the original commit may still be in flight. Reporting
+it not delivered would invite a resend that duplicates the turn if the
+original lands (TLA `ClientSubmissionContention`, `Unretained`); waiting with
+no way out leaves the composer blocked forever (`UnretainedWait`). Decision:
+the person may set it aside. Setting aside never claims non-delivery and mints
+no identity; a late landing of the original still appears in the session, and
+anything the person writes next is a new authored message. -/
+
+inductive Unknown where
+  | retained
+  | unretained
+  deriving DecidableEq, Repr
+
+inductive Saved where
+  /-- The send or its check is in flight. -/
+  | sending
+  /-- No reply was recorded and nothing is in flight. -/
+  | unsent
+  | delivered
+  | notDelivered
+  | unknown (why : Unknown)
+  deriving DecidableEq, Repr
+
+inductive DeliveryView where
+  | sending
+  | delivered
+  | notDelivered
+  | awaiting
+  | unprovable
+  deriving DecidableEq, Repr
+
+structure Affordances where
+  view : DeliveryView
+  check : Bool
+  resume : Bool
+  dismiss : Bool
+  setAside : Bool
+  blocksComposer : Bool
+  deriving DecidableEq, Repr
+
+/-- `mailbox` marks an answer to a mailbox question: a delivered answer keeps
+the question answered, so it also blocks answering again. -/
+def affordances (saved : Saved) (mailbox : Bool) : Affordances :=
+  match saved with
+  | .sending => ⟨.sending, false, false, false, false, true⟩
+  | .unsent => ⟨.awaiting, true, true, false, false, true⟩
+  | .delivered => ⟨.delivered, true, false, false, false, mailbox⟩
+  | .notDelivered => ⟨.notDelivered, true, false, true, false, false⟩
+  | .unknown .retained => ⟨.awaiting, true, true, false, false, true⟩
+  | .unknown .unretained => ⟨.unprovable, true, false, false, true, true⟩
+
+/-- Whether the person may author a replacement send under a new identity. -/
+def mayResendNewIdentity (view : DeliveryView) : Bool := view == .notDelivered
+
+/-- A view that blocks the composer is in flight, a delivered mailbox answer,
+or offers Resume or Set aside. -/
+theorem blocking_views_offer_a_way_forward (saved : Saved) (mailbox : Bool)
+    (blocks : (affordances saved mailbox).blocksComposer = true) :
+    saved = .sending ∨ saved = .delivered ∨ (affordances saved mailbox).resume = true ∨
+      (affordances saved mailbox).setAside = true := by
+  cases saved with
+  | unknown why => cases why <;> simp [affordances]
+  | _ => simp_all [affordances]
+
+/-- Only a send that can no longer be proven may be set aside. -/
+theorem set_aside_only_without_bytes (saved : Saved) (mailbox : Bool)
+    (offered : (affordances saved mailbox).setAside = true) :
+    saved = .unknown .unretained := by
+  cases saved with
+  | unknown why => cases why <;> simp_all [affordances]
+  | _ => simp_all [affordances]
+
+/-- Only a proven non-delivery authorizes a new identity: an unprovable send is
+never shown as not delivered. -/
+theorem only_proven_non_delivery_authorizes_a_resend (saved : Saved) (mailbox : Bool)
+    (resend : mayResendNewIdentity (affordances saved mailbox).view = true) :
+    saved = .notDelivered := by
+  cases saved with
+  | unknown why => cases why <;> simp_all [affordances, mayResendNewIdentity]
+  | _ => simp_all [affordances, mayResendNewIdentity]
+
+/-- A journal record whose last reconcile could not decide. -/
+def savedOf (record : Record) : Saved :=
+  match record.outcome with
+  | .accepted => .delivered
+  | .notDelivered => .notDelivered
+  | .unresolved => .unknown (if record.retainedBytes then .retained else .unretained)
+
+/-- A journal-written record never reaches the unprovable view: it keeps its
+bytes until it settles. -/
+theorem journal_records_never_show_unprovable (journal : Journal)
+    (inv : retainsUnresolved journal) (record : Record) (member : record ∈ journal) :
+    savedOf record ≠ .unknown .unretained := by
+  unfold savedOf
+  split
+  · simp
+  · simp
+  · rename_i unresolved
+    rw [inv record member unresolved]
+    simp
+
+def savedJson : Saved → Json
+  | .sending => toJson "sending"
+  | .unsent => toJson "unsent"
+  | .delivered => toJson "delivered"
+  | .notDelivered => toJson "notDelivered"
+  | .unknown .retained => toJson "unknownRetained"
+  | .unknown .unretained => toJson "unknownUnretained"
+
+def viewJson : DeliveryView → Json
+  | .sending => toJson "sending"
+  | .delivered => toJson "delivered"
+  | .notDelivered => toJson "notDelivered"
+  | .awaiting => toJson "awaiting"
+  | .unprovable => toJson "unprovable"
+
+def allSaved : List Saved :=
+  [.sending, .unsent, .delivered, .notDelivered, .unknown .retained, .unknown .unretained]
+
+def deliveryViewCasesJson : String :=
+  (toJson (allSaved.flatMap fun saved => [false, true].map fun mailbox =>
+    let shown := affordances saved mailbox
+    Json.mkObj [("saved", savedJson saved), ("mailbox", toJson mailbox),
+      ("view", viewJson shown.view), ("check", toJson shown.check),
+      ("resume", toJson shown.resume), ("dismiss", toJson shown.dismiss),
+      ("setAside", toJson shown.setAside), ("blocksComposer", toJson shown.blocksComposer),
+      ("mayResendNewIdentity", toJson (mayResendNewIdentity shown.view))])).compress
+
 end ClientSubmissionReceipt

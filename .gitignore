@@ -9,6 +9,7 @@
 # TLA+ tooling and TLC state output
 /crates/gents/proofs/tla/.tools/
 /crates/gents/proofs/tla/states/
+/crates/gents/proofs/tla/*_TTrace_*
 
 # Standalone third_party package builds
 /third_party/*/target/

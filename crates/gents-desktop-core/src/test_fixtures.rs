@@ -467,3 +467,161 @@ async fn forward(
     }
     let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
 }
+
+/// An HTTP proxy in front of a served runtime that forwards every request to
+/// the runtime and can withhold its replies: the runtime applies what it
+/// receives while the caller sees a failed transport. It counts the
+/// client-signed creates (`/client-sign` WebSocket upgrades) it forwards.
+pub struct ReplyLossProxy {
+    url: String,
+    creates: Arc<std::sync::atomic::AtomicUsize>,
+    arm: Arc<std::sync::atomic::AtomicBool>,
+    commit: Arc<std::sync::atomic::AtomicBool>,
+    losing: Arc<std::sync::atomic::AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ReplyLossProxy {
+    pub async fn start(graphql: &str) -> Self {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let upstream: std::net::SocketAddr = reqwest::Url::parse(graphql)
+            .unwrap()
+            .socket_addrs(|| None)
+            .unwrap()[0];
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let creates = Arc::new(AtomicUsize::new(0));
+        let arm = Arc::new(AtomicBool::new(false));
+        let commit = Arc::new(AtomicBool::new(false));
+        let losing = Arc::new(AtomicBool::new(false));
+        let (counted, armed, committing, lost) =
+            (creates.clone(), arm.clone(), commit.clone(), losing.clone());
+        let task = tokio::spawn(async move {
+            while let Ok((mut client, _)) = listener.accept().await {
+                let (counted, armed, committing, lost) =
+                    (counted.clone(), armed.clone(), committing.clone(), lost.clone());
+                tokio::spawn(async move {
+                    let _ = async {
+                        let mut request = Vec::new();
+                        let header_end = loop {
+                            let mut bytes = [0u8; 4096];
+                            let count = client.read(&mut bytes).await?;
+                            if count == 0 {
+                                return Ok::<(), std::io::Error>(());
+                            }
+                            request.extend_from_slice(&bytes[..count]);
+                            if let Some(index) =
+                                request.windows(4).position(|part| part == b"\r\n\r\n")
+                            {
+                                break index + 4;
+                            }
+                        };
+                        let headers = String::from_utf8_lossy(&request[..header_end]).into_owned();
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap_or(0);
+                        while request.len() < header_end + length {
+                            let mut bytes = [0u8; 4096];
+                            let count = client.read(&mut bytes).await?;
+                            if count == 0 {
+                                return Ok(());
+                            }
+                            request.extend_from_slice(&bytes[..count]);
+                        }
+                        let mut server = tokio::net::TcpStream::connect(upstream).await?;
+                        let start = headers.lines().next().unwrap_or_default();
+                        if start.contains("/client-sign") {
+                            counted.fetch_add(1, Ordering::SeqCst);
+                            if armed.swap(false, Ordering::SeqCst) {
+                                committing.store(true, Ordering::SeqCst);
+                            }
+                            server.write_all(&request).await?;
+                            tokio::io::copy_bidirectional(&mut client, &mut server).await?;
+                            return Ok(());
+                        }
+                        let forwarded = headers
+                            .lines()
+                            .filter(|line| {
+                                !line.is_empty()
+                                    && !line.to_ascii_lowercase().starts_with("connection:")
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\r\n");
+                        server
+                            .write_all(format!("{forwarded}\r\nConnection: close\r\n\r\n").as_bytes())
+                            .await?;
+                        server.write_all(&request[header_end..]).await?;
+                        let mut reply = Vec::new();
+                        server.read_to_end(&mut reply).await?;
+                        // The create's own relationship writes and reads stay
+                        // answered; loss starts at the transaction commit.
+                        if start.starts_with("POST /api/v0/tx/")
+                            && committing.swap(false, Ordering::SeqCst)
+                        {
+                            lost.store(true, Ordering::SeqCst);
+                        }
+                        if lost.load(Ordering::SeqCst) {
+                            client
+                                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                                .await?;
+                        } else {
+                            client.write_all(&reply).await?;
+                        }
+                        client.shutdown().await
+                    }
+                    .await;
+                });
+            }
+        });
+        Self {
+            url,
+            creates,
+            arm,
+            commit,
+            losing,
+            task,
+        }
+    }
+
+    /// The User's client-signed endpoint, reached through this proxy.
+    pub fn user_access(&self, user: &dyn NodeIdentity) -> ConfigAccess {
+        ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(&self.url, user.did())
+                .with_client_signing_capability(user.client_signing_capability().unwrap())
+                .unwrap()
+                .with_client_signed_agent_creates(),
+        )
+    }
+
+    /// From the commit of the transaction that carries the next client-signed
+    /// create, the runtime still applies every request but each reply is lost,
+    /// until [`Self::restore`].
+    pub fn lose_replies_after_next_create(&self) {
+        self.arm.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn restore(&self) {
+        self.arm.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.commit.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.losing.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Client-signed creates forwarded to the runtime.
+    pub fn creates(&self) -> usize {
+        self.creates.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for ReplyLossProxy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}

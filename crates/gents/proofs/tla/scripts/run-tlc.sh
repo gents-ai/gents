@@ -14,6 +14,7 @@ fi
 mkdir -p states
 exec java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC \
   -workers auto \
+  -noGenerateSpecTE \
   -metadir states \
   "$@" \
   "$MODULE"

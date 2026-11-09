@@ -784,6 +784,15 @@ export function createChatActions({
       return result;
     },
     dismissChatMessage: chatDelivery.dismiss,
+    async setAsideChatMessage(
+      requestId: string,
+      acceptsView: () => boolean = () => true,
+    ) {
+      const intent = selection.captureIntent(store);
+      await chatDelivery.setAside(requestId, (result, draft) =>
+        applyChatResult(result, draft, intent, acceptsView),
+      );
+    },
     interruptRequest,
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),

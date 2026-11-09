@@ -1,6 +1,5 @@
 use anyhow::{bail, Context, Result};
 use gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
-use gents::NodeIdentity as _;
 use gents_protocol::request_admission::AgentRequestCreate;
 use serde::Deserialize;
 use serde_json::Value;
@@ -1084,121 +1083,98 @@ async fn query_row_count_for_test(node: &ConfigAccess, query: &str, root: &str) 
         .unwrap_or_default())
 }
 
+/// The desktop submits as its User (the client key that is its journal's
+/// node identity) with Client admission; the owner holds the request and the
+/// session it reserved, both scoped to that requester, and the desktop's
+/// journal retires the retained submission once delivery is confirmed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
-    core.add_local_standard_peer_for_test(core.node_identity().did())
-        .await?;
-    let requester = gents::KeyIdentity::load_or_create(tempdir.path().join("requester.key"), None)?;
-    let requester_did = requester.did().to_string();
-    let node_did = core.node_identity().did();
-    assert_ne!(requester_did, node_did);
+    let home = crate::test_fixtures::ServedRuntimeHome::start().await;
+    let agent = home.publish_chat_agent().await;
+    let user = home.user().clone();
+    let journal = crate::test_support::client_journal_node(user.did()).await?;
     let session_id = Uuid::new_v4().to_string();
-    let snapshot = core.store().snapshot();
-    // Test the desktop mutation's caller-held enrollment identity directly;
-    // local-standard routing intentionally selects the target's own signer.
-    let submitted = super::submit_request(
-        &core.node_arc(),
-        &snapshot,
-        &ConfigAccess::local(core.node_arc()),
-        &session_id,
-        node_did,
-        &requester_did,
-        &requester,
-        AgentRequestAdmissionRecord::enrollment(
-            &requester_did,
-            "enrollment",
-            "digest",
-            node_did,
-            1,
-            "2030-01-01T00:00:00Z",
-        ),
-        "requester route regression",
-        Some(RECOVERY_AGENT_DID),
-        SubmitRequestOptions {
-            trigger_lineage: TriggerLineage {
-                trigger_kind: Some("manual".to_string()),
-                ..TriggerLineage::default()
+    let result = async {
+        let submitted = super::submit_request(
+            &journal,
+            &crate::client::ClientStore::default(),
+            &home.user_access(),
+            &session_id,
+            home.node_did(),
+            user.did(),
+            user.as_ref(),
+            AgentRequestAdmissionRecord::client(user.did()),
+            "requester route regression",
+            Some(&agent.agent_did),
+            SubmitRequestOptions {
+                trigger_lineage: TriggerLineage {
+                    trigger_kind: Some("manual".to_string()),
+                    ..TriggerLineage::default()
+                },
+                ..SubmitRequestOptions::default()
             },
-            ..SubmitRequestOptions::default()
-        },
-    )
-    .await?;
-
-    let session_id = escape_graphql_string(&session_id);
-    let request_id = escape_graphql_string(&submitted.request_id);
-    let response = core
-        .node()
-        .execute(&format!(
-            r#"{{
-                    AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                        node_did
-                        requester_did
-                        admission_signer_did
-                        caused_by_trigger_kind
+        )
+        .await?;
+        let response = home
+            .user_access()
+            .execute(&format!(
+                r#"{{
+                    AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{
+                        node_did requester_did admission_signer_did caused_by_trigger_kind
                     }}
-                    AgentSession(filter: {{
-                        session_id: {{ _eq: "{session_id}" }},
-                        node_did: {{ _eq: "{}" }},
-                        requester_did: {{ _eq: "{}" }}
-                    }}, limit: 1) {{
-                        node_did
-                        requester_did
+                    AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 2) {{
+                        node_did requester_did agent_did
                     }}
                 }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(&requester_did),
-        ))
-        .await;
-    if response.has_errors() {
-        bail!(
-            "querying desktop requester routes failed: {:?}",
-            response.errors
-        );
-    }
-    let data = response.data.context("requester route query data")?;
-    {
-        let collection = "AgentSession";
-        assert!(
-            data.get(collection)
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(Vec::is_empty),
-            "desktop submission must not create {collection}"
-        );
-    }
-    for (field, expected) in [
-        ("node_did", node_did),
-        ("requester_did", requester_did.as_str()),
-        ("admission_signer_did", requester_did.as_str()),
-    ] {
-        let row = data
-            .get("AgentRequest")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|rows| rows.first())
-            .context("missing AgentRequest row")?;
+                escape_graphql_string(&submitted.request_id),
+                escape_graphql_string(&session_id),
+            ))
+            .await?;
+        let request = match response["data"]["AgentRequest"].as_array().map(Vec::as_slice) {
+            Some([row]) => row,
+            _ => bail!("the owner must hold exactly one request: {response}"),
+        };
+        for (field, expected) in [
+            ("node_did", home.node_did()),
+            ("requester_did", user.did()),
+            ("admission_signer_did", user.did()),
+            ("caused_by_trigger_kind", "manual"),
+        ] {
+            assert_eq!(
+                request[field].as_str(),
+                Some(expected),
+                "AgentRequest must carry {field}"
+            );
+        }
+        let session = match response["data"]["AgentSession"].as_array().map(Vec::as_slice) {
+            Some([row]) => row,
+            _ => bail!("the owner must hold exactly one reserved session: {response}"),
+        };
+        for (field, expected) in [
+            ("node_did", home.node_did()),
+            ("requester_did", user.did()),
+            ("agent_did", agent.agent_did.as_str()),
+        ] {
+            assert_eq!(
+                session[field].as_str(),
+                Some(expected),
+                "AgentSession must carry {field}"
+            );
+        }
+        let retained = ConfigAccess::local_as(journal.clone(), user.did().parse()?)
+            .execute("{ PendingChatSubmission { request_id } }")
+            .await?;
         assert_eq!(
-            row.get(field).and_then(serde_json::Value::as_str),
-            Some(expected),
-            "AgentRequest must carry {field}"
+            retained["data"]["PendingChatSubmission"],
+            serde_json::json!([]),
+            "a confirmed delivery retires the retained submission"
         );
+        Ok::<(), anyhow::Error>(())
     }
-    let row = data
-        .get("AgentRequest")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .context("missing AgentRequest row")?;
-    assert_eq!(
-        row.get("caused_by_trigger_kind")
-            .and_then(serde_json::Value::as_str),
-        Some("manual")
-    );
-    Arc::new(core).shutdown().await?;
-    Ok(())
+    .await;
+    journal.shutdown().await.unwrap();
+    home.shutdown().await;
+    result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

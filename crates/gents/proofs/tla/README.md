@@ -75,6 +75,25 @@ See `../README.md` for how this fits the broader formal-verification model.
   registry entry; `SilentBackoff` sends only snapshots and terminal errors;
   `ResetOnAccept` resets the count on every accepted connection; `Unbounded`
   retries forever. Lean `ClientShell.PackWatch` owns the per-task phases.
+
+  `Recovery` adds reconciliation of an unconfirmed submission while its
+  original commit may still land or abort: the retained signed bytes are
+  replayed only as the identical document; `FreshReplay` answers absence with
+  a freshly signed request and duplicates the turn. A lost reservation
+  response is repeated by Resume (`ReserveRetry`). `BytesLost` lets the caller
+  lose those bytes first (an older uncorrelated send or a reset journal; Lean
+  `journal_records_never_show_unprovable` excludes journal-written records),
+  leaving only the owner's visible request as evidence. Green covers that
+  path: absence stays unconfirmed and the person may set the send aside (Lean
+  `affordances`), which never claims non-delivery (`NotDeliveredIsProven`)
+  and is always offered (`NeverBlocked`). `UnretainedWait` is the code before
+  set-aside (never resolves); `Unretained` is the rejected `.refused` reading
+  (claims non-delivery while the original is in flight). Green's liveness
+  rests on the owner becoming reachable for retained bytes;
+  `OwnerUnreachable` shows that premise is load-bearing.
+  `ReplayRejectedInFlight` is a reported gap: a definite rejection of the
+  identical replay is reported not delivered while the original may still
+  land.
 - `SessionHeadObservation` — a session's observed request head and the
   client that projects it on reopen (#3604). The runtime claims a session's
   requests one at a time; each claim or admission refusal names the incoming
@@ -437,6 +456,15 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCBackgroundAdmissionContentionUnspaced.cfg` | as green, `RenewalSpaced = FALSE` | `NoConflictLoss` intentionally VIOLATED: two back-to-back renewals and two children exhaust call 2's 4 receipt attempts | 33,653 distinct states before counterexample; 68,174 generated | 25 | <1s |
 | `MCBackgroundAdmissionContentionRenewalWitness.cfg` | green constants | `RenewalNeverLost` intentionally VIOLATED: admission bumps exhaust a renewal poll, which green's re-drive recovers | 286,417 distinct states before counterexample; 580,008 generated | 33 | 1s |
 | `MCBackgroundAdmissionContentionStartWitness.cfg` | green constants | `StartNeverConflicts` intentionally VIOLATED: a renewal commits while call 1's dispatch start is open, the traced conflict | 46 distinct states before counterexample; 94 generated | 7 | <1s |
+| `MCClientSubmissionContention.cfg` | `Publications = 3`, `Attempts = 4`, `LostResponse`, `Recovery`, `BytesLost`, `ReplayIdentical`, `OwnerReachable`, `SetAsideOffered`, no `ReplayRejects`, `UnretainedPolicy = "wait"` | Passes `TypeOK`, `NoConflictLoss`, `CreatedOnce`, `NotDeliveredIsProven`, `NeverBlocked`, `EverySubmissionSettles`, `UnconfirmedResolves` | 314 distinct states; 664 generated | 14 | <1s (OpenJDK 25, 4 workers) |
+| `MCClientSubmissionContentionSingleAttempt.cfg` | `Publications = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: ReserveBegin, ReserveCommit, ClientBegin, AgentPublish, ClientCommit | 16 distinct states; 18 generated | 6 | <1s |
+| `MCClientSubmissionContentionReserveSingleAttempt.cfg` | `Publications = 1`, `ReserveRedrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: ReserveBegin, AgentPublish, ReserveCommit | 17 distinct states; 18 generated | 7 | <1s |
+| `MCClientSubmissionContentionShortBudget.cfg` | `Publications = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four AgentPublish/ReserveCommit rounds | 123 distinct states; 163 generated | 12 | <1s |
+| `MCClientSubmissionContentionFreshReplay.cfg` | `Publications = 1`, `Attempts = 2`, `Recovery`, `ReplayIdentical = FALSE` | `CreatedOnce` intentionally VIOLATED: AgentPublish, ReserveBegin, ReserveCommit, ClientBegin, ClientCommitInFlight, ReconcileRetained (fresh request), OriginalLands | 45 distinct states; 62 generated | 9 | <1s |
+| `MCClientSubmissionContentionUnretained.cfg` | as `FreshReplay` with `ReplayIdentical`, `BytesLost`, `UnretainedPolicy = "refuse"` | `NotDeliveredIsProven` intentionally VIOLATED: AgentPublish, ReserveBegin, ReserveCommit, ClientBegin, ClientCommitInFlight, LoseBytes, CheckUnretained (not delivered while in flight) | 64 distinct states; 100 generated | 10 | <1s |
+| `MCClientSubmissionContentionUnretainedWait.cfg` | as `Unretained` with `UnretainedPolicy = "wait"`, `SetAsideOffered = FALSE` | `CreatedOnce` holds; `UnconfirmedResolves` intentionally VIOLATED: ReserveBegin, ReserveCommit, AgentPublish, ClientBegin, ClientCommitInFlight, OriginalAborts, LoseBytes, then stuttering | 53 distinct states; 101 generated | 9 | <1s |
+| `MCClientSubmissionContentionOwnerUnreachable.cfg` | as `UnretainedWait` with `OwnerReachable = FALSE`, no `BytesLost`, `SetAsideOffered` | `UnconfirmedResolves` intentionally VIOLATED: ReserveBegin, ReserveCommit, AgentPublish, ClientBegin, ClientCommitInFlight, OriginalLands, then stuttering | 33 distinct states; 44 generated | 8 | <1s |
+| `MCClientSubmissionContentionReplayRejectedInFlight.cfg` | as `OwnerUnreachable` with `OwnerReachable`, `ReplayRejects` | `NotDeliveredIsProven` VIOLATED, a reported gap: AgentPublish, ReserveBegin, ReserveCommit, ClientBegin, ClientCommitInFlight, ReplayRejected | 43 distinct states; 60 generated | 9 | <1s |
 | `MCSessionHeadObservation.cfg` | `Order = "lean"`, `HeadSeed = TRUE`, `Refusals = TRUE` | Passes `TypeOK`, `HeadFollowsBoundary`, `ReplyObserved` | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationRequestIdTie.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `HeadFollowsBoundary` intentionally VIOLATED: ClaimA, CompleteA, AdmitB, ClaimB leaves the head on A | 77 distinct states before counterexample; 99 generated | 6 | <1s |
 | `MCSessionHeadObservationRequestIdTieLiveness.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: the #3604 schedule; after reopen B completes and every load omits it | 620 distinct states; 1,056 generated | 11 | <1s |

@@ -140,3 +140,21 @@ it("retains a confirmed result after its recovery view closes without navigating
   expect(loadChatDrafts().chatDrafts[0].result).toEqual(acceptedChat(f.request));
   expect(f.app.drafts.getState().drafts.newer).toBe("Keep this newer draft");
 });
+
+it("offers set-aside, not resume, once a check finds no retained preparation", async () => {
+  const f = fixture();
+  saveChatDraft(f.app.stores.chat, {
+    ...loadChatDrafts().chatDrafts[0]!,
+    result: { ...acceptedChat(f.request), outcome: "deliveryUnknown" },
+  });
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Check message delivery" }),
+  );
+  await screen.findByText("The message's delivery can't be confirmed");
+  expect(screen.queryByRole("button", { name: "Resume saved message" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Dismiss saved message" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Set aside saved message" }));
+  await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
+  expect(f.control).not.toHaveBeenCalled();
+  expect(f.ack).not.toHaveBeenCalled();
+});
