@@ -129,6 +129,11 @@ fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
     assert!(std::fs::read(&encryption_path).unwrap() == encryption);
     assert_eq!(std::fs::read(&config_path).unwrap(), config_bytes);
 
+    // Identity-only init bootstraps the owner into a fresh protected store; refusing the
+    // missing key must leave that store byte-for-byte as init wrote it.
+    let data = gents::store::local::home::default_data_dir(&home);
+    assert!(data.join("MANIFEST").exists());
+    let store = store_files(&data);
     std::fs::remove_file(&encryption_path).unwrap();
     let output = unlock();
     assert!(!output.status.success());
@@ -136,8 +141,27 @@ fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
     assert!(!encryption_path.exists());
     assert!(std::fs::read(identity_path).unwrap() == identity);
     assert_eq!(std::fs::read(&config_path).unwrap(), config_bytes);
-    assert!(!gents::store::local::home::default_data_dir(&home)
-        .join("MANIFEST")
-        .exists());
+    assert!(
+        store_files(&data) == store,
+        "the refused unlock changed the store"
+    );
     assert!(!home.join("runtime.json").exists());
+}
+
+fn store_files(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let contents = std::fs::read(&path).unwrap();
+                files.push((path.strip_prefix(root).unwrap().to_path_buf(), contents));
+            }
+        }
+    }
+    files.sort();
+    files
 }
