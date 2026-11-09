@@ -260,7 +260,7 @@ impl EnrollmentProjection {
         );
         anyhow::ensure!(
             active.request.candidate_peer == request.candidate_peer
-                && active.request.owner_agent == request.owner_agent
+                && active.request.owner_node_did == request.owner_node_did
                 && active.request.profile == request.profile
                 && active.request.admin_did == request.admin_did
                 && active.request.server_peer == request.server_peer,
@@ -421,7 +421,7 @@ impl GraphqlEnrollmentStore {
             self.identity.clone(),
             p2p,
             intent.network_id.clone(),
-            active.request.owner_agent.clone(),
+            active.request.owner_node_did.clone(),
             active.request.profile.clone(),
         );
         let offer = issuer
@@ -489,22 +489,48 @@ impl GraphqlEnrollmentStore {
             .lease_seconds
             .map_or_else(|| "null".to_owned(), |value| value.to_string());
         let fields = format!("enabled: {}, lease_seconds: {lease}", policy.enabled);
-        let mutation = match current {
-            Some(row) => format!(
-                r#"mutation {{ update_EnrollmentRenewalPolicy(docID: "{}", input: {{ {fields} }}) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(&row.doc_id)
-            ),
-            None => format!(
-                r#"mutation {{ create_EnrollmentRenewalPolicy(input: {{ network_id: "{}", {fields} }}) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(&network_id)
-            ),
-        };
-        crate::store::config_client::ConfigAccess::write_local(
-            &self.node,
-            "enrollment.set_renewal_policy",
-            &mutation,
-        )
-        .await?;
+        let runtime = identity::Did::new(self.identity.did())?;
+        let access =
+            crate::store::config_client::ConfigAccess::local_as(self.node.clone(), runtime.clone());
+        match current {
+            Some(row) => {
+                let mutation = format!(
+                    r#"mutation {{ update_EnrollmentRenewalPolicy(docID: "{}", input: {{ {fields} }}) {{ _docID }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&row.doc_id)
+                );
+                access
+                    .write("enrollment.set_renewal_policy", &mutation)
+                    .await?;
+            }
+            None => {
+                let mutation = format!(
+                    r#"mutation {{ create_EnrollmentRenewalPolicy(input: {{ network_id: "{}", {fields}, parent_linked: false }}) {{ _docID }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&network_id)
+                );
+                access
+                    .transact_write("enrollment.set_renewal_policy", |txn| {
+                        let mutation = &mutation;
+                        let runtime = &runtime;
+                        Box::pin(async move {
+                            txn.validate_runtime_actor(runtime)?;
+                            let response = txn.execute(mutation).await?;
+                            let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                                &response,
+                                "EnrollmentRenewalPolicy",
+                            )?;
+                            crate::store::config_client::maybe_link_deferred_operation_in_txn(
+                                txn,
+                                "EnrollmentRenewalPolicy",
+                                &doc,
+                                runtime,
+                            )
+                            .await?;
+                            Ok::<_, anyhow::Error>(())
+                        })
+                    })
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -540,7 +566,7 @@ impl GraphqlEnrollmentStore {
         }
     }
 
-    async fn publish_records(
+    pub(super) async fn publish_records(
         &self,
         operation: &'static str,
         mutation: &str,

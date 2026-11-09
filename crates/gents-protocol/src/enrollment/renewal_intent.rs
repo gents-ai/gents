@@ -216,7 +216,7 @@ mod tests {
             admin_did: request.admin_did.clone(),
             server_peer: request.server_peer.clone(),
             server_ticket: "ticket".into(),
-            owner_agent: "owner".into(),
+            owner_node_did: "owner".into(),
             profile: "client".into(),
             schema_fingerprint: "schema".into(),
             issued_at: request.issued_at.clone(),

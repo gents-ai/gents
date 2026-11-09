@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::enrollment::RenewalIntent;
 use serde::Deserialize;
 
@@ -103,11 +103,11 @@ pub(super) async fn prune_expired_intents(
         let mutation = format!(
             r#"mutation {{ delete_EnrollmentRenewalIntent(filter: {{ _docID: {{ _eq: "{id}" }}, member_did: {{ _eq: "{member}" }}, expires_at: {{ _lt: "{cutoff}" }} }}) {{ _docID }} }}"#
         );
-        crate::store::config_client::ConfigAccess::write_local(
-            node,
-            "enrollment.prune_expired_intent",
-            &mutation,
+        crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(identity.did())?,
         )
+        .write("enrollment.prune_expired_intent", &mutation)
         .await?;
     }
     Ok(())
@@ -219,7 +219,13 @@ mod cleanup_tests {
     async fn cleanup_removes_only_owned_verified_expired_intents() {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let identity = crate::support::materialization_identity_for("did:test:renewal-cleanup");
+        let identity = Arc::new(crate::test_support::held_runtime_identity(
+            node.node_identity_did().unwrap(),
+        ));
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(identity.did()).unwrap(),
+        );
         let now = Utc::now();
         let mut expected = std::collections::BTreeSet::new();
         for (nonce, expires, valid_signature, member) in [
@@ -285,13 +291,10 @@ mod cleanup_tests {
                 f(&intent.nonce),
                 f(&bs58::encode(intent.member_sig).into_string())
             );
-            crate::store::config_client::ConfigAccess::write_local(
-                &node,
-                "test.create_renewal_intent",
-                &query,
-            )
-            .await
-            .unwrap();
+            access
+                .write("test.create_renewal_intent", &query)
+                .await
+                .unwrap();
         }
         prune_expired_intents(&node, identity.as_ref(), &mut None)
             .await
@@ -309,6 +312,6 @@ mod cleanup_tests {
             .map(|row| row["intent_id"].as_str().unwrap().to_owned())
             .collect();
         assert_eq!(ids, expected);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

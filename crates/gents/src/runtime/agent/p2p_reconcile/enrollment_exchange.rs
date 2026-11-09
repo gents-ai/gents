@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::enrollment::{RenewalIntent, RenewalOfferResponse};
 use serde::Deserialize;
 
@@ -171,7 +171,9 @@ pub(super) async fn prune_expired_offers(
         let mutation = format!(
             r#"mutation {{ delete_EnrollmentRenewalOffer(filter: {{ _docID: {{ _eq: "{id}" }}, admin_did: {{ _eq: "{admin}" }}, expires_at: {{ _lt: "{cutoff}" }} }}) {{ _docID }} }}"#
         );
-        ConfigAccess::write_local(node, "enrollment.prune_expired_offer", &mutation).await?;
+        ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did())?)
+            .write("enrollment.prune_expired_offer", &mutation)
+            .await?;
     }
     Ok(())
 }
@@ -276,7 +278,14 @@ pub(super) async fn respond_to_renewal_intent(
                 f(&issued.admin_did),
                 f(&sig)
             );
-            match ConfigAccess::write_local(node, "enrollment.create_renewal_offer", &mutation)
+            match store
+                .publish_records(
+                    "enrollment.create_renewal_offer",
+                    &mutation,
+                    &["EnrollmentRenewalOffer"],
+                    &issued.member_did,
+                    None,
+                )
                 .await
             {
                 Ok(result) => {
@@ -345,7 +354,11 @@ mod cleanup_tests {
         };
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let identity = crate::support::materialization_identity_for("did:test:renewal-cleanup");
+        let identity = Arc::new(crate::test_support::held_runtime_identity(
+            node.node_identity_did().unwrap(),
+        ));
+        let access =
+            ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
         let now = Utc::now();
         for (id, expires, valid_signature, admin) in [
             (
@@ -382,7 +395,7 @@ mod cleanup_tests {
                 admin_did: admin.into(),
                 server_peer: "peer".into(),
                 server_ticket: "ticket".into(),
-                owner_agent: "owner".into(),
+                owner_node_did: "owner".into(),
                 profile: "client".into(),
                 schema_fingerprint: "fingerprint".into(),
                 issued_at: (now - chrono::Duration::minutes(2))
@@ -412,7 +425,8 @@ mod cleanup_tests {
                 f(&response.admin_did),
                 f(&bs58::encode(response.admin_sig).into_string())
             );
-            ConfigAccess::write_local(&node, "test.create_renewal_offer", &query)
+            access
+                .write("test.create_renewal_offer", &query)
                 .await
                 .unwrap();
         }
@@ -435,6 +449,6 @@ mod cleanup_tests {
             ids,
             std::collections::BTreeSet::from(["foreign", "invalid", "live"])
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

@@ -110,11 +110,15 @@ pub async fn request_renewal_offer(
         f(&intent.nonce),
         f(&signature)
     );
-    let response =
-        ConfigAccess::write_local(node, "enrollment.create_renewal_intent", &mutation).await?;
-    let doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&response, "EnrollmentRenewalIntent")
-            .context("renewal intent mutation returned no document ID")?;
+    let doc_id = publish_candidate_document(
+        node,
+        &intent.member_did,
+        &intent.admin_did,
+        "EnrollmentRenewalIntent",
+        "enrollment.create_renewal_intent",
+        &mutation,
+    )
+    .await?;
     push_enrollment_document(
         &p2p,
         server_ticket,
@@ -519,21 +523,42 @@ pub async fn write_enrollment_request(
     node: &Arc<EmbeddedNode>,
     request: &EnrollmentRequestRecord,
 ) -> Result<String> {
-    anyhow::ensure!(
-        node.node_identity_did() == Some(request.candidate_did.as_str()),
-        "enrollment request author must be the local peer identity"
-    );
-    let runtime = identity::Did::new(&request.candidate_did)?;
-    let admin = identity::Did::new(&request.admin_did)?;
-    let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     let input = enrollment_request_input(request);
     let mutation =
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
+    publish_candidate_document(
+        node,
+        &request.candidate_did,
+        &request.admin_did,
+        "NetworkEnrollmentRequest",
+        "enrollment.create_request",
+        &mutation,
+    )
+    .await
+}
+
+/// Create one candidate-authored enrollment protocol document as the local
+/// runtime, link it to the local Node when one is visible and grant the
+/// counterpart `reader`, which authenticated document delivery requires.
+pub(super) async fn publish_candidate_document(
+    node: &Arc<EmbeddedNode>,
+    author_did: &str,
+    reader_did: &str,
+    collection: &'static str,
+    operation: &'static str,
+    mutation: &str,
+) -> Result<String> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(author_did),
+        "enrollment document author must be the local peer identity"
+    );
+    let runtime = identity::Did::new(author_did)?;
+    let reader = identity::Did::new(reader_did)?;
+    let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     access
-        .transact_write("enrollment.create_request", |txn| {
+        .transact_write(operation, |txn| {
             let runtime = &runtime;
-            let admin = &admin;
-            let mutation = &mutation;
+            let reader = &reader;
             Box::pin(async move {
                 txn.validate_runtime_actor(runtime)?;
                 let query = format!(
@@ -548,32 +573,23 @@ pub async fn write_enrollment_request(
                         let parent = node["_docID"]
                             .as_str()
                             .filter(|id| !id.is_empty())
-                            .context("enrollment request Node has no document ID")?;
+                            .context("enrollment document Node has no document ID")?;
                         let owners = txn.document_owners("Node", &[parent.to_owned()]).await?;
                         anyhow::ensure!(
                             owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
-                            "enrollment request Node has no visible native owner"
+                            "enrollment document Node has no visible native owner"
                         );
                         Some(parent)
                     }
-                    _ => anyhow::bail!("enrollment request has multiple visible local Nodes"),
+                    _ => anyhow::bail!("enrollment document has multiple visible local Nodes"),
                 };
                 let response = txn.execute(mutation).await?;
-                let doc = gents_protocol::graphql::extract_mutation_doc_id(
-                    &response,
-                    "NetworkEnrollmentRequest",
-                )?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?;
                 if let Some(parent) = parent {
-                    txn.add_resource_relationship(
-                        "NetworkEnrollmentRequest",
-                        &doc,
-                        "parent",
-                        "nodes",
-                        parent,
-                    )
-                    .await?;
+                    txn.add_resource_relationship(collection, &doc, "parent", "nodes", parent)
+                        .await?;
                 }
-                txn.add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", admin)
+                txn.add_actor_relationship(collection, &doc, "reader", reader)
                     .await?;
                 Ok::<_, anyhow::Error>(doc)
             })

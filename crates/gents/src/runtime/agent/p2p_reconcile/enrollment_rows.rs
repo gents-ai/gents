@@ -17,21 +17,21 @@ pub const STATUS_ENROLLMENT_QUERY: &str = r#"{
   NetworkAdminPin { network_id admin_did }
   NetworkEnrollmentRequest {
     _docID protocol_version request_id request_digest offer_id offer_token challenge network_id
-    admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket owner_agent profile
+    admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket owner_node_did profile
     client_nonce issued_at expires_at candidate_sig
   }
   NetworkEnrollmentDecision {
     protocol_version decision_id request_id request_digest network_id admin_did candidate_did
-    candidate_peer owner_agent decision authorization_sequence authorization_expires_at
+    candidate_peer owner_node_did decision authorization_sequence authorization_expires_at
     decided_at signer_did admin_sig
   }
   NetworkAuthorizationRevision {
     protocol_version revision_id request_id request_digest network_id admin_did member_did
-    member_peer owner_agent sequence authorization_expires_at kind issued_at signer_did admin_sig
+    member_peer owner_node_did sequence authorization_expires_at kind issued_at signer_did admin_sig
   }
   NetworkEnrollmentRouteReceipt {
     protocol_version receipt_id request_id request_digest network_id admin_did member_did
-    member_peer server_peer owner_agent authorization_sequence authorization_expires_at
+    member_peer server_peer owner_node_did authorization_sequence authorization_expires_at
     direction applied_at signer_did
     admin_sig
   }
@@ -61,7 +61,7 @@ pub struct EnrollmentRequestRow {
     #[serde(default)]
     pub candidate_name: Option<String>,
     pub candidate_ticket: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub profile: String,
     pub client_nonce: String,
     pub issued_at: String,
@@ -85,7 +85,7 @@ impl EnrollmentRequestRow {
             candidate_peer: self.candidate_peer.clone(),
             candidate_name: self.candidate_name.clone(),
             candidate_ticket: self.candidate_ticket.clone(),
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             profile: self.profile.clone(),
             client_nonce: self.client_nonce.clone(),
             issued_at: self.issued_at.clone(),
@@ -105,7 +105,7 @@ pub struct EnrollmentDecisionRow {
     pub admin_did: String,
     pub candidate_did: String,
     pub candidate_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub decision: String,
     pub authorization_sequence: i64,
     pub authorization_expires_at: String,
@@ -125,7 +125,7 @@ impl EnrollmentDecisionRow {
             admin_did: self.admin_did.clone(),
             candidate_did: self.candidate_did.clone(),
             candidate_peer: self.candidate_peer.clone(),
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             decision: match self.decision.as_str() {
                 "approved" => EnrollmentDecisionKind::Approved,
                 "denied" => EnrollmentDecisionKind::Denied,
@@ -151,7 +151,7 @@ pub struct EnrollmentRevisionRow {
     pub admin_did: String,
     pub member_did: String,
     pub member_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub sequence: i64,
     pub authorization_expires_at: String,
     pub kind: String,
@@ -171,7 +171,7 @@ pub struct EnrollmentRouteReceiptRow {
     pub member_did: String,
     pub member_peer: String,
     pub server_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub authorization_sequence: i64,
     pub authorization_expires_at: String,
     pub direction: String,
@@ -192,7 +192,7 @@ impl EnrollmentRouteReceiptRow {
             member_did: self.member_did.clone(),
             member_peer: self.member_peer.clone(),
             server_peer: self.server_peer.clone(),
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             authorization_sequence: u64::try_from(self.authorization_sequence)
                 .context("negative enrollment route receipt sequence")?,
             authorization_expires_at: self.authorization_expires_at.clone(),
@@ -218,7 +218,7 @@ impl EnrollmentRevisionRow {
             admin_did: self.admin_did.clone(),
             member_did: self.member_did.clone(),
             member_peer: self.member_peer.clone(),
-            owner_agent: self.owner_agent.clone(),
+            owner_node_did: self.owner_node_did.clone(),
             sequence: u64::try_from(self.sequence)
                 .context("negative enrollment revision sequence")?,
             authorization_expires_at: self.authorization_expires_at.clone(),
@@ -250,7 +250,7 @@ pub fn to_pure_offer(
         } else {
             Default::default()
         },
-        owner_node: offer.owner_agent.clone(),
+        owner_node: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
         schema_compatible: offer.schema_fingerprint == enrollment_schema_fingerprint(),
         admin_signed: verified,
@@ -285,7 +285,7 @@ pub fn to_pure_request(
             Default::default()
         },
         candidate_ticket_peer: request.candidate_peer.clone(),
-        owner_node: request.owner_agent.clone(),
+        owner_node: request.owner_node_did.clone(),
         profile: request.profile.clone(),
         client_nonce: request.client_nonce.clone(),
         issued_at: request.issued_at.clone(),
@@ -303,7 +303,7 @@ pub fn to_pure_decision(decision: &EnrollmentDecisionRecord, verified: bool) -> 
         admin_did: decision.admin_did.clone(),
         candidate_did: decision.candidate_did.clone(),
         candidate_peer: decision.candidate_peer.clone(),
-        owner_node: decision.owner_agent.clone(),
+        owner_node: decision.owner_node_did.clone(),
         kind: match decision.decision {
             EnrollmentDecisionKind::Approved => PureDecisionKind::Approved,
             EnrollmentDecisionKind::Denied => PureDecisionKind::Denied,
@@ -327,7 +327,7 @@ pub fn to_pure_revision(revision: &AuthorizationRevisionRecord, verified: bool) 
         admin_did: revision.admin_did.clone(),
         member_did: revision.member_did.clone(),
         member_peer: revision.member_peer.clone(),
-        owner_node: revision.owner_agent.clone(),
+        owner_node: revision.owner_node_did.clone(),
         sequence: revision.sequence as usize,
         authorization_expires_at: revision.authorization_expires_at.clone(),
         kind: match revision.kind {
@@ -348,7 +348,7 @@ pub fn to_pure_receipt(receipt: &EnrollmentRouteReceiptRecord, verified: bool) -
         member_did: receipt.member_did.clone(),
         member_peer: receipt.member_peer.clone(),
         server_peer: receipt.server_peer.clone(),
-        owner_node: receipt.owner_agent.clone(),
+        owner_node: receipt.owner_node_did.clone(),
         authorization_sequence: receipt.authorization_sequence as usize,
         authorization_expires_at: receipt.authorization_expires_at.clone(),
         direction: PureRouteDirection::ClientToServer,

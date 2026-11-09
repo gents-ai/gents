@@ -435,7 +435,7 @@ impl P2pTool {
                                 Ok::<_, anyhow::Error>(value)
                             },
                         )?;
-                        store.decide_request_with_lease(id, EnrollmentDecisionKind::Approved, Duration::from_secs(lease)).await
+                        store.decide_request_with_lease(id, EnrollmentDecisionKind::Approved, std::time::Duration::from_secs(lease)).await
                     },
                     "deny" => store.decide_request(id, EnrollmentDecisionKind::Denied).await,
                     _ => store.revoke_request(id).await,

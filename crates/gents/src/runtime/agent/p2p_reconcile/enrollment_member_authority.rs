@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::store::graphql::{graphql_with_transaction_retry, rows};
+use crate::store::graphql::rows;
 use anyhow::Result;
 use serde_json::Value;
 
@@ -19,19 +19,25 @@ pub enum EnrollmentAuthorityOutcome {
 }
 
 pub async fn load_status_enrollment_approvals(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::Node>,
     principal: &dyn NodeIdentity,
     local_peer_id: &str,
 ) -> Result<(
     BTreeMap<String, EnrollmentAuthorityOutcome>,
     BTreeSet<String>,
 )> {
-    let response = graphql_with_transaction_retry(
-        node,
-        STATUS_ENROLLMENT_QUERY,
-        "load status enrollment approvals",
-    )
-    .await?;
+    anyhow::ensure!(
+        node.node_identity_did() == Some(principal.did()),
+        "member enrollment requires its configured local identity"
+    );
+    let response: defra_node::QueryResponse = serde_json::from_value(
+        crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(principal.did())?,
+        )
+        .execute(STATUS_ENROLLMENT_QUERY)
+        .await?,
+    )?;
     project_status_enrollment_response(&response, principal, local_peer_id).await
 }
 
@@ -43,6 +49,7 @@ pub async fn load_status_enrollment_approvals_in_txn(
     BTreeMap<String, EnrollmentAuthorityOutcome>,
     BTreeSet<String>,
 )> {
+    txn.validate_runtime_actor(&identity::Did::new(principal.did())?)?;
     for collection in [
         "NetworkAdminPin",
         "NetworkEnrollmentRequest",

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::enrollment::{AuthorizationLease, AuthorizationLeaseState};
 
 use crate::store::identity::NodeIdentity;

@@ -283,7 +283,7 @@ mod tests {
             active.request.network_id = text(current, "network");
             active.request.candidate_did = text(current, "member");
             active.request.candidate_peer = text(current, "peer");
-            active.request.owner_agent = text(current, "owner");
+            active.request.owner_node_did = text(current, "owner");
             active.request.profile = text(current, "profile");
             active.decision.decided_at =
                 timestamp(expires - number(current, "lease_seconds") * 86_400);
@@ -292,7 +292,7 @@ mod tests {
             request.network_id = text(proposed, "network");
             request.candidate_did = text(proposed, "member");
             request.candidate_peer = text(proposed, "peer");
-            request.owner_agent = text(proposed, "owner");
+            request.owner_node_did = text(proposed, "owner");
             request.profile = text(proposed, "profile");
             request.issued_at = timestamp(now_seconds - 60);
             request.expires_at = timestamp(now_seconds + 60);
