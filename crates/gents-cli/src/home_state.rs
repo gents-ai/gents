@@ -18,8 +18,25 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
         .unwrap_or_else(default_home_dir)
 }
 
+#[cfg(not(test))]
 fn default_home_dir() -> PathBuf {
     gents::store::local::home::default_home_dir().unwrap_or_else(|_| PathBuf::from(".gents"))
+}
+
+/// Unit tests share the operator's process environment, so they cannot select
+/// a runtime home through it; a command they run without `--home` resolves
+/// this throwaway home.
+#[cfg(test)]
+fn default_home_dir() -> PathBuf {
+    unit_test_homes().path().join("runtime")
+}
+
+#[cfg(test)]
+fn unit_test_homes() -> &'static tempfile::TempDir {
+    static ROOT: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
+        tempfile::tempdir().expect("creating the unit tests' throwaway homes")
+    });
+    &ROOT
 }
 
 pub(crate) fn is_default_home(home_dir: &Path) -> bool {
@@ -255,15 +272,11 @@ fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
     gents_desktop_core::client::DesktopPaths::discover()
 }
 
-/// Unit tests share the operator's process environment, so they cannot
-/// select a desktop home through it; they share one throwaway CLI client home.
+/// Unit tests share one throwaway CLI client home; see [`default_home_dir`].
 #[cfg(test)]
 fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
-    static ROOT: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
-        tempfile::tempdir().expect("creating the unit tests' desktop home")
-    });
     Ok(gents_desktop_core::client::DesktopPaths::from_root(
-        ROOT.path(),
+        unit_test_homes().path().join("desktop"),
     ))
 }
 
