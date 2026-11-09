@@ -378,7 +378,8 @@ export function OnboardingWizard({
                 : activationError
                   ? "Access is approved. The client will retry the secure connection automatically."
                   : active?.state === "approved"
-                    ? "Approval received. Finishing your secure connection…"
+                    ? (target?.chatRefusal?.detail ??
+                      "Approval received. Finishing your secure connection…")
                     : !observed
                       ? "Approval status is unavailable. Refresh to check again."
                       : active

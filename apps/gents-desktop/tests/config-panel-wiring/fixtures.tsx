@@ -13,6 +13,7 @@ export const deployment: DeploymentView = {
   dialSucceeded: true,
   runtimeConnection: "connected",
   chatSafe: true,
+  chatRefusal: null,
   routes: [],
   pairing: [],
   lastError: null,

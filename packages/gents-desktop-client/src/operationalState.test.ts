@@ -29,6 +29,7 @@ function deployment(
     dialSucceeded: true,
     runtimeConnection: "connected",
     chatSafe: true,
+    chatRefusal: null,
     pairingReady: true,
     routes: [],
     pairing: [],
@@ -128,6 +129,27 @@ describe("deployment operational state", () => {
       label: "Preparing peer pairing",
       shortLabel: "Preparing",
     });
+  });
+
+  it("blocks admission with the native chat refusal and its next action", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({
+        chatSafe: false,
+        chatRefusal: {
+          cause: "endpoint_not_advertised",
+          nextAction: "await_endpoint_advertisement",
+          detail: "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
+        },
+      }),
+    );
+
+    expect(state.admissionBlocker).toMatchObject({
+      layer: "route",
+      kind: "waiting",
+      reason: "endpoint_not_advertised",
+      detail: "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
+    });
+    expect(state.summary).toBe(state.admissionBlocker);
   });
 
   it("does not wait for a gossiped Node after pairing", () => {

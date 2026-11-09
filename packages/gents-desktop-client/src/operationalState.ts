@@ -332,6 +332,24 @@ export function projectRouteOperationalStatus(
   });
 }
 
+/** The native chat write fence's refusal, as the composer shows it: the
+ * cause and next action come from the desktop core, never from a UI-local
+ * reading of pairing or source. */
+export function projectChatRefusalStatus(
+  refusal: DeploymentView["chatRefusal"],
+): OperationalStatus | null {
+  if (!refusal) return null;
+  const waiting = refusal.nextAction === "await_endpoint_advertisement";
+  return status({
+    kind: waiting ? "waiting" : "blocked",
+    layer: "route",
+    reason: refusal.cause,
+    label: waiting ? "Waiting for the runtime endpoint" : "Runtime is not connected",
+    shortLabel: waiting ? "Waiting for endpoint" : "Not connected",
+    detail: refusal.detail,
+  });
+}
+
 export function runtimeConnectionBlocksAdmission(connection: string | null | undefined): boolean {
   return connection !== "connected";
 }
@@ -392,9 +410,11 @@ export function projectDeploymentOperationalState(
         });
 
   const agentBlocker = agent.kind === "ready" ? null : agent;
-  const admissionBlocker = runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
-    ? connection
-    : agentBlocker;
+  const admissionBlocker =
+    projectChatRefusalStatus(deployment.chatRefusal) ??
+    (runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
+      ? connection
+      : agentBlocker);
 
   const error =
     deployment.runtime?.lastReconcileError ?? null;
