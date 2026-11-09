@@ -17,6 +17,26 @@ private def firstRunName : ClientSnapshotObservation.FirstRunPhase → String
   | .active => "active"
   | .done => "done"
 
+private def startupFailureName : ClientSnapshotObservation.StartupFailure → String
+  | .approval => "approval"
+  | .portOccupied => "port-occupied"
+  | .foreignNode => "foreign-node"
+  | .homeNeedsFreshStart => "home-needs-fresh-start"
+  | .runtimeFailed => "runtime-failed"
+  | .outdated => "outdated"
+  | .transient => "transient"
+
+private def startupActionName : ClientSnapshotObservation.StartupAction → String
+  | .openLoginItems => "open-login-items"
+  | .checkAgain => "check-again"
+  | .backUpAndStartFresh => "back-up-and-start-fresh"
+  | .removeAndStartFresh => "remove-and-start-fresh"
+  | .restartNode => "restart-node"
+  | .showDiagnostics => "show-diagnostics"
+  | .updateNode => "update-node"
+  | .tryAgain => "try-again"
+  | .continueWithoutLocal => "continue-without-local"
+
 def main : IO Unit := do
   let rows := (List.range 5).flatMap fun current =>
     (List.range 5).map fun captured =>
@@ -41,13 +61,20 @@ def main : IO Unit := do
         [false, true].flatMap fun needsSetup =>
           [false, true].flatMap fun authoritative =>
             [false, true].flatMap fun localRuntimeAllowed =>
-              [false, true].map fun remoteConfigured =>
-                let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initStatus needsSetup authoritative localRuntimeAllowed remoteConfigured
-                "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
-                ",\"initConfigStatus\":\"" ++ initName ++ "\",\"needsSetup\":" ++ toString needsSetup ++
-                ",\"authoritative\":" ++ toString authoritative ++ ",\"localRuntimeAllowed\":" ++ toString localRuntimeAllowed ++
-                ",\"remoteConfigured\":" ++ toString remoteConfigured ++ ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
+              [false, true].flatMap fun localAvailable =>
+                [false, true].map fun remoteConfigured =>
+                  let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initStatus needsSetup authoritative localRuntimeAllowed localAvailable remoteConfigured
+                  "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
+                  ",\"initConfigStatus\":\"" ++ initName ++ "\",\"needsSetup\":" ++ toString needsSetup ++
+                  ",\"authoritative\":" ++ toString authoritative ++ ",\"localRuntimeAllowed\":" ++ toString localRuntimeAllowed ++
+                  ",\"localAvailable\":" ++ toString localAvailable ++
+                  ",\"remoteConfigured\":" ++ toString remoteConfigured ++ ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
+  let startupFailureRows := ClientSnapshotObservation.allStartupFailures.map fun failure =>
+    "{\"failure\":\"" ++ startupFailureName failure ++ "\",\"actions\":[" ++
+      String.intercalate "," (failure.actions.map fun action =>
+        "\"" ++ startupActionName action ++ "\"") ++ "]}"
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
     "],\"startup\":[" ++ String.intercalate "," startupRows ++
     "],\"firstRun\":[" ++ String.intercalate "," firstRunRows ++
+    "],\"startupFailures\":[" ++ String.intercalate "," startupFailureRows ++
     "],\"liveDeltas\":" ++ Conformance.ClientLiveDeltaContracts.casesJson ++ "}")

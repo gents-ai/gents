@@ -139,10 +139,17 @@ enrollment marks configuration complete even while the live route reconnects
 after restart; local setup stays available from the node list. Enrollment
 authority and send readiness remain with their existing owners; operator
 configuration access is not required. Unreadable bootstrap state stays
-unresolved, and an active wizard retains ownership until explicit completion. -/
+unresolved, and an active wizard retains ownership until explicit completion.
+
+`localAvailable` is false when the user declined the local node ("Continue
+without the local node") or it is unavailable. Such a desktop takes the
+remote-only branch even with a configured local home: the client no longer
+needs its local node to start, so waiting for that node's authoritative
+configuration would never resolve (#3609). -/
 def observeFirstRun (phase : FirstRunPhase) (snapshotReady : Bool)
     (initConfigStatus : InitConfigStatus)
-    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) : FirstRunPhase :=
+    (needsSetup authoritative localRuntimeAllowed localAvailable remoteConfigured : Bool) :
+    FirstRunPhase :=
   match phase with
   | .active => .active
   | .done => .done
@@ -151,34 +158,50 @@ def observeFirstRun (phase : FirstRunPhase) (snapshotReady : Bool)
       else match initConfigStatus with
         | .unreadable | .unknown => .unknown
         | status =>
-          if !localRuntimeAllowed || status == .absent then
+          if !localRuntimeAllowed || !localAvailable || status == .absent then
             if remoteConfigured then .done else .active
           else if !authoritative then .unknown
           else if needsSetup then .active else .done
 
-theorem configured_remote_completes_without_operator_access :
-    observeFirstRun .unknown true .absent true false false true = .done := by rfl
+theorem configured_remote_completes_without_operator_access (localAvailable : Bool) :
+    observeFirstRun .unknown true .absent true false false localAvailable true = .done := by
+  cases localAvailable <;> rfl
 
-theorem unconfigured_remote_keeps_setup :
-    observeFirstRun .unknown true .absent false true false false = .active := by rfl
+theorem unconfigured_remote_keeps_setup (localAvailable : Bool) :
+    observeFirstRun .unknown true .absent false true false localAvailable false = .active := by
+  cases localAvailable <;> rfl
 
 theorem desktop_saved_remote_completes_without_local_home (needsSetup authoritative : Bool) :
-    observeFirstRun .unknown true .absent needsSetup authoritative true true = .done := by
+    observeFirstRun .unknown true .absent needsSetup authoritative true true true = .done := by
   cases needsSetup <;> cases authoritative <;> rfl
 
 theorem desktop_without_local_home_or_remote_keeps_setup (needsSetup authoritative : Bool) :
-    observeFirstRun .unknown true .absent needsSetup authoritative true false = .active := by
+    observeFirstRun .unknown true .absent needsSetup authoritative true true false = .active := by
   cases needsSetup <;> cases authoritative <;> rfl
 
 theorem active_setup_keeps_ownership (snapshotReady : Bool) (status : InitConfigStatus)
-    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) :
-    observeFirstRun .active snapshotReady status needsSetup authoritative localRuntimeAllowed remoteConfigured = .active := by
+    (needsSetup authoritative localRuntimeAllowed localAvailable remoteConfigured : Bool) :
+    observeFirstRun .active snapshotReady status needsSetup authoritative localRuntimeAllowed
+      localAvailable remoteConfigured = .active := by
   rfl
 
 theorem unreadable_bootstrap_stays_unresolved
-    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) :
-    observeFirstRun .unknown true .unreadable needsSetup authoritative localRuntimeAllowed remoteConfigured = .unknown := by
+    (needsSetup authoritative localRuntimeAllowed localAvailable remoteConfigured : Bool) :
+    observeFirstRun .unknown true .unreadable needsSetup authoritative localRuntimeAllowed
+      localAvailable remoteConfigured = .unknown := by
   rfl
+
+/-- Declining or losing the local node always resolves first run once the
+snapshot is ready and the init status is known: it is done with a saved remote
+and otherwise returns to setup. -/
+theorem declined_local_resolves (status : InitConfigStatus)
+    (known : status = .absent ∨ status = .configured)
+    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) :
+    observeFirstRun .unknown true status needsSetup authoritative localRuntimeAllowed false
+      remoteConfigured ≠ .unknown := by
+  rcases known with known | known <;> subst known <;>
+    cases needsSetup <;> cases authoritative <;> cases localRuntimeAllowed <;>
+    cases remoteConfigured <;> decide
 
 /-- A client observation can recover a client error, not managed-server authority.
 
@@ -202,6 +225,51 @@ theorem stopped_client_does_not_clear_client_error (autostartDeclined : Bool) :
 
 theorem client_observation_does_not_clear_managed_error (running autostartDeclined : Bool) :
     observeStartup .managedServerError running autostartDeclined = .managedServerError := by rfl
+
+/-- Why the desktop could not bring its local node up. `homeNeedsFreshStart`
+covers a home the User does not own (written under the two-key scheme or by a
+retired key, `Identity.NodeProvisioning.admitLocalHome`), an incompatible
+store and an insecure key. -/
+inductive StartupFailure where
+  | approval | portOccupied | foreignNode | homeNeedsFreshStart
+  | runtimeFailed | outdated | transient
+  deriving DecidableEq, Repr
+
+/-- `openLoginItems` continues by itself once approved; `checkAgain` follows
+the failure's specific instruction (`ForeignRuntime::message`); `tryAgain` is a
+bare retry of the failed step. -/
+inductive StartupAction where
+  | openLoginItems | checkAgain | backUpAndStartFresh | removeAndStartFresh
+  | restartNode | showDiagnostics | updateNode | tryAgain | continueWithoutLocal
+  deriving DecidableEq, Repr
+
+/-- The actions a failure offers, primary first. Every failure offers to
+continue without the local node (`declined_local_resolves`). -/
+def StartupFailure.actions : StartupFailure → List StartupAction
+  | .approval => [.openLoginItems, .continueWithoutLocal]
+  | .portOccupied | .foreignNode => [.checkAgain, .continueWithoutLocal]
+  | .homeNeedsFreshStart => [.backUpAndStartFresh, .removeAndStartFresh, .continueWithoutLocal]
+  | .runtimeFailed => [.restartNode, .showDiagnostics, .continueWithoutLocal]
+  | .outdated => [.updateNode, .continueWithoutLocal]
+  | .transient => [.tryAgain, .continueWithoutLocal]
+
+def allStartupFailures : List StartupFailure :=
+  [.approval, .portOccupied, .foreignNode, .homeNeedsFreshStart, .runtimeFailed,
+   .outdated, .transient]
+
+theorem allStartupFailures_complete (failure : StartupFailure) :
+    failure ∈ allStartupFailures := by
+  cases failure <;> decide
+
+/-- Retrying the same step is offered only for a transient failure; every
+other failure leads with a remedy that is not that retry (#3609). -/
+theorem only_transient_offers_bare_retry (failure : StartupFailure) :
+    StartupAction.tryAgain ∈ failure.actions ↔ failure = .transient := by
+  cases failure <;> decide
+
+theorem every_failure_offers_continue_without_local (failure : StartupFailure) :
+    StartupAction.continueWithoutLocal ∈ failure.actions := by
+  cases failure <;> decide
 
 end ClientSnapshotObservation
 
