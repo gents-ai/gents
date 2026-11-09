@@ -237,13 +237,13 @@ export function resourceTree(node: NodeView, parts: readonly PackPart[]): Resour
   };
   const tied = new Set<string>();
   const agents = of("agents").map((a) => {
-    const agent = node.agents.find((x) => x.agentId === a.id);
+    const agent = node.agents.find((x) => x.agentDid === a.id);
     const context = agent?.contextId
       ? node.contexts.find((c) => c.context_id === agent.contextId)
       : undefined;
     const children = [
       ...of("tasks")
-        .filter((t) => node.tasks.find((x) => x.taskId === t.id)?.agentId === a.id)
+        .filter((t) => node.tasks.find((x) => x.taskId === t.id)?.agentDid === a.id)
         .map((t) => resource("tasks", t, "runs it")),
       ...of("tools")
         .filter((t) => context?.tools_id === t.id)

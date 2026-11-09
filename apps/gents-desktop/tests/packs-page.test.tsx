@@ -47,8 +47,8 @@ const node: DeploymentView = {
   ...deployment,
   agents: [
     ...deployment.agents,
-    { ...deployment.agents[0]!, agentId: "r1", tags: tag },
-    { ...deployment.agents[0]!, agentId: "r2", tags: tag },
+    { ...deployment.agents[0]!, agentDid: "r1", tags: tag },
+    { ...deployment.agents[0]!, agentDid: "r2", tags: tag },
   ],
   skills: deployment.skills.map((s) => ({ ...s, tags: tag })),
 };
@@ -157,12 +157,12 @@ describe("the installed list's order", () => {
 
 describe("what a pack added, as it fits together", () => {
   it("nests the tasks that run an agent and the tools its context gives it", () => {
-    const agent = { ...deployment.agents[0]!, agentId: "a1", contextId: "c1" };
+    const agent = { ...deployment.agents[0]!, agentDid: "a1", contextId: "c1" };
     const fit = {
       ...deployment,
       agents: [agent],
       contexts: [{ node_did: deployment.nodeDid, context_id: "c1", tools_id: "t1" }],
-      tasks: [{ ...deployment.tasks[0]!, taskId: "k1", agentId: "a1" }],
+      tasks: [{ ...deployment.tasks[0]!, taskId: "k1", agentDid: "a1" }],
     } as typeof deployment;
     const parts = [
       {

@@ -21,7 +21,7 @@ export function packContents(deployment: NodeView, pack: string) {
       one: "agent",
       many: "agents",
       section: "agents",
-      items: from(deployment.agents, (a) => ({ id: a.agentId, name: a.displayName })),
+      items: from(deployment.agents, (a) => ({ id: a.agentDid, name: a.displayName })),
     },
     {
       one: "skill",
