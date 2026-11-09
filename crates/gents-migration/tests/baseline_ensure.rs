@@ -114,10 +114,7 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
             >= gents_migration::DEFAULT_BASELINE.len(),
         "expected full baseline coverage, got {report1:?}"
     );
-    assert_eq!(
-        report1.steps_applied,
-        gents_migration::DEFAULT_STEPS.len()
-    );
+    assert_eq!(report1.steps_applied, gents_migration::DEFAULT_STEPS.len());
     if gents_migration::DEFAULT_STEPS.is_empty() {
         assert_eq!(
             report1.materialization.collections_attempted, 0,
