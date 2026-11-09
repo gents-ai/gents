@@ -167,7 +167,7 @@ pub async fn verify(
     let receipt = &receipts[0];
     let mut demand = gents_protocol::file_image_hydration::FileImageDemand {
         inventory_reference: None,
-        admission: gents_protocol::session_hydration::HydrationRequest {
+        admission: gents_protocol::file_inventory::FileInventoryRequest {
             request_key: String::new(),
             peer_id: receipt["peer_id"].as_str().context("review peer")?.into(),
             requester_did: author.into(),
@@ -220,7 +220,7 @@ pub async fn verify_permission_recovery(
     verifier: &dyn gents::NodeIdentity,
 ) -> Result<Value> {
     use gents_protocol::file_image_hydration::FileImageDemand;
-    use gents_protocol::session_hydration::HydrationRequest;
+    use gents_protocol::file_inventory::FileInventoryRequest;
     use std::time::Duration;
 
     const CACHED_RETRY: &str = "030ee487-7cca-496d-be85-bd35f686f154";
@@ -236,7 +236,7 @@ pub async fn verify_permission_recovery(
     let original = receipts[0].clone();
     let demand = FileImageDemand {
         inventory_reference: None,
-        admission: HydrationRequest {
+        admission: FileInventoryRequest {
             request_key: field(&original, "request_key")?.into(),
             peer_id: field(&original, "peer_id")?.into(),
             requester_did: author.into(),

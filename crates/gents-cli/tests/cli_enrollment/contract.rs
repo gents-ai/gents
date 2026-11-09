@@ -866,7 +866,7 @@ async fn assert_local_pagination(
         actual == expected,
         "runtime transcript page differs from canonical rows"
     );
-    let intent_query = "{ SessionHydrationRequest { _docID request_key status status_detail served_doc_count served_manifest_json processed_at outcome_signer_did outcome_signature } PeerPairingDesired { _docID peer_id collections profiles template source enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at updated_at } }";
+    let intent_query = "{ PeerPairingDesired { _docID peer_id collections profiles template source enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at updated_at } }";
     let before = core.node().execute(intent_query).await;
     anyhow::ensure!(!before.has_errors(), "local intent query failed");
     let mut cursor = None;
@@ -915,7 +915,7 @@ async fn assert_local_pagination(
     let after = core.node().execute(intent_query).await;
     anyhow::ensure!(
         !after.has_errors() && before.data == after.data,
-        "scrolling changed pairing or hydration intent"
+        "scrolling changed pairing intent"
     );
     Ok(())
 }

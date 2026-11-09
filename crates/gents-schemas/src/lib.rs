@@ -188,9 +188,6 @@ pub const FILE_INVENTORY_REPLY: &str =
 pub const FILE_IMAGE_HYDRATION_RECEIPT_NAME: &str = "FileImageHydrationReceipt";
 pub const FILE_IMAGE_HYDRATION_RECEIPT: &str =
     include_str!("../schemas/agent/file_image_hydration_receipt.graphql");
-pub const SESSION_HYDRATION_REQUEST_NAME: &str = "SessionHydrationRequest";
-pub const SESSION_HYDRATION_REQUEST: &str =
-    include_str!("../schemas/agent/session_hydration_request.graphql");
 
 pub const AGENT_SESSION_INPUT_EDIT_NAME: &str = "AgentSessionInputEdit";
 pub const AGENT_SESSION_INPUT_EDIT: &str =
@@ -265,7 +262,6 @@ pub const ALL: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
     NETWORK_ENROLLMENT_GRANT,
-    SESSION_HYDRATION_REQUEST,
     FILE_IMAGE_HYDRATION_REQUEST,
     FILE_INVENTORY_IMAGE_REQUEST,
     FILE_INVENTORY_REQUEST,
@@ -347,7 +343,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     NETWORK_ENROLLMENT_GRANT_NAME,
-    SESSION_HYDRATION_REQUEST_NAME,
     FILE_IMAGE_HYDRATION_REQUEST_NAME,
     FILE_INVENTORY_IMAGE_REQUEST_NAME,
     FILE_INVENTORY_REQUEST_NAME,

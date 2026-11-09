@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use crate::enrollment::canonical_domain_payload;
 use crate::file_changes::{FileChangeImages, FileImage, ImageFailure};
 use crate::file_image_hydration::FileImageScope;
-use crate::session_hydration::HydrationRequest;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FileInventoryError {
@@ -77,11 +76,24 @@ impl From<&FileChangeImages> for FileChangeMetadata {
     }
 }
 
+/// The reader and session an inventory read is bound to. `peer_id` is the
+/// reader's route for a source-served page; a direct read has no route and
+/// leaves it empty.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct FileInventoryRequest {
+    pub request_key: String,
+    pub peer_id: String,
+    pub requester_did: String,
+    pub node_did: String,
+    pub session_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileInventoryAdmission {
-    pub request: HydrationRequest,
+    pub request: FileInventoryRequest,
     pub session_doc_id: String,
 }
 
@@ -533,7 +545,6 @@ pub enum FileInventoryReadAction {
 pub struct DirectFileInventoryRequest {
     pub node_did: String,
     pub session_id: String,
-    pub peer_id: String,
     pub action: FileInventoryReadAction,
 }
 

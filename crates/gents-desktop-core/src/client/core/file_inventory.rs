@@ -33,7 +33,6 @@ impl ClientCore {
             .json(&DirectFileInventoryRequest {
                 node_did: node_did.to_owned(),
                 session_id: session_id.to_owned(),
-                peer_id: self.local_peer_id().to_owned(),
                 action,
             })
             .send()

@@ -5,7 +5,7 @@ use gents_protocol::file_inventory::{
     FileInventoryAdmission, FileInventoryBinding, FileInventoryCoverage, FileInventorySnapshotView,
     FileInventoryViewCursor,
 };
-use gents_protocol::session_hydration::HydrationRequest;
+use gents_protocol::file_inventory::FileInventoryRequest;
 
 fn fixture() -> (
     FileInventoryObservation,
@@ -42,7 +42,7 @@ fn fixture() -> (
         change: FileChangeMetadata::from(&change),
     };
     let admission = FileInventoryAdmission {
-        request: HydrationRequest {
+        request: FileInventoryRequest {
             request_key: "target-request".into(),
             peer_id: "client-peer".into(),
             requester_did: "target-requester".into(),

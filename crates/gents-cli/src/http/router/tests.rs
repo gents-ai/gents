@@ -377,7 +377,6 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
     let demand = DirectFileInventoryRequest {
         node_did: owner.into(),
         session_id: session_id.into(),
-        peer_id: "operator-client".into(),
         action: FileInventoryReadAction::default(),
     };
     let response = client.post(&url).json(&demand).send().await.unwrap();

@@ -32,7 +32,6 @@ pub mod row;
 pub mod schemas;
 pub mod serve_lifecycle;
 pub mod session;
-pub mod session_hydration;
 pub mod session_input_edit;
 pub mod timeline;
 pub mod tool_call;

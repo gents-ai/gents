@@ -18,6 +18,12 @@ source consistency checks, not a separate runtime compatibility version.
   delivery or peer-DID and unscoped scopes. Pairing reconciliation installs
   replicators only; it no longer installs or tears down DefraDB collection
   subscriptions, and `PeerPairingApplied.collections` is no longer written.
+- Breaking: P2P no longer hydrates sessions or delivers file images between
+  nodes. The `SessionHydrationRequest` collection leaves the schema baseline;
+  existing homes keep any stored rows untouched. The operator file-inventory
+  request (`DirectFileInventoryRequest`) drops `peer_id`, and a direct read's
+  admission carries an empty `peer_id`. The generated `HydrationRequest`
+  TypeScript type is now `FileInventoryRequest`.
 
 ## 1.0.0-rc1 - 2026-11-03
 

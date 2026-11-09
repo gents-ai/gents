@@ -499,10 +499,6 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT
     ),
     baseline_entry!(
-        gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
-        gents_protocol::schemas::SESSION_HYDRATION_REQUEST
-    ),
-    baseline_entry!(
         gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
         gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST
     ),
@@ -943,7 +939,6 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION_NAME,
     gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
     gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
-    gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
     gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
     gents_protocol::schemas::FILE_INVENTORY_IMAGE_REQUEST_NAME,
     gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,

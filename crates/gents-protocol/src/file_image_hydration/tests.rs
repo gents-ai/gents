@@ -5,7 +5,7 @@ fn receipt() -> FileImageHydrationReceipt {
         version: FILE_IMAGE_RECEIPT_VERSION,
         demand: FileImageDemand {
             inventory_reference: None,
-            admission: HydrationRequest {
+            admission: FileInventoryRequest {
                 request_key: "demand-1".into(),
                 peer_id: "peer-1".into(),
                 requester_did: "requester-1".into(),

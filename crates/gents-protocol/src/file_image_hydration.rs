@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::enrollment::canonical_domain_payload;
-use crate::file_inventory::{FileInventoryPageDemand, FILE_INVENTORY_PAGE_LIMIT};
-use crate::session_hydration::HydrationRequest;
+use crate::file_inventory::{
+    FileInventoryPageDemand, FileInventoryRequest, FILE_INVENTORY_PAGE_LIMIT,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -15,7 +16,7 @@ pub struct FileImageScope {
 }
 
 impl FileImageScope {
-    pub fn matches(&self, request: &HydrationRequest) -> bool {
+    pub fn matches(&self, request: &FileInventoryRequest) -> bool {
         self.requester_did == request.requester_did
             && self.node_did == request.node_did
             && self.session_id == request.session_id
@@ -71,7 +72,7 @@ pub struct FileImageInventoryReference {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileImageDemand {
-    pub admission: HydrationRequest,
+    pub admission: FileInventoryRequest,
     pub request_doc_id: String,
     pub tool_call_doc_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
