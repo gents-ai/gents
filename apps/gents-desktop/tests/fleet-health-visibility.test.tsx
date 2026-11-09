@@ -56,7 +56,10 @@ describe("fleet health visibility", () => {
     // The label is the presentation owner's (its reason is checked against
     // Lean in lean-conformance/runtime-connection); an outage never reads as
     // a connection attempt.
-    const outage = deploymentStatus({ ...deployment, runtimeConnection: "disconnected" }).label;
+    const outage = deploymentStatus({
+      ...deployment,
+      runtimeConnection: "disconnected",
+    }).label;
     expect(outage).toBe(projectRuntimeConnectionStatus("disconnected").shortLabel);
     expect(outage).not.toBe(projectRuntimeConnectionStatus("connecting").shortLabel);
     expect(

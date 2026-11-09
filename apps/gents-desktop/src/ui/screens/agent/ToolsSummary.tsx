@@ -71,7 +71,10 @@ export function ToolsUsedBy({
     <CompactSummary label="Used by">
       {agents.length ? (
         <>
-          <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentDid)} />
+          <AgentMarks
+            deployment={deployment}
+            agentIds={agents.map((a) => a.agentDid)}
+          />
           <span className="min-w-0 truncate">
             {agents.map((a, i) => (
               <span key={a.agentDid}>

@@ -18,11 +18,12 @@ describe("runtime connection admission", () => {
     );
     await run("lake", ["build", "Proofs.Conformance.RuntimeConnectionObservation"], {
       cwd: proofsDir,
+      timeout: 240_000,
     });
     const { stdout } = await run(
       "lake",
       ["env", "lean", "--run", "Proofs/Conformance/RuntimeConnectionObservation.lean"],
-      { cwd: proofsDir },
+      { cwd: proofsDir, timeout: 240_000 },
     );
     const contract = JSON.parse(stdout) as {
       cases: { status: string; blocksAdmission: boolean }[];
@@ -36,10 +37,12 @@ describe("runtime connection admission", () => {
     const labels = new Map<string, string>();
     for (const row of contract.presentations) {
       const shown = projectRuntimeConnectionStatus(row.status);
-      expect({ status: row.status, kind: shown.kind, reason: shown.reason }).toEqual(row);
+      expect({ status: row.status, kind: shown.kind, reason: shown.reason }).toEqual(
+        row,
+      );
       const previous = labels.get(shown.label);
       expect(previous === undefined || previous === row.reason).toBe(true);
       labels.set(shown.label, row.reason);
     }
-  });
+  }, 300_000);
 });

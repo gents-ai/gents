@@ -36,6 +36,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.ClientInterruptControl,
   `Proofs.Conformance.DesktopShellSecurity,
   `Proofs.Conformance.ClientPackWatch,
+  `Proofs.Conformance.ClientAuthorityRestart,
   `Proofs.Conformance.StorageWriteGate,
   `Proofs.Conformance.StorageWriteGateAdmission,
   `Proofs.Conformance.NativeCompletion,

@@ -196,8 +196,9 @@ async function replay(acts: Act[]): Promise<Observation[]> {
     snapshot: RUNNING,
     selection: { nodeDid: NODE, sessionId: sessionOf(0) },
   });
-  let registration: (() => void) | null = null;
-  let listener: ((event: { reason?: string }) => Promise<void>) | null = null;
+  /* assigned inside the listener callback, so declared without narrowing */
+  let registration = null as (() => void) | null;
+  let listener = null as ((event: { reason?: string }) => Promise<void>) | null;
   const stop = startClientObservation(app, async (handler) => {
     await new Promise<void>((resolve) => {
       registration = resolve;
@@ -253,7 +254,7 @@ async function replay(acts: Act[]): Promise<Observation[]> {
           break;
         }
         case "notice":
-          if (registration) (registration as () => void)();
+          if (registration) registration();
           /* the handler resolves once its read does, which the trace answers */
           else void listener?.({ reason: "store" });
           break;
