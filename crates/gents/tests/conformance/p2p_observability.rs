@@ -75,6 +75,7 @@ fn pinned_upstream_wire() -> serde_json::Value {
             admission_saturated_total: 81,
             recovery_saturated_total: 17,
             rejection_dropped_total: 19,
+            gossip_refusals_dropped_total: 23,
         },
         inbound_budget: vec![
             InboundClassSnapshot {
@@ -157,6 +158,8 @@ fn pinned_upstream_wire() -> serde_json::Value {
         single_flight_suppressed: 37,
         already_merged_fast_path: 53,
         pending_dag_capacity_shed: 59,
+        gossip_heads_deferred: 83,
+        gossip_heads_shed: 89,
         pending_dag_retry_dispatched: 61,
         pending_dag_retry_suppressed: 67,
         pending_dag_fetch_deferred_unavailable: 69,
@@ -279,6 +282,7 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
                 admission_saturated_total: 81,
                 recovery_saturated_total: 17,
                 rejection_dropped_total: 19,
+                gossip_refusals_dropped_total: 23,
             },
             inbound_budget: vec![
                 P2pInboundClassSnapshot {
@@ -361,6 +365,8 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
             single_flight_suppressed: 37,
             already_merged_fast_path: 53,
             pending_dag_capacity_shed: 59,
+            gossip_heads_deferred: 83,
+            gossip_heads_shed: 89,
             pending_dag_retry_dispatched: 61,
             pending_dag_retry_suppressed: 67,
             pending_dag_fetch_deferred_unavailable: 69,

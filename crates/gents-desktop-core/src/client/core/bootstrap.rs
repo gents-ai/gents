@@ -268,6 +268,7 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
             max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
             max_pending_dags: options.max_pending_dags,
             replicator_retry_intervals: None,
+            ..Default::default()
         },
         // DefraDB forwards merges to explicit downstream replicators itself.
         rebroadcast_on_merge: false,

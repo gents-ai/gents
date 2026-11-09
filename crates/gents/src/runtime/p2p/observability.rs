@@ -38,6 +38,8 @@ pub struct P2pSyncStatusSnapshot {
     pub single_flight_suppressed: u64,
     pub already_merged_fast_path: u64,
     pub pending_dag_capacity_shed: u64,
+    pub gossip_heads_deferred: u64,
+    pub gossip_heads_shed: u64,
     pub pending_dag_retry_dispatched: u64,
     pub pending_dag_retry_suppressed: u64,
     pub pending_dag_fetch_deferred_unavailable: u64,
@@ -143,6 +145,7 @@ pub struct P2pRequestDispatchSnapshot {
     pub admission_saturated_total: u64,
     pub recovery_saturated_total: u64,
     pub rejection_dropped_total: u64,
+    pub gossip_refusals_dropped_total: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

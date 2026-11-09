@@ -1812,6 +1812,7 @@ fn resolve_server_p2p_config(
             max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
             max_pending_dags,
             replicator_retry_intervals: None,
+            ..Default::default()
         },
         rebroadcast_on_merge: false,
     }))

@@ -142,8 +142,9 @@ impl ConfigAccess {
                 local
                     .run_owned(move |node| async move {
                         let context = actor_context(actor.as_ref());
-                        node.add_view_as(&context, &query, &sdl)
+                        node.add_view_as(&context, &query, &sdl, None)
                             .await
+                            .map(drop)
                             .map_err(Into::into)
                     })
                     .await
