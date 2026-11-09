@@ -8,8 +8,9 @@ pub(crate) use client::{
     stage_runtime_request_in_txn, StageOptions,
 };
 pub use client::{
-    build_signed_client_request, build_signed_client_request_in_txn, reconcile_client_request,
-    reconcile_client_retry, reserve_goal_session, submit_client_request, ClientSubmissionError,
+    build_signed_client_request, build_signed_client_request_in_txn, client_request_key,
+    reconcile_client_request, reconcile_client_retry, reserve_goal_session, send_client_request,
+    submit_client_request, ClientSubmissionError,
 };
 use std::sync::Arc;
 

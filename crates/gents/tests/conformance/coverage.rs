@@ -661,20 +661,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "identity_private_journal_policy".into(),
         "PrivateJournalSigner".into(),
     ));
-    assert!(!snapshot.client_submission_cleanup_cases.is_empty());
+    assert!(snapshot.client_optimistic_send_cases["traces"]
+        .as_array()
+        .is_some_and(|traces| !traces.is_empty()));
     emitted.insert((
-        "client_submission_cleanup_cases".into(),
-        "ClientSubmissionCleanupCases".into(),
-    ));
-    assert!(!snapshot.client_submission_rejection_cases.is_empty());
-    emitted.insert((
-        "client_submission_rejection_cases".into(),
-        "ClientSubmissionRejectionCases".into(),
-    ));
-    assert!(!snapshot.client_submission_uncertain_error_cases.is_empty());
-    emitted.insert((
-        "client_submission_uncertain_error_cases".into(),
-        "ClientSubmissionUncertainErrorCases".into(),
+        "client_optimistic_send_cases".into(),
+        "ClientOptimisticSendCases".into(),
     ));
     assert!(!snapshot.goal_client_delivery_cases.is_empty());
     emitted.insert((

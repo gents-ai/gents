@@ -544,6 +544,90 @@ pub async fn submit_client_request(
         })
 }
 
+/// The owner's idempotency key for a client-authored create: the signer and
+/// the request identity the client picked when the person sent. The key is
+/// part of the signed create, and `AgentRequest.retry_key` is a unique index,
+/// so the store admits one request per key (Lean
+/// `ClientOptimisticSend.create`).
+pub fn client_request_key(signer_did: &str, request_id: &str) -> String {
+    format!("client-request:{signer_did}:{request_id}")
+}
+
+/// Send a signed client create, idempotent on its `retry_key`: a repeat of a
+/// key the runtime already holds is the same request, whichever send of it
+/// committed (a retry after a lost reply, two windows, a retry racing the
+/// first send still committing). Returns the request identity held under the
+/// key. A failure with no request under the key is the send's failure; the
+/// caller shows it failed and may resend the same key.
+pub async fn send_client_request(
+    access: &ConfigAccess,
+    create: &AgentRequestCreate,
+) -> Result<String, ClientSubmissionError> {
+    let key = create
+        .retry_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+        .ok_or_else(|| {
+            ClientSubmissionError::Rejected(anyhow::anyhow!(
+                "a client create requires its idempotency key"
+            ))
+        })?;
+    let error = match submit_client_request(access, create).await {
+        Ok(()) => return Ok(create.request_id.clone()),
+        Err(error) => error,
+    };
+    match held_client_request(access, create, key).await {
+        Ok(Some(request_id)) => Ok(request_id),
+        Ok(None) => Err(error),
+        Err(read) => Err(ClientSubmissionError::Unconfirmed(
+            anyhow::Error::from(error).context(format!("{read:#}")),
+        )),
+    }
+}
+
+/// The request the runtime holds under `key` for this signer and scope, with
+/// its relationships completed.
+async fn held_client_request(
+    access: &ConfigAccess,
+    create: &AgentRequestCreate,
+    key: &str,
+) -> anyhow::Result<Option<String>> {
+    let actor = request_actor(access, create)?;
+    let escaped = crate::store::graphql::escape_graphql_string(key);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} relationships_pending }} }}"#,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .await?;
+    let rows = response["data"]["AgentRequest"]
+        .as_array()
+        .context("client request lookup omitted rows")?;
+    anyhow::ensure!(rows.len() <= 1, "ambiguous client request key");
+    let Some(value) = rows.first() else {
+        return Ok(None);
+    };
+    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(value.clone())?;
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
+    anyhow::ensure!(
+        row.retry_key.as_deref() == Some(key)
+            && row.admission_kind.as_deref() == Some(create.admission.kind.as_str())
+            && row.admission_signer_did.as_deref() == Some(actor.as_str())
+            && row.node_did.as_deref() == Some(create.node_did.as_str())
+            && row.session_id.as_deref() == Some(create.session_id.as_str())
+            && row.requester_did.as_deref() == Some(create.requester_did.as_str()),
+        "the request held under this key belongs to another signer or scope"
+    );
+    if value["relationships_pending"] != false {
+        let doc = row
+            .doc_id
+            .as_deref()
+            .context("client request lookup omitted document identity")?;
+        complete_client_request_relationships(access, doc).await?;
+    }
+    Ok(Some(row.request_id))
+}
+
 async fn publish_request_relationships(
     access: &ConfigAccess,
     agent_did: &str,
@@ -2279,6 +2363,85 @@ mod tests {
             .as_deref(),
             Some("retry")
         );
+        node.shutdown().await.expect("shut down test node");
+    }
+
+    /// `ClientOptimisticSend.create`: repeats of one key, rebuilt and re-signed
+    /// or racing each other, are one request.
+    #[tokio::test]
+    async fn client_send_is_idempotent_on_its_request_key() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
+        let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
+        let (node, endpoint) = serve_client_node(&runtime).await;
+        grant_operator_user(&node, &runtime, &user).await;
+        let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+        let access = client_access(&endpoint, &user);
+        seed_owned_agent(&access, runtime.did(), &agent).await;
+        let signed = |request_id: &'static str, created_at: &'static str| {
+            let access = &access;
+            let user = &user;
+            let runtime = &runtime;
+            let agent = &agent;
+            async move {
+                let mut create = AgentRequestCreate::base(
+                    RequestPurpose::Normal,
+                    request_id,
+                    runtime.did(),
+                    user.did(),
+                    &agent.agent_did,
+                    "idempotent-session",
+                    "hello",
+                    "interactive",
+                    created_at,
+                    AgentRequestAdmissionRecord::client(user.did()),
+                );
+                create.retry_key = Some(client_request_key(user.did(), request_id));
+                let (session, agent_doc) = reserve_client_targets(access, &create).await.unwrap();
+                create.session_doc_id = Some(session);
+                create.agent_doc_id = Some(agent_doc);
+                crate::sign_agent_request_create(user, &mut create)
+                    .await
+                    .unwrap();
+                create
+            }
+        };
+        let count = |request_id: &'static str| {
+            let access = &access;
+            async move {
+                let rows = access
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ _docID relationships_pending }} }}"#
+                    ))
+                    .await
+                    .unwrap();
+                let rows = rows["data"]["AgentRequest"].as_array().unwrap().clone();
+                assert!(rows.iter().all(|row| row["relationships_pending"] == false));
+                rows.len()
+            }
+        };
+        let first = signed("first", "2026-11-04T00:00:00Z").await;
+        assert_eq!(send_client_request(&access, &first).await.unwrap(), "first");
+        assert_eq!(send_client_request(&access, &first).await.unwrap(), "first");
+        let rebuilt = signed("first", "2026-11-04T00:00:07Z").await;
+        assert_ne!(rebuilt.admission.signature, first.admission.signature);
+        assert_eq!(send_client_request(&access, &rebuilt).await.unwrap(), "first");
+        assert_eq!(count("first").await, 1);
+
+        let left = signed("raced", "2026-11-04T00:01:00Z").await;
+        let right = signed("raced", "2026-11-04T00:01:01Z").await;
+        let (left, right) = tokio::join!(
+            send_client_request(&access, &left),
+            send_client_request(&access, &right)
+        );
+        assert_eq!(left.unwrap(), "raced");
+        assert_eq!(right.unwrap(), "raced");
+        assert_eq!(count("raced").await, 1);
+
+        let mut keyless = signed("keyless", "2026-11-04T00:02:00Z").await;
+        keyless.retry_key = None;
+        assert!(send_client_request(&access, &keyless).await.is_err());
+        assert_eq!(count("keyless").await, 0);
         node.shutdown().await.expect("shut down test node");
     }
 
