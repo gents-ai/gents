@@ -139,13 +139,18 @@ pub(super) fn inference_needs(packs: &[PackInference]) -> Value {
     })
 }
 
-/// The pack's coordinate, version and description, and what each of its
-/// plugins asks for beyond a sealed sandbox, worded by the authority owner.
-/// An install that would newly grant any of it is refused without
-/// `--grant-authority`; one already granted that much installs without it.
-pub(super) fn identity_and_authority(manifest: &PackManifest) -> Result<Value> {
+/// The pack's coordinate, version and description; the plugins and UX
+/// plugins it and its dependencies install; and what each of those plugins
+/// asks for beyond a sealed sandbox, worded by the authority owner. An install
+/// that would newly grant any of it is refused without `--grant-authority`;
+/// one already granted that much installs without it.
+pub(super) fn identity_and_authority(
+    manifest: &PackManifest,
+    dependencies: &[&PackManifest],
+) -> Result<Value> {
+    let packs = || std::iter::once(manifest).chain(dependencies.iter().copied());
     let mut authority = Vec::new();
-    for plugin in &manifest.metadata.plugins {
+    for plugin in packs().flat_map(|pack| &pack.metadata.plugins) {
         let declared = gents::plugin::authority::declared_manifold(plugin)?;
         if let Some(asks) = gents::plugin::authority::describe_plugin_authority(plugin, &declared) {
             authority.push(json!({ "plugin": plugin.name, "asks": asks }));
@@ -155,8 +160,67 @@ pub(super) fn identity_and_authority(manifest: &PackManifest) -> Result<Value> {
         "coordinate": format!("{}/{}", manifest.metadata.namespace, manifest.name),
         "version": manifest.version,
         "description": manifest.description,
+        "installed_plugins": packs().flat_map(|pack| &pack.metadata.plugins).collect::<Vec<_>>(),
+        "ux_plugins": packs().flat_map(|pack| &pack.metadata.ux).collect::<Vec<_>>(),
         "authority": authority,
     }))
+}
+
+/// `documents` with each agent named by its slot rather than the DID the
+/// preview bound it to: that DID is minted for this preview only, and the
+/// install mints its own. Every document that refers to the agent refers to
+/// its slot instead, and the agent's creation nonce is left out.
+pub(super) fn documents_by_slot(
+    config: &gents::documents::PackConfig,
+    bindings: &gents::pack::PackAgentBindings,
+) -> Result<Vec<Value>> {
+    let slots: std::collections::BTreeMap<&str, &str> = bindings
+        .iter()
+        .map(|(slot, binding)| (binding.agent_did.as_str(), slot.as_str()))
+        .collect();
+    fn by_slot(value: &mut Value, slots: &std::collections::BTreeMap<&str, &str>) {
+        match value {
+            Value::String(text) => {
+                if let Some(slot) = slots.get(text.as_str()) {
+                    *text = (*slot).to_owned();
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| by_slot(item, slots)),
+            Value::Object(fields) => {
+                fields.remove("creation_nonce");
+                fields.values_mut().for_each(|field| by_slot(field, slots));
+            }
+            _ => {}
+        }
+    }
+    let mut documents = documents(config)?;
+    for document in &mut documents {
+        by_slot(document, &slots);
+    }
+    Ok(documents)
+}
+
+/// The documents an authored pack declares before its agent slots are bound
+/// to Agent DIDs, as a preview with unbound inference shows them: each agent
+/// by its slot, since its DID is minted only when it is installed.
+pub(super) fn authored_documents(config: &gents::pack::AuthoredPackConfig) -> Result<Vec<Value>> {
+    let mut documents = documents(&config.documents)?;
+    for agent in config
+        .value
+        .get("agents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let slot = agent.get("agent_slot").and_then(Value::as_str);
+        documents.push(json!({
+            "collection": "Agent",
+            "id": slot,
+            "name": agent.get("display_name").and_then(Value::as_str).or(slot),
+            "content": agent,
+        }));
+    }
+    Ok(documents)
 }
 
 /// Each document the prepared configuration would write, by collection, with
@@ -285,7 +349,7 @@ mod tests {
     fn a_documents_pack_reports_what_it_would_write() {
         let archive = fixture("documents_fixture");
         let manifest = archive.manifest();
-        let identity = identity_and_authority(manifest).unwrap();
+        let identity = identity_and_authority(manifest, &[]).unwrap();
         assert_eq!(identity["coordinate"], "fixture/documents_fixture");
         assert_eq!(identity["version"], "1.0.0");
         assert_eq!(identity["authority"], json!([]));
@@ -294,7 +358,7 @@ mod tests {
             collections(manifest, asset).unwrap(),
             Some(vec!["FixtureJob".to_owned()])
         );
-        let config = gents::pack::load_pack_config(
+        let config = gents::pack::load_pack_authoring_config(
             manifest,
             &gents::pack::PackInstallOptions {
                 node_did: "did:key:zReviewOwner".into(),
@@ -303,7 +367,7 @@ mod tests {
             &|_| None,
         )
         .unwrap();
-        let documents = documents(&config).unwrap();
+        let documents = authored_documents(&config).unwrap();
         let named: Vec<Value> = documents.iter().map(without_content).collect();
         assert!(named.contains(
             &json!({"collection": "Agent", "id": "fixture-worker", "name": "Fixture worker"})
@@ -316,9 +380,11 @@ mod tests {
             .all(|document| document["collection"] != "Node"));
         let agent = documents
             .iter()
-            .find(|document| document["id"] == "fixture-worker")
+            .find(|document| {
+                document["collection"] == "Agent" && document["id"] == "fixture-worker"
+            })
             .unwrap();
-        assert_eq!(agent["content"]["agent_id"], "fixture-worker");
+        assert_eq!(agent["content"]["agent_slot"], "fixture-worker");
         assert_eq!(agent["content"]["display_name"], "Fixture worker");
         assert!(agent["content"]
             .as_object()
@@ -408,7 +474,33 @@ mod tests {
             },
         }))
         .unwrap()];
-        let identity = identity_and_authority(&manifest).unwrap();
+        let identity = identity_and_authority(&manifest, &[]).unwrap();
+        assert_eq!(
+            identity["authority"],
+            json!([{"plugin": "fetcher", "asks": "HTTP to example.com"}])
+        );
+    }
+
+    #[test]
+    fn a_dependency_s_plugins_are_listed_with_the_pack_s() {
+        let root = fixture("documents_fixture").manifest().clone();
+        let mut dependency = root.clone();
+        dependency.name = "helpers".into();
+        dependency.metadata.plugins = vec![serde_json::from_value(json!({
+            "name": "fetcher",
+            "description": "Fetches",
+            "artifact": "plugins/fetcher.afb",
+            "language": "rust",
+            "input_schema": {"type": "object"},
+            "manifold": {
+                "fs": "None", "net": {"OutboundHttp": ["example.com"]}, "env": "None",
+                "crypto": false, "child_process": false
+            },
+        }))
+        .unwrap()];
+        let identity = identity_and_authority(&root, &[&dependency]).unwrap();
+        assert_eq!(identity["installed_plugins"][0]["name"], "fetcher");
+        assert_eq!(identity["ux_plugins"], json!([]));
         assert_eq!(
             identity["authority"],
             json!([{"plugin": "fetcher", "asks": "HTTP to example.com"}])

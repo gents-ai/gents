@@ -157,9 +157,10 @@ async fn install_documents_pack_resolved_inner(
             "inference_needs": needs,
             "would_write": false,
         });
+        let dependency_manifests: Vec<_> = dependencies.iter().map(PackSource::manifest).collect();
         merge(
             &mut preview,
-            super::review::identity_and_authority(pack.manifest())?,
+            super::review::identity_and_authority(pack.manifest(), &dependency_manifests)?,
         );
         Ok::<_, anyhow::Error>(preview)
     };
@@ -209,7 +210,7 @@ async fn install_documents_pack_resolved_inner(
             if packs.iter().all(super::review::PackInference::is_bound) {
                 return Err(refusal);
             }
-            let authored = gents::pack::load_pack_config(
+            let authored = gents::pack::load_pack_authoring_config(
                 pack.manifest(),
                 &gents::pack::PackInstallOptions {
                     node_did: owner.to_owned(),
@@ -218,7 +219,7 @@ async fn install_documents_pack_resolved_inner(
                 &|name| std::env::var(name).ok(),
             )?;
             return review(
-                super::review::documents(&authored)?,
+                super::review::authored_documents(&authored)?,
                 super::review::inference_needs(&packs),
             );
         }
@@ -235,7 +236,7 @@ async fn install_documents_pack_resolved_inner(
             .map(|(manifest, preview)| super::review::PackInference::bound(manifest, preview))
             .collect();
         let mut preview = review(
-            super::review::documents(&prepared.config)?,
+            super::review::documents_by_slot(&prepared.config, &prepared.agent_bindings)?,
             super::review::inference_needs(&packs),
         )?;
         preview["inference"] = json!(inference);
@@ -353,6 +354,34 @@ async fn install_documents_pack_resolved_inner(
         "schemas": schemas,
         "apply": apply,
     }))
+}
+
+/// A plugins pack's slots as the review binds them, from the node its model
+/// slots would run on. Without that node (offline, or no slots declared) the
+/// preview still lists `inference_slots`, and the install itself checks the
+/// bindings.
+async fn plugin_inference_needs(
+    scope: &ScopeArgs,
+    manifest: &PackManifest,
+    requested: &gents::pack::PackInferenceBindings,
+) -> Option<serde_json::Value> {
+    if manifest.metadata.inference_slots.is_empty() {
+        return None;
+    }
+    let (access, owner) = match resolve_scope_owner(scope).await {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), "plugins pack preview could not read the node's inference profiles");
+            return None;
+        }
+    };
+    let inference = super::review::pack_inference(&access, &owner, manifest, requested).await;
+    if let Some(node) = access.local_node() {
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
+    }
+    inference.map(|inference| super::review::inference_needs(&[inference]))
 }
 
 fn merge(into: &mut serde_json::Value, from: serde_json::Value) {
@@ -529,16 +558,19 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     "pack": pack.manifest().name,
                     "source": pack.label(),
                     "digest": pack.digest(),
-                    "installed_plugins": pack.manifest().metadata.plugins,
-                    "ux_plugins": pack.manifest().metadata.ux,
                     "inference_slots": pack.manifest().metadata.inference_slots,
                     "kind": pack.manifest().metadata.kind,
                     "would_write": false,
                 });
                 merge(
                     &mut preview,
-                    super::review::identity_and_authority(pack.manifest())?,
+                    super::review::identity_and_authority(pack.manifest(), &[])?,
                 );
+                if let Some(needs) =
+                    plugin_inference_needs(&args.scope, pack.manifest(), &requested).await
+                {
+                    preview["inference_needs"] = needs;
+                }
                 return crate::print_json(&preview);
             }
             let slot_owner =
