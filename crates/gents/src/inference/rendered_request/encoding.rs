@@ -1430,9 +1430,7 @@ mod tests {
         let layouts = values
             .each_ref()
             .map(|value| capture_block_layout(value).unwrap());
-        let shared = layouts
-            .each_ref()
-            .map(chunk_capture_layout);
+        let shared = layouts.each_ref().map(chunk_capture_layout);
         let baseline = layouts
             .each_ref()
             .map(|layout| chunk_capture_body(&layout.json));

@@ -1,11 +1,11 @@
 use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
+use gents::store::config_client::ConfigAccess;
+use gents_desktop_core::client::{ClientStoreRows, TranscriptWindow};
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
-use gents::store::config_client::ConfigAccess;
-use gents_desktop_core::client::{ClientStoreRows, TranscriptWindow};
 use gents_protocol::output::{MessageBlock, MessageRole};
 
 #[tokio::test]
@@ -105,9 +105,10 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         .unwrap();
         let items = render_transcript_rows(&ClientStore::default(), &page, "origin");
         assert_eq!(items.len(), 4);
-        for (item, (expected, notification)) in items
-            .iter()
-            .zip([(success, true), (failure, true), (wake, false)])
+        for (item, (expected, notification)) in
+            items
+                .iter()
+                .zip([(success, true), (failure, true), (wake, false)])
         {
             assert!(matches!(item, RenderedTimelineItem::AutomatedInput {
                 origin: RequestOriginView::BackgroundCompletion { notification: observed },
