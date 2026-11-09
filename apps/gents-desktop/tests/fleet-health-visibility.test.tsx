@@ -16,11 +16,8 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     lastError: null,
     connectedPeerCount: 1,
     activationErrorCount: 0,
-    pendingDagCount: 0,
-    persistedPendingDagCount: 0,
-    pushRetryMarkerCount: 0,
-    exhaustedFetchCount: 0,
-    quarantinedDagCount: 0,
+    cause: null,
+    nextAction: null,
     ...overrides,
   };
 }
@@ -84,9 +81,9 @@ describe("fleet health visibility", () => {
       },
     };
     const syncing = syncHealth({
-      state: "syncing",
-      pendingDagCount: 1,
-      exhaustedFetchCount: 1,
+      state: "waiting",
+      cause: "discovery_degraded",
+      nextAction: "wait",
     });
     expect(deploymentStatus(stale, syncing).label).toBe("Online");
     renderRow(stale, syncing);

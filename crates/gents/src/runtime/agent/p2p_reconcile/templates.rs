@@ -1,6 +1,4 @@
-use gents_protocol::peer_schema::{
-    compare_replicated_schema, ReplicatedCollectionIdentity, ReplicatedSchema, ReplicatedSchemaSkew,
-};
+use gents_protocol::peer_schema::{ReplicatedCollectionIdentity, ReplicatedSchema};
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
@@ -180,35 +178,6 @@ pub async fn read_replicated_schema(
     Ok(schema)
 }
 
-pub fn compare_client_replicated_schema(
-    local: &ReplicatedSchema,
-    remote: Option<&ReplicatedSchema>,
-) -> Result<(), ReplicatedSchemaSkew> {
-    compare_replicated_schema(CLIENT_COLLECTIONS, local, remote).map_err(|mut skew| {
-        // Name the side that is off the canonical lineage, so the fix offered is re-creating
-        // that store rather than "update to the same version", which cannot help.
-        fn off_lineage(collections: &[String], schema: &ReplicatedSchema) -> Vec<String> {
-            collections
-                .iter()
-                .filter(|name| {
-                    schema.get(*name).is_some_and(|identity| {
-                        crate::store::schema::migration::is_known_off_lineage(
-                            name,
-                            &identity.version_id,
-                        )
-                    })
-                })
-                .cloned()
-                .collect()
-        }
-        skew.local_off_lineage = off_lineage(&skew.collections, local);
-        skew.remote_off_lineage = remote
-            .map(|schema| off_lineage(&skew.collections, schema))
-            .unwrap_or_default();
-        skew
-    })
-}
-
 pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
     BUILTIN_TEMPLATES.iter().find(|t| t.id == id)
 }
@@ -241,60 +210,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    #[tokio::test]
-    async fn changed_discovery_schema_is_refused_as_skew() {
-        async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::Node> {
-            let node =
-                std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-            let context = defra_core::RequestContext::default()
-                .with_identity(Some(node.node_identity_did().unwrap().to_owned()));
-            node.add_dac_policy_with_counter_as(
-                &context,
-                gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
-                0,
-            )
-            .await
-            .unwrap();
-            crate::test_support::acp_policies::install_identity_acp_policies(&node)
-                .await
-                .unwrap();
-            for sdl in schemas {
-                node.add_collection(sdl).await.unwrap();
-            }
-            node
-        }
-        let current = gents_protocol::schemas::ALL
-            .iter()
-            .map(|sdl| (*sdl).to_owned())
-            .collect::<Vec<_>>();
-        let previous = current
-            .iter()
-            .map(|sdl| {
-                if *sdl == gents_protocol::schemas::PEER_REGISTRY {
-                    sdl.replace("    endpoint_updated_at: String", "    revision: String")
-                } else {
-                    sdl.clone()
-                }
-            })
-            .collect::<Vec<_>>();
-        assert_ne!(previous, current, "fixture must change a discovery field");
-
-        let local = read_client_replicated_schema(node_with(&current).await)
-            .await
-            .unwrap();
-        let same = read_client_replicated_schema(node_with(&current).await)
-            .await
-            .unwrap();
-        assert!(compare_client_replicated_schema(&local, Some(&same)).is_ok());
-
-        let old = read_client_replicated_schema(node_with(&previous).await)
-            .await
-            .unwrap();
-        let skew = compare_client_replicated_schema(&local, Some(&old))
-            .expect_err("an old runtime schema must not enroll or sync");
-        assert!(format!("{skew:?}").contains("PeerRegistry"), "{skew:?}");
-    }
-
     #[test]
     fn unsupported_acp_filter_is_rejected() {
         let filters = [(
@@ -307,43 +222,6 @@ mod tests {
         .collect();
 
         assert!(to_replication_filters(&filters).is_err());
-    }
-
-    #[test]
-    fn client_schema_comparison_covers_every_client_route_collection() {
-        let identity = |version: &str| ReplicatedCollectionIdentity {
-            version_id: version.to_string(),
-            branchable: true,
-            policy_resource: None,
-        };
-        let local: ReplicatedSchema = CLIENT_COLLECTIONS
-            .iter()
-            .map(|name| ((*name).to_string(), identity(name)))
-            .collect();
-        assert_eq!(
-            compare_client_replicated_schema(&local, Some(&local)),
-            Ok(())
-        );
-
-        for name in CLIENT_COLLECTIONS {
-            let mut skewed = local.clone();
-            skewed.insert((*name).into(), identity("bafy-other-release"));
-            assert_eq!(
-                compare_client_replicated_schema(&local, Some(&skewed))
-                    .unwrap_err()
-                    .collections,
-                vec![(*name).to_string()]
-            );
-        }
-
-        let mut missing = local.clone();
-        missing.remove("PeerRegistry");
-        assert_eq!(
-            compare_client_replicated_schema(&local, Some(&missing))
-                .unwrap_err()
-                .collections,
-            vec!["PeerRegistry".to_string()]
-        );
     }
 
     #[tokio::test]

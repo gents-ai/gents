@@ -479,23 +479,67 @@ export function projectClientOperationalStatus(
   return null;
 }
 
-export type SyncHealthStateName =
-  "healthy" | "syncing" | "offline" | "failed" | "incompatible";
+export type SyncHealthStateName = "healthy" | "waiting" | "blocked";
 
 export function syncHealthState(
   syncHealth: SyncHealthView | null | undefined,
 ): SyncHealthStateName | null {
   switch (syncHealth?.state) {
     case "healthy":
-    case "syncing":
-    case "offline":
-    case "failed":
-    case "incompatible":
+    case "waiting":
+    case "blocked":
       return syncHealth.state;
     default:
       return null;
   }
 }
+
+type SyncCauseText = { label: string; shortLabel: string; detail: string };
+
+/** Presentation of each `ClientSyncHealth.Cause`; the bridge derives the cause. */
+const SYNC_CAUSE_TEXT: Record<string, SyncCauseText> = {
+  runtime_connecting: {
+    label: "Connecting to runtime",
+    shortLabel: "Connecting",
+    detail: "Waiting for the authenticated runtime connection.",
+  },
+  runtime_disconnected: {
+    label: "Runtime unreachable",
+    shortLabel: "Reconnecting",
+    detail: "The runtime connection was lost; reconnecting.",
+  },
+  runtime_refused: {
+    label: "Runtime refused this app",
+    shortLabel: "Refused",
+    detail:
+      "The runtime does not accept this app's credentials. Ask its owner to restore this device's access; it reconnects by itself once they do.",
+  },
+  runtime_no_endpoint: {
+    label: "Runtime has no endpoint",
+    shortLabel: "No endpoint",
+    detail: "This runtime has no endpoint this app can read. Connect the runtime again.",
+  },
+  enrollment_authentication: {
+    label: "Enrollment failed",
+    shortLabel: "Enroll again",
+    detail: "The enrolled runtime could not be authenticated. Enroll this device again.",
+  },
+  enrollment_route: {
+    label: "Finishing enrollment",
+    shortLabel: "Enrolling",
+    detail: "The enrollment route is not applied yet; retrying.",
+  },
+  discovery_degraded: {
+    label: "Discovery degraded",
+    shortLabel: "Discovery degraded",
+    detail: "The peer-to-peer transport probe is failing; retrying.",
+  },
+  discovery_offline: {
+    label: "Offline",
+    shortLabel: "Offline",
+    detail: "No configured peer can be reached. Check this device's network connection.",
+  },
+};
 
 export function projectSyncOperationalStatus(
   syncHealth: SyncHealthView | null | undefined,
@@ -506,33 +550,34 @@ export function projectSyncOperationalStatus(
       kind: "waiting",
       layer: "sync",
       reason: "sync_not_observed",
-      label: "Checking database sync",
+      label: "Checking sync",
       shortLabel: "Checking sync",
-      detail: "Waiting for the database sync coordinator's first observation.",
+      detail: "Waiting for the secure client's first sync observation.",
     });
   }
-  const label =
-    state === "healthy"
-      ? "Sync is healthy"
-      : state === "syncing"
-        ? "Syncing"
-        : state === "offline"
-          ? "Offline"
-          : state === "incompatible"
-            ? "Update required"
-            : "Sync failed";
+  if (state === "healthy") {
+    return status({
+      kind: "ready",
+      layer: "sync",
+      reason: "healthy",
+      label: "Sync is healthy",
+      shortLabel: "Sync healthy",
+      detail: "The runtime is reachable, enrollment is current and peers are discoverable.",
+    });
+  }
+  const cause = syncHealth?.cause ?? "unknown";
+  const text = SYNC_CAUSE_TEXT[cause] ?? {
+    label: "Sync needs attention",
+    shortLabel: "Sync",
+    detail: `Sync is ${state}.`,
+  };
   return status({
-    kind:
-      state === "healthy"
-        ? "ready"
-        : state === "syncing"
-          ? "syncing"
-          : "blocked",
+    kind: state,
     layer: "sync",
-    reason: state,
-    label,
-    shortLabel: state === "healthy" ? "Sync healthy" : label,
-    detail: syncHealth?.lastError ?? `Database synchronization is ${state}.`,
+    reason: cause,
+    label: text.label,
+    shortLabel: text.shortLabel,
+    detail: syncHealth?.lastError ?? text.detail,
   });
 }
 
@@ -541,12 +586,10 @@ export function syncHealthDiagnostics(
 ) {
   return {
     state: syncHealthState(syncHealth),
+    cause: syncHealth?.cause ?? null,
+    nextAction: syncHealth?.nextAction ?? null,
     lastError: syncHealth?.lastError ?? null,
     connectedPeerCount: syncHealth?.connectedPeerCount ?? 0,
-    pendingDagCount: syncHealth?.pendingDagCount ?? null,
-    persistedPendingDagCount: syncHealth?.persistedPendingDagCount ?? null,
-    pushRetryMarkerCount: syncHealth?.pushRetryMarkerCount ?? null,
-    exhaustedFetchCount: syncHealth?.exhaustedFetchCount ?? null,
-    quarantinedDagCount: syncHealth?.quarantinedDagCount ?? null,
+    activationErrorCount: syncHealth?.activationErrorCount ?? 0,
   };
 }

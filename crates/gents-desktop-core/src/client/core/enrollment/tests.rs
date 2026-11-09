@@ -2019,8 +2019,6 @@ async fn pending_request_requires_the_exact_current_applied_route() {
 async fn enrollment_challenge_waits_for_prior_route_teardown() {
     use crate::client::paths::DesktopPaths;
     use futures::FutureExt;
-    use gents::runtime::agent::p2p_reconcile::read_client_replicated_schema;
-    use gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD;
     use std::sync::atomic::Ordering::SeqCst;
 
     let temp = tempfile::tempdir().unwrap();
@@ -2038,18 +2036,10 @@ async fn enrollment_challenge_waits_for_prior_route_teardown() {
         observations: 0.into(),
     });
     core.p2p = transport.clone();
-    let schema = read_client_replicated_schema(core.node_arc())
-        .await
-        .unwrap();
     let status = json!({
         "node_did":authority.offer.owner_node_did,
         "enrollment":{"token":authority.offer_token},
-        STATUS_REPLICATED_SCHEMA_FIELD:schema,
     });
-    core.sync_state
-        .compare_runtime_schema(&core.node, &authority.offer.owner_node_did, &status)
-        .await
-        .unwrap();
     {
         let cleanup = core.route_manager.lock().await;
         let request = core.request_status_enrollment(&status);

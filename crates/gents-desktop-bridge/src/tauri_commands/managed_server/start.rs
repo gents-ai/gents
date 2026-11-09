@@ -4,9 +4,7 @@ use super::launch::{fail_managed_start, launch_managed_server, LaunchFailure, Na
 use super::native::{
     ensure_launchable_here, launchable_native_service, native_service, run_native,
 };
-use super::pairing::{
-    pairing_is_ready, pairing_target, start_managed_runtime_pairing, start_running_managed_pairing,
-};
+use super::pairing::{pairing_is_ready, pairing_target, start_running_managed_pairing};
 use super::port::{
     ensure_default_port_identity, matching_external_server, observe_port_readiness,
     user_status_signer, PortReadiness,
@@ -146,7 +144,6 @@ where
             core.refresh_local_standard_peer(&node_home, &target.node_name)
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
-            start_managed_runtime_pairing(state, core, target).await;
         }
         external.pairing_ready = pairing_is_ready(state, external.node_did.as_deref()).await;
         return Ok(external);

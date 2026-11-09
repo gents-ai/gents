@@ -406,6 +406,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_chat_readiness_cases: Vec<serde_json::Value>,
     pub(crate) client_route_pairing_legs: Vec<serde_json::Value>,
     pub(crate) client_chat_readiness_causes: Vec<serde_json::Value>,
+    pub(crate) client_sync_health_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_route_readiness_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_startup_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,

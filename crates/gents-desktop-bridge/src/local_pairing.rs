@@ -25,27 +25,6 @@ pub(crate) enum PairingFailure {
     Transient(String),
 }
 
-pub(crate) const PERMANENT_PAIRING_ERRORS: &[&str] =
-    &["incompatible", "does not match", "predates this app"];
-
-impl PairingFailure {
-    /// Not yet typed: the pairing closures flatten desktop-core, runtime
-    /// status and server-host failures to strings before this reads them, so
-    /// a permanent refusal (runtime schema skew, outdated runtime, offer or
-    /// identity mismatch) is recognized by its wording. Each origin should
-    /// return a typed refusal the pairing flow matches instead.
-    pub(crate) fn classify(message: String) -> Self {
-        if PERMANENT_PAIRING_ERRORS
-            .iter()
-            .any(|permanent| message.contains(permanent))
-        {
-            Self::Permanent(message)
-        } else {
-            Self::Transient(message)
-        }
-    }
-}
-
 impl std::fmt::Display for PairingFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -140,7 +119,7 @@ where
             return Ok(());
         }
         if !approval_committed {
-            match approve().await.map_err(PairingFailure::classify)? {
+            match approve().await.map_err(PairingFailure::Transient)? {
                 PairingApproval::Committed => approval_committed = true,
                 PairingApproval::NotVisibleYet => {}
             }
@@ -158,28 +137,38 @@ where
     }
 }
 
-pub(crate) const MANAGED_SCHEMA_PUBLISH_WINDOW: Duration = Duration::from_secs(30);
+pub(crate) const MANAGED_STATUS_READY_WINDOW: Duration = Duration::from_secs(30);
 
+/// The runtime's own `/status` lifecycle types the one permanent refusal here:
+/// an outdated runtime never starts accepting this app until it restarts.
 pub(crate) async fn fetch_managed_runtime_status(
     graphql: &str,
     cancel: &tokio_util::sync::CancellationToken,
-) -> Result<serde_json::Value, String> {
-    let mut status_url = reqwest::Url::parse(graphql)
-        .map_err(|error| format!("parsing managed runtime GraphQL URL: {error}"))?;
+) -> Result<serde_json::Value, PairingFailure> {
+    let mut status_url = reqwest::Url::parse(graphql).map_err(|error| {
+        PairingFailure::Transient(format!(
+            "loading managed runtime enrollment offer: parsing managed runtime GraphQL URL: {error}"
+        ))
+    })?;
     status_url.set_path("/status");
     status_url.set_query(None);
     status_url.set_fragment(None);
-    let deadline = tokio::time::Instant::now() + MANAGED_SCHEMA_PUBLISH_WINDOW;
+    let deadline = tokio::time::Instant::now() + MANAGED_STATUS_READY_WINDOW;
     loop {
         let fetched = tokio::select! {
             fetched = fetch_runtime_connection_payload(status_url.as_str()) => {
-                fetched.map_err(|error| format!("{error:#}"))
+                fetched.map_err(|error| PairingFailure::Transient(format!(
+                    "loading managed runtime enrollment offer: {error:#}"
+                )))
             }
-            () = cancel.cancelled() => return Err("managed runtime status wait was cancelled".to_string()),
+            () = cancel.cancelled() => return Err(PairingFailure::Cancelled),
         };
         let observed = fetched.as_ref().ok().map(ObservedServeLifecycle::observe);
         if let Some(ObservedServeLifecycle::Outdated { version }) = observed {
-            return Err(outdated_runtime_message(version.as_deref()));
+            return Err(PairingFailure::Permanent(format!(
+                "loading managed runtime enrollment offer: {}",
+                outdated_runtime_message(version.as_deref())
+            )));
         }
         if observed.is_some_and(|observed| observed.is_ready())
             || tokio::time::Instant::now() >= deadline
@@ -188,32 +177,9 @@ pub(crate) async fn fetch_managed_runtime_status(
         }
         tokio::select! {
             () = tokio::time::sleep(Duration::from_millis(500)) => {}
-            () = cancel.cancelled() => return Err("managed runtime status wait was cancelled".to_string()),
+            () = cancel.cancelled() => return Err(PairingFailure::Cancelled),
         }
     }
-}
-
-#[cfg(feature = "tauri-host")]
-pub(crate) async fn observe_managed_runtime_schema(
-    core: &ClientCore,
-    target: &ManagedPairingTarget,
-) -> Result<(), String> {
-    let observation = core
-        .begin_runtime_schema_observation(&target.node_did, &target.graphql)
-        .ok_or_else(|| {
-            format!(
-                "managed runtime {} no longer routes through {}",
-                target.node_did, target.graphql
-            )
-        })?;
-    let endpoint = observation
-        .endpoint()
-        .ok_or_else(|| "managed runtime route has no endpoint".to_string())?;
-    let status =
-        fetch_managed_runtime_status(endpoint, &tokio_util::sync::CancellationToken::new()).await?;
-    core.finish_runtime_schema_observation(&observation, &status)
-        .await
-        .map_err(|error| format!("{error:#}"))
 }
 
 pub(crate) async fn ensure_managed_runtime_pairing(
@@ -231,17 +197,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
         return Ok(());
     }
 
-    let status = fetch_managed_runtime_status(&target.graphql, cancel)
-        .await
-        .map_err(|error| {
-            if cancel.is_cancelled() {
-                PairingFailure::Cancelled
-            } else {
-                PairingFailure::classify(format!(
-                    "loading managed runtime enrollment offer: {error}"
-                ))
-            }
-        })?;
+    let status = fetch_managed_runtime_status(&target.graphql, cancel).await?;
     if cancel.is_cancelled() {
         return Err(PairingFailure::Cancelled);
     }
@@ -269,7 +225,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                 .await
                 .map(|request| request.request_id)
                 .map_err(|error| {
-                    PairingFailure::classify(format!(
+                    PairingFailure::Transient(format!(
                         "requesting managed runtime enrollment: {error:#}"
                     ))
                 })
@@ -399,7 +355,7 @@ where
         Ok(None) => author().await,
         Ok(Some(request)) if request.state == "pending_approval" => {
             resend(request.request_id.clone()).await.map_err(|error| {
-                PairingFailure::classify(format!("resending managed runtime enrollment: {error}"))
+                PairingFailure::Transient(format!("resending managed runtime enrollment: {error}"))
             })?;
             Ok(request.request_id)
         }

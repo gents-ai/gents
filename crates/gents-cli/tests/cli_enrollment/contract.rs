@@ -786,8 +786,8 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
         Err(_) => None,
     };
     format!(
-        "observer={:?}; database_now={database_now:?}; runtime_database={runtime_database:?}; runtime_replicators={runtime_replicators:?}; database={:?}; peers={:?}; client={client:?}; runtime={runtime:?}",
-        core.observer_metrics().await, sync.database_sync, sync.peers
+        "observer={:?}; database_now={database_now:?}; runtime_database={runtime_database:?}; runtime_replicators={runtime_replicators:?}; transport={:?}; peers={:?}; client={client:?}; runtime={runtime:?}",
+        core.observer_metrics().await, sync.transport, sync.peers
     )
 }
 
