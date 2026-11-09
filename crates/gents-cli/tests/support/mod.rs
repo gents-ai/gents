@@ -162,7 +162,7 @@ pub struct UserSeededHome {
     node: std::sync::Arc<gents::defra_node::Node>,
     access: gents::ConfigAccess,
     _claim: gents::store::local::home::StoreLock,
-    _runtime: gents::KeyIdentity,
+    _runtime: std::sync::Arc<gents::KeyIdentity>,
 }
 
 impl UserSeededHome {
@@ -178,13 +178,23 @@ impl UserSeededHome {
             &["--identity-only", "--node-name", node_name, "--home", home],
         )?;
         let node_did = node_did_from_init(&init)?;
-        let runtime = gents::KeyIdentity::load_existing(
-            init["key_path"]
-                .as_str()
-                .context("identity-only init output missing key_path")?,
-            None,
-        )
-        .context("loading the home's Node key")?;
+        let runtime = std::sync::Arc::new(
+            gents::KeyIdentity::load_existing(
+                init["key_path"]
+                    .as_str()
+                    .context("identity-only init output missing key_path")?,
+                None,
+            )
+            .context("loading the home's Node key")?,
+        );
+        let tool_root = init["tool_root"].as_str().map(std::path::Path::new);
+        let ceiling = match (init["tool_ceiling"].as_str(), tool_root) {
+            (Some("meta-only"), _) => gents::ToolCeiling::meta_only(),
+            (Some("readonly"), Some(root)) => gents::ToolCeiling::readonly_at(root),
+            (Some("readonly"), None) => gents::ToolCeiling::readonly(),
+            (Some("readwrite"), Some(root)) => gents::ToolCeiling::readwrite(root),
+            other => anyhow::bail!("identity-only init output has no tool ceiling: {other:?}"),
+        };
         let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
             &graphql::cli_client_paths(cwd, &[]),
         )
@@ -196,6 +206,12 @@ impl UserSeededHome {
         let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
         let node = std::sync::Arc::new(
             gents::store::local::store_key::persistent_builder(&data, &key)?
+                // The home's own projector, as its runtime and CLI open it,
+                // projects published documents' native source edges.
+                .with_document_projector(gents::store::local::document_projector(
+                    runtime.clone(),
+                    std::sync::Arc::new(ceiling),
+                )?)
                 .with_node_identity_did(node_did)
                 .with_node_acp_enabled()
                 .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
@@ -245,6 +261,148 @@ impl UserSeededHome {
     pub async fn shutdown(self) -> anyhow::Result<()> {
         self.node.shutdown().await?;
         Ok(())
+    }
+
+    pub fn node_did(&self) -> &str {
+        gents::NodeIdentity::did(self._runtime.as_ref())
+    }
+
+    /// Publishes the home's Node and a managed Agent as the User, then creates
+    /// `session_id` as that Agent's own session, related to its Agent document
+    /// as the runtime's sessions are. Returns the Agent's signer.
+    pub async fn managed_agent_session(
+        &self,
+        display_name: &str,
+        session_id: &str,
+    ) -> anyhow::Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+        use anyhow::Context as _;
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents::Collection;
+        use gents::NodeIdentity as _;
+        let node_did = self.node_did().to_owned();
+        let user = identity::Did::new(
+            self.access
+                .actor_did()
+                .context("seeded home access has no User")?,
+        )?;
+        let apply = |documents: Vec<(Collection, serde_json::Value)>| async move {
+            let plan = DesiredStateApplyPlan::new(
+                documents
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+            )?;
+            self.access
+                .transact_write("test.seed.managed_agent", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                })
+                .await
+        };
+        apply(vec![(
+            Collection::Node,
+            serde_json::json!({"node_did": node_did}),
+        )])
+        .await?;
+        let binding = gents::store::identity::provision_agent_identity_authorized(
+            &self.node,
+            self._runtime.as_ref(),
+            &user,
+        )
+        .await?;
+        let agent_did = binding.agent_did.clone();
+        let backend_id = format!("{agent_did}:backend");
+        let profile_id = format!("{agent_did}:inference");
+        let documents = vec![
+            (
+                Collection::InferenceBackend,
+                serde_json::json!({
+                    "node_did": node_did, "backend_id": backend_id, "name": "Test inference",
+                    "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
+                    "auth": {"kind": "unauthenticated"},
+                }),
+            ),
+            (
+                Collection::InferenceProfile,
+                serde_json::json!({
+                    "node_did": node_did, "profile_id": profile_id,
+                    "backend_id": backend_id, "model_name": "test-model",
+                }),
+            ),
+            (
+                Collection::Agent,
+                serde_json::json!({
+                    "node_did": node_did, "agent_did": agent_did,
+                    "creation_nonce": binding.creation_nonce, "display_name": display_name,
+                    "inference_profile_id": profile_id, "enabled": true,
+                }),
+            ),
+        ];
+        apply(documents).await?;
+        let agent =
+            gents::store::identity::resolve_agent_identity(self._runtime.as_ref(), &binding)?;
+        gents::store::identity::GrantSet::AgentBaseline
+            .grant(
+                &gents::ConfigAccess::local_as(self.node.clone(), identity::Did::new(&node_did)?),
+                &identity::Did::new(agent.did())?,
+            )
+            .await?;
+        let agent_access = gents::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(agent.did())?,
+            agent.as_ref(),
+        )?;
+        agent_access
+            .transact_write("test.seed.agent_session", |txn| {
+                let (node_did, agent_did) = (&node_did, &agent_did);
+                Box::pin(async move {
+                    let (agent_doc, _) =
+                        gents::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            Collection::Agent,
+                            node_did,
+                            agent_did,
+                        )
+                        .await?
+                        .context("published Agent")?;
+                    let response = txn
+                        .execute_with_variables(
+                            "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) {_docID} }",
+                            &serde_json::json!({"input": {
+                                "node_did": node_did, "session_id": session_id,
+                                "requester_did": agent_did, "agent_did": agent_did,
+                                "created_at": "2026-10-24T00:00:00Z",
+                                "relationships_pending": false,
+                            }}),
+                        )
+                        .await?;
+                    let session_doc =
+                        gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                    txn.add_resource_relationship(
+                        "AgentSession",
+                        &session_doc,
+                        "parent",
+                        "agents",
+                        &agent_doc,
+                    )
+                    .await?;
+                    txn.add_actor_relationship(
+                        "AgentSession",
+                        &session_doc,
+                        "working_agent",
+                        &agent_did.parse()?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await?;
+        Ok(agent)
     }
 }
 

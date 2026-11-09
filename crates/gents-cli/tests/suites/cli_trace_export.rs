@@ -772,7 +772,14 @@ async fn seed_v2_rendered_request_rows(node: &UserSeededHome) -> Result<()> {
     Ok(())
 }
 
+/// Captures a manifest request as the runtime's sink does: a managed Agent
+/// signs it into its own session, which the home's User then reads.
 async fn seed_manifest_rendered_request_row(node: &UserSeededHome) -> Result<()> {
+    let session_id = "session-cap-manifest";
+    let agent = node
+        .managed_agent_session("Trace capture agent", session_id)
+        .await?;
+    let (node_did, agent_did) = (node.node_did().to_owned(), agent.did().to_owned());
     let capture_scope = "inference.1".to_string();
     let assembly_trace = gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
         gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
@@ -784,12 +791,15 @@ async fn seed_manifest_rendered_request_row(node: &UserSeededHome) -> Result<()>
         "native_tool_output": {"ok": true, "exit_code": 3},
         "padding": "q".repeat(6 * 1024)
     }]);
-    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node.node()));
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new_managed(
+        Arc::clone(node.node()),
+        agent.as_ref(),
+    )?;
     sink.capture(RenderedCompletionRequest {
         capture_key: gents::inference::rendered_request::capture_key(
-            "did:test:amy",
-            "session-cap-manifest",
-            "",
+            &node_did,
+            session_id,
+            &agent_did,
             &capture_scope,
             0,
             0,
@@ -801,10 +811,10 @@ async fn seed_manifest_rendered_request_row(node: &UserSeededHome) -> Result<()>
         capture_scope: capture_scope.clone(),
         turn_index: 0,
         attempt: 0,
-        node_did: "did:test:amy".into(),
-        requester_did: String::new(),
-        agent_did: "amy".into(),
-        session_id: "session-cap-manifest".into(),
+        node_did: node_did.clone(),
+        requester_did: agent_did.clone(),
+        agent_did: agent_did.clone(),
+        session_id: session_id.into(),
         model_name: "test-model".into(),
         source: gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
         request_json: json!({
