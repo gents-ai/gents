@@ -30,13 +30,9 @@ import { nodeOrFirst, nodeOf } from "./fleetStore";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { heldFor, readSession } from "./sessionStore";
-import {
-  unresolvedSubmissionFor,
-  forgetUnresolvedSubmission,
-} from "./unresolvedSubmissions";
 import type { ShellProjection, ShellStores } from "./shellProjection";
-import { createChatDelivery } from "./chatDelivery";
-import { chatDraftRequest, retainChatDraft, type ChatDraft } from "./chatDrafts";
+import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
+import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
 
@@ -50,11 +46,6 @@ type ChatActionParams = {
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
 };
-
-export const DELIVERY_UNKNOWN_HINT =
-  "Your message may have been delivered. Use Check message delivery or Resume saved message to resolve the original send.";
-export const EARLIER_SEND_NOT_DELIVERED_HINT =
-  "Your earlier message was not delivered. Send it again.";
 
 export function sessionShowsRequest(
   session: DesktopSessionSnapshot | null,
@@ -324,75 +315,6 @@ export function createChatActions({
     chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
       if (!callerDid) throw new Error("Connect this client before sending a message.");
-      let earlier = unresolvedSubmissionFor(
-        node.nodeDid,
-        selectedSessionId,
-        content,
-        attachments,
-      );
-      if (
-        earlier &&
-        sessionShowsRequest(
-          heldFor(readSession(stores.session), earlier.sessionId, node.nodeDid),
-          earlier.requestId,
-        )
-      ) {
-        forgetUnresolvedSubmission(earlier.requestId);
-        earlier = undefined;
-      }
-      if (earlier) {
-        const reply = await api.sendChatMessage({
-          nodeDid: node.nodeDid,
-          agentDid: admission.agentDid,
-          sessionId: earlier.sessionId,
-          content,
-          attachments,
-          resolveRequestId: earlier.requestId,
-        });
-        if (
-          reply.nodeDid !== earlier.nodeDid ||
-          reply.sessionId !== earlier.sessionId ||
-          reply.requestId !== earlier.requestId
-        )
-          throw new Error("The reply does not match the earlier saved message.");
-        if (reply.outcome !== "deliveryUnknown")
-          forgetUnresolvedSubmission(earlier.requestId);
-        if (reply.outcome) {
-          if (acceptsView() && selection.acceptsIntent(store, intent)) {
-            chat.resetWorkflow(stores.chat);
-            reportSendFailure(
-              reply.outcome === "notDelivered"
-                ? `${EARLIER_SEND_NOT_DELIVERED_HINT}${reply.deliveryError ? ` ${reply.deliveryError.message}` : ""}`
-                : `${DELIVERY_UNKNOWN_HINT}${reply.deliveryError ? ` ${reply.deliveryError.message}` : ""}`,
-            );
-          }
-          return null;
-        }
-        const draft = retainChatDraft(
-          {
-            clientDid: callerDid,
-            requestId: reply.requestId,
-            nodeDid: reply.nodeDid,
-            sessionId: reply.sessionId,
-            agentDid: reply.agentDid,
-            content,
-            attachments,
-            cwd,
-          },
-          selectedSessionId,
-          status.kind === "queue",
-        );
-        await applyChatResult(reply, draft, intent, acceptsView);
-        if (
-          reply.deliveryError &&
-          acceptsView() &&
-          selection.acceptsIntent(store, intent)
-        )
-          reportSendFailure(
-            `Your message was delivered, but its saved-message cleanup failed: ${reply.deliveryError.message}`,
-          );
-        return reply;
-      }
       const result = await chatDelivery.submit(
         {
           clientDid: callerDid,
@@ -409,21 +331,15 @@ export function createChatActions({
         status.kind === "queue",
         (result, draft) => applyChatResult(result, draft, intent, acceptsView),
       );
-      if (result.outcome) {
-        if (acceptsView() && selection.acceptsIntent(store, intent)) {
-          chat.resetWorkflow(stores.chat);
-          reportSendFailure(
-            result.outcome === "notDelivered"
-              ? `${EARLIER_SEND_NOT_DELIVERED_HINT}${result.deliveryError ? ` ${result.deliveryError.message}` : ""}`
-              : `${DELIVERY_UNKNOWN_HINT}${result.deliveryError ? ` ${result.deliveryError.message}` : ""}`,
-          );
-        }
-        return null;
-      }
       return result;
     } catch (error) {
-      if (!acceptsView() || !selection.acceptsIntent(store, intent)) return null;
+      if (!acceptsView() || !selection.acceptsIntent(store, intent))
+        return error instanceof ChatViewUpdateError ? error.result : null;
       chat.resetWorkflow(stores.chat);
+      if (error instanceof ChatViewUpdateError) {
+        reportFailure(error.message);
+        return error.result;
+      }
       reportSendFailure(actionFailure("send the message", error));
       return null;
     } finally {
@@ -790,18 +706,13 @@ export function createChatActions({
       return result;
     },
     dismissGoalChange: goalDelivery.dismiss,
-    async recoverChatMessage(
-      requestId: string,
-      resume = false,
-      acceptsView: () => boolean = () => true,
-    ) {
+    /** Resend a failed message under its original identity. */
+    async retryChatMessage(requestId: string, acceptsView: () => boolean = () => true) {
       const intent = selection.captureIntent(store);
-      const result = await chatDelivery.recover(requestId, resume, (result, draft) =>
+      const result = await chatDelivery.retry(requestId, (result, draft) =>
         applyChatResult(result, draft, intent, acceptsView),
       );
       if (
-        result &&
-        !result.outcome &&
         acceptsView() &&
         selection.acceptsIntent(store, intent) &&
         store.getState().sessionId === result.sessionId &&
@@ -820,16 +731,7 @@ export function createChatActions({
       }
       return result;
     },
-    dismissChatMessage: chatDelivery.dismiss,
-    async setAsideChatMessage(
-      requestId: string,
-      acceptsView: () => boolean = () => true,
-    ) {
-      const intent = selection.captureIntent(store);
-      await chatDelivery.setAside(requestId, (result, draft) =>
-        applyChatResult(result, draft, intent, acceptsView),
-      );
-    },
+    discardChatMessage: chatDelivery.discard,
     interruptRequest,
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),

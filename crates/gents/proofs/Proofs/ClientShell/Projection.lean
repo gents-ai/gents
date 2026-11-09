@@ -1,4 +1,5 @@
 import Proofs.ClientShell.Transition
+import Proofs.ClientShell.ChatReadiness
 
 inductive SelectionHealth where
   | noSelection
@@ -74,8 +75,14 @@ structure RecoveryStatus where
 def projectTransportRecovery (connected : Bool) : RecoveryStatus :=
   { kind := if connected then .ready else .waiting, action := none }
 
-def projectRouteRecovery (routeReady : Bool) (_pairingPending : Bool) : RecoveryStatus :=
-  { kind := if routeReady then .ready else .waiting, action := none }
+/-- The chat write route follows the chat write fence alone
+(`ClientChatReadiness`): no refusal is ready, a refusal that awaits the
+runtime's advertisement waits, and one whose next action is connecting the
+runtime is blocked. Pairing is not an input. -/
+def projectRouteRecovery : Option ClientChatReadiness.Cause → RecoveryStatus
+  | none => { kind := .ready, action := none }
+  | some .endpointNotAdvertised => { kind := .waiting, action := none }
+  | some _ => { kind := .blocked, action := none }
 
 def projectConnectionFailure : RecoveryStatus :=
   { kind := .blocked, action := none }
@@ -88,17 +95,24 @@ theorem transport_recovery_requires_no_action (connected : Bool) :
     (projectTransportRecovery connected).action = none := by
   rfl
 
-theorem route_recovery_requires_no_action (ready pairingPending : Bool) :
-    (projectRouteRecovery ready pairingPending).action = none := by
-  rfl
+theorem route_recovery_requires_no_action (refusal : Option ClientChatReadiness.Cause) :
+    (projectRouteRecovery refusal).action = none := by
+  cases refusal with
+  | none => rfl
+  | some cause => cases cause <;> rfl
 
 theorem offline_transport_waits :
     (projectTransportRecovery false).kind = .waiting := by
   rfl
 
-theorem unready_route_waits (pairingPending : Bool) :
-    (projectRouteRecovery false pairingPending).kind = .waiting := by
-  rfl
+/-- The route is ready exactly when the fence admits the write. -/
+theorem route_ready_iff_fence_admits (route : Option ClientChatReadiness.Route) :
+    (projectRouteRecovery (match ClientChatReadiness.chatReadiness route with
+      | .ready => none | .notReady cause => some cause)).kind = .ready ↔
+      ClientChatReadiness.chatReadiness route = .ready := by
+  cases h : ClientChatReadiness.chatReadiness route with
+  | ready => simp [projectRouteRecovery]
+  | notReady cause => cases cause <;> simp [projectRouteRecovery]
 
 /-- Request progress is projected directly from the persisted request
 lifecycle. Clients may choose presentation, but must not collapse the active

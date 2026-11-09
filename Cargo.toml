@@ -138,7 +138,7 @@ toml = "0.8"
 tracing = "0.1"
 tracing-opentelemetry = { version = "0.32.1", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 
 [profile.release]
 # On the dedicated M4 release host, disabling LTO with 16 CGUs cut a fresh-target

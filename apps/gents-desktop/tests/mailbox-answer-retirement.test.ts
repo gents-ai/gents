@@ -6,7 +6,6 @@ import type {
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
 import { testApp, node, publish, publishSnapshot } from "./app-fixture";
-import { acceptedChat } from "./chat-delivery-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { deferred } from "./deferred";
 import {
@@ -62,17 +61,16 @@ function answer(requestId = "answer", sourceNodeDid = NODE) {
       itemId: "question",
       summary: "Yes",
     }),
-    result: acceptedChat(request),
+    confirmed: true as const,
   };
 }
 function fixture(items: MailboxItemView[] = []) {
   const observe = vi.fn().mockResolvedValue(closed());
-  const ack = vi.fn().mockResolvedValue(undefined);
   const app = testApp({
-    api: { observeMailboxItem: observe, acknowledgeChatSubmission: ack },
+    api: { observeMailboxItem: observe },
     deployments: [node({ nodeDid: NODE, mailboxItems: items })],
   });
-  return { app, observe, ack };
+  return { app, observe };
 }
 const flush = () => act(async () => {});
 
@@ -89,34 +87,26 @@ it("keeps an open answer latched and requires a positive exact native closure af
     nodeDid: NODE,
     itemId: "question",
   });
-  expect(f.ack).not.toHaveBeenCalled();
   expect(loadChatDrafts().chatDrafts).toHaveLength(1);
   publish(f.app, [node({ nodeDid: NODE, mailboxItems: [question] })]);
   await flush();
   publish(f.app, [node({ nodeDid: NODE })]);
   await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
-  expect(f.ack).toHaveBeenCalledExactlyOnceWith(answer().result.submissionReceipt);
 });
 
 it.each(["acted", "dismissed", "expired"])(
-  "retires a restored confirmed answer only after %s and successful acknowledgement",
+  "retires a restored confirmed answer once its question is %s",
   async (status) => {
-    const waiting = deferred();
-    const saved = answer();
     const f = fixture();
     f.observe.mockResolvedValue(closed(status));
-    f.ack.mockReturnValue(waiting.promise);
-    saveChatDraft(f.app.stores.chat, saved);
-    await waitFor(() => expect(f.ack).toHaveBeenCalledTimes(1));
-    expect(loadChatDrafts().chatDrafts).toHaveLength(1);
-    await act(async () => waiting.resolve());
-    expect(loadChatDrafts().chatDrafts).toHaveLength(0);
+    saveChatDraft(f.app.stores.chat, answer());
+    await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
     expect(f.app.stores.chat.getState().chatDrafts).toHaveLength(0);
   },
 );
 
-it.each(["missing", "open", "read-failure", "ack-failure"])(
-  "preserves the original resolver after %s",
+it.each(["missing", "open", "read-failure"])(
+  "keeps the confirmed answer after %s",
   async (failure) => {
     const f = fixture();
     if (failure === "missing") f.observe.mockResolvedValue(null);
@@ -124,89 +114,67 @@ it.each(["missing", "open", "read-failure", "ack-failure"])(
       f.observe.mockResolvedValue({ item: question, terminal: false });
     if (failure === "read-failure")
       f.observe.mockRejectedValue(new Error("Unavailable"));
-    if (failure === "ack-failure") f.ack.mockRejectedValue(new Error("Reply lost"));
     saveChatDraft(f.app.stores.chat, answer());
     await flush();
     expect(loadChatDrafts().chatDrafts).toEqual([answer()]);
     expect(f.observe).toHaveBeenCalledTimes(1);
-    expect(f.ack).toHaveBeenCalledTimes(failure === "ack-failure" ? 1 : 0);
   },
 );
 
-it("does not resolve or acknowledge uncertain answers even when their question is closed", async () => {
+it("never retires an unconfirmed answer even when its question is closed", async () => {
   const f = fixture();
-  const saved = answer();
-  saveChatDraft(f.app.stores.chat, {
-    ...saved,
-    result: { ...saved.result, outcome: "deliveryUnknown" },
-  });
+  const { confirmed: _, ...saved } = answer();
+  saveChatDraft(f.app.stores.chat, saved);
   await flush();
   expect(f.observe).not.toHaveBeenCalled();
-  expect(f.ack).not.toHaveBeenCalled();
-  expect(loadChatDrafts().chatDrafts[0].result?.outcome).toBe("deliveryUnknown");
+  expect(loadChatDrafts().chatDrafts[0].confirmed).toBeUndefined();
 });
 
-it("coalesces updates and waits for in-flight delivery before observing closure", async () => {
+it("coalesces updates into one closure observation", async () => {
   const f = fixture();
   const observed = deferred<MailboxItemObservation>();
   f.observe.mockReturnValue(observed.promise);
-  f.app.stores.chat.setState({ chatRequestsInFlight: new Set(["answer"]) });
   saveChatDraft(f.app.stores.chat, answer());
-  await flush();
-  expect(f.observe).not.toHaveBeenCalled();
-  f.app.stores.chat.setState({ chatRequestsInFlight: new Set() });
   await flush();
   for (let i = 0; i < 10; i++)
     publish(f.app, [node({ nodeDid: NODE, label: String(i) })]);
   await flush();
   expect(f.observe).toHaveBeenCalledTimes(1);
   await act(async () => observed.resolve(closed()));
-  expect(f.ack).toHaveBeenCalledTimes(1);
   expect(loadChatDrafts().chatDrafts).toHaveLength(0);
 });
 
-it.each(["observation", "acknowledgement"])(
-  "fences a client switch during %s",
-  async (boundary) => {
-    const f = fixture();
-    const waiting = deferred<MailboxItemObservation>();
-    const ack = deferred();
-    if (boundary === "observation") f.observe.mockReturnValue(waiting.promise);
-    else f.ack.mockReturnValue(ack.promise);
-    saveChatDraft(f.app.stores.chat, answer());
-    await flush();
-    const snapshot = f.app.stores.client.getState().snapshot!;
-    publishSnapshot(f.app, {
-      ...snapshot,
-      client: { ...snapshot.client!, clientDid: "other-client" },
-    });
-    await act(async () => {
-      waiting.resolve(closed());
-      ack.resolve();
-    });
-    expect(loadChatDrafts().chatDrafts).toHaveLength(1);
-    expect(f.ack).toHaveBeenCalledTimes(boundary === "acknowledgement" ? 1 : 0);
-  },
-);
-
-it("checks persisted data again after acknowledgement and preserves newer or changed answers", async () => {
+it("fences a client switch during observation", async () => {
   const f = fixture();
-  const ack = deferred();
-  f.ack.mockReturnValue(ack.promise);
+  const waiting = deferred<MailboxItemObservation>();
+  f.observe.mockReturnValue(waiting.promise);
   saveChatDraft(f.app.stores.chat, answer());
-  await waitFor(() => expect(f.ack).toHaveBeenCalledTimes(1));
-  const saved = answer();
-  saveChatDraft(f.app.stores.chat, {
-    ...saved,
-    result: { ...saved.result, outcome: "deliveryUnknown" },
+  await flush();
+  const snapshot = f.app.stores.client.getState().snapshot!;
+  publishSnapshot(f.app, {
+    ...snapshot,
+    client: { ...snapshot.client!, clientDid: "other-client" },
   });
-  saveChatDraft(f.app.stores.chat, { ...answer("newer"), result: undefined });
-  await act(async () => ack.resolve());
+  await act(async () => waiting.resolve(closed()));
+  expect(loadChatDrafts().chatDrafts).toHaveLength(1);
+});
+
+it("checks persisted data again after observation and preserves newer or changed answers", async () => {
+  const f = fixture();
+  const observed = deferred<MailboxItemObservation>();
+  f.observe.mockReturnValue(observed.promise);
+  saveChatDraft(f.app.stores.chat, answer());
+  await waitFor(() => expect(f.observe).toHaveBeenCalledTimes(1));
+  const { confirmed: _, ...changed } = answer();
+  saveChatDraft(f.app.stores.chat, changed);
+  const { confirmed: __, ...newer } = answer("newer");
+  saveChatDraft(f.app.stores.chat, newer);
+  await act(async () => observed.resolve(closed()));
   expect(loadChatDrafts().chatDrafts.map((row) => row.requestId)).toEqual([
     "answer",
     "newer",
   ]);
-  expect(loadChatDrafts().chatDrafts[0].result?.outcome).toBe("deliveryUnknown");
+  expect(loadChatDrafts().chatDrafts[0].confirmed).toBeUndefined();
 });
 
 it("reconciles a confirmed answer from saved storage after app recreation without publishing again", async () => {
@@ -221,7 +189,6 @@ it("reconciles a confirmed answer from saved storage after app recreation withou
     nodeDid: NODE,
     itemId: "question",
   });
-  expect(restored.ack).toHaveBeenCalledExactlyOnceWith(saved.result.submissionReceipt);
 });
 
 it("observes closure at the mailbox host when the reply targets another runtime", async () => {
@@ -239,7 +206,6 @@ it("observes closure at the mailbox host when the reply targets another runtime"
     nodeDid: source,
     itemId: "question",
   });
-  expect(f.ack).not.toHaveBeenCalled();
   expect(loadChatDrafts().chatDrafts).toHaveLength(1);
   f.observe.mockResolvedValue({
     item: { ...hostedQuestion, status: "acted" },
@@ -248,6 +214,5 @@ it("observes closure at the mailbox host when the reply targets another runtime"
   publish(f.app, [node({ nodeDid: source, mailboxItems: [hostedQuestion] })]);
   await flush();
   publish(f.app, [node({ nodeDid: source })]);
-  await waitFor(() => expect(f.ack).toHaveBeenCalledTimes(1));
-  expect(loadChatDrafts().chatDrafts).toHaveLength(0);
+  await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
 });

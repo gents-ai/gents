@@ -30,7 +30,7 @@ fn ux_data_requires_the_installing_local_runtime() {
     assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_err());
 }
 
-/// `ClientChatReadiness.readiness_ignores_route_observations`: the runtime's
+/// `ClientChatReadiness` reads no route observation: the runtime's
 /// ACP, not the desktop's copy of the enrollment lease, decides whether a
 /// signed HTTP write is admitted; an enrollment without an endpoint has no
 /// write path whatever its lease says.
@@ -59,9 +59,9 @@ fn enrollment_lease_does_not_gate_the_http_write_path() {
 #[test]
 fn chat_write_fence_matches_lean() {
     let cases = crate::client::peer_directory::tests::chat_readiness_cases();
-    assert!(cases.len() > 1000);
-    assert!(cases.iter().any(|(record, _, _)| record.is_none()));
-    for (record, _, refusal) in cases {
+    assert!(cases.len() > 100);
+    assert!(cases.iter().any(|(record, _)| record.is_none()));
+    for (record, refusal) in cases {
         let node_did = record
             .as_ref()
             .map_or("did:key:runtime", |record| record.node_did.as_str())

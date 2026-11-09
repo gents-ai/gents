@@ -1,13 +1,8 @@
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
-use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use gents::store::config_client::ConfigApplyTxn;
 use gents::store::graphql::escape_graphql_string;
-use std::sync::Arc;
 
-use super::correlated::{Outcome, Record};
-use super::UnresolvedSubmission;
-
-pub(crate) mod caller;
 pub(crate) mod goal;
 pub(crate) mod publication;
 
@@ -22,8 +17,6 @@ pub(crate) fn require_client_signer(node: &EmbeddedNode, client: &str) -> Result
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "record", deny_unknown_fields)]
 enum Envelope {
-    #[serde(rename = "callerReceipt-v1")]
-    Caller(Box<Record>),
     #[serde(rename = "goalCallerReceipt-v1")]
     Goal(Box<super::goal_delivery::Record>),
     #[serde(rename = "agentPublication-v1")]
@@ -31,27 +24,14 @@ enum Envelope {
 }
 
 enum Entry {
-    Uncorrelated(Box<UnresolvedSubmission>),
-    Caller(Box<Record>),
     Goal(Box<super::goal_delivery::Record>),
     Publication(Box<publication::Record>),
 }
 
 fn decode(payload: &str, request_id: &str) -> Result<Entry> {
-    let value: serde_json::Value =
-        serde_json::from_str(payload).context("decoding retained submission")?;
-    if value.get("kind").is_some() {
-        let envelope: Envelope =
-            serde_json::from_value(value).context("decoding caller submission receipt")?;
-        match envelope {
-            Envelope::Caller(record) => {
-                anyhow::ensure!(
-                    record.intent.request_id == request_id
-                        && record.result() != super::correlated::Decision::Refused,
-                    "retained caller receipt binding is invalid"
-                );
-                Ok(Entry::Caller(record))
-            }
+    let envelope: Envelope =
+        serde_json::from_str(payload).context("decoding a client journal record")?;
+    match envelope {
             Envelope::Goal(record) => {
                 anyhow::ensure!(
                     record.intent.command_id == request_id
@@ -68,12 +48,6 @@ fn decode(payload: &str, request_id: &str) -> Result<Entry> {
                 record.validate()?;
                 Ok(Entry::Publication(record))
             }
-        }
-    } else {
-        let pending: UnresolvedSubmission =
-            serde_json::from_value(value).context("decoding retained signed submission")?;
-        pending.validate_binding(request_id)?;
-        Ok(Entry::Uncorrelated(Box::new(pending)))
     }
 }
 
@@ -126,70 +100,6 @@ fn require_written(response: &serde_json::Value, field: &str) -> Result<()> {
     Ok(())
 }
 
-/// The local encrypted store retains signed intent before the owner can see it.
-/// This collection stays outside the desktop replication catalog.
-pub(crate) async fn save(
-    node: &Arc<EmbeddedNode>,
-    client: &str,
-    pending: &UnresolvedSubmission,
-) -> Result<()> {
-    let request_id = escape_graphql_string(&pending.request_id);
-    let payload = escape_graphql_string(&serde_json::to_string(pending)?);
-    let response = ConfigAccess::local_as(node.clone(), identity::Did::new(client)?).write(
-        "desktop.chat.retain_submission",
-        &format!("mutation {{ create_PendingChatSubmission(input: {{request_id: \"{request_id}\", payload: \"{payload}\"}}) {{ _docID }} }}"),
-    )
-    .await?;
-    require_written(&response, "create_PendingChatSubmission")
-}
-
-pub(crate) async fn load(
-    node: &Arc<EmbeddedNode>,
-    client: &str,
-    request_id: &str,
-) -> Result<Option<UnresolvedSubmission>> {
-    let response = ConfigAccess::local_as(node.clone(), identity::Did::new(client)?)
-        .execute(&query(request_id))
-        .await?;
-    let data = response
-        .get("data")
-        .context("pending submission query omitted data")?;
-    Ok(row(data, request_id)?.and_then(|(_, entry)| match entry {
-        Entry::Uncorrelated(pending) => Some(*pending),
-        Entry::Caller(record) if record.outcome == Outcome::Unresolved => record.pending,
-        Entry::Caller(_) => None,
-        Entry::Goal(_) => None,
-        Entry::Publication(_) => None,
-    }))
-}
-
-pub(crate) async fn forget(node: &Arc<EmbeddedNode>, client: &str, request_id: &str) -> Result<()> {
-    let actor = identity::Did::new(client)?;
-    ConfigAccess::transact_local_idempotent(
-        node,
-        Some(actor),
-        IdempotentTransactionRetry::Standard,
-        "desktop.chat.forget_submission",
-        move |txn| {
-            Box::pin(async move {
-                if let Some((doc_id, Entry::Uncorrelated(_))) = read_in_txn(txn, request_id).await?
-                {
-                    let id = escape_graphql_string(&doc_id);
-                    let response = txn
-                        .execute(&format!(
-                        "mutation {{ delete_PendingChatSubmission(docID: \"{id}\") {{ _docID }} }}"
-                    ))
-                        .await?;
-                    require_written(&response, "delete_PendingChatSubmission")?;
-                }
-                Ok::<_, anyhow::Error>(())
-            })
-        },
-    )
-    .await
-    .context("client journal cleanup failed")
-}
-
 #[cfg(test)]
 mod mutation_result_tests {
     use super::require_written;
@@ -200,5 +110,51 @@ mod mutation_result_tests {
         assert!(require_written(&empty, "update_PendingChatSubmission").is_err());
         let written = serde_json::json!({"data": {"update_PendingChatSubmission": [{"_docID": "owner-document"}]}});
         require_written(&written, "update_PendingChatSubmission").unwrap();
+    }
+}
+
+#[cfg(test)]
+mod signer_tests {
+    use super::require_client_signer;
+    use defra_node::Node as EmbeddedNode;
+    use gents::NodeIdentity as _;
+
+    /// `Identity.ClientAgentJournal.privatePolicy`: only the local client key
+    /// may write its private journal.
+    #[tokio::test]
+    async fn client_journal_refuses_a_different_local_signer() {
+        let home = tempfile::tempdir().unwrap();
+        let client =
+            gents::KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
+        let other =
+            gents::KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
+        let node = EmbeddedNode::builder()
+            .with_node_identity_did(client.did())
+            .build()
+            .await
+            .unwrap();
+        let snapshot = tokio::task::spawn_blocking(
+            gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let checks = snapshot["identity_private_journal_policy"]["signer_checks"]
+            .as_array()
+            .unwrap();
+        assert!(!checks.is_empty());
+        for case in checks {
+            let actor = match case["role"].as_str().unwrap() {
+                "client" => client.did(),
+                "other" => other.did(),
+                "empty" => "",
+                _ => panic!("unknown modeled signer"),
+            };
+            assert_eq!(
+                require_client_signer(&node, actor).is_ok(),
+                case["expected"].as_bool().unwrap()
+            );
+        }
+        node.shutdown().await.unwrap();
     }
 }

@@ -9,7 +9,7 @@ import type {
 import {
   isTerminalTurnState,
   projectClientOperationalStatus,
-  projectRouteOperationalStatus,
+  projectRuntimeConnectionStatus,
 } from "@source-inc/gents-desktop-client";
 
 export type OptimisticPendingTurn = PendingTurnView & {
@@ -356,7 +356,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   );
   const deploymentStatus = input.selectedNodeDid
     ? (input.operationalState?.admissionBlocker ??
-      (input.operationalState ? null : projectRouteOperationalStatus(false)))
+      (input.operationalState ? null : projectRuntimeConnectionStatus(null)))
     : null;
   const admissionStatus = clientStatus ?? deploymentStatus;
   const rawObservedTurnState =

@@ -135,18 +135,6 @@ async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Res
                         facts.records_json(&[retained])?,
                         facts.records_json(std::slice::from_ref(&record))?
                     );
-                    assert!(journal::load(
-                        &node,
-                        &record.intent.client_did,
-                        &record.intent.command_id
-                    )
-                    .await?
-                    .is_none());
-                    journal::forget(&node, &record.intent.client_did, &record.intent.command_id)
-                        .await?;
-                    assert!(journal::goal::recover(&node, &record.intent)
-                        .await?
-                        .is_some());
                 }
             }
             node.shutdown().await.unwrap();

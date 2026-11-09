@@ -92,28 +92,27 @@ private def closedQuestion : AnswerCacheObservation :=
     item := "question", kind := .ask, handling := .startRequest, status := .acted }
 
 private def answerCacheCases : List
-    (String × AnswerCacheBinding × Option AnswerCacheObservation × String × Bool) :=
-  [ ("acted", savedAnswer, some closedQuestion, "client", true)
-  , ("dismissed", savedAnswer, some { closedQuestion with status := .dismissed }, "client", true)
-  , ("expired", savedAnswer, some { closedQuestion with status := .expired }, "client", true)
-  , ("open", savedAnswer, some { closedQuestion with status := .open }, "client", true)
-  , ("missing", savedAnswer, none, "client", true)
-  , ("uncertain-delivery", { savedAnswer with confirmed := false }, some closedQuestion, "client", true)
-  , ("acknowledgement-lost", savedAnswer, some closedQuestion, "client", false)
-  , ("client-switched", savedAnswer, some closedQuestion, "other", true)
-  , ("agent-created-session", savedAnswer, some { closedQuestion with requester := "other" }, "client", true)
-  , ("wrong-node", savedAnswer, some { closedQuestion with node := "other" }, "client", true)
-  , ("wrong-agent", savedAnswer, some { closedQuestion with agent := "other" }, "client", true)
-  , ("wrong-session", savedAnswer, some { closedQuestion with session := "other" }, "client", true)
-  , ("wrong-question", savedAnswer, some { closedQuestion with item := "other" }, "client", true)
-  , ("wrong-kind", savedAnswer, some { closedQuestion with kind := .gate }, "client", true)
-  , ("wrong-action", savedAnswer, some { closedQuestion with handling := .ack }, "client", true)
-  , ("empty-binding", { savedAnswer with item := "", sourceItem := "" }, some closedQuestion, "client", true)
-  , ("mismatched-authored-source", { savedAnswer with sourceItem := "other" }, some closedQuestion, "client", true)
+    (String × AnswerCacheBinding × Option AnswerCacheObservation × String) :=
+  [ ("acted", savedAnswer, some closedQuestion, "client")
+  , ("dismissed", savedAnswer, some { closedQuestion with status := .dismissed }, "client")
+  , ("expired", savedAnswer, some { closedQuestion with status := .expired }, "client")
+  , ("open", savedAnswer, some { closedQuestion with status := .open }, "client")
+  , ("missing", savedAnswer, none, "client")
+  , ("unconfirmed", { savedAnswer with confirmed := false }, some closedQuestion, "client")
+  , ("client-switched", savedAnswer, some closedQuestion, "other")
+  , ("agent-created-session", savedAnswer, some { closedQuestion with requester := "other" }, "client")
+  , ("wrong-node", savedAnswer, some { closedQuestion with node := "other" }, "client")
+  , ("wrong-agent", savedAnswer, some { closedQuestion with agent := "other" }, "client")
+  , ("wrong-session", savedAnswer, some { closedQuestion with session := "other" }, "client")
+  , ("wrong-question", savedAnswer, some { closedQuestion with item := "other" }, "client")
+  , ("wrong-kind", savedAnswer, some { closedQuestion with kind := .gate }, "client")
+  , ("wrong-action", savedAnswer, some { closedQuestion with handling := .ack }, "client")
+  , ("empty-binding", { savedAnswer with item := "", sourceItem := "" }, some closedQuestion, "client")
+  , ("mismatched-authored-source", { savedAnswer with sourceItem := "other" }, some closedQuestion, "client")
   ]
 
 def answerCacheCasesJson : String := jsonArray <| answerCacheCases.map fun
-    (name, binding, observed, current, ack) =>
+    (name, binding, observed, current) =>
   let observation := observed.map fun value =>
     "{\"item\":{\"itemId\":" ++ jsonString value.item ++
     ",\"requesterDid\":" ++ jsonString value.requester ++
@@ -134,7 +133,6 @@ def answerCacheCasesJson : String := jsonArray <| answerCacheCases.map fun
   ",\"confirmed\":" ++ boolJson binding.confirmed ++ "}" ++
   ",\"observation\":" ++ observation.getD "null" ++
   ",\"currentClient\":" ++ jsonString current ++
-  ",\"acknowledged\":" ++ boolJson ack ++
-  ",\"retire\":" ++ boolJson (mayRetireAnswerCache binding observed current ack) ++ "}"
+  ",\"retire\":" ++ boolJson (mayRetireAnswerCache binding observed current) ++ "}"
 
 end Conformance.MailboxReplyContracts

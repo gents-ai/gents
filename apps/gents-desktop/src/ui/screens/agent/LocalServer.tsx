@@ -19,9 +19,9 @@ import {
 } from "../../../lib/managedServerStartup";
 import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
-import { useFleet } from "@/ui/hooks/useFleet";
-import { nodeOf } from "@/hooks/fleetStore";
-import { engineerAgentOf } from "@/ui/lib/engineer";
+import { useFleet } from "@/hooks/useFleet";
+import { nodeOf } from "../../../hooks/fleetStore";
+import { engineerAgentOf } from "@/lib/engineer";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
 import { errorText } from "../../../lib/errorText";

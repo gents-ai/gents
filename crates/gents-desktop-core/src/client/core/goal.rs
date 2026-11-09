@@ -98,8 +98,7 @@ impl ClientCore {
         SessionGoalControl,
     )> {
         let peer = self
-            .peer_record_for_chat_write(node_did, Utc::now())
-            .await?;
+            .peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer.as_ref())?;
         if matches!(operation, GoalOperation::Stop {})
             || (matches!(operation, GoalOperation::Create { .. }) && expected.is_some())

@@ -297,39 +297,23 @@ export function projectDeploymentTransportStatus(
       });
 }
 
+/** The chat write route (`ClientChatReadiness`): an authenticated runtime
+ * endpoint means ready, and the native fence's refusal names its cause and
+ * next action. Pairing is a P2P observation and is not read here. */
 export function projectRouteOperationalStatus(
-  routeReady: boolean,
-  pairingPending = false,
+  refusal: DeploymentView["chatRefusal"],
 ): OperationalStatus {
-  if (routeReady) {
-    return status({
+  return (
+    projectChatRefusalStatus(refusal) ??
+    status({
       kind: "ready",
       layer: "route",
       reason: "route_ready",
-      label: "Peer pairing is ready",
-      shortLabel: "Paired",
-      detail: "The signed peer pairing is ready.",
-    });
-  }
-  if (pairingPending) {
-    return status({
-      kind: "waiting",
-      layer: "route",
-      reason: "pairing_not_accepted",
-      label: "Waiting for pairing request acceptance",
-      shortLabel: "Waiting for pairing",
-      detail:
-        "The pairing request was sent and is waiting for the agent to accept it.",
-    });
-  }
-  return status({
-    kind: "waiting",
-    layer: "route",
-    reason: "route_not_ready",
-    label: "Preparing peer pairing",
-    shortLabel: "Preparing",
-    detail: "Waiting for the signed peer pairing to become ready.",
-  });
+      label: "Runtime endpoint is ready",
+      shortLabel: "Ready",
+      detail: "Chat writes go to the authenticated runtime endpoint.",
+    })
+  );
 }
 
 /** The native chat write fence's refusal, as the composer shows it: the
@@ -396,9 +380,7 @@ export function projectDeploymentOperationalState(
   const connection = projectRuntimeConnectionStatus(deployment.runtimeConnection);
 
   const localRuntime = isLocalRuntimeSource(deployment.source);
-  const route = projectRouteOperationalStatus(
-    localRuntime || deployment.pairingReady === true,
-  );
+  const route = projectRouteOperationalStatus(deployment.chatRefusal);
   const sync = projectSyncOperationalStatus(syncHealth);
 
   const nodeReadiness = selectedNodeReadinessDecision(

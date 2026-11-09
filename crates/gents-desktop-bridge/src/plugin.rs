@@ -174,8 +174,6 @@ where
             tauri_commands::chat::desktop_tool_file_changes,
             tauri_commands::chat::desktop_request_timeline,
             tauri_commands::chat::desktop_chat_send,
-            tauri_commands::chat::desktop_chat_submission_recover,
-            tauri_commands::chat::desktop_chat_submission_acknowledge,
             tauri_commands::attachments::desktop_attachment_read,
             tauri_commands::attachments::desktop_request_attachments,
             tauri_commands::chat::desktop_pending_queue_edit,

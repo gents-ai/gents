@@ -1,13 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::Node as EmbeddedNode;
 use gents::request::lifecycle::TriggerLineage;
 use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
@@ -17,8 +15,9 @@ use super::super::graphql::escape_graphql_string;
 use super::super::graphql::normalize_required;
 use prepare::prepare_request_submission;
 
-/// The durable submission receipt. Replica observation may still be pending;
-/// callers must not replay the mutation when a subsequent refresh fails.
+/// The request the runtime holds for a send. Replica observation may still be
+/// pending; callers must not resend under a new identity when a subsequent
+/// refresh fails.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmittedRequest {
     pub request_id: String,
@@ -29,7 +28,10 @@ pub struct SubmittedRequest {
 
 #[derive(Debug, Clone, Default)]
 pub struct SubmitRequestOptions {
-    pub caller_intent: Option<SubmissionIntent>,
+    /// The request identity the client picked when the person sent (Lean
+    /// `ClientOptimisticSend`). A retry passes the same identity, which the
+    /// runtime's create treats as the same request; `None` mints one.
+    pub request_id: Option<String>,
     pub valid_until: Option<DateTime<Utc>>,
     pub retry_parent_request: Option<String>,
     pub input: RequestInput,
@@ -38,12 +40,17 @@ pub struct SubmitRequestOptions {
     pub retry_key: Option<String>,
 }
 
+/// One signed, idempotent create (`send_client_request`). A resend of an
+/// identity the runtime already holds returns that request before any other
+/// check, so a held answer to a question the runtime has since claimed still
+/// confirms (Lean `ClientOptimisticSend.held_resend_never_refused`). A failure
+/// leaves no request under the identity, so the caller shows the message
+/// failed and may resend the same identity.
 #[expect(
     clippy::too_many_arguments,
     reason = "admission inputs from separate owners (store, access, identity, admission record)"
 )]
 pub async fn submit_request(
-    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     access: &ConfigAccess,
     session_id: &str,
@@ -54,20 +61,26 @@ pub async fn submit_request(
     content: &str,
     agent_did: Option<&str>,
     options: SubmitRequestOptions,
-) -> std::result::Result<SubmittedRequest, receipt::SubmissionError> {
-    receipt::journal::require_client_signer(node, signer.did())?;
-    let caller_intent = options.caller_intent.clone();
-    if let Some(intent) = caller_intent.as_ref() {
-        if intent.client_did != signer.did() {
-            return Err(
-                anyhow::anyhow!("caller submission belongs to another client identity").into(),
-            );
-        }
-        if intent.node_did != node_did {
-            return Err(anyhow::anyhow!("caller submission belongs to another node").into());
-        }
-        if let Some(record) = receipt::journal::caller::recover(node, intent).await? {
-            return receipt::delivery::reconcile(node, receipt::delivery::OwnerAccess::Granted(access), record).await;
+) -> Result<SubmittedRequest> {
+    let request_id = options.request_id.clone();
+    if let Some(request_id) = request_id.as_deref() {
+        let held = gents::request::lifecycle::held_client_request(
+            access,
+            gents::request::lifecycle::ClientRequestScope {
+                node_did,
+                session_id,
+                requester_did,
+                request_id,
+            },
+        )
+        .await?;
+        if let Some(held) = held {
+            return Ok(SubmittedRequest {
+                request_id: held.request_id,
+                session_id: held.session_id,
+                node_did: node_did.to_owned(),
+                agent_did: held.agent_did,
+            });
         }
     }
     let (result, create) = prepare_request_submission(
@@ -81,28 +94,14 @@ pub async fn submit_request(
         content,
         agent_did,
         options,
-        caller_intent
-            .as_ref()
-            .map(|intent| intent.request_id.as_str()),
+        request_id.as_deref(),
     )
     .await?;
-    // Owner submissions, including resends routed through this function, are
-    // receipt-reconciled. An unknown outcome returns `SubmissionOutcomeUnknown`
-    // carrying the original signed payload, so reconciliation replays identical
-    // bytes instead of minting a new request identity.
-    let pending = receipt::UnresolvedSubmission::new(create, result)?;
-    if let Some(intent) = caller_intent {
-        let proposal = receipt::correlated::Record::proposal(intent, pending);
-        let record = receipt::journal::caller::reserve(node, &proposal).await?;
-        return receipt::delivery::reconcile(node, receipt::delivery::OwnerAccess::Granted(access), record).await;
-    }
-    receipt::journal::save(node, signer.did(), &pending).await?;
-    let result = match receipt::commit_signed_submission(access, pending.clone()).await {
-        Err(receipt::SubmissionAttemptError::Unknown(error)) => return Err(error.into()),
-        result => result,
-    };
-    let cleanup = receipt::journal::forget(node, signer.did(), &pending.request_id).await;
-    receipt::report_cleanup(&pending, result, cleanup)
+    let held = gents::request::lifecycle::send_client_request(access, &create).await?;
+    Ok(SubmittedRequest {
+        request_id: held,
+        ..result
+    })
 }
 
 #[cfg(test)]
@@ -193,7 +192,6 @@ pub async fn submit_task_request(
 /// other state would risk bypassing legitimate terminal classifications.
 #[allow(clippy::too_many_arguments)]
 pub async fn resend_request(
-    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     access: &ConfigAccess,
     stale_request_id: &str,
@@ -222,9 +220,17 @@ pub async fn resend_request(
         .content
         .as_deref()
         .context("stale request has no content")?;
-    let retry_session_id = Uuid::new_v4().to_string();
+    // The successor's identity is derived from the stale request, so a
+    // repeated resend (a lost reply, a second click) is the same request.
+    let successor = |part: &str| {
+        Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("gents.resend:{stale_node_did}:{stale_request_id}:{part}").as_bytes(),
+        )
+        .to_string()
+    };
+    let retry_session_id = successor("session");
     submit_request(
-        node,
         store,
         access,
         &retry_session_id,
@@ -235,7 +241,7 @@ pub async fn resend_request(
         stale_content,
         stale.agent_did.as_deref(),
         SubmitRequestOptions {
-            caller_intent: None,
+            request_id: Some(successor("request")),
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
             input: stale.input.unwrap_or_default(),
@@ -245,7 +251,6 @@ pub async fn resend_request(
         },
     )
     .await
-    .map_err(Into::into)
 }
 
 async fn fetch_request_view(
@@ -299,12 +304,5 @@ mod lean_vocab_test;
 mod tests;
 
 pub(super) mod prepare;
-pub(crate) mod receipt;
 pub(super) mod retry;
 
-pub use receipt::correlated::{Intent as SubmissionIntent, Reference as SubmissionReference};
-pub use receipt::{
-    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionAttemptError, SubmissionCleanupIncomplete, SubmissionError, SubmissionNotDelivered,
-    SubmissionOutcomeUnknown, UnresolvedSubmission,
-};

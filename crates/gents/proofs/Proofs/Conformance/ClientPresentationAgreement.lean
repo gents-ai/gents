@@ -88,25 +88,34 @@ def recoveryActionJson : Option Unit → String
   | none => "null"
   | some _ => jsonString "required"
 
-def recoveryCaseJson (surface : String) (connected routeReady pairingPending : Bool) : String :=
+def refusalJson : Option ClientChatReadiness.Cause → String
+  | none => "null"
+  | some cause => "{\"cause\":" ++ jsonString (ClientChatReadiness.causeToken cause) ++
+      ",\"nextAction\":" ++
+        jsonString (ClientChatReadiness.nextActionToken (ClientChatReadiness.nextAction cause)) ++ "}"
+
+def recoveryCaseJson (surface : String) (connected : Bool)
+    (refusal : Option ClientChatReadiness.Cause) : String :=
   let projected := if surface = "transport" then projectTransportRecovery connected
-    else if surface = "route" then projectRouteRecovery routeReady pairingPending
+    else if surface = "route" then projectRouteRecovery refusal
     else projectConnectionFailure
-  "{\"name\":" ++ jsonString s!"{surface}_{connected}_{routeReady}_{pairingPending}" ++
+  let refusalName := match refusal with
+    | none => "ready"
+    | some cause => ClientChatReadiness.causeToken cause
+  "{\"name\":" ++ jsonString s!"{surface}_{connected}_{refusalName}" ++
     ",\"surface\":" ++ jsonString surface ++
     ",\"connected\":" ++ toString connected ++
-    ",\"routeReady\":" ++ toString routeReady ++
-    ",\"pairingPending\":" ++ toString pairingPending ++
+    ",\"refusal\":" ++ refusalJson refusal ++
     ",\"expected_kind\":" ++ recoveryKindJson projected.kind ++
     ",\"expected_action\":" ++ recoveryActionJson projected.action ++ "}"
 
 def recoveryCasesJson : String :=
   let transport := [false, true].map fun connected =>
-    recoveryCaseJson "transport" connected false false
-  let route := [false, true].flatMap fun ready => [false, true].map fun pairing =>
-    recoveryCaseJson "route" true ready pairing
+    recoveryCaseJson "transport" connected none
+  let route := (none :: ClientChatReadiness.allCauses.map some).map fun refusal =>
+    recoveryCaseJson "route" true refusal
   "[" ++ String.intercalate "," (transport ++ route ++ ["offline", "failed", "incompatible", "deploymentError"].map fun surface =>
-    recoveryCaseJson surface false false false) ++ "]"
+    recoveryCaseJson surface false none) ++ "]"
 
 def presentationAndRecoveryJson : String :=
   "{\"presentationCases\":" ++ casesJson ++ ",\"recoveryCases\":" ++ recoveryCasesJson ++ "}"

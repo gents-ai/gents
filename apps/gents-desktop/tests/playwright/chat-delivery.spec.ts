@@ -2,7 +2,7 @@ import { expect, gotoHarness, test } from "./desktopTest";
 import { chatDraftKey, retainChatDraft } from "../../src/hooks/chatDrafts";
 
 for (const colorScheme of ["light", "dark"] as const) {
-  test(`keeps saved message recovery compact and keyboard reachable in ${colorScheme}`, async ({
+  test(`keeps a failed message compact, keyboard reachable and retryable in ${colorScheme}`, async ({
     page,
   }, info) => {
     await page.emulateMedia({ colorScheme });
@@ -35,13 +35,11 @@ for (const colorScheme of ["light", "dark"] as const) {
     expect(box!.height).toBeLessThan(160);
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-    const check = panel.getByRole("button", { name: "Check message delivery" });
-    await check.focus();
-    await expect(check).toBeFocused();
+    const retry = panel.getByRole("button", { name: "Retry message" });
+    await retry.focus();
+    await expect(retry).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(
-      panel.getByRole("button", { name: "Resume saved message" }),
-    ).toBeFocused();
+    await expect(panel.getByRole("button", { name: "Discard message" })).toBeFocused();
     await panel.getByRole("button", { name: /Show details/ }).focus();
     await page.keyboard.press("Enter");
     await expect(
@@ -56,17 +54,11 @@ for (const colorScheme of ["light", "dark"] as const) {
     await page.reload();
     await page.getByTestId("session-session-intro").click();
     await expect(panel).toBeVisible();
-    await expect(
-      panel.getByRole("button", { name: "Resume saved message" }),
-    ).toBeEnabled();
+    await expect(panel.getByRole("button", { name: "Retry message" })).toBeEnabled();
     await page
       .getByRole("textbox", { name: "Message", exact: true })
       .fill("Keep this newer message");
-    await panel.getByRole("button", { name: "Check message delivery" }).click();
-    await expect(panel.getByRole("alert")).toHaveText(
-      "Delivery is still unconfirmed. Check again or resume the saved message.",
-    );
-    await panel.getByRole("button", { name: "Resume saved message" }).click();
+    await panel.getByRole("button", { name: "Retry message" }).click();
     await expect(panel).toHaveCount(0);
     await expect(
       page.getByText(

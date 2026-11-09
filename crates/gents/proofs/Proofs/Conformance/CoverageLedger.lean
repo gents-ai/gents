@@ -534,7 +534,7 @@ def caseCoverage : List CoverageEntry :=
       "triggers::callback::tests::callback_parent_requires_the_selected_authenticated_agent")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases"
-      "client::mutations::chat::request::receipt::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations")
+      "client::mutations::journal::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "root_admission_cases"
@@ -1235,14 +1235,9 @@ def caseCoverage : List CoverageEntry :=
       "observe::inference_observation::tests::visibility_matches_lean_for_direct_reads")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_submission_rejection_cases"
-      "ClientSubmissionRejectionCases"
-      "client::mutations::chat::request::receipt::tests::rejected_recovery_retains_modeled_identity_and_native_error")
-      "client-shell" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "client_submission_uncertain_error_cases"
-      "ClientSubmissionUncertainErrorCases"
-      "client::mutations::chat::request::receipt::tests::uncertain_recovery_retains_modeled_identity_and_access_error")
+      "client_optimistic_send_cases"
+      "ClientOptimisticSendCases"
+      "client::mutations::chat::request::tests::chat_send_replays_lean_optimistic_send_traces")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_telemetry_cases"
@@ -1658,13 +1653,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "identity_private_journal_policy"
       "PrivateJournalSigner"
-      "client::mutations::chat::request::receipt::tests::client_submission_refuses_a_different_local_signer_before_journal_write")
+      "client::mutations::journal::records::signer_tests::client_journal_refuses_a_different_local_signer")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "client_submission_cleanup_cases"
-      "ClientSubmissionCleanupCases"
-      "client::mutations::chat::request::receipt::tests::cleanup_observation_preserves_the_modeled_delivery_and_identity")
-      "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "file_image_read_grant_cases"
       "FileImageReadGrantCases"

@@ -7,7 +7,6 @@ import {
   chatDraftRequest,
   loadChatDrafts,
   removeChatDraft,
-  validateChatResult,
   type ChatDraft,
 } from "./chatDrafts";
 import type { ShellStores } from "./shellProjection";
@@ -34,18 +33,16 @@ type AnswerObservation = Pick<MailboxItemObservation, "terminal"> & {
   >;
 };
 
-/** Only an exact native terminal observation plus an acknowledged, persisted
- * confirmation can retire an answer. Open-list absence provides no authority. */
+/** Only an exact native terminal observation of a confirmed answer can retire
+ * it. Open-list absence provides no authority. */
 export function mayRetireMailboxAnswer(
   binding: AnswerCacheBinding,
   observation: AnswerObservation | null,
   currentClient: string | null,
-  acknowledged: boolean,
 ): boolean {
   const item = observation?.item;
   return Boolean(
     binding.confirmed &&
-    acknowledged &&
     currentClient === binding.clientDid &&
     binding.sourceItemId === binding.itemId &&
     [
@@ -67,9 +64,8 @@ export function mayRetireMailboxAnswer(
 }
 
 function bindingOf(draft: ChatDraft): AnswerCacheBinding | null {
-  if (!draft.mailbox || !draft.result || draft.result.outcome != null) return null;
+  if (!draft.mailbox || !draft.confirmed) return null;
   try {
-    validateChatResult(draft, draft.result);
     const request = chatDraftRequest(draft);
     return {
       clientDid: draft.clientDid,
@@ -115,12 +111,7 @@ export function observeMailboxAnswerRetirement({
     const state = stores.chat.getState();
     for (const draft of state.chatDrafts) {
       const binding = bindingOf(draft);
-      if (
-        !binding ||
-        binding.clientDid !== clientDid() ||
-        state.chatRequestsInFlight.has(draft.requestId)
-      )
-        continue;
+      if (!binding || binding.clientDid !== clientDid()) continue;
       if (
         stores.fleet
           .getState()
@@ -154,7 +145,6 @@ export function observeMailboxAnswerRetirement({
       if (disposed || generation !== epoch || clientDid() !== binding.clientDid)
         return false;
       const state = stores.chat.getState();
-      if (state.chatRequestsInFlight.has(draft.requestId)) return false;
       const matches = (row: ChatDraft) =>
         chatDraftKey(row) === chatDraftKey(draft) && JSON.stringify(row) === serialized;
       const saved = loadChatDrafts();
@@ -172,12 +162,10 @@ export function observeMailboxAnswerRetirement({
     if (
       observation?.item.nodeDid !== draft.mailbox!.nodeDid ||
       !current() ||
-      !mayRetireMailboxAnswer(binding, observation, clientDid(), true)
+      !mayRetireMailboxAnswer(binding, observation, clientDid())
     )
       return;
-    await api.acknowledgeChatSubmission(draft.result!.submissionReceipt!);
-    if (current() && mayRetireMailboxAnswer(binding, observation, clientDid(), true))
-      removeChatDraft(stores.chat, draft);
+    removeChatDraft(stores.chat, draft);
   }
   const stop = [
     stores.client.subscribe((state, previous) => {
@@ -192,11 +180,7 @@ export function observeMailboxAnswerRetirement({
       }
     }),
     stores.chat.subscribe((state, previous) => {
-      if (
-        state.chatDrafts !== previous.chatDrafts ||
-        state.chatRequestsInFlight !== previous.chatRequestsInFlight
-      )
-        schedule();
+      if (state.chatDrafts !== previous.chatDrafts) schedule();
     }),
     stores.fleet.subscribe((state, previous) => {
       if (state.mailboxOf !== previous.mailboxOf) schedule();

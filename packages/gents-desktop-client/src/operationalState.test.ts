@@ -113,20 +113,16 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("keeps pairing preparation distinct from runtime admission", () => {
-    const state = projectDeploymentOperationalState(
-      deployment({ pairingReady: false }),
-    );
-
-    expect(state.transport.kind).toBe("ready");
-    expect(state.admissionBlocker).toBeNull();
-    expect(state.route).toMatchObject({
-      layer: "route",
-      kind: "waiting",
-      reason: "route_not_ready",
-      label: "Preparing peer pairing",
-      shortLabel: "Preparing",
-    });
+  it("reads the route from the native chat fence, never from pairing", () => {
+    for (const pairingReady of [false, true]) {
+      const state = projectDeploymentOperationalState(deployment({ pairingReady }));
+      expect(state.admissionBlocker).toBeNull();
+      expect(state.route).toMatchObject({
+        layer: "route",
+        kind: "ready",
+        reason: "route_ready",
+      });
+    }
   });
 
   it("blocks admission with the native chat refusal and its next action", () => {
@@ -148,6 +144,7 @@ describe("deployment operational state", () => {
       detail: "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
     });
     expect(state.summary).toBe(state.admissionBlocker);
+    expect(state.route).toEqual(state.admissionBlocker);
   });
 
   it("does not wait for a gossiped Node after pairing", () => {
