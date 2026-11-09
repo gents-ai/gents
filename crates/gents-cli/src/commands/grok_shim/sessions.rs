@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
@@ -139,7 +139,7 @@ async fn scan_requests(
             node,
             &format!(
                 r#"{{ AgentRequest(filter: {{ {scope} }}, order: [{{request_id: ASC}}, {{_docID: ASC}}], limit: {PAGE_SIZE}) {{
-            _docID request_id session_id node_did requester_did agent_id
+            _docID request_id session_id node_did requester_did agent_did
             content created_at terminalized_at lifecycle_state runtime_source_kind
         }} }}"#,
             ),
@@ -181,7 +181,7 @@ async fn scan_requests(
 /// above can authorize their content; null here never widens that scope.
 fn readable_owner(row: &Value, principal: &str, behavior: &str) -> bool {
     row.get("node_did").and_then(Value::as_str) == Some(principal)
-        && row.get("agent_id").and_then(Value::as_str) == Some(behavior)
+        && row.get("agent_did").and_then(Value::as_str) == Some(behavior)
         && row
             .get("requester_did")
             .and_then(Value::as_str)
@@ -199,7 +199,7 @@ pub(super) async fn load(
         node,
         &format!(
             r#"{{ AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{
-        session_id node_did requester_did agent_id
+        session_id node_did requester_did agent_did
     }} }}"#,
             escape_graphql_string(session)
         ),
@@ -293,7 +293,7 @@ async fn list_entries(
             node,
             &format!(
                 r#"{{ AgentSession(filter: {{session_id: {{_in: [{ids}]}}}}) {{
-            session_id node_did requester_did agent_id provenance
+            session_id node_did requester_did agent_did provenance
         }} }}"#
             ),
             "Grok history session owners",
@@ -490,7 +490,7 @@ mod tests {
         .unwrap();
         let mut observed = Vec::new();
         let result = scan_requests(&node, owner, None, |row| observed.push(row.request_id)).await;
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         result.unwrap();
         assert_eq!(observed.len(), PAGE_SIZE + 1);
         assert_eq!(observed.last().map(String::as_str), Some("d-public"));

@@ -132,9 +132,10 @@ async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
     // Started sessions in these fixtures carry receipts the fixture key signs.
     let signer = crate::caused_sessions::fixtures::fixture_signer();
     let node_did = gents::NodeIdentity::did(&signer).to_owned();
-    let agent_id = gents::default_agent_id_for_node(&node_did);
+    let binding = gents::store::identity::provision_agent_identity(&signer).unwrap();
+    let agent_did = binding.agent_did.clone();
     let node = Arc::new(
-        crate::shared::test_support::node_builder()
+        crate::shared::test_support::fixture_node_builder()
             .data_path(tempdir.path().join("node"))
             .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
             .build()
@@ -147,8 +148,8 @@ async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
     super::super::seed_test_agent_configuration(
         &node,
         &node_did,
-        &agent_id,
-        &agent_id,
+        &binding,
+        &agent_did,
         "GLM-5.3-NVFP4",
         true,
     )
@@ -156,17 +157,30 @@ async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
     (tempdir, node, node_did)
 }
 
-fn test_config(graphql: String, node_did: &str) -> TurnManagerConfig {
+async fn test_config(graphql: String, node_did: &str, node: &EmbeddedNode) -> TurnManagerConfig {
+    let agent_did = gents::load_node(node, node_did)
+        .await
+        .unwrap()
+        .unwrap()
+        .default_agent_did
+        .unwrap();
     TurnManagerConfig {
         actor: ::identity::Did::new(node_did.to_string()).expect("fixture creator DID"),
         node_did: node_did.to_string(),
-        agent_id: gents::default_agent_id_for_node(node_did),
-        graphql,
+        agent_did,
+        graphql: gents::store::config_client::GraphqlEndpoint::as_principal(graphql, node_did)
+            .with_client_signing_capability(
+                crate::caused_sessions::fixtures::fixture_signer()
+                    .client_signing_capability()
+                    .unwrap(),
+            )
+            .unwrap(),
+        agent_signer: None,
     }
 }
 
 fn test_engine(node: Arc<EmbeddedNode>) -> Arc<ProjectionEngine> {
-    Arc::new(ProjectionEngine::new(
+    Arc::new(ProjectionEngine::new_for_test(
         node,
         super::super::projection::BoundModelContext::new(
             "GLM-5.3-NVFP4".to_string(),
@@ -181,13 +195,18 @@ async fn seed_runtime_wake(
     node_did: &str,
     content: &str,
 ) -> gents_protocol::row::AgentRequestRow {
-    let agent_id = gents::default_agent_id_for_node(node_did);
+    let agent_did = gents::load_node(node, node_did)
+        .await
+        .unwrap()
+        .unwrap()
+        .default_agent_did
+        .unwrap();
     let request = uuid::Uuid::new_v4().to_string();
     let result = node
         .execute(&format!(
             r#"mutation {{create_AgentRequest(input:{{
         request_id:"{request}",purpose:"normal",node_did:"{node_did}",requester_did:"{node_did}",
-        agent_id:"{agent_id}",session_id:"session-1",runtime_source_kind:"local-control",lifecycle_state:"pending",
+        agent_did:"{agent_did}",session_id:"session-1",runtime_source_kind:"local-control",lifecycle_state:"pending",
         content:"{}",created_at:"{}"}}) {{_docID}}}}"#,
             escape_graphql_string(content),
             chrono::Utc::now().to_rfc3339(),
@@ -200,7 +219,7 @@ async fn seed_runtime_wake(
         "AgentRequest",
     )
     .unwrap();
-    serde_json::from_value(json!({"_docID":doc,"request_id":request,"node_did":node_did,"requester_did":node_did,"agent_id":agent_id,"session_id":"session-1","runtime_source_kind":"local-control"})).unwrap()
+    serde_json::from_value(json!({"_docID":doc,"request_id":request,"node_did":node_did,"requester_did":node_did,"agent_did":agent_did,"session_id":"session-1","runtime_source_kind":"local-control"})).unwrap()
 }
 
 #[test]
@@ -222,7 +241,7 @@ fn buffer_sender() -> (Arc<Mutex<Vec<String>>>, PromptSender) {
 fn fixture_request_filter(request: &gents_protocol::row::AgentRequestRow) -> String {
     format!(
         "{}, _docID: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}",
-        gents::session::session_scope_filter(
+        gents_protocol::session::session_scope_filter(
             request.node_did.as_deref().expect("fixture owner"),
             request.session_id.as_deref().expect("fixture session"),
             request.requester_did.as_deref()
@@ -310,7 +329,7 @@ async fn seed_canonical_text_message(
     role: gents_protocol::output::MessageRole,
     text: &str,
 ) {
-    use gents::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -439,7 +458,7 @@ async fn seed_child_request(
 ) -> gents_protocol::row::AgentRequestRow {
     let owner = escape_graphql_string(parent.node_did.as_deref().unwrap());
     let requester = format!("\"{owner}\"");
-    let agent = escape_graphql_string(parent.agent_id.as_deref().expect("fixture agent"));
+    let agent = escape_graphql_string(parent.agent_did.as_deref().expect("fixture agent"));
     let logical_parent = escape_graphql_string(&parent.request_id);
     let physical_parent = escape_graphql_string(parent.doc_id.as_deref().unwrap());
     let tool = escape_graphql_string(tool_doc_id);
@@ -447,7 +466,7 @@ async fn seed_child_request(
     let state = escape_graphql_string(lifecycle_state);
     let now = chrono::Utc::now().to_rfc3339();
     let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-        request_id: "{child}", purpose: "normal", node_did: "{owner}", requester_did: {requester}, agent_id: "{agent}", session_id: "session-1-child",
+        request_id: "{child}", purpose: "normal", node_did: "{owner}", requester_did: {requester}, agent_did: "{agent}", session_id: "session-1-child",
         caused_by_parent_request_id: "{logical_parent}", caused_by_parent_request_doc_id: "{physical_parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "{tool}", content: "child work", lifecycle_state: "{state}", created_at: "{now}"
     }}) {{_docID}} }}"#)).await;
     ensure_no_errors(&response, "test seed child request").unwrap();
@@ -459,7 +478,7 @@ async fn seed_child_request(
     crate::caused_sessions::fixtures::create_started_session(
         node,
         gents_protocol::session::AgentSession {
-            agent_id: parent.agent_id.clone().expect("fixture agent"),
+            agent_did: parent.agent_did.clone().expect("fixture agent"),
             ..crate::caused_sessions::fixtures::fixture_session(
                 parent.node_did.as_deref().unwrap(),
                 "session-1-child",
@@ -474,7 +493,7 @@ async fn seed_child_request(
         &doc,
     )
     .await;
-    serde_json::from_value(json!({"_docID":doc,"request_id":child_request_id,"node_did":parent.node_did,"requester_did":parent.node_did,"agent_id":parent.agent_id,"session_id":"session-1-child", "caused_by_parent_request_id":parent.request_id,"caused_by_parent_request_doc_id":parent.doc_id,"caused_by_parent_tool_call_id":"call-1","caused_by_parent_tool_call_doc_id":tool_doc_id})).unwrap()
+    serde_json::from_value(json!({"_docID":doc,"request_id":child_request_id,"node_did":parent.node_did,"requester_did":parent.node_did,"agent_did":parent.agent_did,"session_id":"session-1-child", "caused_by_parent_request_id":parent.request_id,"caused_by_parent_request_doc_id":parent.doc_id,"caused_by_parent_tool_call_id":"call-1","caused_by_parent_tool_call_doc_id":tool_doc_id})).unwrap()
 }
 
 async fn complete_tool_call(node: &Arc<EmbeddedNode>, tool_doc_id: &str, result: &str) {
@@ -529,12 +548,17 @@ async fn complete_child_request(
 #[tokio::test]
 async fn fixture_receipts_keep_colliding_requests_and_child_owners_separate() {
     let (_dir, node, node_did) = test_node().await;
-    let agent_id = gents::default_agent_id_for_node(&node_did);
+    let agent_did = gents::load_node(&node, &node_did)
+        .await
+        .unwrap()
+        .unwrap()
+        .default_agent_did
+        .unwrap();
     let mut receipts = Vec::new();
     for content in ["selected", "same-label other document"] {
         let result = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
             request_id:"collision", purpose:"normal", node_did:"{node_did}", requester_did:"{node_did}",
-            session_id:"session-1", agent_id:"{agent_id}", content:"{content}", lifecycle_state:"pending"
+            session_id:"session-1", agent_did:"{agent_did}", content:"{content}", lifecycle_state:"pending"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&result, "seed colliding requests").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
@@ -545,7 +569,7 @@ async fn fixture_receipts_keep_colliding_requests_and_child_owners_separate() {
         receipts.push(
             serde_json::from_value::<gents_protocol::row::AgentRequestRow>(json!({
                 "_docID":doc,"request_id":"collision","node_did":node_did,"requester_did":node_did,
-                "session_id":"session-1","agent_id":agent_id
+                "session_id":"session-1","agent_did":agent_did
             }))
             .unwrap(),
         );
@@ -635,7 +659,8 @@ async fn wait_for_pending_request(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
 ) -> gents_protocol::row::AgentRequestRow {
-    let scope = gents::session::session_scope_filter(node_did, "session-1", Some(node_did));
+    let scope =
+        gents_protocol::session::session_scope_filter(node_did, "session-1", Some(node_did));
     loop {
         let response = node.execute(&format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS)).await;
         ensure_no_errors(&response, "wait for fixture request").unwrap();

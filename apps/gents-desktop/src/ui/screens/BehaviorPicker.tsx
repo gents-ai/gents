@@ -23,31 +23,31 @@ const RECENT = 3;
 /** Agents of the sessions the person started, most recent first. Sessions
     another session or a task started don't count, so a busy worker never
     crowds out what the person picks. */
-export function recentAgentIds(sessions: readonly SessionSummary[]): string[] {
+export function recentAgentDids(sessions: readonly SessionSummary[]): string[] {
   const ids = sessions
-    .filter((c) => c.agentId && matchesSource(c, "person"))
+    .filter((c) => c.agentDid && matchesSource(c, "person"))
     .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
-    .map((c) => c.agentId!);
+    .map((c) => c.agentDid!);
   return [...new Set(ids)];
 }
 
 export function AgentPicker({
   deployment,
-  agentId,
+  agentDid,
   onChange,
 }: {
   deployment: NodeView | null;
-  agentId: string | null;
-  onChange: (agentId: string) => void;
+  agentDid: string | null;
+  onChange: (agentDid: string) => void;
 }) {
   const hidden = useHidden();
   if (!deployment) return null;
   const enabled = deployment.agents.filter((b) => b.enabled);
-  const chosen = enabled.find((b) => b.agentId === agentId) ?? enabled[0];
+  const chosen = enabled.find((b) => b.agentDid === agentDid) ?? enabled[0];
   if (!chosen) return null;
   /* hidden on this device, unless it is the one chosen */
   const agents = enabled.filter(
-    (b) => b === chosen || !hidden.agent(deployment.nodeDid, b.agentId),
+    (b) => b === chosen || !hidden.agent(deployment.nodeDid, b.agentDid),
   );
   return (
     <MountedAgentPicker
@@ -68,11 +68,11 @@ function MountedAgentPicker({
   deployment: NodeView;
   agents: NodeView["agents"];
   chosen: NodeView["agents"][number];
-  onChange: (agentId: string) => void;
+  onChange: (agentDid: string) => void;
 }) {
   const readOnly = useNodeConfigReadOnly(deployment);
   const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
-  const recentIds = useMemo(() => recentAgentIds(sessions), [sessions]);
+  const recentIds = useMemo(() => recentAgentDids(sessions), [sessions]);
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   // Wait for the popover's exit animation so two dialogs are never open at once.
@@ -85,16 +85,16 @@ function MountedAgentPicker({
     if (popover.open) input.current?.focus();
   }, [popover.open]);
   const describe = (id: string) =>
-    deployment.agents.find((b) => b.agentId === id)?.description ?? "";
+    deployment.agents.find((b) => b.agentDid === id)?.description ?? "";
   const readiness = (id: string) => agentReadiness(deployment, id);
   const env = (id: string) =>
-    deployment.agentEnvironments.find((e) => e.agentId === id);
+    deployment.agentEnvironments.find((e) => e.agentDid === id);
   const q = query.trim().toLowerCase();
   const shown = agents.filter(
     (b) =>
       !q ||
       b.displayName.toLowerCase().includes(q) ||
-      describe(b.agentId).toLowerCase().includes(q),
+      describe(b.agentDid).toLowerCase().includes(q),
   );
   /* the default leads, then the agents the person started sessions with
      lately, apart, so the rest keep their places; a search ranks by match
@@ -102,17 +102,17 @@ function MountedAgentPicker({
   const recent = q
     ? []
     : recentIds
-        .map((id) => agents.find((b) => b.agentId === id))
+        .map((id) => agents.find((b) => b.agentDid === id))
         .filter((b): b is NodeView["agents"][number] => Boolean(b && !b.isDefault))
         .slice(0, RECENT);
-  const lifted = new Set(recent.map((b) => b.agentId));
+  const lifted = new Set(recent.map((b) => b.agentDid));
   /* then the person's own agents; a pack's agents, often stages of its work
      rather than ones to talk to, under its name, folded unless none of the
      person's own show, a search is on, or the chosen agent is among them. A
      recent pack agent stays in its pack too. */
   const own = shown.filter((b) => packOrigin(b.tags) === null);
   const lead = own.filter((b) => b.isDefault);
-  const rest = own.filter((b) => !b.isDefault && !lifted.has(b.agentId));
+  const rest = own.filter((b) => !b.isDefault && !lifted.has(b.agentDid));
   const packs = Array.from(
     new Set(
       shown.map((b) => packOrigin(b.tags)).filter((o): o is string => o !== null),
@@ -121,11 +121,11 @@ function MountedAgentPicker({
   const packGroups = usePackGroups("agent-picker");
   const openByDefault = own.length === 0;
   const row = (b: NodeView["agents"][number]) => {
-    const e = env(b.agentId);
-    const selected = b.agentId === chosen.agentId;
-    const ready = readiness(b.agentId);
+    const e = env(b.agentDid);
+    const selected = b.agentDid === chosen.agentDid;
+    const ready = readiness(b.agentDid);
     return (
-      <li key={b.agentId}>
+      <li key={b.agentDid}>
         <button
           type="button"
           role="option"
@@ -136,7 +136,7 @@ function MountedAgentPicker({
               : `Unavailable: ${ready.reason}`
           }
           onClick={() => {
-            onChange(b.agentId);
+            onChange(b.agentDid);
             popover.onOpenChange(false);
           }}
           className={cn(
@@ -150,9 +150,9 @@ function MountedAgentPicker({
             <span className="shrink-0 text-xs text-muted-foreground">default</span>
           )}
           {ready.ready ? (
-            describe(b.agentId) && (
+            describe(b.agentDid) && (
               <span className="min-w-0 truncate text-xs text-muted-foreground">
-                {describe(b.agentId)}
+                {describe(b.agentDid)}
               </span>
             )
           ) : (
@@ -265,7 +265,7 @@ function MountedAgentPicker({
                 const members = shown.filter((b) => packOrigin(b.tags) === pack);
                 const open =
                   Boolean(q) ||
-                  members.some((b) => b.agentId === chosen.agentId) ||
+                  members.some((b) => b.agentDid === chosen.agentDid) ||
                   packGroups.isOpen(pack, openByDefault);
                 return (
                   <li key={`pack:${pack}`} role="group" aria-label={`From ${pack}`}>
@@ -304,9 +304,9 @@ function MountedAgentPicker({
           deployment={deployment}
           open={creating}
           enabled
-          onClose={(agentId) => {
+          onClose={(agentDid) => {
             setCreating(false);
-            if (agentId) onChange(agentId);
+            if (agentDid) onChange(agentDid);
           }}
         />
       )}

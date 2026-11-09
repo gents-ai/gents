@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
 use gents::store::config_client::ConfigAccess;
 
-use super::{ensure_peer_chat_ready_at, ClientCore};
+use super::{ensure_peer_chat_ready, ClientCore};
 use crate::client::observe::ObservedStore;
 use crate::client::store::{ClientStore, ClientStoreRows};
 
@@ -101,10 +100,7 @@ impl ClientCore {
     ) -> Result<gents_protocol::request_input::RequestInput> {
         let input = self.prepare_goal_input(node_did, session_id, input).await?;
         gents::request::lifecycle::prepare_user_message_input(
-            &self
-                .operator_observation_graphql(node_did)
-                .map(ConfigAccess::Graphql)
-                .unwrap_or_else(|| ConfigAccess::local(self.node_arc())),
+            &self.session_queue_access(node_did)?,
             node_did,
             session_id,
             input,
@@ -137,10 +133,7 @@ impl ClientCore {
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
         gents::request::lifecycle::pending_user_queue_projection(
-            &self
-                .operator_observation_graphql(node_did)
-                .map(ConfigAccess::Graphql)
-                .unwrap_or_else(|| ConfigAccess::local(self.node_arc())),
+            &self.session_queue_access(node_did)?,
             node_did,
             session_id,
             &self.requester_did(&record),
@@ -186,10 +179,8 @@ impl ClientCore {
         steer: Option<&str>,
         request_id: Option<&str>,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
-        let peer = self
-            .peer_record_for_chat_write(node_did, Utc::now())
-            .await?;
-        ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        let peer = self.peer_record_for_chat_write(node_did)?;
+        ensure_peer_chat_ready(node_did, peer.as_ref())?;
         if edit
             .messages
             .iter()
@@ -199,14 +190,13 @@ impl ClientCore {
         }
         let (signer, admission, _) = self.request_authority(node_did, peer.as_ref()).await?;
         let selected_doc_ids = edit.selected_request_doc_ids.clone();
-        let access = self.session_queue_access(node_did);
+        let access = self.session_queue_access(node_did)?;
         let result = match steer {
             Some(request_doc_id) => {
                 gents::request::lifecycle::submit_pending_user_steer(
                     &access,
                     signer.as_ref(),
                     admission,
-                    Some(self.local_peer_id()),
                     node_did,
                     session_id,
                     edit,
@@ -220,7 +210,6 @@ impl ClientCore {
                     &access,
                     signer.as_ref(),
                     admission,
-                    Some(self.local_peer_id()),
                     node_did,
                     session_id,
                     edit,
@@ -235,7 +224,7 @@ impl ClientCore {
                     .map(|record| self.requester_did(record))
                     .unwrap_or_else(|| self.node_identity.did().to_string());
                 let receipt = merge_accepted_edit_projection(
-                    &self.session_queue_access(node_did),
+                    &self.session_queue_access(node_did)?,
                     self.store.as_ref(),
                     receipt,
                     &selected_doc_ids,

@@ -45,13 +45,21 @@ log = pathlib.Path(os.environ["CALL_LOG"])
 with log.open("a") as stream:
     stream.write(json.dumps(args) + "\\n")
 if args[0] == "query":
-    print(json.dumps({"results": [{"node_did": "did:test:node"}]}))
+    print(json.dumps({"results": [{"node_did": "did:test:node", "default_agent_did": None if os.getenv("MISSING_DEFAULT_AGENT") else "did:test:provisioned-agent"}]}))
+elif args[:2] == ["config", "apply"] and os.getenv("FAIL_CONFIG_APPLY"):
+    print(json.dumps({"errors": ["specific validation failure"]}))
+    raise SystemExit(1)
 elif args[:2] == ["eval", "batch"]:
     plan = json.loads(pathlib.Path(args[args.index("--plan") + 1]).read_text())
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     applied = [call[call.index("--root") + 1] for call in calls if call[:2] == ["config", "apply"]]
     assert len(applied) == 3, applied
     assert all(pathlib.Path(path).is_dir() for path in applied)
+    for path in applied:
+        config = json.loads((pathlib.Path(path) / "pack_config.json").read_text())
+        assert config["node"]["default_agent_did"] == "did:test:provisioned-agent", config
+        if "inference_profiles" in config:
+            assert config["inference_profiles"][0]["execution_id"] == config["inference_execution"][0]["execution_id"], config
     assert len(plan["runs"]) == 4, plan
     assert not any(call[:2] == ["eval", "run"] for call in calls)
 elif args[:2] != ["config", "apply"]:
@@ -104,6 +112,21 @@ elif args[:2] != ["config", "apply"]:
                 run_ids.append(args[args.index("--run-id") + 1])
         self.assertEqual(len(run_ids), 8)
         self.assertEqual(len(set(run_ids)), 8)
+
+    def test_missing_default_agent_stops_before_config_apply(self):
+        result = self.run_ladder("all", MISSING_DEFAULT_AGENT="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("initialized node has no unambiguous default agent", result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any(call[:2] == ["config", "apply"] for call in calls))
+        self.assertFalse(any(call[:2] == ["eval", "batch"] for call in calls))
+
+    def test_failed_config_apply_reports_validation_details(self):
+        result = self.run_ladder("all", FAIL_CONFIG_APPLY="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("specific validation failure", result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any(call[:2] == ["eval", "batch"] for call in calls))
 
     def test_help_does_not_initialize_or_call_cli(self):
         result = self.run_ladder("--help")

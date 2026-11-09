@@ -55,7 +55,7 @@ theorem previous_stop_does_not_mark_new_owner (request old : RequestId)
   simp [stopping, h, Ne.symm h]
 
 theorem displayed_active_owner_is_interrupt_target (sid : SessionId) (node : NodeDid)
-    (agent : Option AgentId) (rows : List SessionTurn.Row) (selected owner : SessionTurn.Row)
+    (agent : Option AgentDid) (rows : List SessionTurn.Row) (selected owner : SessionTurn.Row)
     (tracked : Option RequestId)
     (hterminal : (SessionTurn.turnOf rows (SessionTurn.replacementOf rows selected)).state = .terminal)
     (howner : ((SessionTurn.displayCandidates rows selected).reverse.find?

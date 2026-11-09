@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "name": "placement_fixture",
+  "version": "1.0.0",
+  "description": "Three slot Agents and one repository placement, for tests of the placement reader grants a pack install makes.",
+  "namespace": "fixture",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "fixture"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agents/fixture_placement/system_prompt.md",
+    "pack_config.json"
+  ],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "worker",
+      "description": "The one slot this fixture declares.",
+      "agents": [
+        "fixture-writer",
+        "fixture-reviewer",
+        "fixture-integrator"
+      ]
+    }
+  ]
+}

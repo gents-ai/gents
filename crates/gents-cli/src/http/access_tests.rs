@@ -60,20 +60,48 @@ fn authority_matching_rejects_rebinding_ambiguous_hosts_and_wrong_ports() {
     }
 }
 
+fn principal_endpoint(
+    url: impl Into<String>,
+    identity: &PrincipalIdentity,
+) -> gents::store::config_client::GraphqlEndpoint {
+    gents::store::config_client::GraphqlEndpoint::as_principal(url, identity.did())
+        .with_client_signing_capability(
+            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                identity.private_key_bytes(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+}
+
 struct Fixture {
     _temp: tempfile::TempDir,
     _server: tokio_util::task::AbortOnDropHandle<()>,
     owner: PrincipalIdentity,
     other: PrincipalIdentity,
+    admin: PrincipalIdentity,
     endpoint: String,
     client: reqwest::Client,
     queries: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    query_bearers: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    status_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
     let (runtime, observation) = crate::http::router::empty_activation_state();
     crate::http::runtime_contract_router(
         format!("{endpoint}/api/v0/graphql"),
+        gents::store::config_client::GraphqlEndpoint::as_principal(
+            format!("{endpoint}/api/v0/graphql"),
+            owner.did(),
+        )
+        .with_client_signing_capability(
+            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                owner.private_key_bytes(),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
         "test-runtime".into(),
         owner.did().into(),
         "readwrite".into(),
@@ -100,12 +128,17 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let owner_paths = DesktopPaths::from_root(temp.path().join("owner"));
         let other_paths = DesktopPaths::from_root(temp.path().join("other"));
+        let admin_paths = DesktopPaths::from_root(temp.path().join("admin"));
         owner_paths.ensure_root_dirs().await.unwrap();
         other_paths.ensure_root_dirs().await.unwrap();
+        admin_paths.ensure_root_dirs().await.unwrap();
         let owner = PrincipalIdentity::load_or_create(&owner_paths)
             .await
             .unwrap();
         let other = PrincipalIdentity::load_or_create(&other_paths)
+            .await
+            .unwrap();
+        let admin = PrincipalIdentity::load_or_create(&admin_paths)
             .await
             .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -113,15 +146,60 @@ impl Fixture {
         let router = runtime_routes(&endpoint, &owner);
         let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed_queries = queries.clone();
-        let router = router.merge(axum::Router::new().route(
-            "/api/v0/graphql",
-            axum::routing::post(move || {
-                let queries = observed_queries.clone();
+        let query_bearers = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed_bearers = query_bearers.clone();
+        let admin_did = admin.did().to_owned();
+        let router = router
+            .merge(axum::Router::new().route(
+                "/api/v0/graphql",
+                axum::routing::post(move |headers: axum::http::HeaderMap| {
+                    let queries = observed_queries.clone();
+                    let bearers = observed_bearers.clone();
+                    async move {
+                        queries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if let Some(bearer) = headers
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                        {
+                            bearers.lock().unwrap().push(bearer.to_owned());
+                        }
+                        axum::Json(serde_json::json!({ "data": {} }))
+                    }
+                }),
+            ))
+            // Native NAC's explanation to the subject itself; only the
+            // fixture admin holds the `admin` relation.
+            .merge(axum::Router::new().route(
+                "/api/v0/acp/node/explain",
+                axum::routing::get(
+                    move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                        let admin_did = admin_did.clone();
+                        async move {
+                            let grants = if query.get("subject") == Some(&admin_did) {
+                                vec![acp::nac::PermissionProvenance {
+                                    permission: acp::nac::NodePermission::NacStatus,
+                                    via: acp::nac::PermissionVia::Admin,
+                                }]
+                            } else {
+                                Vec::new()
+                            };
+                            axum::Json(grants)
+                        }
+                    },
+                ),
+            ));
+        let status_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_status_requests = status_requests.clone();
+        let router = router.layer(axum::middleware::from_fn(
+            move |request: Request, next: axum::middleware::Next| {
+                let status_requests = observed_status_requests.clone();
                 async move {
-                    queries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    axum::Json(serde_json::json!({ "data": {} }))
+                    if request.uri().path() == "/status" {
+                        status_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    next.run(request).await
                 }
-            }),
+            },
         ));
         let router = HttpAuthority::for_endpoint(&endpoint).wrap(router);
         let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
@@ -132,15 +210,83 @@ impl Fixture {
             _server: server,
             owner,
             other,
+            admin,
             endpoint,
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             queries,
+            query_bearers,
+            status_requests,
         }
     }
 
     fn get(&self, path: &str) -> reqwest::RequestBuilder {
         self.client.get(format!("{}{path}", self.endpoint))
     }
+}
+
+#[tokio::test]
+async fn startup_gate_blocks_concurrent_client_operations_until_owner_bootstrap_finishes() {
+    use axum::{
+        routing::{get, post},
+        Router,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let ready = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let router = Router::new()
+        .route("/private-bind-probe", get(|| async { "probe" }))
+        .route(
+            "/api/v0/graphql",
+            post(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    "ok"
+                }
+            }),
+        );
+    let router = HttpAuthority::for_endpoint(&endpoint)
+        .with_startup_gate(ready.clone(), "/private-bind-probe".into())
+        .wrap(router);
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    }));
+    let client = reqwest::Client::new();
+    assert_eq!(
+        client
+            .get(format!("{endpoint}/private-bind-probe"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let mut pending = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let client = client.clone();
+        let url = format!("{endpoint}/api/v0/graphql");
+        pending.spawn(async move { client.post(url).send().await.unwrap().status() });
+    }
+    while let Some(response) = pending.join_next().await {
+        assert_eq!(response.unwrap(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    ready.store(true, Ordering::Release);
+    assert_eq!(
+        client
+            .post(format!("{endpoint}/api/v0/graphql"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -152,12 +298,15 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let endpoint = format!("http://{address}");
-    let config = HttpAuthority::for_endpoint(&endpoint).protect_http(
-        gents::defra_node::HttpConfig::with_listener(listener)
-            .unwrap()
-            .with_extra_routes(runtime_routes(&endpoint, &owner)),
-    );
-    let node = gents::defra_node::EmbeddedNode::builder()
+    let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let config = HttpAuthority::for_endpoint(&endpoint)
+        .with_startup_gate(ready.clone(), "/private-bind-probe".into())
+        .protect_http(
+            gents::defra_node::HttpConfig::with_listener(listener)
+                .unwrap()
+                .with_extra_routes(runtime_routes(&endpoint, &owner)),
+        );
+    let node = gents::defra_node::Node::builder()
         .with_node_identity_did(owner.did())
         .with_node_acp_enabled()
         .with_http(config)
@@ -169,6 +318,19 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap();
+
+    for path in ["/api/v0/graphql", "/api/v0/collections", "/status"] {
+        assert_eq!(
+            client
+                .get(format!("{endpoint}{path}"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    ready.store(true, std::sync::atomic::Ordering::Release);
 
     for path in [
         "/health-check",
@@ -219,17 +381,14 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
             .unwrap();
         assert_eq!(response.status(), expected, "{path}");
     }
-    let response = gents::store::config_client::GraphqlEndpoint::as_principal(
-        format!("{endpoint}/api/v0/graphql"),
-        owner.did(),
-    )
-    .authorize(client.get(format!("{endpoint}/api/v0/collections")))
-    .unwrap()
-    .send()
-    .await
-    .unwrap();
+    let response = principal_endpoint(format!("{endpoint}/api/v0/graphql"), &owner)
+        .authorize(client.get(format!("{endpoint}/api/v0/collections")))
+        .unwrap()
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[derive(Deserialize)]
@@ -239,6 +398,7 @@ struct Case {
     surface: String,
     identity: String,
     decision: String,
+    reads_as: Option<String>,
 }
 
 #[tokio::test]
@@ -250,29 +410,34 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
     )
     .unwrap();
     let cases: Vec<Case> = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(cases.len(), 12);
+    assert_eq!(cases.len(), 24);
     let f = Fixture::start().await;
     for case in cases {
-        let path = if case.surface == "bootstrap" {
-            "/status"
-        } else {
-            "/activation"
+        let path = match case.surface.as_str() {
+            "bootstrap" => "/status",
+            "operator" => "/activation",
+            "snapshot" => "/fleet/slots",
+            _ => panic!("unknown surface"),
         };
         let mut request = f.get(path);
         let identity = match case.identity.as_str() {
             "operator" => Some(&f.owner),
             "other" => Some(&f.other),
+            "admin" => Some(&f.admin),
             "anonymous" => None,
             _ => panic!("unknown identity"),
         };
+        let mut bearer = None;
         if let Some(identity) = identity {
-            request = gents::store::config_client::GraphqlEndpoint::as_principal(
-                format!("{}/api/v0/graphql", f.endpoint),
-                identity.did(),
-            )
-            .authorize(request)
-            .unwrap();
+            let authorization =
+                principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), identity)
+                    .authorization()
+                    .unwrap()
+                    .unwrap();
+            request = request.header(header::AUTHORIZATION, &authorization);
+            bearer = Some(authorization);
         }
+        f.query_bearers.lock().unwrap().clear();
         if !case.authority_matches {
             request = request.header(header::HOST, "attacker.example:9191");
         }
@@ -299,10 +464,37 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
         if case.decision == "unauthorized" {
             assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
         }
+        if path == "/fleet/slots" {
+            let bearers = f.query_bearers.lock().unwrap().clone();
+            if case.decision == "operator" {
+                assert_eq!(case.reads_as.as_deref(), Some(case.identity.as_str()));
+                assert!(!bearers.is_empty(), "the slot snapshot is read");
+                assert!(
+                    bearers.iter().all(|seen| Some(seen) == bearer.as_ref()),
+                    "the slot snapshot reads as its caller {}: {bearers:?}",
+                    case.identity
+                );
+            } else {
+                assert_eq!(case.reads_as, None);
+                assert!(bearers.is_empty(), "refused snapshots read nothing");
+            }
+            continue;
+        }
         let body: Value = response.json().await.unwrap();
         if case.decision == "operator" && path == "/status" {
             assert_eq!(body["home"], "/private/operator/home");
             assert_eq!(body["tool_root"], "/private/operator/workspace");
+            assert_eq!(case.reads_as.as_deref(), Some(case.identity.as_str()));
+            let bearers = f.query_bearers.lock().unwrap().clone();
+            assert!(!bearers.is_empty(), "private status reads the node's data");
+            assert!(
+                bearers.iter().all(|seen| Some(seen) == bearer.as_ref()),
+                "private status reads as its caller {}: {bearers:?}",
+                case.identity
+            );
+        }
+        if case.decision != "operator" {
+            assert_eq!(case.reads_as, None);
         }
         if case.decision != "operator" {
             assert_eq!(
@@ -344,13 +536,10 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
 #[tokio::test]
 async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work() {
     let f = Fixture::start().await;
-    let authorization = gents::store::config_client::GraphqlEndpoint::as_principal(
-        format!("{}/api/v0/graphql", f.endpoint),
-        f.other.did(),
-    )
-    .authorization()
-    .unwrap()
-    .unwrap();
+    let authorization = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.other)
+        .authorization()
+        .unwrap()
+        .unwrap();
     for path in [
         "/self",
         "/sessions",
@@ -414,11 +603,11 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
         "/mcp/pool",
         "/activation",
         "/identity/decide",
+        gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
         "/enrollment/decisions",
         "/enrollment/pending",
         "/accounts/usage/read",
         gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
-        gents_protocol::job::JOB_CONTROL_PATH,
         gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
         gents_protocol::file_inventory::FILE_INVENTORY_OPERATOR_PATH,
     ] {
@@ -432,12 +621,17 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
     }
 }
 
+/// The desktop's managed-runtime status check reads as the User through the
+/// client-signed endpoint. It never loads the hosted runtime's node key, and
+/// without a User signer it sends nothing rather than reading anonymously.
 #[tokio::test]
-async fn managed_readiness_status_uses_the_hosted_node_principal() {
+async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
     use gents_desktop_core::local_runtime::{
-        fetch_hosted_runtime_status, OperatorIdentityInteraction,
+        fetch_hosted_runtime_status, HostedRuntimeStatusError,
     };
+    use identity::Identity as _;
     let f = Fixture::start().await;
+    // A home whose init.json names a node key: reading status must not open it.
     let home = f._temp.path().join("runtime-home");
     std::fs::create_dir_all(&home).unwrap();
     let graphql = format!("{}/api/v0/graphql", f.endpoint);
@@ -445,6 +639,15 @@ async fn managed_readiness_status_uses_the_hosted_node_principal() {
         home.join("runtime.json"),
         serde_json::json!({
             "node_name":"test-runtime", "node_did": f.owner.did(), "graphql":graphql,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("init.json"),
+        serde_json::json!({
+            "node_name":"test-runtime", "node_did": f.owner.did(),
+            "key_path": home.join("missing-node.key"),
         })
         .to_string(),
     )
@@ -463,26 +666,54 @@ async fn managed_readiness_status_uses_the_hosted_node_principal() {
     .await
     .unwrap();
     assert!(public.get("tool_root").is_none());
-    let private = fetch_hosted_runtime_status(&record, OperatorIdentityInteraction::Prevent)
+    let calls = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(calls, 1);
+
+    let error = fetch_hosted_runtime_status(&record, None)
+        .await
+        .expect_err("no User signer means no status read");
+    assert!(
+        matches!(error, HostedRuntimeStatusError::NoUserSigner),
+        "{error:#}"
+    );
+    assert_eq!(
+        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
+        calls,
+        "an unsigned private status read is never sent"
+    );
+
+    let user = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        f.admin.private_key_bytes(),
+    )
+    .unwrap();
+    f.query_bearers.lock().unwrap().clear();
+    let private = fetch_hosted_runtime_status(&record, Some(&user))
         .await
         .unwrap()
-        .expect("cached hosted authority");
-    assert_eq!(private["node_did"], f.owner.did());
-    assert_eq!(private["tool_ceiling"], "readwrite");
+        .expect("a local runtime record has a status endpoint");
     assert_eq!(private["tool_root"], "/private/operator/workspace");
-    assert_eq!(private["desktop_graphql"], graphql);
-    record.graphql = Some("http://127.0.0.1:1/api/v0/graphql".into());
-    assert!(
-        fetch_hosted_runtime_status(&record, OperatorIdentityInteraction::Prevent)
-            .await
-            .unwrap()
-            .is_none(),
-        "authority never follows a repointed endpoint"
+    assert_eq!(
+        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
+        calls + 1
     );
+    let bearers = f.query_bearers.lock().unwrap().clone();
+    assert!(!bearers.is_empty(), "private status reads the node's data");
+    for bearer in bearers {
+        let token = bearer.strip_prefix("Bearer ").unwrap();
+        assert_eq!(
+            identity::from_token(token.as_bytes())
+                .unwrap()
+                .did()
+                .unwrap()
+                .to_string(),
+            f.admin.did(),
+            "private status reads as the User, not the node"
+        );
+    }
 }
 
 #[tokio::test]
-async fn remote_pack_install_requires_the_runtime_operator_before_work() {
+async fn remote_pack_install_requires_authenticated_client_before_work() {
     let fixture = Fixture::start().await;
     let body = serde_json::json!({
         "node_did": fixture.owner.did(), "root": "", "dependencies": [],
@@ -490,25 +721,70 @@ async fn remote_pack_install_requires_the_runtime_operator_before_work() {
         "preview": false, "force_rebind": false, "grant_authority": false,
         "explicit": true, "wire": []
     });
+    // An authenticated caller reaches request decoding, which refuses this
+    // archive-less body before any database work.
     for (identity, expected) in [
         (None, StatusCode::UNAUTHORIZED),
-        (Some(&fixture.other), StatusCode::FORBIDDEN),
-        (Some(&fixture.owner), StatusCode::SERVICE_UNAVAILABLE),
+        (Some(&fixture.other), StatusCode::BAD_REQUEST),
+        (Some(&fixture.owner), StatusCode::BAD_REQUEST),
     ] {
         let mut request = fixture
             .client
             .post(format!("{}/packs/install", fixture.endpoint))
             .json(&body);
         if let Some(identity) = identity {
-            request = gents::store::config_client::GraphqlEndpoint::as_principal(
-                format!("{}/api/v0/graphql", fixture.endpoint),
-                identity.did(),
-            )
-            .authorize(request)
-            .unwrap();
+            request = principal_endpoint(format!("{}/api/v0/graphql", fixture.endpoint), identity)
+                .authorize(request)
+                .unwrap();
         }
         let response = request.send().await.unwrap();
         assert_eq!(response.status(), expected);
     }
     assert_eq!(fixture.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn agent_identity_provisioning_requires_client_authentication_and_writes_no_config() {
+    let f = Fixture::start().await;
+    let url = format!(
+        "{}{}",
+        f.endpoint,
+        gents_protocol::agent_identity::AGENT_IDENTITY_PATH
+    );
+    let unsigned = f
+        .client
+        .post(&url)
+        .json(&serde_json::json!({"node_did":f.owner.did()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+    let endpoint = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.owner);
+    let response = endpoint
+        .authorize(
+            f.client
+                .post(&url)
+                .json(&serde_json::json!({"node_did":"different-node"})),
+        )
+        .unwrap()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(f.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[test]
+fn advertised_authority_is_explicit_and_does_not_trust_forwarded_headers() {
+    let authority = HttpAuthority::for_endpoint("http://0.0.0.0:9191/api/v0/graphql")
+        .with_advertised_endpoint(Some("https://runtime.example:8443/api/v0/graphql"));
+    assert!(authority.accepts(&request("runtime.example:8443")));
+    assert!(authority.accepts(&request("localhost:9191")));
+    assert!(!authority.accepts(&request("runtime.example:9191")));
+    let mut foreign = request("attacker.example:8443");
+    foreign.headers_mut().insert(
+        "x-forwarded-host",
+        header::HeaderValue::from_static("runtime.example:8443"),
+    );
+    assert!(!authority.accepts(&foreign));
 }

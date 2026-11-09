@@ -1,16 +1,19 @@
 use crate::request::lifecycle::queue::next_append_sequence_in_transaction;
-use crate::session::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, output_segment_create_variables,
-    transcript_message_create_variables, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+use crate::store::config_client::session_children::{
+    output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::ConfigApplyTxn;
 #[cfg(test)]
-use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
+use crate::store::config_client::IdempotentTransactionRetry;
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
+use gents_protocol::output::rows::{
+    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
+    AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
     OutputWriter, PayloadPresentation, PresentedPayload, SegmentRun, SourceClose,
@@ -22,25 +25,33 @@ impl ToolCallLifecycle {
     pub(crate) async fn publish_background_receipt(&mut self, text: &str) -> Result<bool> {
         let binding = self.background_receipt_binding()?;
         let receipt = text.to_owned();
-        ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
-            IdempotentTransactionRetry::Standard,
-            "tool_call.publish_background_receipt",
-            move |txn| {
-                let binding = binding.clone();
-                let receipt = receipt.clone();
-                Box::pin(
-                    async move { publish_background_receipt_in_txn(txn, &binding, &receipt).await },
-                )
-            },
+        let result = self
+            .access()?
+            .transact_idempotent(
+                IdempotentTransactionRetry::Standard,
+                "tool_call.publish_background_receipt",
+                move |txn| {
+                    let binding = binding.clone();
+                    let receipt = receipt.clone();
+                    Box::pin(async move {
+                        publish_background_receipt_in_txn(txn, &binding, &receipt).await
+                    })
+                },
+            )
+            .await?;
+        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+            &self.access()?,
+            &self.node_did,
+            &self.actor,
+            &self.session_id,
         )
-        .await
+        .await?;
+        Ok(result)
     }
 
     pub(crate) fn background_receipt_binding(&self) -> Result<BackgroundReceiptBinding> {
         anyhow::ensure!(
-            self.await_mode == crate::tools::call::lifecycle::AwaitMode::Background
+            self.await_mode == gents_protocol::tool_call::AwaitMode::Background
                 && !self.is_spawned_background(),
             "background receipt requires an accepted direct background invocation"
         );
@@ -102,7 +113,7 @@ pub(super) async fn ensure_background_receipt_before_bridge_close(
     let key = escape_graphql_string(&format!(
         "{session_id}:background-receipt:{tool_call_doc_id}"
     ));
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let response = txn
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{key}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
@@ -300,7 +311,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
     let segment_response = txn
         .execute_with_variables(
             CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-            &output_segment_create_variables(&segment)?,
+            &output_segment_bound_variables(txn, &segment).await?,
         )
         .await?;
     let close_doc_id = created_doc_id(&segment_response, "AgentOutputSegment")?;
@@ -344,7 +355,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
     };
     txn.execute_with_variables(
         CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message)?,
+        &transcript_message_bound_variables(txn, &message).await?,
     )
     .await?;
     Ok(true)

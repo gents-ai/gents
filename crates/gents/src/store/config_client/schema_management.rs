@@ -4,14 +4,29 @@ use super::{graphql_api_base, ConfigAccess, ConfigClientError};
 
 type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
+fn actor_context(actor: Option<&identity::Did>) -> defra_core::RequestContext {
+    defra_core::RequestContext::default().with_identity(actor.map(ToString::to_string))
+}
+
 impl ConfigAccess {
     pub async fn collection_versions(&self) -> Result<Vec<Value>> {
         match self {
             Self::Local(local) => {
+                let actor = local.identity().cloned();
                 local
-                    .run_owned(|node| async move {
-                        node.get_all_collection_versions()
-                            .await?
+                    .run_owned(move |node| async move {
+                        let versions = match actor {
+                            Some(actor) => {
+                                let context = actor_context(Some(&actor));
+                                let selector = schema::CollectionSelector {
+                                    get_inactive: true,
+                                    ..Default::default()
+                                };
+                                node.get_collections_as(&context, &selector).await?
+                            }
+                            None => node.get_all_collection_versions().await?,
+                        };
+                        versions
                             .into_iter()
                             .map(|v| serde_json::to_value(v).map_err(Into::into))
                             .collect::<Result<_>>()
@@ -32,11 +47,15 @@ impl ConfigAccess {
             Self::Local(local) => {
                 let collection = collection.to_owned();
                 let patch = serde_json::to_string(patch)?;
+                let actor = local.identity().cloned();
                 local
                     .run_owned(move |node| async move {
-                        Ok(serde_json::to_value(
-                            node.patch_collection(&collection, &patch).await?,
-                        )?)
+                        let context = actor_context(actor.as_ref());
+                        node.patch_collection_as(&context, &patch, None).await?;
+                        Ok::<_, ConfigClientError>(json!({
+                            "committed": true, "collection": collection, "VersionID": null,
+                            "note": "Schema publication returns no version ID; inspect collection versions for the resulting definition"
+                        }))
                     })
                     .await
             }
@@ -61,9 +80,11 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 let version_id = version_id.to_owned();
+                let actor = local.identity().cloned();
                 local
                     .run_owned(move |node| async move {
-                        node.set_active_collection_version(&version_id)
+                        let context = actor_context(actor.as_ref());
+                        node.set_active_collection_version_as(&context, &version_id)
                             .await
                             .map_err(Into::into)
                     })
@@ -91,13 +112,17 @@ impl ConfigAccess {
     ) -> Result<Value> {
         config.validate_for_http()?;
         match self {
-            Self::Local(local) => Ok(local
-                .run_owned(move |node| async move {
-                    Ok::<_, ConfigClientError>(
-                        json!({"lensId":node.set_migration(config).await?.to_string()}),
-                    )
-                })
-                .await?),
+            Self::Local(local) => {
+                let actor = local.identity().cloned();
+                let config = serde_json::to_value(config)?;
+                local
+                    .run_owned(move |node| async move {
+                        let context = actor_context(actor.as_ref());
+                        let id = node.set_migration_as(&context, &config).await?;
+                        Ok::<_, ConfigClientError>(json!({"lensId": id}))
+                    })
+                    .await
+            }
             Self::Graphql(_) => Ok(self
                 .schema_request(
                     reqwest::Method::POST,
@@ -113,9 +138,13 @@ impl ConfigAccess {
             Self::Local(local) => {
                 let query = query.to_owned();
                 let sdl = sdl.to_owned();
+                let actor = local.identity().cloned();
                 local
                     .run_owned(move |node| async move {
-                        node.add_view(&query, &sdl).await.map_err(Into::into)
+                        let context = actor_context(actor.as_ref());
+                        node.add_view_as(&context, &query, &sdl)
+                            .await
+                            .map_err(Into::into)
                     })
                     .await
             }
@@ -135,9 +164,11 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 let collection = collection.to_owned();
+                let actor = local.identity().cloned();
                 local
                     .run_owned(move |node| async move {
-                        node.materialize_collection(&collection)
+                        let context = actor_context(actor.as_ref());
+                        node.materialize_collection_as(&context, &collection)
                             .await
                             .map_err(Into::into)
                     })

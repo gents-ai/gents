@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use futures::future::BoxFuture;
 use gents_loop::rig_compat::CachedInputTokensObservation;
 use tokio_util::sync::CancellationToken;
@@ -9,7 +9,7 @@ use super::client::AdmissionError;
 use super::controller::{InferenceCallRecord, PoolPermit};
 use super::persistence::{persist_existing_call_terminal, ProviderCallUsage};
 use super::stream_guard::StreamGuardLifecycle;
-use crate::runtime::drop_cleanup::DropCleanup;
+use crate::drop_cleanup::DropCleanup;
 
 pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,

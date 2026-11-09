@@ -1,18 +1,11 @@
 use super::plan::PlannedWrite;
 use super::*;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
-use gents_protocol::goal_control::SessionGoalObservation;
+use crate::goal::operator_resume_test_support::Fixture;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
-use serde_json::Value;
-
-async fn write(node: &Arc<EmbeddedNode>, mutation: &str) -> Value {
-    ConfigAccess::write_local(node, "test.session_message_goal_input", mutation)
-        .await
-        .unwrap()
-}
+use serde_json::{json, Value};
 
 #[tokio::test]
 async fn generated_session_messages_capture_target_goal_before_signing() {
@@ -20,93 +13,89 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
     let cases = contracts["session_message_goal_input_cases"]
         .as_array()
         .unwrap();
-    assert_eq!(cases.len(), 11);
-    let temp = tempfile::tempdir().unwrap();
-    let identities = [
-        Arc::new(KeyIdentity::load_or_create(temp.path().join("caller.key"), None).unwrap()),
-        Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap()),
-    ];
-    let caller = &identities[0];
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(caller.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    for identity in &identities {
-        crate::test_support::install_test_agent(&node, identity.did(), "agent").await;
-    }
-    let mut calling = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "caller",
-        caller.did(),
-        caller.did(),
-        "agent",
-        "caller-chat",
-        "Send to another chat",
-        "interactive",
-        "2026-10-21T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(caller.did()),
-    );
-    calling.input.goal_assignment = Some(GoalAssignmentInput {
-        goal_id: "caller-goal".into(),
-        root_request_doc_id: Some("caller-root".into()),
-    });
-    crate::sign_agent_request_create(caller.as_ref(), &mut calling)
-        .await
-        .unwrap();
-    let calling = write(&node, &calling.graphql_mutation().unwrap()).await;
-    let calling_doc = crate::store::graphql::created_doc_id(&calling, "AgentRequest").unwrap();
+    assert_eq!(cases.len(), 5);
+    let before = json!({"status":"active","sequence":0,"last_continued_from":null,
+        "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
+        "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     for (index, case) in cases.iter().enumerate() {
         let name = case["name"].as_str().unwrap();
-        let identity = &identities[case["owner"].as_u64().unwrap() as usize - 1];
-        let session_id = format!("target-{index}");
+        let f = Fixture::new(&before).await;
+        assert_eq!(
+            case["owner"], 1,
+            "{name}: delivery stays on the calling runtime"
+        );
+        let caller_agent = &f.agent;
+        let session_id = format!("goal-input-{index}");
         let target = SessionMessageTarget {
-            node_did: identity.did().into(),
-            agent_id: "agent".into(),
+            node_did: f.identity.did().into(),
+            agent_did: f.agent.did().into(),
             session_id: session_id.clone(),
         };
+        let agent_access = f.agent_access();
         if case["session_readable"] == true {
-            crate::session::ensure_session_with_agent_id_and_requester_did(
-                &node,
-                &session_id,
-                identity.did(),
-                "agent",
-                Some(caller.did()),
+            agent_access
+                .transact_write("test.goal_input.session", |txn| {
+                    Box::pin(async {
+                        crate::session::ensure_session_in_txn(
+                            txn,
+                            &session_id,
+                            f.identity.did(),
+                            f.agent.did(),
+                            Some(caller_agent.did()),
+                            None,
+                            None,
+                            "2026-01-01T00:00:00Z",
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
+            crate::session::recover_agent_session_relationships_with_access(
+                &agent_access,
+                f.identity.did(),
+                &identity::Did::new(f.agent.did()).unwrap(),
             )
             .await
             .unwrap();
         }
         let mut goal_id = None;
-        let mut root = None;
-        if case["observed"].is_object() {
+        let mut root_doc = None;
+        if case["observed"].is_object() && case["session_readable"] == false {
+            agent_access.write("test.goal_input.orphan", &format!(r#"mutation {{ create_Goal(input: {{ goal_id: "orphan", node_did: "{}", agent_did: "{}", session_id: "{}", objective: "Orphan", status: "active" }}) {{ _docID }} }}"#,
+                escape_graphql_string(f.identity.did()), escape_graphql_string(f.agent.did()), escape_graphql_string(&session_id))).await.unwrap();
+        }
+        if case["observed"].is_object() && case["session_readable"] == true {
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 format!("opening-{index}"),
-                identity.did(),
-                identity.did(),
-                "agent",
+                f.identity.did(),
+                f.agent.did(),
+                f.agent.did(),
                 &session_id,
                 "Original goal",
                 "interactive",
                 "2026-10-21T00:00:00Z",
-                AgentRequestAdmissionRecord::local_self(identity.did()),
+                AgentRequestAdmissionRecord::local_self(f.agent.did()),
             );
-            crate::sign_agent_request_create(identity.as_ref(), &mut opening)
+            crate::sign_agent_request_create(f.agent.as_ref(), &mut opening)
                 .await
                 .unwrap();
-            let created = write(&node, &opening.graphql_mutation().unwrap()).await;
-            let opening_doc =
-                crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-            let goal = crate::goal::set_goal(
-                &node,
-                identity.did(),
+            let created = agent_access
+                .write(
+                    "test.goal_input.opening",
+                    &opening.graphql_mutation().unwrap(),
+                )
+                .await
+                .unwrap();
+            let doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+            let goal = crate::goal::set_goal_from_access(
+                &agent_access,
+                f.identity.did(),
                 &session_id,
                 Some("Target goal"),
+                None,
                 None,
                 None,
             )
@@ -114,115 +103,161 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             .unwrap();
             goal_id = Some(goal.goal_id);
             if !case["observed"]["root"].is_null() {
-                write(&node, &format!(
-                    r#"mutation {{ update_Goal(docID: "{}", input: {{ assignment_root_request_doc_id: "{}" }}) {{ _docID }} }}"#,
-                    escape_graphql_string(&goal.doc_id), escape_graphql_string(&opening_doc),
-                )).await;
-                root = Some(opening_doc);
+                agent_access.write("test.goal_input.root", &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ assignment_root_request_doc_id: "{}" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&goal.doc_id), escape_graphql_string(&doc))).await.unwrap();
+                root_doc = Some(doc);
             }
         }
-        if case["owner"] == 2
-            && (case["observation_verified"] == true || case["observed"].is_object())
-        {
-            let source: Arc<dyn NodeIdentity> = identity.clone();
-            crate::goal::reconcile_goal_observations(&node, &source, true, &[])
+        // A local message is caused by an accepted tool call on the caller's
+        // own request, which staging verifies before it publishes.
+        let tool_call_doc_id = {
+            let created = agent_access
+                .write(
+                    "test.goal_input.tool_call",
+                    &format!(
+                        r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "goal-input-call-{index}", request_id: "{}", request_doc_id: "{}", session_id: "{}", agent_did: "{}", node_did: "{}", requester_did: "{}", tool_name: "agent_message", tool_call_id: "call-{index}", status: "pending", lifecycle_state: "pending" }}) {{ _docID }} }}"#,
+                        escape_graphql_string(&f.parent.request_id),
+                        escape_graphql_string(&f.parent.doc_id),
+                        escape_graphql_string(&f.parent.session_id),
+                        escape_graphql_string(f.agent.did()),
+                        escape_graphql_string(f.identity.did()),
+                        escape_graphql_string(f.parent.requester_did.as_deref().unwrap()),
+                    ),
+                )
                 .await
                 .unwrap();
-            let access = ConfigAccess::local(node.clone());
-            let rows = access.execute(&format!(
-                r#"{{ GoalObservation(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ _docID observation_json }} }}"#,
-                escape_graphql_string(identity.did()), escape_graphql_string(&session_id),
-            )).await.unwrap();
-            let row = &rows["data"]["GoalObservation"][0];
-            let mut observation: SessionGoalObservation =
-                serde_json::from_str(row["observation_json"].as_str().unwrap()).unwrap();
-            if let Some(goal) = &mut observation.goal {
-                if case["observed"]["owner"] != case["owner"] {
-                    goal.snapshot.node_did = caller.did().into();
-                }
-                if case["observed"]["session"] != case["session"] {
-                    goal.snapshot.session_id = "foreign-chat".into();
-                }
-            }
-            observation.signature = identity
-                .sign(&observation.signing_payload().unwrap())
-                .await
-                .unwrap();
-            if case["observation_verified"] == false {
-                observation.signature[0] ^= 1;
-            }
-            write(&node, &format!(
-                r#"mutation {{ update_GoalObservation(docID: "{}", input: {{ observation_json: "{}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(row["_docID"].as_str().unwrap()),
-                escape_graphql_string(&serde_json::to_string(&observation).unwrap()),
-            )).await;
-        }
+            crate::store::graphql::created_doc_id(&created, "AgentToolCall").unwrap()
+        };
         let cause = SessionMessageCause {
-            caller_node_did: caller.did().into(),
-            caller_agent_id: "caller-agent".to_owned(),
-            caller_session_id: "caller-session".to_owned(),
-            caller_requester_did: None,
-            caller_request_id: "caller".into(),
-            caller_request_doc_id: calling_doc.clone(),
+            caller_node_did: f.identity.did().into(),
+            caller_agent_did: caller_agent.did().into(),
+            caller_session_id: f.parent.session_id.clone(),
+            caller_requester_did: f.parent.requester_did.clone(),
+            caller_request_id: f.parent.request_id.clone(),
+            caller_request_doc_id: f.parent.doc_id.clone(),
             caller_hop: 0,
             tool_call_id: format!("call-{index}"),
-            tool_call_doc_id: format!("call-doc-{index}"),
+            tool_call_doc_id,
             correlation: None,
         };
-        let planned = plan(
-            &node,
-            &cause,
-            &target,
-            RenderedBody {
-                content: "Follow up".into(),
-                goal: None,
-            },
-            None,
-            false,
-        )
-        .await;
+        let selected = super::plan::target_goal_assignment(&f.node, &cause, &target).await;
         if case["expected"]["kind"] == "pending" {
             assert!(
-                planned.as_ref().map_or(true, |planned| planned.is_err()),
-                "{name}: unknown source state must not be signed as unassigned"
+                selected.is_err(),
+                "{name}: unknown goal must remain pending"
+            );
+            let signer = caller_agent.managed_agent_signer().unwrap();
+            let planned = plan(
+                &f.node,
+                &cause,
+                &target,
+                RenderedBody {
+                    content: "Follow up".into(),
+                    goal: None,
+                },
+                None,
+                false,
+                &signer,
+            )
+            .await;
+            assert!(
+                planned.as_ref().map_or(true, |result| result.is_err()),
+                "{name}: unknown destination input must not be signed as unassigned"
             );
         } else {
-            let planned = planned.unwrap().unwrap();
-            let PlannedWrite::Request { create, .. } = &planned.write else {
-                panic!("{name}")
-            };
             let expected = case["expected"]["reference"]
                 .is_object()
                 .then(|| GoalAssignmentInput {
                     goal_id: goal_id.unwrap(),
-                    root_request_doc_id: root,
+                    root_request_doc_id: root_doc,
                 });
-            assert_eq!(create.input.goal_assignment, expected, "{name}");
-            if name == "local_target_uses_own_goal" {
-                write(&node, &format!(
-                    r#"mutation {{ update_Goal(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, input: {{ assignment_root_request_doc_id: "later-opening" }}) {{ _docID }} }}"#,
-                    escape_graphql_string(&target.node_did), escape_graphql_string(&target.session_id),
-                )).await;
-            }
-            let staged = ConfigAccess::transact_local_write(
-                &node,
+            assert_eq!(selected.unwrap(), expected, "{name}");
+            let signer = caller_agent.managed_agent_signer().unwrap();
+            let source_access = ConfigAccess::local_managed_agent(
+                f.node.clone(),
+                identity::Did::new(caller_agent.did()).unwrap(),
+                caller_agent.as_ref(),
+            )
+            .unwrap();
+            let planned = plan(
+                &f.node,
+                &cause,
+                &target,
+                RenderedBody {
+                    content: "Follow up".into(),
+                    goal: None,
+                },
                 None,
-                "test.session_message_stage_goal_input",
-                |txn| Box::pin(async { stage_planned_write_in_txn(txn, &cause, &planned).await }),
+                false,
+                &signer,
             )
             .await
-            .unwrap();
-            let stored = ConfigAccess::local(node.clone())
+            .unwrap()
+            .unwrap_or_else(|error| panic!("{name}: local delivery must plan: {error}"));
+            let PlannedWrite::Request { create, .. } = &planned.write else {
+                panic!("{name}: expected a session message request")
+            };
+            assert_eq!(
+                create.input.goal_assignment, expected,
+                "{name}: signed capture"
+            );
+            assert!(
+                caller_agent
+                    .verify(
+                        caller_agent.did(),
+                        &create.signing_payload(),
+                        &create.admission.signature
+                    )
+                    .await
+                    .unwrap(),
+                "{name}: input must be signed by the selected Agent"
+            );
+            assert_ne!(
+                create
+                    .input
+                    .goal_assignment
+                    .as_ref()
+                    .map(|goal| goal.goal_id.as_str()),
+                Some("caller-goal"),
+                "{name}"
+            );
+            if name == "local_target_uses_own_goal" {
+                agent_access.write("test.goal_input.later_root", &format!(
+                    r#"mutation {{ update_Goal(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, input: {{ assignment_root_request_doc_id: "later-opening" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&target.node_did), escape_graphql_string(&target.session_id),
+                )).await.unwrap();
+            }
+            let staged = source_access
+                .transact_write("test.session_message_stage_goal_input", |txn| {
+                    Box::pin(async { stage_planned_write_in_txn(txn, &cause, &planned).await })
+                })
+                .await;
+            if case["session_readable"] == false {
+                // Session messages publish only into an existing session the
+                // caller can see; a fresh session is opened by its own flow.
+                let error = staged.err().unwrap_or_else(|| {
+                    panic!("{name}: an unseen session must not receive a message")
+                });
+                assert!(
+                    format!("{error:#}").contains("client request session is unavailable"),
+                    "{name}: {error:#}"
+                );
+                f.node.shutdown().await.expect("shut down test node");
+                continue;
+            }
+            let staged = staged.unwrap_or_else(|error| panic!("{name}: {error:#}"));
+            let stored = source_access
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     escape_graphql_string(&staged.doc_id),
-                    crate::request::admission::SIGNED_REQUEST_FIELDS,
+                    gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
                 ))
                 .await
                 .unwrap();
             let stored: gents_protocol::row::AgentRequestRow =
                 serde_json::from_value(stored["data"]["AgentRequest"][0].clone()).unwrap();
-            crate::request::admission::verify_request_receipt_signature(&stored).unwrap();
+            crate::store::identity::request_receipt::verify_request_receipt_signature(&stored)
+                .unwrap();
             assert_eq!(
                 stored
                     .input
@@ -233,7 +268,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             );
             if let Some(expected) = &expected {
                 let crate::goal::RequestAssignmentObservation::Assigned(assigned) =
-                    crate::goal::load_request_assignment(&node, &stored)
+                    crate::goal::load_request_assignment(&source_access, &stored)
                         .await
                         .unwrap()
                 else {
@@ -245,27 +280,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                     "{name}"
                 );
             }
-            assert!(
-                caller
-                    .verify(
-                        caller.did(),
-                        &create.signing_payload(),
-                        &create.admission.signature
-                    )
-                    .await
-                    .unwrap(),
-                "{name}: input must be signed"
-            );
-            assert_ne!(
-                create
-                    .input
-                    .goal_assignment
-                    .as_ref()
-                    .map(|r| r.goal_id.as_str()),
-                Some("caller-goal"),
-                "{name}"
-            );
         }
+        f.node.shutdown().await.expect("shut down test node");
     }
-    node.shutdown().await;
 }

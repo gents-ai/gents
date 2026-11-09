@@ -30,7 +30,7 @@ def recoveryPre
     (latestId : RequestId := 1)
     (requestIds : Finset RequestId := {1, 3}) : SessionState :=
   { sessionId := 10
-  , agentId := 20
+  , agentDid := 20
   , requestIds := requestIds
   , ctx := fun rid =>
       if rid = 1 then failedCtx
@@ -74,8 +74,8 @@ def recoveryCaseFromStep
       , postLatestId := post.latest
       , preSessionId := pre.sessionId
       , postSessionId := post.sessionId
-      , preAgentId := pre.agentId
-      , postAgentId := post.agentId
+      , preAgentDid := pre.agentDid
+      , postAgentDid := post.agentDid
       , preRequestCount := pre.requestIds.card
       , postRequestCount := post.requestIds.card
       , preRetryCount := failedPre.retryCount
@@ -116,8 +116,8 @@ def recoveryCaseFromStep
       , postLatestId := 0
       , preSessionId := pre.sessionId
       , postSessionId := 0
-      , preAgentId := pre.agentId
-      , postAgentId := 0
+      , preAgentDid := pre.agentDid
+      , postAgentDid := 0
       , preRequestCount := pre.requestIds.card
       , postRequestCount := 0
       , preRetryCount := failedPre.retryCount

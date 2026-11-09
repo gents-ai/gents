@@ -6,7 +6,10 @@ namespace GoalAutomation.OperatorResume
 time recorded on the failed call that ended the latest request (`none`: no
 reset reported). `limitStartedAt` is that call's start. `profileNamesAccount`
 means the profile that served the call still selects the call's backend, and
-the serving sign-in connected before the limited call (the same sign-in). -/
+the serving sign-in connected before the limited call (the same sign-in).
+The held runtime Node obtains only this account-selection fact on the Agent's
+transaction snapshot; native document authorization controls the Node's read,
+and the Agent is not granted credential-secret access. -/
 structure ResetFacts where
   optedIn : Bool
   resetAt : Option Nat

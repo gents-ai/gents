@@ -2,10 +2,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents::store::config_client::ConfigAccess;
+use gents::store::identity::NodeIdentity as _;
 
 use super::super::bootstrap::normalize_required;
-use super::super::p2p_ops;
-use super::{ux_local_runtime_record, ClientCore};
+use super::{ux_local_runtime_record, ClientCore, LocalHomeAccessError};
 use crate::client::mutations::PeerMutationResult;
 use crate::client::peer_directory::{PeerRecord, RemovalCause};
 
@@ -43,34 +43,6 @@ impl ClientCore {
                 normalize_required("node_home", node_home)?,
             )
             .await
-    }
-
-    pub async fn network_status(&self) -> NetworkStatus {
-        let local_peer_id = p2p_ops::p2p_local_peer_id(&self.p2p).await;
-        let listen_addresses = p2p_ops::p2p_listen_addresses(&self.p2p).await;
-        let connected_peers = p2p_ops::p2p_connected_peers(&self.p2p).await;
-        let replicators = p2p_ops::p2p_get_replicators(&self.p2p).await;
-        let saved_peers = self.sync_state.records();
-
-        NetworkStatus {
-            local_peer_id: local_peer_id.map_err(|error| error.to_string()),
-            listen_addresses: listen_addresses.map_err(|error| error.to_string()),
-            connected_peers: connected_peers.map_err(|error| error.to_string()),
-            replicators: replicators
-                .map(|rows| {
-                    rows.into_iter()
-                        .map(|info| NetworkReplicator {
-                            peer_id: info.id,
-                            address: info.address,
-                            collections: info.collections,
-                            status: info.status,
-                            last_status_change: info.last_status_change,
-                        })
-                        .collect()
-                })
-                .map_err(|error| error.to_string()),
-            saved_peers,
-        }
     }
 
     pub async fn rename_peer(&self, peer_id: &str, label: &str) -> Result<()> {
@@ -141,7 +113,22 @@ impl ClientCore {
             .records()
             .iter()
             .find(|record| record.node_did == node_did)
-            .and_then(crate::local_runtime::operator_endpoint)
+            .and_then(|record| {
+                record.operator_graphql().and_then(|url| {
+                    let capability =
+                        gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                            self.node_identity.private_key_bytes(),
+                        )
+                        .ok()?;
+                    gents::store::config_client::GraphqlEndpoint::as_principal(
+                        url,
+                        self.node_identity.did(),
+                    )
+                    .with_client_signing_capability(capability)
+                    .ok()
+                    .map(|endpoint| endpoint.with_client_signed_agent_creates())
+                })
+            })
     }
 
     pub fn operator_observation_graphql(
@@ -152,7 +139,12 @@ impl ClientCore {
             .records()
             .iter()
             .find(|record| record.node_did == node_did)
-            .and_then(|record| self.options.operator_identity_interaction.endpoint(record))
+            .and_then(|record| {
+                crate::local_runtime::operator_endpoint(
+                    record,
+                    &self.node_identity.client_signing_capability().ok()?,
+                )
+            })
     }
 
     pub async fn operator_observation_endpoint(
@@ -164,11 +156,13 @@ impl ClientCore {
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)?;
-        let interaction = self.options.operator_identity_interaction;
-        tokio::task::spawn_blocking(move || interaction.endpoint(&record))
-            .await
-            .ok()
-            .flatten()
+        let capability = self.node_identity.client_signing_capability().ok()?;
+        tokio::task::spawn_blocking(move || {
+            crate::local_runtime::operator_endpoint(&record, &capability)
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     pub fn operator_signer(
@@ -181,7 +175,26 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no runtime record for this node")?;
-        crate::local_runtime::operator_signer(&record)
+        anyhow::ensure!(
+            record.operator_graphql().is_some(),
+            "runtime has no operator endpoint"
+        );
+        Ok(std::sync::Arc::new(self.node_identity.clone()))
+    }
+
+    /// Operational requests such as shared credential usage refresh retain the
+    /// co-hosted runtime signer. Configuration mutations use `operator_signer`.
+    pub fn runtime_operator_signer(
+        &self,
+        node_did: &str,
+    ) -> Result<std::sync::Arc<dyn gents::store::identity::NodeIdentity>> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.node_did == node_did)
+            .context("no runtime record for this node")?;
+        crate::local_runtime::runtime_operator_signer(&record)
     }
 
     pub fn operator_access(&self, node_did: &str) -> Result<ConfigAccess> {
@@ -189,47 +202,61 @@ impl ClientCore {
             .sync_state
             .records()
             .into_iter()
-            .find(|record| record.node_did == node_did);
-        match record {
-            Some(record) if record.operator_graphql().is_some() => {
-                crate::local_runtime::operator_endpoint(&record)
-                    .map(ConfigAccess::Graphql)
-                    .context("local standard runtime has no operator GraphQL endpoint")
-            }
-            Some(_) => anyhow::bail!(
-                "managed node {node_did} has no operator GraphQL endpoint; refusing a desktop-replica configuration fallback"
-            ),
-            None => Ok(ConfigAccess::local(self.node_arc())),
-        }
+            .find(|record| record.node_did == node_did)
+            .context("Connect this runtime before editing configuration.")?;
+        record
+            .operator_graphql()
+            .map(|url| -> Result<ConfigAccess> {
+                let capability =
+                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                        self.node_identity.private_key_bytes(),
+                    )?;
+                Ok(ConfigAccess::Graphql(
+                    gents::store::config_client::GraphqlEndpoint::as_principal(
+                        url,
+                        self.node_identity.did(),
+                    )
+                    .with_client_signing_capability(capability)?
+                    .with_client_signed_agent_creates(),
+                ))
+            })
+            .transpose()?
+            .context("Connect this runtime before editing configuration.")
     }
 
-    pub fn local_home_operator_access(
+    pub async fn provision_agent_identity(
+        &self,
+        node_did: &str,
+    ) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
+        let endpoint = self
+            .operator_graphql(node_did)
+            .context("Connect this runtime before creating an agent.")?;
+        Ok(crate::agent_identity::provision(&endpoint, node_did).await?)
+    }
+
+    /// The User's signed endpoint on the managed runtime whose home installed
+    /// a pack app.
+    pub fn local_home_operator_endpoint(
         &self,
         node_did: &str,
         home: &std::path::Path,
-    ) -> Result<ConfigAccess> {
+    ) -> std::result::Result<gents::store::config_client::GraphqlEndpoint, LocalHomeAccessError>
+    {
         let records = self.sync_state.records();
         let record = ux_local_runtime_record(&records, node_did, home)?;
-        crate::local_runtime::operator_endpoint(record)
-            .map(ConfigAccess::Graphql)
-            .context("the local node that installed this app has no operator connection")
+        let url = record
+            .operator_graphql()
+            .ok_or(LocalHomeAccessError::NoOperatorConnection)?;
+        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            self.node_identity.private_key_bytes(),
+        )
+        .map_err(LocalHomeAccessError::Signing)?;
+        Ok(gents::store::config_client::GraphqlEndpoint::as_principal(
+            url,
+            self.node_identity.did(),
+        )
+        .with_client_signing_capability(capability)
+        .map_err(LocalHomeAccessError::Signing)?
+        .with_client_signed_agent_creates())
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct NetworkStatus {
-    pub local_peer_id: std::result::Result<String, String>,
-    pub listen_addresses: std::result::Result<Vec<String>, String>,
-    pub connected_peers: std::result::Result<Vec<String>, String>,
-    pub replicators: std::result::Result<Vec<NetworkReplicator>, String>,
-    pub saved_peers: Vec<crate::client::peer_directory::PeerRecord>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NetworkReplicator {
-    pub peer_id: Option<String>,
-    pub address: Option<String>,
-    pub collections: Vec<String>,
-    pub status: Option<u8>,
-    pub last_status_change: Option<String>,
 }

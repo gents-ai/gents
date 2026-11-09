@@ -47,7 +47,7 @@ async fn row(
     value["admission_signature"] = json!(bs58::encode(create.admission.signature).into_string());
     value["lifecycle_state"] = json!("pending");
     let row: AgentRequestRow = serde_json::from_value(value).unwrap();
-    crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     row
 }
 

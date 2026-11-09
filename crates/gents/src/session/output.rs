@@ -2,9 +2,10 @@
 //!
 //! Headers carry no body bytes.  This module is the one session reader that
 //! obtains strict header/segment documents and hands the facts to the protocol
-//! reconstruction owner.  In particular, a fork header may resolve segments
-//! from its origin session, so segment reads are scoped by node/requester,
-//! not by the child session label.
+//! reconstruction owner.  A fork header resolves the closures copied into its
+//! own session, so a reader granted only the fork needs nothing from the
+//! source session; its origin chain is provenance only.  A fork published
+//! before those copies existed still resolves through its origin.
 
 fn replay_violation(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(gents_loop::loop_stream::ReplayEvidenceViolation(
@@ -76,10 +77,10 @@ pub(crate) struct CanonicalProviderCoordinate {
 }
 
 struct ReconstructedScopedMessage {
-    header: super::canonical_rows::TranscriptMessageRow,
-    origin: super::canonical_rows::TranscriptMessageRow,
+    header: gents_protocol::output::rows::TranscriptMessageRow,
+    origin: gents_protocol::output::rows::TranscriptMessageRow,
     message: gents_protocol::message::Message,
-    segments: Vec<super::canonical_rows::OutputSegmentRow>,
+    segments: Vec<gents_protocol::output::rows::OutputSegmentRow>,
 }
 
 #[cfg(test)]
@@ -129,7 +130,7 @@ where
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-mod access;
+pub(in crate::session) mod access;
 mod headers;
 pub(super) mod reader;
 mod reconstruct;

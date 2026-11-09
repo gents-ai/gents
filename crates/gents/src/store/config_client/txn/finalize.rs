@@ -28,24 +28,54 @@ pub(super) struct CommitFailure {
 impl ConfigApplyTxn<'_> {
     pub(super) async fn commit_inner(&mut self) -> std::result::Result<(), CommitFailure> {
         match &self.backend {
+            TxnBackend::Http { endpoint, .. } if endpoint.pack_replay.is_some() => endpoint
+                .pack_replay
+                .as_ref()
+                .expect("checked replay")
+                .0
+                .commit()
+                .await
+                .map_err(|error| CommitFailure {
+                    error: ConfigClientError::from(error),
+                    cleanup: CommitCleanup::NotNeeded,
+                    definitely_not_committed: false,
+                }),
             TxnBackend::Http {
                 endpoint,
                 id,
                 client,
-            } => graphql::txn_commit(endpoint, id, client)
-                .await
-                .map_err(|failure| match failure {
-                    graphql::TxnCommitError::CleanupRequired(error) => CommitFailure {
-                        error,
-                        cleanup: CommitCleanup::Required,
-                        definitely_not_committed: false,
-                    },
-                    graphql::TxnCommitError::TransactionConsumed(error) => CommitFailure {
-                        error,
+            } => {
+                let result = graphql::txn_commit(endpoint, id, client)
+                    .await
+                    .map_err(|failure| match failure {
+                        graphql::TxnCommitError::CleanupRequired(error) => CommitFailure {
+                            error,
+                            cleanup: CommitCleanup::Required,
+                            definitely_not_committed: false,
+                        },
+                        graphql::TxnCommitError::TransactionConsumed(error) => CommitFailure {
+                            error,
+                            cleanup: CommitCleanup::NotNeeded,
+                            definitely_not_committed: false,
+                        },
+                        graphql::TxnCommitError::ConfirmedConflict(error) => CommitFailure {
+                            error,
+                            cleanup: CommitCleanup::NotNeeded,
+                            definitely_not_committed: true,
+                        },
+                    });
+                #[cfg(test)]
+                if result.is_ok() && post_commit_receipt_loss_for_test(self.operation) {
+                    return Err(CommitFailure {
+                        error: retry::transaction_storage_failure(
+                            ConfigClientError::InjectedReceiptLoss,
+                        ),
                         cleanup: CommitCleanup::NotNeeded,
                         definitely_not_committed: false,
-                    },
-                }),
+                    });
+                }
+                result
+            }
             TxnBackend::Embedded { node, handle, .. } => {
                 if self.embedded_poisoned() {
                     return Err(CommitFailure {
@@ -148,6 +178,14 @@ impl ConfigApplyTxn<'_> {
             return Err(ConfigClientError::InjectedRollbackFailure);
         }
         let result = match &self.backend {
+            TxnBackend::Http { endpoint, .. } if endpoint.pack_replay.is_some() => endpoint
+                .pack_replay
+                .as_ref()
+                .expect("checked replay")
+                .0
+                .abort()
+                .await
+                .map_err(ConfigClientError::from),
             TxnBackend::Http {
                 endpoint,
                 id,

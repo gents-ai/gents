@@ -260,11 +260,11 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents/src/documents/projection_acp.rs",
-        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs",
+        "crates/gents/src/file_inventory/selection.rs",
         "crates/gents/src/session/fork.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs",
+        "crates/gents/src/file_inventory/snapshot.rs",
         "crates/gents/src/session/tests.rs"
       ],
       "native_status": "pending",
@@ -323,17 +323,15 @@
       "native_owner_paths": [
         "crates/gents/src/runtime/agent/p2p_reconcile/templates.rs",
         "crates/gents/src/runtime/agent/p2p_reconcile/profiles.rs",
-        "crates/gents/src/runtime/agent/p2p_reconcile/policy.rs",
-        "crates/gents/src/runtime/agent/p2p_reconcile/session_hydration.rs"
+        "crates/gents/src/runtime/agent/p2p_reconcile/policy.rs"
       ],
-      "consumer_paths": ["crates/gents/src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs"],
+      "consumer_paths": ["crates/gents/src/runtime/agent/p2p_reconcile/templates/file_route_tests.rs"],
       "native_status": "pending",
       "required_cases": [
         "replace response and spill routes with segment while preserving requester and agent filters and every route direction",
         "cover conversation, client in both directions, machine and operator route inventories; collection presence is not ACP authorization",
         "host return leg includes segment with requester filters while coordinator leg remains addressed AgentToolCall only",
         "deliver immutable argument-only delegated_input without granting parent output or header access",
-        "resolve authorized reference closure, twins and origin dependencies in a signed bounded exact hydration manifest",
         "do not assume a client-to-runtime segment writer: retain or remove that direction only after the explicit writer decision"
       ],
       "retired_bindings": ["response pairing route", "spill pairing route", "session-only hydration completeness"]

@@ -1,7 +1,7 @@
 use rapidhash::RapidHashSet;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::tools::native::ToolSet;
 
@@ -30,7 +30,6 @@ pub struct AgentToolSurfaceConfig {
     agent_tools: AgentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
-    enable_memory: bool,
     enable_context_budget_tool: bool,
     enable_session_history_tool: bool,
     enable_schema_tool: bool,
@@ -62,7 +61,6 @@ impl AgentToolSurfaceConfig {
         agent_policy.schema_management = false;
         agent_policy.p2p_read = false;
         agent_policy.p2p_mutate = false;
-        agent_policy.p2p_collections = EndpointScope::none();
         agent_policy.self_config_categories = EndpointScope::none();
         Self {
             host_tools: ToolSet::meta_only(),
@@ -76,7 +74,6 @@ impl AgentToolSurfaceConfig {
             agent_tools: AgentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
-            enable_memory: false,
             enable_context_budget_tool: true,
             enable_session_history_tool: true,
             enable_schema_tool: false,
@@ -201,9 +198,7 @@ impl AgentToolSurfaceConfig {
             remote_tools,
             required_mcp_service_ids,
             backgroundable_tool_names,
-            enable_memory,
             enable_session_history_tool: _,
-            p2p_collections: _,
             enable_schema_tool: _,
             enable_p2p_tool: _,
             enable_p2p_mutations: _,
@@ -246,7 +241,7 @@ impl AgentToolSurfaceConfig {
             || !cli_tool_names.is_empty()
             || static_policy.lsp)
             .then(|| super::RootExecutionGuard {
-                agent_id: agent_name.to_string(),
+                agent_did: agent_name.to_string(),
                 selected_root: root_was_authored
                     .then(|| host_tools.read_root().map(ToOwned::to_owned))
                     .flatten(),
@@ -317,7 +312,7 @@ impl AgentToolSurfaceConfig {
         effective_agent_targets.retain(|target| {
             static_policy
                 .agent_targets
-                .permits(&(target.target_node_did.clone(), target.agent_id.clone()))
+                .permits(&(target.target_node_did.clone(), target.agent_did.clone()))
         });
 
         Ok(Self {
@@ -338,7 +333,6 @@ impl AgentToolSurfaceConfig {
                 timeouts: timeouts.background.clone(),
             },
             custom_tools,
-            enable_memory: static_policy.memory && enable_memory,
             enable_context_budget_tool: static_policy.context_budget && enable_context_budget,
             enable_session_history_tool: static_policy.session_history,
             enable_schema_tool: static_policy.schema_management,
@@ -359,7 +353,7 @@ impl AgentToolSurfaceConfig {
                 .collect(),
             self_config: super::SelfConfigToolConfig {
                 enabled: static_policy.include_self_config(),
-                agent_id: agent_name.to_string(),
+                agent_did: agent_name.to_string(),
                 categories: static_policy.self_config_category_set(),
                 no_lockout: self_config_no_lockout,
                 preview: self_config_preview,
@@ -394,10 +388,6 @@ impl AgentToolSurfaceConfig {
         self.enable_goal_creation
     }
 
-    pub(crate) fn memory_requested(&self) -> bool {
-        self.enable_memory
-    }
-
     pub(crate) fn defra_query_requested(&self) -> bool {
         self.enable_defra_query
     }
@@ -422,12 +412,10 @@ impl AgentToolSurfaceConfig {
         &self.required_mcp_service_ids
     }
 
-    #[allow(dead_code)]
     pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
         &self.agent_tools
     }
 
-    #[allow(dead_code)]
     pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
         &self.background_tools
     }
@@ -480,7 +468,7 @@ impl AgentToolSurfaceConfig {
         Ok(surface)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn resolve_with_agent_tools_for_mcp_presence(
         &self,
         mcp_services_online: bool,
@@ -517,14 +505,12 @@ impl AgentToolSurfaceConfig {
             agent_tools,
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
-            enable_memory: effective_policy.memory && self.enable_memory,
             enable_context_budget_tool: effective_policy.context_budget
                 && self.enable_context_budget_tool,
             enable_session_history_tool: effective_policy.session_history,
             enable_schema_tool: effective_policy.schema_management,
             enable_p2p_tool: effective_policy.p2p_read,
             enable_p2p_mutations: effective_policy.permits_p2p_mutation(),
-            p2p_collections: effective_policy.p2p_collections.clone(),
             enable_defra_query: effective_policy.include_defra_query(),
             defra_query_scope: effective_policy.defra_query_collection_scope(),
             application_write_collections: effective_policy
@@ -591,7 +577,7 @@ impl AgentToolSurfaceConfig {
                     ),
                     workspace,
                     session_id: String::new(),
-                    agent_id: self.self_config.agent_id.clone(),
+                    agent_did: self.self_config.agent_did.clone(),
                     servers,
                     constraints,
                     format_on_write: doc.format_on_write.unwrap_or(false),
@@ -609,27 +595,27 @@ impl AgentToolSurfaceConfig {
         &self,
         node: &std::sync::Arc<EmbeddedNode>,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
         plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
         let mut agent_tools = self.agent_tools.clone();
         agent_tools.targets.retain(|target| {
-            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
+            target.target_node_did != own_node_did || active_agent_dids.contains(&target.agent_did)
         });
         self.resolve_with_agent_tools(node, own_node_did, plugins, agent_tools)
             .await
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn resolve_with_available_agent_targets_for_mcp_presence(
         &self,
         mcp_services_online: bool,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) -> ToolSurface {
         let mut agent_tools = self.agent_tools.clone();
         agent_tools.targets.retain(|target| {
-            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
+            target.target_node_did != own_node_did || active_agent_dids.contains(&target.agent_did)
         });
         self.resolve_with_agent_tools_for_mcp_presence(mcp_services_online, agent_tools)
     }
@@ -708,7 +694,6 @@ impl std::fmt::Debug for AgentToolSurfaceConfig {
                     .map(|tool| tool.name())
                     .collect::<Vec<_>>(),
             )
-            .field("enable_memory", &self.enable_memory)
             .field(
                 "enable_context_budget_tool",
                 &self.enable_context_budget_tool,

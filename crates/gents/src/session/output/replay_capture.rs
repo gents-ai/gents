@@ -1,5 +1,4 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::access::{rows_value, ReadAccess};
@@ -36,7 +35,7 @@ pub(super) fn replay_capture_key(
 /// never an error. Rows are queried by the exact key only: a contradictory row
 /// under a key must be detected, not filtered away.
 pub(super) async fn load_replay_capture_rows(
-    node: &EmbeddedNode,
+    access: ReadAccess<'_, '_>,
     selected: &[SelectedReplayCandidate],
 ) -> Result<BTreeMap<String, Vec<serde_json::Value>>> {
     let mut keys = Vec::new();
@@ -59,7 +58,7 @@ pub(super) async fn load_replay_capture_rows(
         #[cfg(test)]
         let _ = CAPTURE_ROW_QUERIES
             .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-        let response = ReadAccess::Node(node)
+        let response = access
             .query(&query, "load_canonical_replay_captures")
             .await?;
         for row in rows_value(&response, "RenderedRequest")? {
@@ -81,7 +80,7 @@ pub(super) async fn load_replay_capture_rows(
 /// read would; the shared block read isolates a verification failure per
 /// manifest the same way.
 pub(super) async fn preload_replay_capture_blocks(
-    node: &EmbeddedNode,
+    access: ReadAccess<'_, '_>,
     capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
     cache: &mut crate::inference::rendered_request::CaptureReadCache,
 ) -> Result<()> {
@@ -117,8 +116,8 @@ pub(super) async fn preload_replay_capture_blocks(
             _ => {}
         }
     }
-    crate::inference::rendered_request::preload_manifest_blocks(node, &manifests, cache).await?;
-    crate::inference::rendered_request::preload_manifest_trees(node, &trees, cache).await
+    crate::inference::rendered_request::preload_manifest_blocks(&access, &manifests, cache).await?;
+    crate::inference::rendered_request::preload_manifest_trees(&access, &trees, cache).await
 }
 
 /// Verify the one capture row the pass's batched read returned under
@@ -126,7 +125,7 @@ pub(super) async fn preload_replay_capture_blocks(
 /// both leave the turn without evidence, never an error.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn replay_capture_from_row(
-    node: &EmbeddedNode,
+    access: ReadAccess<'_, '_>,
     capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
     capture_key: &str,
     node_did: &str,
@@ -144,7 +143,7 @@ pub(super) async fn replay_capture_from_row(
     // An unverifiable capture makes only this turn non-replayable; it must not
     // fail every later request in the session.
     match verify_replay_capture(
-        node,
+        access,
         capture,
         capture_key,
         node_did,
@@ -208,7 +207,7 @@ const REPLAY_CAPTURE_VERSIONS: &[u32] = &[2, 3, 4];
 
 #[allow(clippy::too_many_arguments)]
 async fn verify_replay_capture(
-    node: &EmbeddedNode,
+    access: ReadAccess<'_, '_>,
     capture: &serde_json::Value,
     capture_key: &str,
     node_did: &str,
@@ -298,8 +297,8 @@ async fn verify_replay_capture(
     else {
         return Ok(None);
     };
-    let body = crate::inference::rendered_request::decode_capture_json_embedded_cached(
-        node,
+    let body = crate::inference::rendered_request::decode_capture_json_from_cached(
+        &access,
         capture_version,
         required_row_str(capture, "request_json")?,
         crate::inference::rendered_request::CapturePayloadKind::RequestBody,

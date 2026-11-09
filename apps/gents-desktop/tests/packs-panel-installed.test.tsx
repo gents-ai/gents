@@ -59,8 +59,8 @@ describe("PacksPanel installed packs", () => {
       ...deployment,
       agents: [
         ...deployment.agents,
-        { ...deployment.agents[0]!, agentId: "r1", tags: tag },
-        { ...deployment.agents[0]!, agentId: "r2", tags: tag },
+        { ...deployment.agents[0]!, agentDid: "r1", tags: tag },
+        { ...deployment.agents[0]!, agentDid: "r2", tags: tag },
       ],
       skills: deployment.skills.map((s) => ({ ...s, tags: tag })),
     };

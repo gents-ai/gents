@@ -4,6 +4,8 @@ const SESSION: &str = "delivery-goal-existing-session";
 const INITIAL: &str = "delivery-goal-existing-request";
 const OLD_OBJECTIVE: &str =
     "Keep working on the current request; never complete this old objective.";
+const GOAL_WORK_SDL: &str =
+    "type DeliveryGoalWork { handoff_id: String @immutable kind: String @immutable session_id: String @immutable }";
 const OBJECTIVE: &str = "On an explicit durable goal controller continuation, first write a numbered checklist with 100 short entries, then call update_goal with status complete and reason 'Goal Task continuation verified', and reply GOAL_TASK_COMPLETE. The initial Task delivery and inbox replies must not complete the Goal.";
 
 async fn evidence(access: &ConfigAccess, owner: &str) -> Result<Value> {
@@ -20,7 +22,7 @@ async fn evidence(access: &ConfigAccess, owner: &str) -> Result<Value> {
     }}"#
     );
     Ok(access
-        .transact_write("test.delivery_goal.snapshot", |txn| {
+        .transact_readonly("test.delivery_goal.snapshot", |txn| {
             let query = &query;
             Box::pin(async move { txn.execute(query).await })
         })
@@ -61,15 +63,13 @@ fn inference_running(state: &Value, request: &str) -> bool {
 }
 
 async fn submit(access: &ConfigAccess, kind: &str) -> Result<()> {
-    access
-        .write(
-            "test.delivery_goal.submit",
-            &format!(
-        "mutation {{create_DeliveryGoalWork(input:{{handoff_id:\"{}\",kind:\"{}\",session_id:\"{}\"}}){{_docID}}}}",
-        escape_graphql_string(&format!("goal-{kind}")), escape_graphql_string(kind), escape_graphql_string(SESSION),
-    ),
-        )
-        .await?;
+    create_source(
+        access,
+        "DeliveryGoalWork",
+        GOAL_WORK_SDL,
+        json!({"handoff_id": format!("goal-{kind}"), "kind": kind, "session_id": SESSION}),
+    )
+    .await?;
     Ok(())
 }
 
@@ -91,19 +91,14 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
-    let access = ConfigAccess::local(db.node.clone());
-    access.add_collection(SCHEMA).await?;
-    access
-        .add_collection(
-            "type DeliveryGoalWork { handoff_id: String @immutable kind: String @immutable session_id: String @immutable }",
-        )
-        .await?;
-    configure(&access, &db.node, &owner, &endpoints).await?;
+    let (fixture, agents) = configure(&db, &endpoints).await?;
+    let access = fixture.access.clone();
+    install_schema(&access, GOAL_WORK_SDL).await?;
     support::fixtures::configure_agent_tools(
-        &db.node, &owner, "delivery-lead",
+        &db, &owner, &agents.lead,
         Some("Follow the current request and Goal objective. Initial Task deliveries and inbox replies must not call update_goal. On an explicit durable Goal controller continuation, perform the objective and call update_goal complete when instructed. Do not create another Goal or use unrelated tools.".into()),
         gents::documents::Tools {
-            tools_id: "delivery-lead:tools".into(), node_did: owner.clone(),
+            tools_id: format!("{}:tools", agents.lead), node_did: owner.clone(),
             built_ins: Some(gents::documents::BuiltInTools {
                 enable_goal_tools: Some(true), ..Default::default()
             }),
@@ -117,7 +112,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     ] {
         let id = format!("delivery-goal-{kind}");
         documents.extend([
-            (Collection::Task, json!({"task_id":id,"agent_id":"delivery-lead", "emit_outcome":emit,
+            (Collection::Task, json!({"task_id":id,"agent_did":&agents.lead, "emit_outcome":emit,
                 "goal_objective_template":objective,"prompt_template":prompt})),
             (Collection::EventSource, json!({"event_source_id":id,"source_collection":"DeliveryGoalWork",
                 "event_kind":"created","filter":format!("{{kind:{{_eq:\"{kind}\"}}}}")})),
@@ -128,8 +123,9 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     apply(&access, &owner, documents).await?;
     let runtime = boot_live_agent(&db, identity).await?;
     let result: Result<()> = async {
-    support::interrupt::create_runtime_request(&db.node, &owner, "delivery-lead", INITIAL, SESSION,
-        "Write a numbered list with 150 entries, each saying 'still working'. Do not call tools and do not complete the Goal.").await;
+    support::agent_requests::submit_user_request(&owner, &fixture, SESSION, INITIAL,
+        "Write a numbered list with 150 entries, each saying 'still working'. Do not call tools and do not complete the Goal.",
+        gents_protocol::request_input::QueueDelivery::Queue).await;
     gents::goal::set_goal_from_access(
         &access,
         &owner,
@@ -222,6 +218,6 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
         )?;
     }
     runtime.shutdown().await;
-    db.node.shutdown().await;
+    db.node.shutdown().await?;
     result
 }

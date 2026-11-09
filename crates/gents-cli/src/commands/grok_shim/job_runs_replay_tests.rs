@@ -37,7 +37,7 @@ const PROJECTED_KEYS: [&str; 20] = [
 /// Recorded, and deliberately never emitted in v1.
 const OMITTED_KEYS: [&str; 2] = ["agent_usage_incomplete", "result_summary"];
 const AGENT_KEYS: [&str; 6] = [
-    "agent_id",
+    "agent_did",
     "duration_ms",
     "label",
     "phase",
@@ -148,7 +148,7 @@ fn assert_recorded_shape(frames: &[Value], keys: &[&str], spawned: &BTreeSet<Str
                 assert!(AGENT_KEYS.contains(&key.as_str()), "agent key `{key}`");
             }
             assert_in(&AGENT_STATES, &agent["state"], "agent state");
-            let id = agent["agent_id"].as_str().unwrap();
+            let id = agent["agent_did"].as_str().unwrap();
             assert!(spawned.contains(id), "agent `{id}` was never spawned");
         }
         assert_eq!(

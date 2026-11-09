@@ -32,7 +32,7 @@ const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
   title: "One",
   previewText: null,
   status: null,
-  agentId: null,
+  agentDid: null,
   taskId: null,
   taskName: null,
   triggerId: null,
@@ -148,8 +148,8 @@ describe("the side nav's recent sessions filter", () => {
           node({
             sessions,
             agents: [
-              { agentId: "default", displayName: "Default" },
-              { agentId: "pack-worker", displayName: "Pack worker" },
+              { agentDid: "default", displayName: "Default" },
+              { agentDid: "pack-worker", displayName: "Pack worker" },
             ],
           }),
         ],

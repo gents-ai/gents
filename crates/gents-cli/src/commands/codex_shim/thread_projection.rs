@@ -20,7 +20,7 @@ mod conformance;
 
 pub(super) use goal::{clear_codex_thread_goal, get_codex_thread_goal, set_codex_thread_goal};
 pub(super) use json::{
-    codex_thread_json, codex_thread_json_with_turns, projected_thread_status, thread_response_json,
+    codex_thread_json, codex_thread_json_with_turns, projected_thread_status,
     thread_resume_response_json, thread_start_response_json,
 };
 pub(super) use mutations::{
@@ -56,11 +56,11 @@ impl CodexThreadRecord {
         self.caused.is_some()
     }
 
-    pub(super) fn projection_agent_id<'a>(&'a self, root_agent_id: &'a str) -> &'a str {
+    pub(super) fn projection_agent_did<'a>(&'a self, root_agent_did: &'a str) -> &'a str {
         self.caused
             .as_ref()
-            .map(|link| link.agent_id.as_str())
-            .unwrap_or(root_agent_id)
+            .map(|link| link.agent_did.as_str())
+            .unwrap_or(root_agent_did)
     }
 }
 
@@ -245,28 +245,6 @@ pub(super) async fn list_codex_threads_for_sources(
     Ok(records)
 }
 
-pub(super) async fn store_forked_codex_thread(
-    state: &ShimState,
-    source: &CodexThreadRecord,
-    child_session_id: &str,
-    cwd: &Path,
-) -> Result<CodexThreadRecord> {
-    state.mark_thread_created(child_session_id).await;
-    state
-        .set_thread_cwd(child_session_id, cwd.to_path_buf())
-        .await;
-    state.set_thread_loaded(child_session_id, true).await;
-    state
-        .set_thread_memory_mode(child_session_id, &source.memory_mode)
-        .await;
-    state
-        .set_thread_settings(child_session_id, &source.settings_json)
-        .await;
-    load_codex_thread(state, child_session_id)
-        .await?
-        .with_context(|| format!("loading forked Codex thread {child_session_id}"))
-}
-
 async fn assemble_record(
     state: &ShimState,
     session_id: &str,
@@ -339,27 +317,26 @@ async fn assemble_caused_record_parts(
     cwd: PathBuf,
     git_info: Option<Value>,
 ) -> Result<CodexThreadRecord> {
-    let session = gents::store::config_client::ConfigAccess::transact_local_write(
-        &state.node,
-        None,
-        "codex.caused.session",
-        |txn| {
+    let session = state
+        .reader
+        .transact_readonly("codex.caused.session", |txn| {
             let owner = &link.node_did;
             let id = &link.session_id;
             let requester = link.requester_did.as_deref();
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::session::load_agent_session_row_in_txn(txn, owner, id, requester)
-                        .await?
-                        .map(|row| row.session),
+                    gents::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn, owner, id, requester,
+                    )
+                    .await?
+                    .map(|row| row.session),
                 )
             })
-        },
-    )
-    .await?;
+        })
+        .await?;
     if let Some(session) = &session {
         anyhow::ensure!(
-            session.agent_id == link.agent_id,
+            session.agent_did == link.agent_did,
             "child session binding differs from its authorized request"
         );
     } else {

@@ -45,9 +45,9 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
         )
         .unwrap_or_else(|error| panic!("{} invalid generated process state: {error}", case.name));
         let selected_assigned = case.runnable || case.unavailable || case.startup_demoted;
-        let default_agent_id = if selected_assigned { "20" } else { "10" };
+        let default_agent_did = if selected_assigned { "20" } else { "10" };
         let sources = vec![AgentReadinessSourceEntry {
-            agent_id: default_agent_id.to_string(),
+            agent_did: default_agent_did.to_string(),
             dispatcher_present: if selected_assigned {
                 case.runnable
             } else {
@@ -64,7 +64,7 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
             process_state,
             case.active_generation,
             case.router_generation,
-            default_agent_id,
+            default_agent_did,
             sources,
         )
         .unwrap_or_else(|error| panic!("{} invalid generated source: {error}", case.name));

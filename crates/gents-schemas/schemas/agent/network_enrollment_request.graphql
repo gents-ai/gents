@@ -1,6 +1,6 @@
 # Candidate-authored immutable request bound to one signed status offer and
 # one authenticated transport identity; the request itself grants nothing.
-type NetworkEnrollmentRequest @branchable {
+type NetworkEnrollmentRequest @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "enrollment_records") @branchable {
     protocol_version: Int @immutable
     request_id: String @index(unique: true) @immutable
     request_digest: String @index @immutable
@@ -13,7 +13,7 @@ type NetworkEnrollmentRequest @branchable {
     candidate_did: String @index @immutable
     candidate_peer: String @index @immutable
     candidate_ticket: String @immutable
-    owner_agent: String @index @immutable
+    owner_node_did: String @index @immutable
     profile: String @immutable
     client_nonce: String @immutable
     issued_at: DateTime @immutable

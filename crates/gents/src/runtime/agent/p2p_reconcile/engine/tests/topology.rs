@@ -1,7 +1,6 @@
 #[tokio::test]
 async fn install_updates_applied_after_success() {
     let store = MockStore::with_desired(Some(PairingDesired {
-        collections: set(&["c1"]),
         replicator_addresses: set(&["addr1"]),
         ..Default::default()
     }));
@@ -13,16 +12,12 @@ async fn install_updates_applied_after_success() {
 
     assert_eq!(
         outcome.ops_applied,
-        vec![
-            DiffOp::InstallCollection("c1".into()),
-            DiffOp::InstallReplicator("addr1".into())
-        ]
+        vec![DiffOp::InstallReplicator("addr1".into())]
     );
     assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr1"]]);
     assert_eq!(
         *store.applied.lock().unwrap(),
         PairingApplied {
-            collections: set(&["c1"]),
             replicator_addresses: set(&["addr1"]),
             ..Default::default()
         }
@@ -33,13 +28,11 @@ async fn install_updates_applied_after_success() {
 async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
     let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
     let store = MockStore::with_desired(Some(PairingDesired {
-        collections: set(&["Network", "AgentRequest"]),
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: conversation_filter.clone(),
         ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
-        collections: set(&["Network"]),
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: PairingFilters::new(),
     };
@@ -48,7 +41,6 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
         fail_connect: true,
         ..Default::default()
     };
-    *admin.collections.lock().unwrap() = set(&[&mock_collection_id("Network")]);
     admin.replicators.lock().unwrap().insert(
         TEST_TRANSPORT_ADDRESS_A.into(),
         RemoteReplicator {
@@ -70,7 +62,6 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
     assert_eq!(
         outcome.ops_applied,
         vec![
-            DiffOp::InstallCollection("AgentRequest".into()),
             DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
             DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
         ]
@@ -156,7 +147,6 @@ async fn matching_applied_repairs_restored_unfiltered_stale_address() {
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&[&desired_address]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let admin = MockAdmin {
         active: Mutex::new(vec![peer_id.to_string()]),
@@ -202,7 +192,6 @@ async fn omitted_live_filters_force_current_protocol_repair() {
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
         replicator_filter: filter,
-        ..Default::default()
     };
     let admin = MockAdmin::default();
     admin.replicators.lock().unwrap().insert(
@@ -236,7 +225,6 @@ async fn known_empty_live_filters_repair_a_scoped_route() {
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
         replicator_filter: filter,
-        ..Default::default()
     };
     let admin = MockAdmin::default();
     admin.replicators.lock().unwrap().insert(

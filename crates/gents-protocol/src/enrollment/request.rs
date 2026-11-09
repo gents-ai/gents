@@ -22,7 +22,7 @@ pub struct EnrollmentRequestRecord {
     pub candidate_did: String,
     pub candidate_peer: String,
     pub candidate_ticket: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub profile: String,
     pub client_nonce: String,
     pub issued_at: String,
@@ -41,7 +41,7 @@ impl EnrollmentRequestRecord {
             &self.server_peer,
             &self.candidate_did,
             &self.candidate_peer,
-            &self.owner_agent,
+            &self.owner_node_did,
             &self.profile,
             &self.client_nonce,
             &self.issued_at,
@@ -74,8 +74,8 @@ impl EnrollmentRequestRecord {
         if self.server_peer != offer.server_peer {
             return Err(EnrollmentError::RequestServerPeerMismatch);
         }
-        if self.owner_agent != offer.owner_agent {
-            return Err(EnrollmentError::RequestOwnerAgentMismatch);
+        if self.owner_node_did != offer.owner_node_did {
+            return Err(EnrollmentError::RequestOwnerNodeMismatch);
         }
         if self.profile != offer.profile {
             return Err(EnrollmentError::RequestProfileMismatch);
@@ -113,7 +113,7 @@ impl EnrollmentRequestRecord {
             ("candidate_did", self.candidate_did.as_str()),
             ("candidate_peer", self.candidate_peer.as_str()),
             ("candidate_ticket", self.candidate_ticket.as_str()),
-            ("owner_agent", self.owner_agent.as_str()),
+            ("owner_node_did", self.owner_node_did.as_str()),
             ("profile", self.profile.as_str()),
             ("client_nonce", self.client_nonce.as_str()),
             ("issued_at", self.issued_at.as_str()),
@@ -152,7 +152,7 @@ impl EnrollmentRequestRecord {
                 &self.candidate_did,
                 &self.candidate_peer,
                 &self.candidate_ticket,
-                &self.owner_agent,
+                &self.owner_node_did,
                 &self.profile,
                 &self.client_nonce,
                 &self.issued_at,

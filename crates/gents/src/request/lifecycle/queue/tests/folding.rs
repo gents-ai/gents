@@ -7,8 +7,8 @@ use serde_json::json;
 const FOREIGN_REQUESTER: &str = "did:test:fold-foreign-requester";
 const OTHER_CWD: &str = "/tmp/gents-fold-other-context";
 
-async fn insert_row(node: &Arc<EmbeddedNode>, input: serde_json::Value) -> String {
-    crate::store::config_client::ConfigAccess::transact_local_write(node, None, "test.fold.insert", |txn| {
+async fn insert_row(db: &TestDb, input: serde_json::Value) -> String {
+    db.agent_access.transact_write("test.fold.insert", |txn| {
         let input = input.clone();
         Box::pin(async move {
             let result = txn
@@ -26,7 +26,7 @@ async fn insert_row(node: &Arc<EmbeddedNode>, input: serde_json::Value) -> Strin
 
 fn requester_did(db: &TestDb, requester: Option<u64>) -> Option<String> {
     match requester {
-        Some(1) => Some(db.node_did().to_owned()),
+        Some(1) => Some(db.agent_did().to_owned()),
         Some(2) => Some(FOREIGN_REQUESTER.to_owned()),
         None => None,
         Some(other) => panic!("no native node for modeled requester {other}"),
@@ -84,14 +84,14 @@ async fn enqueue_with_ttl(
     valid_until: Option<&str>,
 ) -> String {
     insert_row(
-        &db.node,
+        db,
         json!({
             "valid_until": valid_until,
             "request_id": entry.request_id.to_string(),
             "purpose": "normal",
             "node_did": db.node_did(),
             "requester_did": requester_did(db, entry.requester_id),
-            "agent_id": TEST_AGENT_ID,
+            "agent_did": db.agent_did(),
             "session_id": session_id,
             "content": format!("message {}", entry.request_id),
             "input": generated_input(entry),
@@ -116,26 +116,16 @@ async fn enqueue_signed(
         gents_protocol::request_admission::RequestPurpose::Normal,
         entry.request_id.to_string(),
         db.node_did(),
-        db.node_did(),
-        TEST_AGENT_ID,
+        db.agent_did(),
+        db.agent_did(),
         session_id,
         format!("message {}", entry.request_id),
         "interactive",
         format!("2026-09-01T00:00:{arrival:02}Z"),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(db.node_did()),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(db.agent_did()),
     );
     create.input = generated_input(entry);
-    crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
-        .await
-        .unwrap();
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        &db.node,
-        "test.fold.signed",
-        &create.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    extract_single_doc_id(&response, "create_AgentRequest").unwrap()
+    publish_signed_queue_request(db, &mut create).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,20 +140,21 @@ struct FoldRow {
     failure_reason: Option<String>,
 }
 
-async fn fold_rows(node: &EmbeddedNode, session_id: &str) -> Vec<FoldRow> {
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &format!(
+async fn fold_rows(db: &TestDb, session_id: &str) -> Vec<FoldRow> {
+    let response = db
+        .agent_access
+        .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
                 _docID request_id lifecycle_state superseded_by_request_doc_id failure_reason
             }} }}"#,
             escape_graphql_string(session_id)
-        ),
-        "fold rows",
-    )
-    .await
-    .unwrap();
-    crate::store::graphql::rows(&response, "AgentRequest").unwrap()
+        ))
+        .await
+        .unwrap();
+    match response["data"]["AgentRequest"].clone() {
+        serde_json::Value::Null => Vec::new(),
+        rows => serde_json::from_value(rows).unwrap(),
+    }
 }
 
 fn modeled_id(row: &FoldRow) -> u64 {
@@ -192,30 +183,82 @@ pub(super) async fn claim_head(
     head: u64,
     admitted: &[u64],
 ) -> ActiveTurn {
-    let request = crate::request::binding::load_agent_request_by_doc_id(&db.node, &bound[&head])
-        .await
-        .unwrap()
-        .unwrap();
+    let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
+        &bound[&head],
+    )
+    .await
+    .unwrap()
+    .unwrap();
     claim_request(db, bound, request, admitted).await
+}
+
+/// Signed fixture rows are verified by the Agent's admission owner before
+/// claim, as the daemon does; unsigned fixture rows carry no admission.
+async fn verify_claim_admission(
+    db: &TestDb,
+    request: gents_protocol::row::AgentRequest,
+) -> (
+    gents_protocol::row::AgentRequest,
+    Option<crate::request::admission::ClientClaimAdmission>,
+) {
+    let escaped = escape_graphql_string(&request.doc_id);
+    let response = db
+        .agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ admission_kind }} }}"#
+        ))
+        .await
+        .unwrap();
+    let signed = response["data"]["AgentRequest"][0]["admission_kind"]
+        .as_str()
+        .is_some_and(|kind| !kind.is_empty());
+    if !signed {
+        return (request, None);
+    }
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.identity.clone(),
+        authority,
+    );
+    verifier
+        .verify_fresh_for_claim_with_identity(&request, db.agent_identity.as_ref())
+        .await
+        .expect("verify signed fixture admission")
 }
 
 async fn claim_request(
     db: &TestDb,
     bound: &RapidHashMap<u64, String>,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
     admitted: &[u64],
 ) -> ActiveTurn {
     let head = request.request_id.clone();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        TEST_AGENT_ID,
-        db.node_did(),
-        request,
-        60,
-    );
+    let (request, client_claim) = verify_claim_admission(db, request).await;
+    let mut lifecycle = RequestLifecycle::new_with_node_did(db.node.clone(), request, 60);
+    lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
+    // As the daemon does, signed folded input is re-verified by the held Agent
+    // when its publication consumes it; unsigned fixture rows carry no admission.
+    if client_claim.is_some() {
+        let (_authority_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        lifecycle.set_steering_admission(
+            crate::request::admission::AgentRequestAdmissionVerifier::new(
+                db.node.clone(),
+                db.identity.clone(),
+                authority,
+            ),
+            db.agent_identity.clone(),
+        );
+    }
+    lifecycle.set_client_claim_admission(client_claim);
     lifecycle.set_fold_admitted(admitted.iter().map(|id| bound[id].clone()).collect());
     assert_eq!(
-        lifecycle.claim().await.unwrap(),
+        lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed,
         "head {head} must claim"
     );
@@ -255,7 +298,9 @@ async fn drive(case: &LeanFoldQueueCase) {
     let mut arrivals: Vec<u64> = Vec::new();
     let mut active: Option<ActiveTurn> = None;
     let mut claims = Vec::new();
-    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    let writer =
+        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+            .unwrap();
     for event in &case.inputs {
         match event {
             LeanFoldQueueInput::Enqueue { entry } => {
@@ -265,7 +310,7 @@ async fn drive(case: &LeanFoldQueueCase) {
             }
             LeanFoldQueueInput::Claim { admitted } => {
                 assert!(active.is_none(), "{}: claim while active", case.name);
-                let rows = fold_rows(&db.node, &session_id).await;
+                let rows = fold_rows(&db, &session_id).await;
                 let head = *arrivals
                     .iter()
                     .find(|id| {
@@ -308,7 +353,7 @@ async fn drive(case: &LeanFoldQueueCase) {
         }
     }
 
-    let rows = fold_rows(&db.node, &session_id).await;
+    let rows = fold_rows(&db, &session_id).await;
     let by_id: RapidHashMap<u64, &FoldRow> =
         rows.iter().map(|row| (modeled_id(row), row)).collect();
     assert_eq!(
@@ -424,7 +469,7 @@ async fn generated_handover_fold_claims_bind_to_native_claims() {
             "{}: selection",
             case.name
         );
-        let rows = fold_rows(&db.node, &session_id).await;
+        let rows = fold_rows(&db, &session_id).await;
         let pending = case
             .pending
             .iter()
@@ -440,18 +485,16 @@ async fn generated_handover_fold_claims_bind_to_native_claims() {
     }
 }
 
-async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String> {
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &format!(
+async fn authored_keys(db: &TestDb, request_doc_id: &str) -> Vec<String> {
+    let response = db
+        .agent_access
+        .execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ sequence: ASC }}) {{ message_key }} }}"#,
             escape_graphql_string(request_doc_id)
-        ),
-        "authored keys",
-    )
-    .await
-    .unwrap();
-    response.data.unwrap()["AgentMessage"]
+        ))
+        .await
+        .unwrap();
+    response["data"]["AgentMessage"]
         .as_array()
         .unwrap()
         .iter()
@@ -459,20 +502,18 @@ async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String>
         .collect()
 }
 
-async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
+async fn durable_facts(db: &TestDb, session_id: &str) -> serde_json::Value {
     let session = escape_graphql_string(session_id);
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &format!(
+    let response = db
+        .agent_access
+        .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key sequence }}
                AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID }}
                AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID lifecycle_state execution_generation superseded_by_request_doc_id }} }}"#
-        ),
-        "fold publication durable facts",
-    )
-    .await
-    .unwrap();
-    let mut data = response.data.unwrap();
+        ))
+        .await
+        .unwrap();
+    let mut data = response["data"].clone();
     for collection in ["AgentOutputSegment", "AgentRequest"] {
         let rows = data[collection].as_array_mut().unwrap();
         rows.sort_by_key(|row| row["_docID"].as_str().unwrap().to_owned());
@@ -529,15 +570,6 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
     }) {
         let db = test_db(&case.name).await;
         let session_id = format!("fold-publication-{}", case.name);
-        crate::session::ensure_session_with_agent_id_and_requester_did(
-            &db.node,
-            &session_id,
-            db.node_did(),
-            TEST_AGENT_ID,
-            Some(db.node_did()),
-        )
-        .await
-        .unwrap();
         let (_authority_owner, authority) =
             crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
@@ -571,7 +603,12 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             bound.insert(id, enqueue_signed(&db, &session_id, &entry, arrival).await);
         }
         let head_doc = bound[&case.head].clone();
-        let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+        let writer = DefraStreamWriter::new_managed(
+            db.node.clone(),
+            db.agent_identity.as_ref(),
+            Duration::ZERO,
+        )
+        .unwrap();
         let mut generations: RapidHashMap<u64, ActiveTurn> = RapidHashMap::new();
         let mut first = claim_head(&db, &bound, case.head, &[case.selected]).await;
         first.begin(&writer).await;
@@ -579,7 +616,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         let scope: gents_protocol::rendered_request::CaptureScope = "inference.1".parse().unwrap();
         assert_eq!(case.steps.len(), case.expected.len());
         for (index, (step, expected)) in case.steps.iter().zip(&case.expected).enumerate() {
-            let before = durable_facts(&db.node, &session_id).await;
+            let before = durable_facts(&db, &session_id).await;
             let accepted = match step {
                 Step::ObserveDeadline { now, deadline } => {
                     observed_now = Some(clock_origin + chrono::Duration::milliseconds(*now as i64));
@@ -637,8 +674,8 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                 Step::Recover { expected, fresh } => {
                     let mut request = generations[expected].lifecycle.request().clone();
                     request.deadline = None;
-                    crate::store::config_client::ConfigAccess::write_local_response(
-                        &db.node,
+                    // The expired head is the Agent's own row; recovery resets it as the Agent.
+                    db.agent_access.write(
                         "test.fold_publication_reclaim",
                         &format!(
                             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending", deadline: null }}) {{ _docID }} }}"#,
@@ -647,7 +684,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     )
                     .await
                     .unwrap();
-                    let still_queued = fold_rows(&db.node, &session_id)
+                    let still_queued = fold_rows(&db, &session_id)
                         .await
                         .iter()
                         .filter(|row| {
@@ -716,6 +753,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                             &db.node,
                             turn.lifecycle.request(),
                             &verifier,
+                            None,
                         )
                         .await
                         .unwrap();
@@ -745,16 +783,35 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     }
                 }
                 Step::CancelFirstPending => {
-                    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
+                    let access = &db.agent_access;
                     let snapshot =
-                        pending_user_queue(&access, db.node_did(), &session_id, db.node_did())
+                        pending_user_queue(access, db.node_did(), &session_id, db.agent_did())
                             .await
                             .unwrap();
                     if let Some(first) = snapshot.entries.first() {
-                        let result = replace_pending_user_messages(&access, db.identity.as_ref(), gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(db.node_did()), PendingEditActor { node_did: db.node_did(), session_id: &session_id, requester_did: db.node_did() }, PendingQueueEdit {
-                                expected_request_doc_ids: snapshot.entries.iter().map(|entry| entry.request_doc_id.clone()).collect(),
-                                selected_request_doc_ids: vec![first.request_doc_id.clone()], messages: vec![],
-                            }, &[]).await;
+                        let result = replace_pending_user_messages(
+                            access,
+                            db.agent_identity.as_ref(),
+                            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+                                db.agent_did(),
+                            ),
+                            PendingEditActor {
+                                node_did: db.node_did(),
+                                session_id: &session_id,
+                                requester_did: db.agent_did(),
+                            },
+                            PendingQueueEdit {
+                                expected_request_doc_ids: snapshot
+                                    .entries
+                                    .iter()
+                                    .map(|entry| entry.request_doc_id.clone())
+                                    .collect(),
+                                selected_request_doc_ids: vec![first.request_doc_id.clone()],
+                                messages: vec![],
+                            },
+                            &[],
+                        )
+                        .await;
                         if result.is_ok() {
                             for turn in generations.values_mut() {
                                 turn.selected.clear();
@@ -770,16 +827,16 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             assert_eq!(accepted, expected.accepted, "{label}: acceptance");
             if !accepted {
                 assert_eq!(
-                    durable_facts(&db.node, &session_id).await,
+                    durable_facts(&db, &session_id).await,
                     before,
                     "{label}: a rejected step leaves durable state unchanged"
                 );
             }
-            let keys = authored_keys(&db.node, &head_doc)
+            let keys = authored_keys(&db, &head_doc)
                 .await
                 .into_iter()
                 .filter_map(|key| {
-                    key.strip_prefix(&crate::session::canonical_rows::authored_message_key(
+                    key.strip_prefix(&gents_protocol::output::rows::authored_message_key(
                         &head_doc, "",
                     ))
                     .map(str::to_owned)
@@ -796,7 +853,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             if matches!(step, Step::Terminalize { .. }) {
                 continue;
             }
-            let rows = fold_rows(&db.node, &session_id).await;
+            let rows = fold_rows(&db, &session_id).await;
             let state = |id: u64| {
                 rows.iter()
                     .find(|row| modeled_id(row) == id)
@@ -864,7 +921,9 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
     }
     let mut active = claim_head(&db, &bound, 2, &[3]).await;
     assert_eq!(active.selected, vec![3]);
-    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    let writer =
+        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+            .unwrap();
     active.begin(&writer).await;
     let incompatible = LeanFoldQueueEntry {
         request_id: 1,
@@ -879,7 +938,7 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
         fresh: true,
     };
     bound.insert(1, enqueue_signed(&db, session_id, &incompatible, 2).await);
-    let before = fold_rows(&db.node, session_id).await;
+    let before = fold_rows(&db, session_id).await;
     assert_eq!(
         before
             .iter()
@@ -897,7 +956,7 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
         )
         .await
         .unwrap();
-    let rows = fold_rows(&db.node, session_id).await;
+    let rows = fold_rows(&db, session_id).await;
     let incompatible = rows.iter().find(|row| row.request_id == "1").unwrap();
     let folded = rows.iter().find(|row| row.request_id == "3").unwrap();
     assert_eq!(incompatible.lifecycle_state, RequestLifecycleState::Pending);
@@ -943,7 +1002,9 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
     };
     bound.insert(99, enqueue_signed(&db, session_id, &head, 0).await);
     let mut active = claim_head(&db, &bound, 99, &[]).await;
-    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    let writer =
+        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+            .unwrap();
     active.begin(&writer).await;
     for (index, item) in case.inputs.iter().enumerate() {
         let delivery = if item.kind == "user_steer" {
@@ -962,10 +1023,14 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
         db.identity.clone(),
         authority,
     );
-    let snapshot =
-        super::super::intake::steering_snapshot(&db.node, active.lifecycle.request(), &verifier)
-            .await
-            .unwrap();
+    let snapshot = super::super::intake::steering_snapshot(
+        &db.node,
+        active.lifecycle.request(),
+        &verifier,
+        None,
+    )
+    .await
+    .unwrap();
     let selected = case.expected.expect("modeled steer selection");
     assert_eq!(snapshot.inputs.len(), 1);
     assert_eq!(snapshot.inputs[0].key, folded_input_key(&bound[&selected]));
@@ -977,9 +1042,9 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
         )
         .await
         .unwrap();
-    let rows = fold_rows(&db.node, session_id).await;
-    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
-    let queue = pending_user_queue(&access, db.node_did(), session_id, db.node_did())
+    let rows = fold_rows(&db, session_id).await;
+    let access = &db.agent_access;
+    let queue = pending_user_queue(access, db.node_did(), session_id, db.node_did())
         .await
         .unwrap();
     assert_eq!(
@@ -1032,7 +1097,12 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
         let head_doc = enqueue_signed(&db, session_id, head, 0).await;
         let mut bound = RapidHashMap::from_iter([(head.request_id, head_doc)]);
         let mut active = claim_head(&db, &bound, head.request_id, &[]).await;
-        let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+        let writer = DefraStreamWriter::new_managed(
+            db.node.clone(),
+            db.agent_identity.as_ref(),
+            Duration::ZERO,
+        )
+        .unwrap();
         active.begin(&writer).await;
         for (index, entry) in case.before.pending.iter().enumerate() {
             let doc = if entry.fresh {
@@ -1053,6 +1123,7 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             &db.node,
             active.lifecycle.request(),
             &verifier,
+            None,
         )
         .await
         .unwrap();
@@ -1072,7 +1143,7 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             error.is::<super::super::PendingInputChanged>(),
             "{name}: {error:#}"
         );
-        let rows = fold_rows(&db.node, session_id).await;
+        let rows = fold_rows(&db, session_id).await;
         for entry in &expected.pending {
             let row = rows
                 .iter()

@@ -48,7 +48,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) source_fields: std::collections::BTreeMap<String, String>,
     pub(crate) requester_did: Option<String>,
     pub(crate) node_did: Option<String>,
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
     pub(crate) request_id: Option<String>,
 }
 
@@ -117,7 +117,7 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
         source_fields: scope.source_fields,
         requester_did: scope.requester_did,
         node_did: scope.node_did,
-        agent_id: scope.agent_id,
+        agent_did: scope.agent_did,
         request_id: scope.request_id,
     })
 }
