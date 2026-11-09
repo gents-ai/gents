@@ -147,9 +147,11 @@ pub(super) async fn handle_request(
         ("GET", "/desktop/packs/installed") => {
             let home = fixture.node_home().to_path_buf();
             let node_did = fixture.node_did().to_owned();
-            let access = fixture
-                .desktop_core()
-                .local_home_operator_access(&node_did, &home)?;
+            let access = gents::ConfigAccess::Graphql(
+                fixture
+                    .desktop_core()
+                    .local_home_operator_endpoint(&node_did, &home)?,
+            );
             json(
                 run_pack(runtime, move || {
                     packs::installed_with_access(home, None, access, node_did)
@@ -234,9 +236,11 @@ pub(super) async fn handle_request(
             let home = fixture.node_home().to_path_buf();
             let operator = if packs::plugin_call_uses_data(&home, &request.ux, &request.name)? {
                 let node_did = packs::ux_installing_node(&home)?;
-                let access = fixture
-                    .desktop_core()
-                    .local_home_operator_access(&node_did, &home)?;
+                let access = gents::ConfigAccess::Graphql(
+                    fixture
+                        .desktop_core()
+                        .local_home_operator_endpoint(&node_did, &home)?,
+                );
                 Some((access, node_did))
             } else {
                 None

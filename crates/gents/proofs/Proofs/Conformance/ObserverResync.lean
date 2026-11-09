@@ -79,12 +79,14 @@ def statusName : Status → String
   | .connected => "connected"
   | .disconnected => "disconnected"
   | .denied => "denied"
+  | .noEndpoint => "noEndpoint"
 
 def presentationName : Presentation → String
   | .catchingUp => "catching_up"
   | .current => "current"
   | .retrying => "retrying"
   | .denied => "denied"
+  | .noEndpoint => "no_endpoint"
   | .stalled => "stalled"
 
 def withSlot (m : Machine) (node : Nat) (slot : Slot) : Machine :=

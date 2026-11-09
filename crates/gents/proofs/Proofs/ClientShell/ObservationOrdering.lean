@@ -1414,6 +1414,10 @@ inductive Presentation where
   | retrying
   /-- Cause: the runtime refused the User. Next: the re-probe schedule. -/
   | denied
+  /-- Cause: the directory has no operator endpoint for the peer, so it has no
+  source. Next: a reconcile that supplies one starts a source
+  (`RuntimeConnectionObservation`). -/
+  | noEndpoint
   /-- Nothing owns progress. No `Owned` slot presents this. -/
   | stalled
   deriving DecidableEq, Repr
@@ -1421,6 +1425,7 @@ inductive Presentation where
 def present (n : Slot) : Presentation :=
   match n.status with
   | .denied => .denied
+  | .noEndpoint => .noEndpoint
   | .disconnected =>
       if n.pending || n.waiting || n.loading || !n.armed then .retrying else .stalled
   | .connecting => if n.pending || n.loading || !n.armed then .catchingUp else .stalled

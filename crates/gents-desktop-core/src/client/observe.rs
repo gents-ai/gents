@@ -39,7 +39,7 @@ impl Settlement {
     /// The connection event the settlement reports, if any.
     fn connection_event(self) -> Option<RuntimeConnectionEvent> {
         match self {
-            Self::Published => Some(RuntimeConnectionEvent::SnapshotSucceeded),
+            Self::Published => Some(remote::snapshot_event(remote::SnapshotOutcome::Succeeded)),
             Self::Superseded => None,
             Self::TransportFailed => Some(RuntimeConnectionEvent::TransportFailed),
             Self::Denied => Some(RuntimeConnectionEvent::PermissionDenied),

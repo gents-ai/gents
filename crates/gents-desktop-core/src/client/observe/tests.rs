@@ -1218,7 +1218,8 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
             let notice = |queue: &mut Queue,
                           in_flight: &mut BTreeMap<String, projection_store::StoreReadFence>,
                           generation: u64,
-                          kind: SourceNotice| {
+                          event: RuntimeConnectionEvent| {
+                let kind = SourceNotice::of(event).expect("a source task event");
                 if kind != SourceNotice::Armed {
                     store.observe_request_event(None);
                 }
@@ -1226,7 +1227,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     in_flight.remove(&node_did);
                 }
                 queue.notice(&store, &node_did, generation, kind);
-                store.observe_runtime_connection(&node_did, kind.connection_event());
+                store.observe_runtime_connection(&node_did, event);
             };
             let mut finished = serde_json::Value::Null;
             match step["op"].as_str().unwrap() {
@@ -1242,19 +1243,19 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     &mut queue,
                     &mut in_flight,
                     generation[node],
-                    SourceNotice::Armed,
+                    RuntimeConnectionEvent::SubscriptionsReady,
                 ),
                 "stream_failed" => notice(
                     &mut queue,
                     &mut in_flight,
                     generation[node],
-                    SourceNotice::StreamFailed,
+                    RuntimeConnectionEvent::TransportFailed,
                 ),
                 "stream_denied" => notice(
                     &mut queue,
                     &mut in_flight,
                     generation[node],
-                    SourceNotice::Denied,
+                    RuntimeConnectionEvent::PermissionDenied,
                 ),
                 "start" => {
                     if queue.startable(&node_did, generation[node], in_flight.contains_key(&node_did))
