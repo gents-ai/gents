@@ -25,6 +25,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { navigate, type Route } from "@/lib/router";
 import { isLocalNode } from "@/lib/firstRun";
 import { shownNodes, useHidden } from "@/lib/hidden";
+import { CONNECTION_LABEL, isOnline, nodeConnection } from "@/lib/nodeConnection";
 import { switchToNode } from "@/app/NodeSwitcher";
 import { previousNode } from "../../hooks/activeNode";
 import { NodeAvatar } from "./AgentAvatar";
@@ -214,7 +215,7 @@ function useEntries(): SearchEntry[] {
           name: nodeName(n.nodeDid),
           avatar: n.nodeConfig?.avatar ?? null,
           place: isLocalNode(n, homeDid) ? "Local" : "Remote",
-          offline: !n.dialSucceeded,
+          connection: isOnline(n) ? null : CONNECTION_LABEL[nodeConnection(n)],
           current: n.nodeDid === selected,
           last: n.nodeDid === last,
         })),

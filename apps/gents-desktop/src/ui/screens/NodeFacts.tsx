@@ -3,6 +3,7 @@
 import { cn } from "@gents/ui/lib/utils";
 import type { NodeView } from "../../hooks/fleetStore";
 import { providerLogo } from "@/lib/provider";
+import { CONNECTION_LABEL, type NodeConnection } from "@/lib/nodeConnection";
 import { ProviderLogo } from "./ProviderLogo";
 import { healthy } from "./agent/inferenceKinds";
 
@@ -26,11 +27,19 @@ export function StateDot({ tone }: { tone: Tone }) {
   );
 }
 
-export function OnlineStatus({ online }: { online: boolean }) {
+export function OnlineStatus({ connection }: { connection: NodeConnection }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <StateDot tone={online ? "good" : "bad"} />
-      {online ? "Online" : "Offline"}
+      <StateDot
+        tone={
+          connection === "connected"
+            ? "good"
+            : connection === "connecting"
+              ? "idle"
+              : "bad"
+        }
+      />
+      {CONNECTION_LABEL[connection]}
     </span>
   );
 }

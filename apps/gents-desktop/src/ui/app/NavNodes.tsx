@@ -5,6 +5,7 @@ import { isLocalNode } from "@/lib/firstRun";
 import { href, navigate, reviewNavigation, type Route } from "@/lib/router";
 import { fleetNodes } from "@/lib/scope";
 import { shownNodes, useHidden } from "@/lib/hidden";
+import { CONNECTION_LABEL, nodeConnection } from "@/lib/nodeConnection";
 import { useFleet } from "@/hooks/useFleet";
 import { useHomeDid } from "@/hooks/useClient";
 import { NodeAvatar, nodeAvatarOf } from "@/screens/AgentAvatar";
@@ -43,6 +44,8 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
         {ordered.map((node) => {
           const name = node.node.displayName ?? node.label;
           const here = node.nodeDid === current;
+          const connection = nodeConnection(node);
+          const online = connection === "connected";
           return (
             <li key={node.nodeDid}>
               <button
@@ -60,21 +63,23 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
                   <NodeAvatar
                     name={name}
                     {...nodeAvatarOf(node)}
-                    className={cn("size-4", !node.dialSucceeded && "opacity-50")}
+                    className={cn("size-4", !online && "opacity-50")}
                   />
                   <span
                     aria-hidden
                     className={cn(
                       "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-2 ring-background",
-                      node.dialSucceeded ? "bg-brand" : "bg-border",
+                      online ? "bg-brand" : "bg-border",
                     )}
                   />
                 </span>
                 <span className="min-w-0 flex-1 truncate">{name}</span>
-                {node.dialSucceeded ? (
+                {online ? (
                   <NodeActivity nodeDid={node.nodeDid} />
                 ) : (
-                  <span className="shrink-0 text-muted-foreground">Offline</span>
+                  <span className="shrink-0 text-muted-foreground">
+                    {CONNECTION_LABEL[connection]}
+                  </span>
                 )}
               </button>
             </li>

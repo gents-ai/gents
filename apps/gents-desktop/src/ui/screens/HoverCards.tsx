@@ -25,6 +25,7 @@ import { isLocalNode } from "@/lib/firstRun";
 import { useLocalServerRun } from "./agent/LocalServer";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
+import { nodeConnection } from "@/lib/nodeConnection";
 
 /* the card looks the same at rest; what leads somewhere underlines only
    while pointed at or focused */
@@ -266,7 +267,6 @@ export function NodeHoverCard({
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
-  const online = deployment.dialSucceeded;
   const page = nodeSection(deployment.nodeDid, "agent");
   return (
     <HoverCard open={open} onOpenChange={setOpen}>
@@ -283,7 +283,7 @@ export function NodeHoverCard({
             />
           }
         >
-          <OnlineStatus online={online} />
+          <OnlineStatus connection={nodeConnection(deployment)} />
         </CardTitle>
         <Facts>
           <NodeReach deployment={deployment} />

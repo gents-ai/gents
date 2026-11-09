@@ -1699,6 +1699,7 @@ export function createDesktopUiHarness(
     const visibleDeployment = {
       ...deployment,
       dialSucceeded: p2pStatus === "healthy",
+      runtimeConnection: p2pStatus === "healthy" ? "connected" : "disconnected",
       chatSafe: p2pStatus === "healthy",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];

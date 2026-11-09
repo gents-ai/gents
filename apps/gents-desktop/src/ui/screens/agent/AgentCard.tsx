@@ -30,6 +30,7 @@ import { agentOf, backendOf } from "@/lib/agents";
 import { RunNodeButton } from "./LocalServer";
 import { errorText } from "../../../lib/errorText";
 import { shortPath } from "@/lib/paths";
+import { nodeConnection } from "@/lib/nodeConnection";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 
 function pulse(
@@ -300,7 +301,6 @@ export function AgentCard({
   }, [fetchOperationsSnapshot, deployment.nodeDid, sessions]);
   const now = pulse(sessions, ops);
   const limit = limitNote(useProviderUsage(deployment.nodeDid).usage, useMinute());
-  const online = deployment.dialSucceeded;
   const backends = deployment.inferenceBackends;
   const section = (section: string): Route => ({
     name: "agent",
@@ -327,7 +327,7 @@ export function AgentCard({
               {name}
             </h2>
             {node.enabled === false && <Badge variant="outline">Disabled</Badge>}
-            <OnlineStatus online={online} />
+            <OnlineStatus connection={nodeConnection(deployment)} />
             {edit && (
               <Button
                 size="xs"

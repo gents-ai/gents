@@ -27,6 +27,8 @@ import { AgentEditor } from "./BehaviorEditor";
 import { NEW_ITEM } from "./draftItems";
 import { useHidden } from "@/lib/hidden";
 import { preferences } from "@/preferences";
+import { pageConnection } from "@/lib/nodeConnection";
+import { ConnectionPlaceholder, StaleNotice } from "../NodeConnectionState";
 
 export async function saveDefault(
   changeConfig: ShellActions["changeConfig"],
@@ -185,6 +187,7 @@ export function AgentsPanel({
     section: "agents",
   };
   const hidden = useHidden();
+  const connection = pageConnection(deployment, deployment.agents.length > 0);
   const inUse = new Set(deployment.agents.map((b) => b.contextId));
   const unusedContexts = deployment.contexts.filter(
     (c) => !inUse.has(c.context_id),
@@ -237,6 +240,9 @@ export function AgentsPanel({
           </a>
         </p>
       )}
+      {!agentDid && connection?.kind === "stale" && (
+        <StaleNotice text={connection.text} className="mb-3" />
+      )}
       <ListDetail
         base={base}
         item={agentDid}
@@ -264,7 +270,13 @@ export function AgentsPanel({
             ),
           }))}
         createLabel="New agent"
-        empty="No agents yet. An agent is what a session is told, what it may use, and what model runs it."
+        empty={
+          connection && connection.kind !== "stale" ? (
+            <ConnectionPlaceholder state={connection} className="py-0" />
+          ) : (
+            "No agents yet. An agent is what a session is told, what it may use, and what model runs it."
+          )
+        }
         onCreate={() => navigate({ ...base, item: NEW_ITEM })}
         detail={(id) => {
           const agent = agentOf(deployment, id)!;

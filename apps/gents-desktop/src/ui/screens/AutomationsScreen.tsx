@@ -30,7 +30,9 @@ import { href, navigate } from "@/lib/router";
 import { SEARCH_FIELD } from "@/lib/textAssist";
 import { browserStorage } from "@/lib/storage";
 import { useSelectedNode } from "@/hooks/useClient";
+import { pageConnection } from "@/lib/nodeConnection";
 import { Hint } from "./Hint";
+import { ConnectionPlaceholder, StaleNotice } from "./NodeConnectionState";
 import { usePackGroups } from "./agent/ListDetail";
 import { AutomationForm } from "./agent/NewAutomationDialog";
 import { AutomationDetail } from "./automations/AutomationDetail";
@@ -82,6 +84,7 @@ export function AutomationsScreen({ item }: { item?: string }) {
   const packGroups = usePackGroups("automations");
   const open = item ? (all.find((a) => a.id === item) ?? null) : null;
   const name = node ? (node.node.displayName ?? node.label) : "this node";
+  const connection = pageConnection(node, all.length > 0);
 
   return (
     <ScrollArea className="h-full" data-testid="automations-screen">
@@ -131,6 +134,9 @@ export function AutomationsScreen({ item }: { item?: string }) {
                   <p className="mt-0.5 text-sm text-muted-foreground">
                     Work that runs on its own on {name}.
                   </p>
+                  {connection?.kind === "stale" && (
+                    <StaleNotice text={connection.text} className="mt-1" />
+                  )}
                 </div>
                 {all.length > 0 && (
                   <div className="flex items-center gap-1">
@@ -243,7 +249,9 @@ export function AutomationsScreen({ item }: { item?: string }) {
             {node && all.length > 0 && !templatesHidden && (
               <TemplateRow onUse={start} onHide={() => hideTemplates(true)} />
             )}
-            {all.length === 0 ? (
+            {connection && connection.kind !== "stale" ? (
+              <ConnectionPlaceholder state={connection} />
+            ) : all.length === 0 ? (
               <>
                 <Empty node={name} onNew={node ? () => start(null) : undefined} />
                 {node && <Templates onUse={start} />}

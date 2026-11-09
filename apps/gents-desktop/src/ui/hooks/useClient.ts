@@ -21,6 +21,7 @@ import { recentFolders, sessionFolder } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
 import { configIsRead, isLocalNode } from "../lib/firstRun";
+import { connectionTitle, nodeConnection } from "../lib/nodeConnection";
 import { isWorkingNode, workingNode } from "../lib/nodes";
 import {
   defaultScope,
@@ -66,7 +67,12 @@ export function useNodeConfigReadOnly(node: NodeView): string | null {
     state.snapshot ? configIsRead(state.snapshot, node.nodeDid) : false,
   );
   if (isLocalNode(node, homeDid) || read) return null;
-  return `Read-only here: change ${node.node.displayName ?? node.label}'s settings on that machine.`;
+  const name = node.node.displayName ?? node.label;
+  const connection = nodeConnection(node);
+  if (connection === "connecting") return `Read-only here while connecting to ${name}.`;
+  if (connection !== "connected")
+    return `Read-only here: ${connectionTitle(connection, name)}.`;
+  return `Read-only here: change ${name}'s settings on that machine.`;
 }
 
 export function useSelectedNodeMailboxItem(

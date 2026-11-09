@@ -1,6 +1,7 @@
 import { selectedAgentDidForDeployment } from "@source-inc/gents-desktop-client";
 
 import { toast } from "sonner";
+import { nodeConnection } from "../ui/lib/nodeConnection";
 import { routeMoves } from "../ui/lib/router";
 import { openOnNode } from "../ui/preferences";
 import { noteActiveNode, rememberedNode, rememberNode } from "./activeNode";
@@ -13,10 +14,14 @@ import type { ShellStores } from "./shellProjection";
     reachability isn't known yet, may still arrive and be opened on. */
 export const OPEN_ON_WAIT_MS = 5000;
 
-/* a dial that failed leaves its error; before the first dial there is
-   neither a connection nor an error */
-export const reachOf = (node: NodeView) =>
-  node.dialSucceeded ? "reachable" : node.lastError ? "failed" : "unknown";
+export const reachOf = (node: NodeView) => {
+  const connection = nodeConnection(node);
+  return connection === "connected"
+    ? "reachable"
+    : connection === "connecting"
+      ? "unknown"
+      : "failed";
+};
 
 export const nameOf = (node: NodeView) => node.node.displayName ?? node.label;
 

@@ -45,6 +45,7 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
+import { CONNECTION_LABEL, isOnline, nodeConnection } from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
@@ -145,7 +146,7 @@ export function AgentsScreen() {
       label: "Remote nodes",
       nodes: shown
         .filter((d) => !isWorkingNode(d, homeDid))
-        .sort((a, b) => Number(b.dialSucceeded) - Number(a.dialSucceeded)),
+        .sort((a, b) => Number(isOnline(b)) - Number(isOnline(a))),
       count: true,
     },
     /* out of the menus on this device, and only here when there are any */
@@ -493,7 +494,7 @@ const AgentRow = memo(function AgentRow({
     useShallow((s) => activityOf(s, d.nodeDid)),
   );
   const name = d.node.displayName ?? d.label;
-  const online = d.dialSucceeded;
+  const connection = nodeConnection(d);
   /* the node the app is working with, ringed as the rail's avatar is */
   const active = useSelectedNode()?.nodeDid === d.nodeDid;
   const config = href({
@@ -539,9 +540,13 @@ const AgentRow = memo(function AgentRow({
         <span
           className={cn(
             "size-2 shrink-0 rounded-full",
-            online ? "bg-brand" : "bg-destructive",
+            connection === "connected"
+              ? "bg-brand"
+              : connection === "connecting"
+                ? "bg-border"
+                : "bg-destructive",
           )}
-          aria-label={online ? "online" : "offline"}
+          aria-label={CONNECTION_LABEL[connection].toLowerCase()}
           role="img"
         />
         <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">

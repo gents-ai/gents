@@ -157,29 +157,40 @@ describe("a session link that leads nowhere", () => {
 
   it("says when its node can't be reached", () => {
     const app = appOn(NODE, [
-      node({ label: "Forge", dialSucceeded: false, lastError: "connection refused" }),
+      node({ label: "Forge", runtimeConnection: "disconnected" }),
     ]);
     renderIn(app, <Probe />);
     lookedAndFoundNothing(app);
     expect(screen.getByRole("heading", { name: /^Can't reach/ })).toBeTruthy();
   });
 
+  it("says when its node refuses this app, whatever the old dial reported", () => {
+    const app = appOn(NODE, [
+      node({ label: "Forge", dialSucceeded: true, runtimeConnection: "refused" }),
+    ]);
+    renderIn(app, <Probe />);
+    lookedAndFoundNothing(app);
+    expect(
+      screen.getByRole("heading", { name: "Local Agent doesn't accept this app" }),
+    ).toBeTruthy();
+  });
+
   it("keeps loading while its node connects, and reads a connection as it arrives", () => {
     const app = appOn(NODE, [
-      node({ label: "Forge", dialSucceeded: false, lastError: null }),
+      node({ label: "Forge", runtimeConnection: "connecting" }),
     ]);
     renderIn(app, <Probe />);
     lookedAndFoundNothing(app);
     expect(screen.getByText("still loading")).toBeTruthy();
-    act(() => publish(app, [node({ label: "Forge", dialSucceeded: true })]));
+    act(() => publish(app, [node({ label: "Forge", runtimeConnection: "connected" })]));
     expect(screen.getByRole("heading", { name: "Session not found" })).toBeTruthy();
   });
 
-  it("stops waiting for a node that dropped, which reports no error", () => {
+  it("stops waiting for a node that stays connecting", () => {
     vi.useFakeTimers();
     try {
       const app = appOn(NODE, [
-        node({ label: "Forge", dialSucceeded: false, lastError: null }),
+        node({ label: "Forge", runtimeConnection: "connecting" }),
       ]);
       renderIn(app, <Probe />);
       lookedAndFoundNothing(app);

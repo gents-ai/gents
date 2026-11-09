@@ -50,7 +50,8 @@ import { href } from "@/lib/router";
 import { useListWindow } from "@source-inc/gents-desktop-ui";
 import { Age } from "./time";
 import { defaultScope, sessionsInScope, type Scope } from "@/lib/scope";
-import { useInScope, useSelectedNodeDid } from "@/hooks/useClient";
+import { useInScope, useSelectedNode, useSelectedNodeDid } from "@/hooks/useClient";
+import { pageConnection, type PageConnection } from "@/lib/nodeConnection";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 import { Hint } from "./Hint";
 import { pinSession } from "./SessionMenu";
@@ -74,6 +75,7 @@ import { usePinnedSessions } from "@/preferences";
 import { useFleet } from "../hooks/useFleet";
 import { RenameField } from "./SessionHeader";
 import { SEARCH_FIELD } from "@/lib/textAssist";
+import { ConnectionPlaceholder, StaleNotice } from "./NodeConnectionState";
 
 /* a session, and after an open group that leaves some out, the way to all
    of them */
@@ -103,6 +105,7 @@ export function SessionsScreen({
   entry?: object;
 }) {
   const selectedNodeDid = useSelectedNodeDid();
+  const selectedNode = useSelectedNode();
   const [query, setQuery] = useState<string | null>(null);
   const filter = useListViews((v) => v.sessionFilter);
   const opened = useOpened(entry);
@@ -120,6 +123,7 @@ export function SessionsScreen({
           : scoped,
     [scoped, archived],
   );
+  const connection = pageConnection(selectedNode, scoped.length > 0);
   const pinnedKeys = usePinnedSessions();
   const pinned = useMemo(() => new Set(pinnedKeys), [pinnedKeys]);
   const parents = useFleet((s) => s.parentOf);
@@ -312,8 +316,12 @@ export function SessionsScreen({
               </div>
             )}
           </div>
+          {connection?.kind === "stale" && (
+            <StaleNotice text={connection.text} className="mt-2" />
+          )}
           <SessionList
             rows={rows}
+            connection={connection}
             archived={archived}
             level={level}
             narrowed={narrowed}
@@ -410,6 +418,7 @@ function SessionList({
   parentOf,
   listed,
   onToggle,
+  connection,
 }: {
   rows: Row[];
   archived: boolean;
@@ -420,6 +429,7 @@ function SessionList({
   listed: ReadonlyMap<string, SessionSummary>;
   /** with the rows a close takes along: everything opened under it */
   onToggle: (key: string, under: readonly string[]) => void;
+  connection: PageConnection | null;
 }) {
   const items = useMemo(() => {
     const out: Item[] = [];
@@ -464,7 +474,10 @@ function SessionList({
     }
     return steps;
   }, [rows, fresh]);
-  const empty = rows.length === 0;
+  /* a node with nothing to list yet is connecting or out of reach, not empty */
+  const unlisted =
+    rows.length === 0 && connection?.kind !== "stale" ? connection : null;
+  const empty = rows.length === 0 && !unlisted;
 
   const [list, setList] = useState<HTMLUListElement | null>(null);
   const ownRef = window.listProps.ref;
@@ -566,6 +579,11 @@ function SessionList({
           />
         );
       })}
+      {unlisted && (
+        <li>
+          <ConnectionPlaceholder state={unlisted} className="min-h-[50vh]" />
+        </li>
+      )}
       {empty && archived && !narrowed && (
         <li className="py-8 text-center text-sm text-muted-foreground">
           No archived sessions.

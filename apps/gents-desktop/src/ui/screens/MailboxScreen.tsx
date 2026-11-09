@@ -5,13 +5,15 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@gents/ui/components/tabs";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
-import { useSelectedNodeDid } from "@/hooks/useClient";
+import { useSelectedNode, useSelectedNodeDid } from "@/hooks/useClient";
+import { pageConnection } from "@/lib/nodeConnection";
 import { listViews, useListViews, type MailboxTab } from "@/app/listViews";
 import { TRIAGE, greeting, groupItems, waiting } from "./mailbox-triage";
 import { ItemRow } from "./MailboxItem";
 import { MAILBOX, openHere, useMailboxList } from "./MailboxStack";
 import { useMinute } from "./time";
 import { SEARCH_FIELD } from "@/lib/textAssist";
+import { ConnectionPlaceholder, StaleNotice } from "./NodeConnectionState";
 
 type Tab = MailboxTab;
 
@@ -29,6 +31,7 @@ export function MailboxScreen() {
   const { items, searched, groups, shown } = useMailboxList(query ?? "");
   /* the whole mailbox, whatever the search narrows the list to */
   const summary = waiting(groupItems(items));
+  const connection = pageConnection(useSelectedNode(), items.length > 0);
   const tabs = TRIAGE.map((t) => ({
     key: t.key as Tab,
     label: t.label,
@@ -45,6 +48,9 @@ export function MailboxScreen() {
                 {greeting(new Date(now).getHours())}
               </h1>
               <p className="mt-0.5 text-sm text-muted-foreground">{summary}</p>
+              {connection?.kind === "stale" && (
+                <StaleNotice text={connection.text} className="mt-1" />
+              )}
             </header>
             <div className="flex items-center gap-2">
               <div
@@ -156,7 +162,10 @@ export function MailboxScreen() {
             </button>
           </p>
         )}
-        {items.length === 0 && (
+        {items.length === 0 && connection && connection.kind !== "stale" && (
+          <ConnectionPlaceholder state={connection} className="min-h-[60vh]" />
+        )}
+        {items.length === 0 && !connection && (
           <div className="grid min-h-[60vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
             <div className="text-center">
               <Inbox className="mx-auto size-6 text-muted-foreground" />
