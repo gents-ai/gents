@@ -1,12 +1,12 @@
 use super::*;
 
 impl ClientStore {
-    pub fn default_agent_id_for_node(&self, node_did: &str) -> Option<&str> {
+    pub fn default_agent_did_for_node(&self, node_did: &str) -> Option<&str> {
         let from_node = self
             .nodes
             .iter()
             .find(|row| row.node_did == node_did)
-            .and_then(|row| row.default_agent_id.as_deref())
+            .and_then(|row| row.default_agent_did.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty());
         if from_node.is_some() {
@@ -14,12 +14,8 @@ impl ClientStore {
         }
 
         let agents = self.agent_rows(node_did);
-        let conventional = gents::default_agent_id_for_node(node_did);
-        if let Some(row) = agents.iter().find(|row| row.agent_id == conventional) {
-            return Some(row.agent_id.as_str());
-        }
         let enabled = agents.iter().filter(|row| row.enabled).collect::<Vec<_>>();
-        (enabled.len() == 1).then(|| enabled[0].agent_id.as_str())
+        (enabled.len() == 1).then(|| enabled[0].agent_did.as_str())
     }
 
     pub fn agent_rows(&self, node_did: &str) -> Vec<&Agent> {
@@ -29,46 +25,46 @@ impl ClientStore {
             .collect()
     }
 
-    pub fn agent_row(&self, node_did: &str, agent_id: &str) -> Option<&Agent> {
+    pub fn agent_row(&self, node_did: &str, agent_did: &str) -> Option<&Agent> {
         self.agents
             .iter()
-            .find(|row| row.node_did == node_did && row.agent_id == agent_id)
+            .find(|row| row.node_did == node_did && row.agent_did == agent_did)
     }
 
-    pub fn session_agent_id(&self, session_id: &str, node_did: Option<&str>) -> Option<String> {
+    pub fn session_agent_did(&self, session_id: &str, node_did: Option<&str>) -> Option<String> {
         self.sessions
             .iter()
             .find(|row| {
                 row.session_id == session_id
                     && node_did.is_none_or(|node_did| row.node_did == node_did)
             })
-            .and_then(|row| clean_string(Some(&row.agent_id)))
+            .and_then(|row| clean_string(Some(&row.agent_did)))
     }
 
-    pub fn sessions_for_agent(&self, node_did: &str, agent_id: &str) -> Vec<&AgentSession> {
+    pub fn sessions_for_agent(&self, node_did: &str, agent_did: &str) -> Vec<&AgentSession> {
         self.sessions
             .iter()
             .filter(|row| {
                 row.node_did == node_did
-                    && clean_string(Some(&row.agent_id)).as_deref() == Some(agent_id)
+                    && clean_string(Some(&row.agent_did)).as_deref() == Some(agent_did)
             })
             .collect()
     }
 
-    pub fn requests_for_agent(&self, node_did: &str, agent_id: &str) -> Vec<&AgentRequestRow> {
+    pub fn requests_for_agent(&self, node_did: &str, agent_did: &str) -> Vec<&AgentRequestRow> {
         self.requests
             .iter()
             .filter(|row| {
                 row.node_did.as_deref() == Some(node_did)
-                    && clean_string(row.agent_id.as_deref()).as_deref() == Some(agent_id)
+                    && clean_string(row.agent_did.as_deref()).as_deref() == Some(agent_did)
             })
             .collect()
     }
 
-    pub fn tasks_for_agent(&self, node_did: &str, agent_id: &str) -> Vec<&Task> {
+    pub fn tasks_for_agent(&self, node_did: &str, agent_did: &str) -> Vec<&Task> {
         self.tasks
             .iter()
-            .filter(|row| row.node_did == node_did && row.agent_id == agent_id)
+            .filter(|row| row.node_did == node_did && row.agent_did == agent_did)
             .collect()
     }
 

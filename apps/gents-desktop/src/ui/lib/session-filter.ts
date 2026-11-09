@@ -65,7 +65,7 @@ export const matchesSource = (c: SessionSummary, source: SessionSource) =>
 export const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
-  (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
+  (f.agents.length === 0 || f.agents.includes(c.agentDid ?? ""));
 
 /** A choice shows checked while nothing narrows its axis. */
 export const isShown = <V extends string>(picked: readonly V[], v: V) =>

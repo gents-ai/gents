@@ -187,6 +187,12 @@ pub(super) async fn replace_when_requested(
 
 async fn start(binary: &Path, paths: &DesktopPaths) -> Result<Child> {
     let mut child = Command::new(binary)
+        .envs(
+            super::support::homes::ProcessHomes::under(
+                paths.root().parent().context("client home parent")?,
+            )
+            .env(),
+        )
         .env("GENTS_HOME", paths.root().join("unused-runtime"))
         .env("GENTS_DESKTOP_HOME", paths.root())
         .env_remove("GENTS_SYSTEM_LOG")
@@ -221,13 +227,13 @@ async fn schema(paths: &DesktopPaths, did: &str) -> Result<defra_node::Collectio
     let identity = PrincipalIdentity::load_or_create(paths).await?;
     ensure!(identity.did() == did, "the retained identity changed");
     let node = key
-        .encrypt(defra_node::EmbeddedNode::builder().data_path(paths.node_data_dir()))
+        .encrypt(defra_node::Node::builder().data_path(paths.node_data_dir()))
         .with_node_identity_did(did.to_owned())
         .build()
         .await?;
     let schema = node
         .get_collection("InferenceCall")?
         .context("inference collection")?;
-    node.shutdown().await;
+    node.shutdown().await?;
     Ok(schema)
 }

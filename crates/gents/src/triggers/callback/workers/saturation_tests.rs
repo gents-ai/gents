@@ -11,12 +11,11 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::{CallbackWorkers, PLUGIN_CALLBACK_CONCURRENCY};
+use crate::documents::apply_desired_state_plan;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store;
 use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
-use crate::store::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::triggers::callback::documents::{load_callback, load_invocation, CallbackInvocationDoc};
 use crate::UpdateSubscriptionSource;
 
@@ -81,22 +80,42 @@ async fn wait_for_invocations(
     .expect("callback invocations did not reach the expected durable state")
 }
 
-async fn wait_for_arrival_checkpoint(access: &ConfigAccess, updates: &mut events::Subscription) {
+async fn arrival_head(access: &ConfigAccess) -> Value {
+    let response = access
+        .execute("{ _documentArrivals(collection: \"SaturationInput\", after: \"0\", limit: 1) { head } }")
+        .await
+        .unwrap();
+    response["data"]["_documentArrivals"]["head"].clone()
+}
+
+/// Waits until source delivery has checkpointed exactly through `through`.
+/// A callback arrival is a checkpoint receipt only once a worker has claimed
+/// it (`visibleCallbackClaim` in the Lean model), so the cursor stops before
+/// an invocation that capacity left unclaimed.
+async fn wait_for_arrival_checkpoint(
+    access: &ConfigAccess,
+    updates: &mut events::Subscription,
+    through: &Value,
+) {
     tokio::time::timeout(WAIT, async {
         loop {
-            let response = access.execute(
-                "{ _documentArrivals(collection: \"SaturationInput\", after: \"0\", limit: 1) { head }
-                    EventSourceCursor { after } }",
-            ).await.unwrap();
-            let data = &response["data"];
-            let cursors = data["EventSourceCursor"].as_array().unwrap();
+            let response = access
+                .execute("{ EventSourceCursor { after } }")
+                .await
+                .unwrap();
+            let cursors = response["data"]["EventSourceCursor"].as_array().unwrap();
             assert_eq!(cursors.len(), 1);
-            if cursors[0]["after"] == data["_documentArrivals"]["head"] {
+            if cursors[0]["after"] == *through {
                 return;
             }
-            updates.recv().await.expect("database update stream stays open");
+            updates
+                .recv()
+                .await
+                .expect("database update stream stays open");
         }
-    }).await.expect("source delivery must checkpoint after the capacity refusal");
+    })
+    .await
+    .expect("source delivery must checkpoint the claimed prefix after the capacity refusal");
 }
 
 fn transition(name: &str) -> &'static Value {
@@ -131,11 +150,16 @@ async fn create_inputs(access: &ConfigAccess, items: impl Iterator<Item = usize>
         .unwrap();
 }
 
-async fn snapshot(node: &defra_node::EmbeddedNode, row: &Value) -> CallbackInvocationDoc {
-    load_invocation(node, row["invocation_id"].as_str().unwrap(), OWNER)
-        .await
-        .unwrap()
-        .unwrap()
+async fn snapshot(node: &Arc<defra_node::Node>, row: &Value) -> CallbackInvocationDoc {
+    load_invocation(
+        node,
+        row["invocation_id"].as_str().unwrap(),
+        OWNER,
+        &crate::triggers::callback::test_agent_did(),
+    )
+    .await
+    .unwrap()
+    .unwrap()
 }
 
 async fn result_rows(access: &ConfigAccess) -> Vec<Value> {
@@ -209,10 +233,15 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         store::grant_on_install(home.path(), &plugin.namespace, &plugin.declaration, true).unwrap();
     store::write_record(home.path(), &plugin).unwrap();
     let plugins = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::triggers::callback::test_node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
-    access
+    crate::triggers::callback::seed_test_agent(&node, OWNER).await;
+    ConfigAccess::local(node.clone())
         .add_collection(
             "type SaturationInput { item: Int correlation: String }
              type SaturationOutput { item: Int correlation: String http_calls: Boolean
@@ -220,6 +249,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         )
         .await
         .unwrap();
+    let access = crate::triggers::callback::test_agent_access(&node);
     let documents = [
         (
             crate::Collection::Callback,
@@ -239,7 +269,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         ),
         (
             crate::Collection::CallbackBinding,
-            json!({"binding_id": "saturation", "event_source_id": "saturation",
+            json!({"binding_id": "saturation", "agent_did":crate::triggers::callback::test_agent_did(),"event_source_id": "saturation",
                 "callback_id": CALLBACK, "input_fields": ["item", "correlation"]}),
         ),
     ]
@@ -254,7 +284,8 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     })
     .collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    access
+    let config_access = ConfigAccess::local_as(node.clone(), identity::Did::new(OWNER).unwrap());
+    config_access
         .transact_write("test.callback_saturation_config", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
@@ -270,6 +301,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         OWNER.into(),
         None,
         plugins.clone(),
+        crate::triggers::callback::test_snapshot(),
         cancel.clone(),
     ));
 
@@ -292,6 +324,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         let stale_running = snapshot(&node, &initial[0]).await;
 
         let mut updates = node.subscribe_updates();
+        let claimed_head = arrival_head(&access).await;
         create_inputs(
             &access,
             PLUGIN_CALLBACK_CONCURRENCY..PLUGIN_CALLBACK_CONCURRENCY + 1,
@@ -307,7 +340,12 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             .unwrap();
         assert_phase(pending, &claim["pre"], &claim["pre"]["attempts"]);
         let stale_pending = snapshot(&node, pending).await;
-        wait_for_arrival_checkpoint(&access, &mut updates).await;
+        wait_for_arrival_checkpoint(&access, &mut updates, &claimed_head).await;
+        assert_ne!(
+            arrival_head(&access).await,
+            claimed_head,
+            "the unclaimed arrival stays beyond the checkpoint"
+        );
         assert_eq!(
             snapshot(&node, pending).await.lifecycle_state,
             claim["pre"]["state"]
@@ -383,7 +421,14 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             .unwrap();
         let stale_workers = CallbackWorkers::new(1, CancellationToken::new());
         for stale in [stale_pending, stale_running] {
-            stale_workers.dispatch(node.clone(), &stale, &callback, None, plugins.clone());
+            stale_workers.dispatch(
+                node.clone(),
+                access.clone(),
+                &stale,
+                &callback,
+                None,
+                plugins.clone(),
+            );
             stale_workers.drain().await;
         }
         assert_eq!(
@@ -415,7 +460,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     if stopped.is_err() {
         server.abort();
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }

@@ -1,0 +1,346 @@
+import Proofs.FileInventory.Snapshot
+
+namespace FileInventory.Examples
+
+open ToolExecution
+
+def admission : Request := ⟨"inventory-1", "reader-1", "node-1", "session-1", 2⟩
+def scope : FileImages.Scope := ⟨admission.requester, admission.node, admission.session⟩
+
+def tool (id : Nat) : Tool := ⟨id, 1000 + id, scope, "agent-1", true, .completed⟩
+def change (id : Nat) : CapturedChange :=
+  ⟨"workspace", "src/" ++ toString id ++ ".rs", .file "before" "old bytes",
+    .file "after" "new bytes"⟩
+def observation (id : Nat) : Observation :=
+  ⟨some (2000 + id), id, (tool id).request, scope, [change id], false⟩
+def unchangedObservation (id : Nat) : Observation :=
+  { observation id with id := none, changes := [], verifiedUnchanged := true }
+
+def unchangedProjection (id : Nat) : Projection := (unchangedObservation id).metadata (3000 + id) (tool id).agentDid
+
+def projection (id : Nat) : Projection := (observation id).metadata (3000 + id) (tool id).agentDid
+
+def input (ids : List Nat) : ClosureInput :=
+  { request := admission, bases := ids.map (.toolCall ·), roots := [], requirements := []
+  , messages := [], segments := []
+  , access := ids.map fun id => ⟨admission.authorizationScope, ⟨.agentToolCall, id⟩, .authorized⟩
+  , deniedHeaders := [], deniedSegments := [] }
+
+structure CatalogInput where
+  sessions : List SessionOwner
+  closureInputs : List ClosureInput
+  sessionReads : List SessionReadObservation := []
+
+/-- List inputs retain their wire representation; the existing catalog owns
+set membership and canonical closure interpretation. -/
+def CatalogInput.model (input : CatalogInput) : Catalog :=
+  ⟨input.sessions.toFinset, input.closureInputs, input.sessionReads⟩
+
+structure SourceInput where
+  catalog : CatalogInput
+  tools : List Tool
+  projections : List Projection
+  boundary : ReadBoundary
+  sessionOwner : String := ""
+
+def SourceInput.model (input : SourceInput) : Source :=
+  ⟨input.catalog.model, input.tools, input.projections, input.boundary, input.sessionOwner⟩
+
+def catalog (ids : List Nat) : CatalogInput :=
+  { sessions := [ownedSession admission]
+  , closureInputs := [input ids] }
+
+def source (count : Nat) : SourceInput :=
+  let ids := (List.range count).map (· + 1)
+  { catalog := catalog ids, tools := ids.map tool, projections := ids.map projection
+  , boundary := .atomicExhaustive }
+
+inductive Summary where
+  | rejected
+  | unknown
+  | selected (entries pending unknown : Nat) (knownEmpty : Bool)
+  deriving DecidableEq, Repr
+
+def summary (value : SourceInput) (request : Request := admission) : Summary :=
+  match snapshot value.model request with
+  | .error .rejected => .rejected
+  | .error .unknown => .unknown
+  | .ok value => .selected value.entries.length value.pending.length value.unknown.length value.knownEmpty
+
+structure SelectionCase where
+  name : String
+  source : SourceInput := source 1
+  expected : Summary := .rejected
+
+def selectionCases : List SelectionCase :=
+  [ ⟨"verified_unchanged_terminal", {source 1 with projections := [unchangedProjection 1]}, .selected 0 0 0 true⟩
+  , ⟨"multiple_verified_unchanged", {source 2 with projections := [unchangedProjection 1, unchangedProjection 2]}, .selected 0 0 0 true⟩
+  , ⟨"unchanged_claim_cannot_carry_images", {source 1 with projections :=
+      [{projection 1 with verifiedUnchanged := true}]}, .rejected⟩
+  , ⟨"unchanged_claim_cannot_retain_image_identity", {source 1 with projections :=
+      [{unchangedProjection 1 with observation := some 2001}]}, .rejected⟩
+  , ⟨"unchanged_claim_cannot_precede_terminal", {source 1 with
+      tools := [{tool 1 with state := .running}], projections := [unchangedProjection 1]}, .rejected⟩
+  , ⟨"accepted_terminal_capture", source 1, .selected 1 0 0 false⟩
+  , ⟨"valid_empty_closure", source 0, .selected 0 0 0 true⟩
+  , ⟨"legacy_missing_capture_is_unknown", {source 1 with projections := []}, .selected 0 0 1 false⟩
+  , ⟨"active_missing_capture_is_pending",
+      {source 1 with tools := [{tool 1 with state := .running}], projections := []}, .selected 0 1 0 false⟩
+  , ⟨"missing_accepted_binding", {source 1 with tools := []}, .unknown⟩
+  , ⟨"incomplete_database_enumeration", {source 1 with boundary := .incomplete}, .unknown⟩
+  , ⟨"mixed_revision_database_reads", {source 1 with boundary := .nonAtomic}, .unknown⟩
+  , ⟨"missing_closure_input", {source 1 with catalog := {catalog [1] with closureInputs := []}}, .unknown⟩
+  , ⟨"ambiguous_closure_input", {source 1 with catalog :=
+        {catalog [1] with closureInputs := [input [1], input [1]]}}, .unknown⟩
+  , ⟨"canonical_missing_provenance", {source 1 with catalog :=
+        {catalog [1] with closureInputs := [{input [1] with access := []}]}}, .unknown⟩
+  , ⟨"canonical_denied_provenance", {source 1 with catalog :=
+        {catalog [1] with closureInputs := [{input [1] with access :=
+          [⟨admission.authorizationScope, ⟨.agentToolCall, 1⟩, .denied⟩]}]}}, .rejected⟩
+  , ⟨"foreign_session_owner", {source 1 with catalog :=
+        {catalog [1] with sessions := [⟨admission.session, 2, "foreign", admission.node⟩]}}, .rejected⟩
+  , ⟨"physical_binding_not_accepted", {source 1 with tools := [{tool 1 with accepted := false}]}, .rejected⟩
+  , ⟨"duplicate_physical_tool", {source 1 with tools := [tool 1, tool 1]}, .rejected⟩
+  , ⟨"duplicate_capture_projection", {source 1 with projections := [projection 1, projection 1]}, .rejected⟩
+  , ⟨"uncommitted_capture_before_terminal", {source 1 with tools := [{tool 1 with state := .running}]}, .rejected⟩
+  , ⟨"projection_wrong_request", {source 1 with projections := [{projection 1 with request := 99}]}, .rejected⟩
+  , ⟨"projection_in_another_session_is_not_this_inventory", {source 1 with projections :=
+        [{projection 1 with scope := {scope with session := "foreign"}}]}, .selected 0 0 1 false⟩
+  , ⟨"projection_wrong_actual_requester", {source 1 with projections :=
+        [{projection 1 with scope := {scope with requester := "foreign"}}]}, .rejected⟩
+  , ⟨"projection_wrong_actual_node", {source 1 with projections :=
+        [{projection 1 with scope := {scope with node := "foreign"}}]}, .rejected⟩
+  , ⟨"projection_foreign_stored_owner", {source 1 with projections :=
+        [{projection 1 with owner := "foreign"}]}, .rejected⟩
+  , ⟨"invalid_empty_capture_not_empty_inventory", {source 1 with projections :=
+        [{projection 1 with changes := []}]}, .rejected⟩
+  , ⟨"duplicate_paths_in_capture", {source 1 with projections :=
+        [{projection 1 with changes := [(change 1).metadata, (change 1).metadata]}]}, .rejected⟩
+  , ⟨"projection_id_reused_across_tools", {source 2 with projections :=
+        [projection 1, {projection 2 with id := (projection 1).id}]}, .rejected⟩
+  , ⟨"observation_id_reused_across_tools", {source 2 with projections :=
+        [projection 1, {projection 2 with observation := (projection 1).observation}]}, .rejected⟩
+  , ⟨"unselected_tools_do_not_expand_inventory",
+        {source 1 with tools := [tool 1, tool 99], projections := [projection 1, projection 99]},
+        .selected 1 0 0 false⟩
+  , ⟨"canonical_membership_order_is_stable",
+        { source 2 with
+          catalog := catalog [2, 1]
+          tools := [tool 2, tool 1]
+          projections := [projection 2, projection 1] }, .selected 2 0 0 false⟩ ]
+
+theorem selection_regressions : selectionCases.all
+    (fun test => summary test.source == test.expected) = true := by native_decide
+
+def running : ToolCallContext :=
+  { callId := 1, requestId := (tool 1).request, state := .running, operation := .nativeCommand
+  , deadline := 10, currentTime := 11, persistence := .committed }
+
+structure PublicationCase where
+  name : String
+  pre : ToolCallContext := running
+  action : ToolCallContext.Action
+  won : Bool := true
+  write : TerminalWriteResult := .committed
+  actual : Tool := {tool 1 with state := .running}
+  observation : Observation := observation 1
+  expected : Bool
+
+def publicationCases : List PublicationCase :=
+  [ {name := "verified_unchanged_commits", action := .complete, observation := unchangedObservation 1, expected := true}
+  , {name := "unchanged_cancel_retains_witness", action := .cancelDuringRun .userCancelled,
+      observation := unchangedObservation 1, expected := true}
+  , {name := "unchanged_timeout_retains_witness", action := .timeout,
+      observation := unchangedObservation 1, expected := true}
+  , {name := "unchanged_losing_terminal_publishes_nothing", action := .complete, won := false,
+      observation := unchangedObservation 1, expected := false}
+  , {name := "unchanged_rollback_publishes_nothing", action := .complete, write := .failed,
+      observation := unchangedObservation 1, expected := false}
+  , {name := "empty_capture_without_witness_is_invalid", action := .complete,
+      observation := {unchangedObservation 1 with verifiedUnchanged := false}, expected := false}
+  , {name := "unchanged_cannot_claim_images", action := .complete,
+      observation := {observation 1 with verifiedUnchanged := true}, expected := false}
+  , {name := "unchanged_wrong_physical_tool", action := .complete,
+      observation := {unchangedObservation 1 with tool := 2}, expected := false}
+  , {name := "unchanged_wrong_request", action := .complete,
+      observation := {unchangedObservation 1 with request := 999}, expected := false}
+  , {name := "unchanged_wrong_scope", action := .complete,
+      observation := {unchangedObservation 1 with scope := {scope with requester := "other"}}, expected := false}
+  , {name := "completed_retains_capture", action := .complete, expected := true}
+  , {name := "failed_retains_partial_capture", action := .fail .external, expected := true}
+  , {name := "timeout_retains_partial_capture", action := .timeout, expected := true}
+  , {name := "cancelled_retains_partial_capture", action := .cancelDuringRun .userCancelled, expected := true}
+  , {name := "lost_terminal_cas_does_not_publish", action := .complete, won := false, expected := false}
+  , {name := "rollback_does_not_publish", action := .complete, write := .failed, expected := false}
+  , {name := "unattempted_write_does_not_publish", action := .complete, write := .notAttempted, expected := false}
+  , {name := "nonterminal_action_does_not_publish", action := .background, expected := false}
+  , {name := "terminal_replay_does_not_publish", pre := {running with state := .completed},
+      action := .complete, expected := false}
+  , {name := "capture_wrong_actual_session", action := .complete,
+      observation := {observation 1 with scope := {scope with session := "foreign"}}, expected := false}
+  , {name := "capture_wrong_actual_node", action := .complete,
+      observation := {observation 1 with scope := {scope with node := "foreign"}}, expected := false}
+  , {name := "capture_wrong_actual_requester", action := .complete,
+      observation := {observation 1 with scope := {scope with requester := "foreign"}}, expected := false}
+  , {name := "capture_different_physical_tool", action := .complete,
+      actual := {tool 2 with state := .running}, expected := false}
+  , {name := "capture_unaccepted_tool", action := .complete,
+      actual := {tool 1 with state := .running, accepted := false}, expected := false} ]
+
+theorem publication_regressions : publicationCases.all (fun test =>
+    (publish test.pre test.action test.won test.write test.actual test.observation 3001).isSome ==
+      test.expected) = true := by native_decide
+
+def partialObservation : Observation :=
+  {observation 1 with changes := [{change 1 with after := .unavailable .mutationIncomplete}]}
+
+theorem cancellation_preserves_unavailable_after_image :
+    publish running (.cancelDuringRun .userCancelled) true .committed {tool 1 with state := .running} partialObservation 3001 =
+      some (partialObservation.metadata 3001 (tool 1).agentDid) := by native_decide
+
+def forkRequest : Request := {admission with session := "fork-session", nativeSession := 3}
+def originDelivery := CanonicalOutput.Hydration.Examples.parentDelivery
+def forkDelivery : CanonicalOutput.MessageEnvelope :=
+  { originDelivery with
+    header := CanonicalOutput.forkHeader originDelivery.header 221 3
+    key := "fork-delivery" }
+/-- The fork's destination-owned copy of the delivered closure, under the
+logical closing identity its header names. -/
+def forkOutputCopy : CanonicalOutput.Segment :=
+  let output := CanonicalOutput.Hydration.Examples.parentOutput
+  { output with id := 3301, coordinate := { output.coordinate with request := output.id } }
+/-- A self-contained fork's closure: its own header and copies, never the
+origin message, request, tool or closure. -/
+def forkInput : ClosureInput :=
+  { input [] with
+    request := forkRequest
+    roots := [221]
+    messages := [forkDelivery]
+    segments := [forkOutputCopy]
+    access := [⟨.agentMessage, 221⟩, ⟨.agentOutputSegment, 3301⟩].map fun key =>
+        ⟨forkRequest.authorizationScope, key, .authorized⟩ }
+def forkScope : FileImages.Scope := { scope with session := forkRequest.session }
+def forkOwner : String := "fork-creator"
+/-- The origin session's own projection of the inherited tool. -/
+def originProjection : Projection := {(projection 300) with request := 10}
+/-- The fork's copy: the same projected facts, in the fork session, owned by
+the fork's creating actor. -/
+def forkCopy : Projection := {originProjection with id := 3600, scope := forkScope, owner := forkOwner}
+def forkSource : SourceInput :=
+  let originTool : Tool := ⟨300, 10, scope, "agent-1", true, .completed⟩
+  { source 0 with
+    tools := [originTool, tool 99]
+    projections := [originProjection, forkCopy, projection 99]
+    sessionOwner := forkOwner
+    catalog := { catalog [] with
+      sessions := [ownedSession forkRequest]
+      closureInputs := [forkInput] } }
+
+theorem fork_retains_only_authorized_physical_origin :
+    summary forkSource forkRequest = .selected 1 0 0 false := by native_decide
+
+theorem fork_entries_are_scoped_to_the_fork :
+    (snapshot forkSource.model forkRequest).toOption.any (fun value =>
+      value.entries.all (fun entry => entry.scope == forkScope && entry.projection == forkCopy.id &&
+        entry.tool == 300) && !value.entries.isEmpty) = true := by native_decide
+
+/-- Deleting the origin's tools and projections does not change the fork's
+inventory. -/
+theorem fork_copy_is_retained_without_its_source :
+    (snapshot {forkSource with tools := [], projections := [forkCopy]}.model forkRequest).toOption =
+      (snapshot forkSource.model forkRequest).toOption := by native_decide
+
+theorem fork_does_not_read_its_source_projection :
+    summary {forkSource with projections := [originProjection, projection 99]} forkRequest =
+      .selected 0 0 0 true := by native_decide
+
+theorem fork_copy_requires_the_fork_owner :
+    summary {forkSource with projections := [{forkCopy with owner := "agent-1"}]} forkRequest =
+      .selected 0 0 0 true ∧
+    summary {forkSource with sessionOwner := ""} forkRequest = .selected 0 0 0 true := by
+  native_decide
+
+theorem fork_copy_cannot_cross_requester_or_duplicate :
+    summary {forkSource with projections :=
+      [{forkCopy with scope := {forkScope with requester := "foreign"}}]} forkRequest =
+      .rejected ∧
+    summary {forkSource with projections := [forkCopy, {forkCopy with id := 3601}]} forkRequest =
+      .rejected := by native_decide
+
+theorem fork_copy_of_an_unnamed_tool_is_not_selected :
+    summary {forkSource with projections := [{forkCopy with tool := 301}]} forkRequest =
+      .selected 0 0 0 true := by native_decide
+
+theorem fork_copies_in_other_sessions_do_not_conflict :
+    summary {forkSource with projections :=
+      forkSource.projections ++ [{forkCopy with id := 3700, scope := {forkScope with session := "other-fork"}}]}
+      forkRequest = .selected 1 0 0 false ∧
+    summary {source 1 with projections := [projection 1,
+      {projection 1 with id := 3601, scope := forkScope, owner := forkOwner}]} =
+      .selected 1 0 0 false := by native_decide
+
+def getSnapshot (value : SourceInput) : Snapshot :=
+  (snapshot value.model admission).toOption.getD ⟨admission, [], [], []⟩
+
+def large : SourceInput := source 65
+def largeSnapshot : Snapshot := getSnapshot large
+def firstPage : Page := makePage largeSnapshot 0
+def secondPage : Page := makePage largeSnapshot 64
+
+theorem pages_flatten_then_bound : firstPage.entries.length = 64 ∧
+    secondPage.entries.length = 1 ∧ firstPage.next = some ⟨largeSnapshot, 64⟩ ∧
+    secondPage.next = none := by native_decide
+
+def oneLargeCapture : SourceInput :=
+  {source 1 with projections := [{projection 1 with
+    changes := (List.range 65).map (fun id => (change id).metadata)}]}
+
+theorem one_large_capture_still_pages_entries :
+    (makePage (getSnapshot oneLargeCapture) 0).entries.length = 64 ∧
+    (makePage (getSnapshot oneLargeCapture) 64).entries.length = 1 := by native_decide
+
+def lateAfter : SourceInput := source 66
+def lateBefore : SourceInput :=
+  { lateAfter with
+    tools := lateAfter.tools.map (fun value => if value.id = 1 then
+      {value with state := .running} else value)
+    projections := lateAfter.projections.filter (fun value => value.tool != 1) }
+def lateSnapshot : Snapshot := getSnapshot lateBefore
+
+theorem old_cursor_was_legitimately_issued :
+    (makePage lateSnapshot 0).next = some ⟨lateSnapshot, 64⟩ := by native_decide
+
+theorem old_terminal_behind_cursor_is_stale :
+    pageFromSnapshot (getSnapshot lateAfter) (some ⟨lateSnapshot, 64⟩) = .stale := by
+  native_decide
+
+theorem membership_change_is_stale :
+    pageFromSnapshot (getSnapshot (source 66)) (some ⟨largeSnapshot, 64⟩) = .stale := by
+  native_decide
+
+theorem metadata_change_is_stale :
+    pageFromSnapshot (getSnapshot ({large with projections := large.projections.map (fun value =>
+      if value.tool = 1 then {value with observation := some 9999} else value)} : SourceInput))
+      (some ⟨largeSnapshot, 64⟩) = .stale := by native_decide
+
+theorem cursor_scope_cannot_be_replayed :
+    pageFromSnapshot largeSnapshot
+      (some ⟨{largeSnapshot with admission := forkRequest}, 64⟩) = .stale := by native_decide
+
+theorem cursor_cannot_skip_partial_page :
+    pageFromSnapshot largeSnapshot (some ⟨largeSnapshot, 1⟩) = .rejected := by
+  native_decide
+
+theorem owner_change_rejects_the_snapshot :
+    summary ({large with projections := large.projections.map fun value =>
+      if value.tool = 1 then {value with owner := "foreign-node"} else value} : SourceInput) =
+      .rejected := by native_decide
+
+theorem physical_input_reordering_preserves_snapshot :
+    (snapshot ({ source 2 with
+      catalog := catalog [2, 1]
+      tools := [tool 2, tool 1]
+      projections := [projection 2, projection 1] } : SourceInput).model admission).toOption =
+      (snapshot (source 2).model admission).toOption := by native_decide
+
+end FileInventory.Examples

@@ -12,11 +12,11 @@ use gents_loop::claude_messages_body::{
     ClaudeAgentIdentity, ClaudeRequestContext, CLAUDE_REQUEST_PARAM,
 };
 use gents_loop::loop_stream::LoopConfig;
-use gents_protocol::session::SessionCreationCause;
+use gents_protocol::session::{SessionCreationCause, SessionScope};
 
 use crate::inference::resolved::ResolvedAgent;
 use crate::request::lifecycle::ExecutionOrigin;
-use crate::session::origin::{self, CreationOrigin, SessionScope};
+use crate::session::origin::{self, CreationOrigin};
 use crate::store::config_client::ConfigAccess;
 use crate::AgentRequest;
 
@@ -165,11 +165,11 @@ pub(crate) async fn for_request(
             .clone(),
         parent_session_id: None,
         agent: origin.subagent().then(|| ClaudeAgentIdentity {
-            agent_id: metadata::agent_id(request.session_id.as_bytes()),
-            parent_agent_id: session
+            agent_did: metadata::agent_did(request.session_id.as_bytes()),
+            parent_agent_did: session
                 .parent_subagent_session_id
                 .as_deref()
-                .map(|session_id| metadata::agent_id(session_id.as_bytes())),
+                .map(|session_id| metadata::agent_did(session_id.as_bytes())),
         }),
     }))
 }

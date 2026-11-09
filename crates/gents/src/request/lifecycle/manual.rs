@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
 use crate::documents::template::{render_template, task_node_ctx, TemplateScope};
@@ -11,20 +11,16 @@ use crate::request::lifecycle::{
 pub async fn write_manual_agent_request(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
-    node_did: &str,
-    agent_id: &str,
-    task_id: &str,
+    identity: &dyn crate::store::identity::NodeIdentity,
+    target: ManualRequestTarget<'_>,
     prompt_template: &str,
     args: Value,
 ) -> Result<String> {
     write_manual_agent_request_with_conversation_title(
         node,
         actor,
-        ManualRequestTarget {
-            node_did,
-            agent_id,
-            task_id,
-        },
+        identity,
+        target,
         prompt_template,
         args,
         None,
@@ -34,13 +30,14 @@ pub async fn write_manual_agent_request(
 
 pub struct ManualRequestTarget<'a> {
     pub node_did: &'a str,
-    pub agent_id: &'a str,
+    pub agent_did: &'a str,
     pub task_id: &'a str,
 }
 
 pub async fn write_manual_agent_request_with_conversation_title(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
+    identity: &dyn crate::store::identity::NodeIdentity,
     target: ManualRequestTarget<'_>,
     prompt_template: &str,
     args: Value,
@@ -48,11 +45,11 @@ pub async fn write_manual_agent_request_with_conversation_title(
 ) -> Result<String> {
     let ManualRequestTarget {
         node_did,
-        agent_id,
+        agent_did,
         task_id,
     } = target;
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let (node_scope, ctx_scope) = task_node_ctx(node_did, agent_id, &now);
+    let (node_scope, ctx_scope) = task_node_ctx(node_did, agent_did, &now);
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let scope = TemplateScope {
@@ -76,7 +73,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
         node,
         actor,
         node_did,
-        agent_id,
+        agent_did,
         &content,
         ExecutionOrigin::Interactive,
         TriggerLineage {
@@ -92,6 +89,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
         None,
         None,
         Some(&session_id),
+        identity,
     )
     .await
     .map_err(|e| anyhow!("create manual AgentRequest for task {task_id}: {e}"))?;
@@ -110,7 +108,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
 mod tests {
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use serde_json::Value;
 
     use super::{
@@ -120,7 +118,7 @@ mod tests {
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use crate::store::schema::ensure_runtime_schemas;
 
-    async fn test_node() -> (Arc<EmbeddedNode>, String) {
+    async fn test_node() -> (Arc<EmbeddedNode>, String, Arc<dyn NodeIdentity>) {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
         let did = identity.did().to_string();
@@ -132,20 +130,41 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        (node, did)
+        let admin = crate::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(identity.did()).unwrap(),
+        );
+        crate::test_support::bootstrap_signed_test_node(&admin, &did).await;
+        let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        crate::test_support::install_test_agent_binding(&node, &did, "manual fixture", &binding)
+            .await;
+        let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        (node, did, agent)
+    }
+
+    /// Reads through the agent's own signed access: ACP filters unsigned node reads.
+    async fn agent_query(node: &Arc<EmbeddedNode>, agent: &dyn NodeIdentity, query: &str) -> Value {
+        crate::ConfigAccess::local_managed_agent(node.clone(), agent.did().parse().unwrap(), agent)
+            .unwrap()
+            .execute(query)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
     async fn writes_manual_request_with_rendered_template_and_manual_lineage() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did.clone()).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request(
             &node,
             actor,
-            &node_did,
-            "behavior-1",
-            "task-1",
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
             "hello {{ args.name }}",
             serde_json::json!({"name": "Amy"}),
         )
@@ -166,18 +185,9 @@ mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query failed: {:?}",
-            response.errors
-        );
-
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(Value::as_array)
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
             .cloned()
             .unwrap_or_default();
         assert_eq!(rows.len(), 1, "expected exactly one row, got {rows:?}");
@@ -197,15 +207,18 @@ mod tests {
 
     #[tokio::test]
     async fn manual_task_template_gets_node_and_ctx_scope() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did.clone()).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
         let doc_id = write_manual_agent_request(
             &node,
             actor,
-            &node_did,
-            "behavior-1",
-            "task-1",
-            "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.agent_id }}",
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
+            "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.agent_did }}",
             serde_json::json!({}),
         )
         .await
@@ -218,38 +231,33 @@ mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query failed: {:?}",
-            response.errors
-        );
-        let content = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("content"))
-            .and_then(Value::as_str)
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let content = response["data"]["AgentRequest"][0]["content"]
+            .as_str()
             .expect("request content");
 
         assert!(content.starts_with("tick "));
         assert!(content.contains(&node_did), "content={content:?}");
-        assert!(content.ends_with(" / behavior-1"), "content={content:?}");
+        assert!(
+            content.ends_with(&format!(" / {}", agent.did())),
+            "content={content:?}"
+        );
     }
 
     #[tokio::test]
     async fn writes_manual_request_with_slash_selected_skill_input() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did.clone()).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request(
             &node,
             actor,
-            &node_did,
-            "behavior-1",
-            "task-1",
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
             "/vuln-scan\nReview /work",
             serde_json::json!({}),
         )
@@ -264,17 +272,9 @@ mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query failed: {:?}",
-            response.errors
-        );
-        let row = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(Value::as_array)
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let row = response["data"]["AgentRequest"]
+            .as_array()
             .and_then(|rows| rows.first())
             .expect("expected request row");
 
@@ -284,15 +284,16 @@ mod tests {
 
     #[tokio::test]
     async fn writes_manual_request_with_deferred_conversation_title() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did.clone()).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request_with_conversation_title(
             &node,
             actor,
+            agent.as_ref(),
             ManualRequestTarget {
                 node_did: &node_did,
-                agent_id: "behavior-1",
+                agent_did: agent.did(),
                 task_id: "task-1",
             },
             "hello {{ args.name }}",
@@ -310,17 +311,9 @@ mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "request query failed: {:?}",
-            response.errors
-        );
-        let request = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(Value::as_array)
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let request = response["data"]["AgentRequest"]
+            .as_array()
             .and_then(|rows| rows.first())
             .expect("request row");
         let session_id = request
@@ -345,17 +338,9 @@ mod tests {
                 }}
             }}"#
         );
-        let session_response = node.execute(&session_query).await;
-        assert!(
-            !session_response.has_errors(),
-            "session query failed: {:?}",
-            session_response.errors
-        );
-        let sessions = session_response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentSession"))
-            .and_then(Value::as_array)
+        let session_response = agent_query(&node, agent.as_ref(), &session_query).await;
+        let sessions = session_response["data"]["AgentSession"]
+            .as_array()
             .expect("session rows");
         assert!(
             sessions.is_empty(),
@@ -365,14 +350,17 @@ mod tests {
 
     #[tokio::test]
     async fn surfaces_template_render_errors() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
         let err = write_manual_agent_request(
             &node,
             actor,
-            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
-            "behavior-1",
-            "task-err",
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-err",
+            },
             "hello {{ args.missing }}",
             serde_json::json!({}),
         )

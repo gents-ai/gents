@@ -115,7 +115,7 @@ async fn observe_waits(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<bool> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let headers = crate::session::load_request_headers_in_txn(
         txn,
         session_id,

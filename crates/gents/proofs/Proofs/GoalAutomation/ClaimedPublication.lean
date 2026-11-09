@@ -1,4 +1,5 @@
 import Proofs.GoalAutomation.OperatorResume
+import Proofs.Identity.SessionChild
 
 /-! Transaction-boundary refinement of the existing claimed → childPresent
 phase. Claim has already consumed the Goal sequence. `commit` means the SAME
@@ -7,6 +8,65 @@ false includes native conflict and discard. No new durable state or clock.
 The Goal write must participate even though modeled Goal fields are unchanged.
 -/
 namespace GoalAutomation.OperatorResume
+
+/-- A continuation is agent work. The selected session agent signs its
+admission and executes its transaction; a node key or the predecessor's
+requester cannot substitute for that agent. The runtime holds agent keys, so
+this isolates agents from one another, not from their hosting runtime. -/
+def continuationIdentityValid (selected signer actor parentAgent : String) : Bool :=
+  signer == selected && actor == selected && parentAgent == selected
+
+theorem continuation_identity_requires_selected_signer
+    (selected signer actor parentAgent : String)
+    (h : continuationIdentityValid selected signer actor parentAgent = true) :
+    signer = selected ∧ actor = selected ∧ parentAgent = selected := by
+  simpa [continuationIdentityValid, Bool.and_eq_true, beq_iff_eq, and_assoc] using h
+
+/-- The native transaction resolves the physical session and selected Agent,
+binds both IDs into the signed receipt, and commits the request with both
+parents and its working-Agent grant. Native relationship checks supply the
+authority premise. A duplicate observes its existing receipt and does not
+restore relationships that were subsequently revoked. -/
+def claimedTargetsValid (session observedSession agent observedAgent : String) : Bool :=
+  GoalAutomation.requestPhysicalTargetsValid session observedSession agent observedAgent
+
+def commitClaimedRequest (state : Identity.SessionChild.ClientRequestPublication)
+    (selected signer actor parentAgent session observedSession agent observedAgent : String)
+    (fresh commit : Bool) : Identity.SessionChild.ClientRequestPublication :=
+  if continuationIdentityValid selected signer actor parentAgent &&
+      claimedTargetsValid session observedSession agent observedAgent then
+    Identity.SessionChild.commitFreshClientRequest state fresh commit
+  else state
+
+theorem claimed_request_wrong_targets_unchanged
+    (state : Identity.SessionChild.ClientRequestPublication)
+    (selected signer actor parentAgent session observedSession agent observedAgent : String)
+    (fresh commit : Bool)
+    (h : claimedTargetsValid session observedSession agent observedAgent = false) :
+    commitClaimedRequest state selected signer actor parentAgent session observedSession
+      agent observedAgent fresh commit = state := by
+  simp [commitClaimedRequest, h]
+
+theorem claimed_request_duplicate_preserves_revocation
+    (state : Identity.SessionChild.ClientRequestPublication)
+    (selected signer actor parentAgent session observedSession agent observedAgent : String)
+    (commit : Bool) :
+    commitClaimedRequest state selected signer actor parentAgent session observedSession
+      agent observedAgent false commit = state := by
+  simp [commitClaimedRequest, Identity.SessionChild.commitFreshClientRequest]
+
+/-- Reconciliation observes and updates each goal as its selected agent. A
+runtime may enumerate configured agents, but a row visible to one agent is not
+evidence that it may act for a different session agent. The same selected DID
+is used for observation, controller writes and any resumed continuation. -/
+def goalCandidateInScope (observer sessionAgent parentAgent : String) : Bool :=
+  observer == sessionAgent && parentAgent == sessionAgent
+
+theorem goal_candidate_requires_selected_actor
+    (observer sessionAgent parentAgent : String)
+    (h : goalCandidateInScope observer sessionAgent parentAgent = true) :
+    observer = sessionAgent ∧ parentAgent = sessionAgent := by
+  simpa [goalCandidateInScope, Bool.and_eq_true, beq_iff_eq] using h
 
 structure ClaimedRequest extends Request where
   expectedLastContinuedFrom : Option Nat

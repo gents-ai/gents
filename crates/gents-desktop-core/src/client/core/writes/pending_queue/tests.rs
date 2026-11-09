@@ -108,7 +108,7 @@ async fn incomplete_or_foreign_edit_projection_keeps_store_and_receipt() {
                     purpose: "normal",
                     node_did: "did:test:other-node",
                     requester_did: "did:test:requester",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "other-session",
                     content: "foreign row",
                     lifecycle_state: "pending",

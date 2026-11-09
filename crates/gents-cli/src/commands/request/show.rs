@@ -206,7 +206,7 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "requester_did",
         "request_id",
         "node_did",
-        "agent_id",
+        "agent_did",
         "session_id",
         "lifecycle_state",
         "backend_id",
@@ -270,7 +270,7 @@ fn request_show_tool_calls_query(
         .doc_id
         .as_deref()
         .context("request show missing physical identity")?;
-    let scope = gents::session::session_scope_filter(
+    let scope = gents_protocol::session::session_scope_filter(
         request
             .node_did
             .as_deref()

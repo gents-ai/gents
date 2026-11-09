@@ -94,4 +94,113 @@ theorem watcher_release_keeps_unrelated_marks
   show x ∈ w.processedSet.filter (fun y => y ≠ d)
   simp [h_marked, h_other]
 
+/-- Availability governs dispatch, while configured agents with verified local
+signing identities remain scan actors so their requests can be rejected. -/
+structure ActorCandidate where
+  did : String
+  configured : Bool
+  identityResolved : Bool
+  available : Bool
+  deriving BEq, DecidableEq, Repr
+
+def scanActors (candidates : List ActorCandidate) : List String :=
+  (candidates.filter (fun c => c.configured && c.identityResolved)).map (·.did)
+
+theorem unavailable_resolved_agent_is_scanned :
+    scanActors [⟨"agent", true, true, false⟩] = ["agent"] := by decide
+
+theorem unresolved_agent_is_not_scanned :
+    scanActors [⟨"agent", true, false, false⟩] = [] := by decide
+
+structure ScopedRow where
+  docId : String
+  selectedAgent : String
+  deriving BEq, DecidableEq, Repr
+
+inductive ScopedView where
+  | denied | missingRoot | rows (rows : List ScopedRow)
+  deriving Repr
+
+structure ScopedScan where
+  actor : String
+  view : ScopedView
+  deriving Repr
+
+structure ScopedFailure where
+  actor : String
+  reason : String
+  deriving BEq, DecidableEq, Repr
+
+structure ScopedBatch where
+  rows : List ScopedRow := []
+  failures : List ScopedFailure := []
+  deriving BEq, DecidableEq, Repr
+
+/-- Each view is the result of a native ACP query authenticated as the named
+agent. A missing root or denied query is not an empty authorized result. Rows
+selected for a different agent do not become work for this actor even if it can
+read them. The caller supplies configured agents with verified resolved
+signing identities, including unavailable agents; an unresolved agent is not scanned. This does not fence a
+configuration change racing a previously started native scan. -/
+def collectScoped : List String → List ScopedScan → ScopedBatch
+  | [], _ => {}
+  | actor :: rest, scans =>
+      let tail := collectScoped rest scans
+      match scans.find? (fun scan => scan.actor == actor) with
+      | none => { tail with failures := ⟨actor, "missing_scan"⟩ :: tail.failures }
+      | some scan =>
+        match scan.view with
+        | .denied => { tail with failures := ⟨actor, "denied"⟩ :: tail.failures }
+        | .missingRoot => { tail with failures := ⟨actor, "missing_root"⟩ :: tail.failures }
+        | .rows rows => { tail with rows := rows.filter (fun row => row.selectedAgent == actor) ++ tail.rows }
+
+def uniqueScopedRows (rows : List ScopedRow) : List ScopedRow :=
+  rows.foldl (fun retained row =>
+    if retained.any (fun prior => prior.docId == row.docId) then retained else retained ++ [row]) []
+
+/-- `arrivalOrder` is the native global ordering of the successfully observed
+physical documents, including comparable cursor positions obtained as each
+agent. No order is asserted relative to unobservable requests. The
+legacy order is the prior created-at/request-id order, used only for rows with
+no native arrival. This is a model of the merge, not an authorization check or
+an assertion that detached observations form one transaction. -/
+def orderScopedRows (rows : List ScopedRow) (legacyOrder arrivalOrder : List String) : List ScopedRow :=
+  let unique := uniqueScopedRows rows
+  let legacyIds := (legacyOrder ++ unique.map (·.docId)).eraseDups
+  let beforeJournal := legacyIds.filterMap (fun id =>
+    if arrivalOrder.contains id then none else unique.find? (fun row => row.docId == id))
+  let journaled := arrivalOrder.eraseDups.filterMap (fun id => unique.find? (fun row => row.docId == id))
+  beforeJournal ++ journaled
+
+def scopedCandidates (activeAgents : List String) (scans : List ScopedScan)
+    (legacyOrder arrivalOrder : List String) : ScopedBatch :=
+  let collected := collectScoped activeAgents.eraseDups scans
+  { collected with rows := orderScopedRows collected.rows legacyOrder arrivalOrder }
+
+/-- Failures remain available to the existing watcher wake and fallback scan;
+their presence does not prevent the successful actors from making progress. -/
+def scopedNeedsRescan (batch : ScopedBatch) : Bool := !batch.failures.isEmpty
+
+theorem missing_scoped_root_is_not_empty :
+    (scopedCandidates ["agent"] [⟨"agent", .missingRoot⟩] [] []).failures =
+      [⟨"agent", "missing_root"⟩] := by decide
+
+theorem denied_scoped_root_is_not_empty :
+    (scopedCandidates ["agent"] [⟨"agent", .denied⟩] [] []).failures =
+      [⟨"agent", "denied"⟩] := by decide
+
+theorem inactive_agent_scan_is_not_used :
+    (scopedCandidates [] [⟨"old", .rows [⟨"old-doc", "old"⟩]⟩] [] ["old-doc"]).rows = [] := by decide
+
+theorem scoped_merge_preserves_native_global_arrival :
+    (scopedCandidates ["a", "b"]
+      [⟨"a", .rows [⟨"late", "a"⟩]⟩, ⟨"b", .rows [⟨"early", "b"⟩]⟩] [] ["early", "late"]).rows =
+      [⟨"early", "b"⟩, ⟨"late", "a"⟩] := by decide
+
+theorem denied_actor_does_not_block_healthy_actor :
+    let batch := scopedCandidates ["a", "b"]
+      [⟨"a", .denied⟩, ⟨"b", .rows [⟨"healthy", "b"⟩]⟩] [] ["healthy"]
+    batch.rows = [⟨"healthy", "b"⟩] ∧ batch.failures = [⟨"a", "denied"⟩] ∧
+      scopedNeedsRescan batch = true := by decide
+
 end EventDelivery.Watcher

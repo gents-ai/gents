@@ -216,7 +216,7 @@ export function AutomationForm({
 }) {
   const { changeConfig } = useApp().actions;
   const defaultAgent =
-    defaultAgentOf(deployment)?.agentId ?? deployment.agents[0]?.agentId ?? "";
+    defaultAgentOf(deployment)?.agentDid ?? deployment.agents[0]?.agentDid ?? "";
   const [name, setName] = useState(start?.name ?? "");
   const [kind, setKind] = useState<Kind | null>(
     start ? "schedule" : forTask ? "manual" : (initialKind ?? null),
@@ -241,15 +241,15 @@ export function AutomationForm({
   const ids = useRef<Record<string, string>>({});
   const idFor = (key: string, prefix: string) => (ids.current[key] ??= newId(prefix));
   const [prompt, setPrompt] = useState(start?.prompt ?? "");
-  const [agentId, setAgentId] = useState(defaultAgent);
+  const [agentDid, setAgentDid] = useState(defaultAgent);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const existingTask =
     taskId === NEW ? null : deployment.tasks.find((t) => t.taskId === taskId);
-  const runningAgentId = taskId === NEW ? agentId : existingTask?.agentId;
-  const agent = agentOf(deployment, runningAgentId) ?? null;
-  const readiness = agent ? agentReadiness(deployment, agent.agentId) : null;
+  const runningAgentDid = taskId === NEW ? agentDid : existingTask?.agentDid;
+  const agent = agentOf(deployment, runningAgentDid) ?? null;
+  const readiness = agent ? agentReadiness(deployment, agent.agentDid) : null;
   const agentOff = readiness !== null && !readiness.ready;
   const fromPrompt = prompt.trim().split("\n")[0].slice(0, 60);
 
@@ -268,7 +268,7 @@ export function AutomationForm({
       kind,
       preset,
       watch,
-      agentId,
+      agentDid,
       taskId,
       goal,
       goalBudget,
@@ -292,7 +292,7 @@ export function AutomationForm({
       setError("Say what the agent should do.");
       return;
     }
-    if (taskId === NEW && !agentId) {
+    if (taskId === NEW && !agentDid) {
       setError("Choose the agent that runs it.");
       return;
     }
@@ -374,7 +374,7 @@ export function AutomationForm({
           task_id,
           display_name: displayName,
           description: description.trim() || null,
-          agent_id: agentId,
+          agent_did: agentDid,
           prompt_template: prompt.trim(),
           emit_outcome: false,
           goal_objective_template: goal.trim() || null,
@@ -537,8 +537,8 @@ export function AutomationForm({
             Runs with
             <AgentPicker
               deployment={deployment}
-              agentId={agentId}
-              onChange={setAgentId}
+              agentDid={agentDid}
+              onChange={setAgentDid}
             />
           </>
         )}

@@ -1,6 +1,6 @@
 use super::*;
 
-fn summary(session_id: &str, agent_id: Option<&str>, turn_state: Option<&str>) -> SessionSummary {
+fn summary(session_id: &str, agent_did: Option<&str>, turn_state: Option<&str>) -> SessionSummary {
     SessionSummary {
         started_by: None,
         node_did: "did:test:owner".into(),
@@ -16,7 +16,7 @@ fn summary(session_id: &str, agent_id: Option<&str>, turn_state: Option<&str>) -
         preview_text: None,
         reply_preview: None,
         status: None,
-        agent_id: agent_id.map(str::to_string),
+        agent_did: agent_did.map(str::to_string),
         latest_request_id: None,
         task_id: None,
         task_name: None,

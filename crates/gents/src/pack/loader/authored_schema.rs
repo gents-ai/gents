@@ -41,6 +41,12 @@ pub fn authored_pack_config_schema() -> Schema {
             }
         }
         if let Some(definition) = definitions
+            .get_mut(Agent::schema_name().as_ref())
+            .and_then(Value::as_object_mut)
+        {
+            author_agent_slot(definition);
+        }
+        if let Some(definition) = definitions
             .get_mut(EvalDefinition::schema_name().as_ref())
             .and_then(Value::as_object_mut)
         {
@@ -81,6 +87,9 @@ pub fn authored_document_schema(collection: Collection) -> Schema {
     };
     let document = schema.ensure_object();
     omit_owner(document);
+    if collection == Collection::Agent {
+        author_agent_slot(document);
+    }
     if collection == Collection::EvalDefinition {
         allow_case_sidecars(document);
     }
@@ -115,6 +124,24 @@ fn omit_owner(document: &mut Map<String, Value>) {
         if required.is_empty() {
             document.remove("required");
         }
+    }
+}
+
+fn author_agent_slot(document: &mut Map<String, Value>) {
+    if let Some(properties) = document
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+    {
+        properties.remove("agent_did");
+        properties.remove("creation_nonce");
+        properties.insert(
+            "agent_slot".into(),
+            json!({"type": "string", "minLength": 1}),
+        );
+    }
+    if let Some(required) = document.get_mut("required").and_then(Value::as_array_mut) {
+        required.retain(|field| field != "agent_did" && field != "creation_nonce");
+        required.push(json!("agent_slot"));
     }
 }
 

@@ -40,7 +40,7 @@ function session(state: string, requestId = target.requestId): DesktopSessionSna
   return {
     sessionId: target.sessionId,
     nodeDid: target.nodeDid,
-    agentId: "general",
+    agentDid: "general",
     title: null,
     previewText: null,
     status: "active",

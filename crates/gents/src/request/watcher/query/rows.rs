@@ -1,15 +1,8 @@
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::AgentRequestRow;
+use gents_protocol::row::{normalize_optional_string, AgentRequestRow};
 
 pub(super) const BACKGROUND_COMPLETION_AGING_THRESHOLD: chrono::Duration =
     chrono::Duration::seconds(30);
-
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PreclaimSignal {

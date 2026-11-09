@@ -1,19 +1,17 @@
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 #[cfg(test)]
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::request::watcher::AgentRequest;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::row::AgentRequest;
 
-use super::materialize::EnqueuedAgentRequest;
 use super::ExecutionOrigin;
+use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 
 mod atomic_inputs;
 mod coalescing;
@@ -30,23 +28,25 @@ mod position;
 mod submission;
 
 pub(crate) use atomic_inputs::next_append_sequence_in_transaction;
+pub(crate) use atomic_inputs::persist_background_completion_with_message_canonical_with_access;
 #[cfg(test)]
-pub(crate) use atomic_inputs::persist_background_completion_with_message;
-pub(crate) use atomic_inputs::persist_background_completion_with_message_canonical;
-#[cfg(test)]
-pub(crate) use atomic_inputs::persist_background_completion_with_message_waking;
+pub(crate) use atomic_inputs::persist_background_completion_with_message_waking_with_access;
 use atomic_inputs::steering_transaction_attempt;
 #[cfg(test)]
 use atomic_inputs::transaction_created_doc_id;
 pub(crate) use atomic_inputs::ToolNotificationPublication;
-pub use coalescing::reconcile_coalesced_pending_request;
 pub(crate) use coalescing::supersede_pending_mutation;
 use coalescing::{
-    parent_agent_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
+    parent_agent_did, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
+};
+pub use coalescing::{
+    reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
 };
 pub(crate) use draining::drain_all_pending_session_requests_in_txn;
 pub(crate) use draining::drain_automated_wakeups_in_txn;
-pub use edit_submission::{submit_pending_user_edit, submit_pending_user_steer};
+pub use edit_submission::{
+    publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
+};
 pub use enqueue::enqueue_local_steering_request;
 #[cfg(test)]
 pub(crate) use enqueue::enqueue_steering_request;
@@ -88,7 +88,7 @@ use management::{replace_pending_user_messages, PendingEditActor};
 pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
 #[cfg(test)]
 use mutation::session_request_create_mutation;
-use mutation::session_request_create_mutation_at_hop;
+use mutation::session_request_create_mutation_at_hop_with_signer;
 use mutation::SessionRequestFields;
 pub use position::validate_position;
 pub(crate) use position::{effective_slots, InvalidQueuePosition};
@@ -97,6 +97,7 @@ pub use submission::prepare_user_message_input;
 #[derive(Debug)]
 pub(crate) struct EnqueuedBackgroundCompletionInput {
     pub(crate) request: Option<EnqueuedAgentRequest>,
+    #[cfg(test)]
     pub(crate) message_sequence: u32,
     pub(crate) created_request: bool,
 }

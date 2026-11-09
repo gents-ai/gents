@@ -1,0 +1,4 @@
+---- MODULE MCRuntimeConnectionNoEndpoint ----
+EXTENDS RuntimeConnectionTransport
+
+====

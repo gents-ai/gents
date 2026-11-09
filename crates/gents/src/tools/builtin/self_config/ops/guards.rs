@@ -85,7 +85,7 @@ pub fn guard_backend_auth(
             .map_err(|error| anyhow!("backend auth is not valid: {error}"))
     };
     let (stored, candidate) = (auth(stored)?, auth(candidate)?);
-    if candidate.is_stored_secret() {
+    if candidate.is_stored_secret() || matches!(candidate, BackendAuth::Credential { .. }) {
         anyhow::ensure!(
             candidate == stored,
             "raw credentials are operator-managed; select an environment or OAuth reference"

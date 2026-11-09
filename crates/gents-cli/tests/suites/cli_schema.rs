@@ -178,7 +178,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             let node = gents::store::local::store_key::open_home_store_key(&agent_home, &data)
                 .await?
                 .encrypt(
-                    gents::defra_node::EmbeddedNode::builder()
+                    gents::defra_node::Node::builder()
                         .data_path(&data)
                         .with_storage_backend(gents::defra_node::StorageBackend::Regolith),
                 )
@@ -218,7 +218,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 after.data.context("read data")?[collection][0]["owned_files"],
                 owned
             );
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
             drop(node);
             // Defra's background task cleanup may outlive shutdown; preserve
             // this isolated test store instead of deleting it underneath them.
@@ -247,9 +247,19 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
     run_cli_json(&home, &["schema", "apply", schemas.to_str().unwrap()])?;
     let original = format!("{}😀", "é".repeat(1500));
     let input = json!({"body":original,"category":"keep"}).to_string();
+    let record_schema = schemas.join("record.graphql");
+    let record_schema = record_schema.to_str().context("schema path utf8")?;
     run_cli_json(
         &home,
-        &["document", "create", "ExportRecord", "--json", &input],
+        &[
+            "document",
+            "create",
+            "ExportRecord",
+            "--schema",
+            record_schema,
+            "--json",
+            &input,
+        ],
     )?;
     run_cli_json(
         &home,
@@ -257,6 +267,8 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
             "document",
             "create",
             "ExportRecord",
+            "--schema",
+            record_schema,
             "--json",
             r#"{"body":"skip","category":"other"}"#,
         ],

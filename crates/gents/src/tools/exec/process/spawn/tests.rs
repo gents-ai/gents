@@ -349,3 +349,104 @@ fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
     second.join().unwrap();
     assert_eq!(complete_output(outcome), b"finite");
 }
+
+/// Darwin's posix_spawn file actions reject dup2 sources at or above OPEN_MAX
+/// with EBADF. The CLI raises the soft descriptor limit above that bound, so
+/// the owner must still spawn with piped stdio once pipes land past it.
+/// The probe holds descriptors past that bound process-wide, so it runs in its
+/// own test process: concurrent tests that spawn without the owner would
+/// otherwise inherit the exhausted descriptor table and fail with EBADF.
+#[tokio::test]
+async fn spawn_succeeds_when_pipes_exceed_open_max() {
+    #[cfg(target_os = "macos")]
+    {
+        const FIXTURE: &str = "GENTS_SPAWN_OPEN_MAX_FIXTURE";
+        if let Some(root) = std::env::var_os(FIXTURE) {
+            exercise_spawn_succeeds_when_pipes_exceed_open_max().await;
+            tokio::fs::write(PathBuf::from(root).join("verified"), b"complete")
+                .await
+                .unwrap();
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let mut environment = std::env::vars().collect::<RapidHashMap<_, _>>();
+        environment.insert(FIXTURE.into(), root.path().to_string_lossy().into_owned());
+        run_isolated_capture_test(
+            "tools::exec::process::spawn::tests::spawn_succeeds_when_pipes_exceed_open_max",
+            root.path(),
+            environment,
+        )
+        .await;
+    }
+    #[cfg(not(target_os = "macos"))]
+    exercise_spawn_succeeds_when_pipes_exceed_open_max().await;
+}
+
+async fn exercise_spawn_succeeds_when_pipes_exceed_open_max() {
+    const OPEN_MAX: usize = 10_240;
+    // Descriptors above OPEN_MAX for the probe pipe and the spawn's own pipes.
+    const HEADROOM: usize = 256;
+    let mut limits = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: limits points to initialized storage for one rlimit value.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
+        0
+    );
+    let target = (OPEN_MAX + HEADROOM) as libc::rlim_t;
+    assert!(
+        limits.rlim_max >= target,
+        "precondition: RLIMIT_NOFILE hard limit {} is below {target}, so descriptors cannot \
+         reach OPEN_MAX ({OPEN_MAX})",
+        limits.rlim_max
+    );
+    if limits.rlim_cur < target {
+        limits.rlim_cur = target;
+        // SAFETY: limits is a valid rlimit; only the soft limit increases.
+        assert_eq!(
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) },
+            0,
+            "raise the RLIMIT_NOFILE soft limit to {target} (kern.maxfilesperproc may be lower): {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    // Descriptors are allocated lowest-free first, so once one reaches
+    // OPEN_MAX - 1 every lower number is occupied and the next lands past it.
+    let mut held = Vec::new();
+    loop {
+        let file = std::fs::File::open("/dev/null").unwrap_or_else(|error| {
+            panic!(
+                "hold descriptors up to OPEN_MAX ({OPEN_MAX}) under a soft limit of {}: {error}",
+                limits.rlim_cur
+            )
+        });
+        let fd = std::os::fd::AsRawFd::as_raw_fd(&file) as usize;
+        held.push(file);
+        if fd + 1 >= OPEN_MAX {
+            break;
+        }
+    }
+    let (reader, writer) = std::io::pipe().unwrap();
+    let pipe_fd = std::os::fd::AsRawFd::as_raw_fd(&writer);
+    assert!(
+        pipe_fd as usize >= OPEN_MAX,
+        "precondition: pipe descriptor {pipe_fd} must reach OPEN_MAX"
+    );
+    drop((reader, writer));
+
+    let root = tempfile::tempdir().unwrap();
+    let output = complete_output(
+        capture(
+            root.path().to_path_buf(),
+            "/bin:/usr/bin",
+            "/bin/sh",
+            "printf ok",
+        )
+        .await,
+    );
+    assert_eq!(output, b"ok");
+    drop(held);
+}

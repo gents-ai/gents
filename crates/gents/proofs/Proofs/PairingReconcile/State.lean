@@ -42,32 +42,32 @@ structure PairingCollectionStatus where
   stuck : Bool
   deriving DecidableEq, Repr
 
+/-- Desired wiring is replicators only.
+
+Decision (supported topology, 2026-11-07): no surviving scope template
+subscribes, so pairing reconciles replicator installs and owns no collection
+subscriptions. -/
 structure PairingDesired where
-  collections : Finset String
   replicators : Finset ReplicatorId
   deriving DecidableEq
 
 namespace PairingDesired
 
 def hasWiring (d : PairingDesired) : Bool :=
-  decide (d.collections.Nonempty ∨ d.replicators.Nonempty)
+  decide d.replicators.Nonempty
 
 end PairingDesired
 
 structure PairingActual where
-  collections : Finset String
   replicators : Finset ReplicatorId
   connected : Bool
   deriving DecidableEq
 
 structure PairingApplied where
-  collections : Finset String
   replicators : Finset ReplicatorId
   deriving DecidableEq
 
 inductive DiffOp where
-  | installCollection (c : String)
-  | teardownCollection (c : String)
   | installReplicator (r : ReplicatorId)
   | teardownReplicator (r : ReplicatorId)
   deriving DecidableEq
@@ -86,9 +86,7 @@ def converged (s : ReconcileState) : Prop :=
   match s.desired with
   | none => True
   | some desired =>
-      desired.collections ⊆ s.actual.collections ∧
       desired.replicators ⊆ s.actual.replicators ∧
-      s.applied.collections ⊆ desired.collections ∧
       s.applied.replicators ⊆ desired.replicators ∧
       (desired.hasWiring = true → s.actual.connected = true)
 
@@ -103,12 +101,10 @@ def convergedState (s : ReconcileState) : ReconcileState :=
   | some desired =>
       { s with
         actual := ({
-          collections := desired.collections,
           replicators := desired.replicators,
           connected := desired.hasWiring
         } : PairingActual),
         applied := {
-          collections := desired.collections
           replicators := desired.replicators
         }
       }

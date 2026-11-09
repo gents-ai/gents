@@ -33,6 +33,7 @@ pub(crate) struct LeanSelfConfigBackend {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigGrants {
     pub(crate) pack_install: bool,
+    pub(crate) policy: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -62,7 +63,7 @@ pub(crate) struct LeanSelfConfigCase {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanAgentCatalogEntry {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) enabled: bool,
 }
 
@@ -108,7 +109,8 @@ pub(crate) struct LeanAgentResolvedSession {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCandidateAgent {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) creation_nonce: String,
     pub(crate) context_id: Option<String>,
     pub(crate) inference_profile_id: String,
     pub(crate) enabled: bool,
@@ -165,6 +167,9 @@ pub(crate) struct LeanJobGuardCase {
     pub(crate) name: String,
     pub(crate) writer: String,
     pub(crate) selected_before: bool,
+    pub(crate) native_authorized: bool,
+    pub(crate) native_source_authorized: bool,
+    pub(crate) add_schema_tool: bool,
     #[serde(deserialize_with = "super::required_nullable")]
     pub(crate) stored_integrations: Option<serde_json::Value>,
     pub(crate) candidate_integrations: serde_json::Value,
@@ -197,4 +202,40 @@ pub(crate) struct LeanSiblingToolsCase {
     pub(crate) existing_network: String,
     pub(crate) admitted: bool,
     pub(crate) result_network: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigScopeEditCase {
+    pub(crate) name: String,
+    pub(crate) categories: Vec<String>,
+    pub(crate) category: String,
+    pub(crate) scope: String,
+    pub(crate) allowed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigGroupCase {
+    pub(crate) name: String,
+    pub(crate) enabled: bool,
+    pub(crate) categories: Option<Vec<String>>,
+    pub(crate) effective: Vec<String>,
+    pub(crate) may_create_agent: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigScopeOfCase {
+    pub(crate) name: String,
+    pub(crate) invoking_agent: String,
+    pub(crate) target_agent: String,
+    pub(crate) shared: bool,
+    pub(crate) scope: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigScopeCases {
+    pub(crate) categories: Vec<String>,
+    pub(crate) default_categories: Vec<String>,
+    pub(crate) edit: Vec<LeanSelfConfigScopeEditCase>,
+    pub(crate) groups: Vec<LeanSelfConfigGroupCase>,
+    pub(crate) scope_of: Vec<LeanSelfConfigScopeOfCase>,
 }

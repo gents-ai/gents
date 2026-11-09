@@ -202,7 +202,7 @@ export function OpenSession() {
                 >
                   <NodeAgentStack
                     nodeDid={session?.nodeDid}
-                    agentId={session?.agentId}
+                    agentDid={session?.agentDid}
                     size="sm"
                     keyboard
                   />
@@ -324,10 +324,10 @@ export function OpenSession() {
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <NodeAgentStack
                       nodeDid={session?.nodeDid}
-                      agentId={session?.agentId}
+                      agentDid={session?.agentDid}
                     />
                     <span className="text-sm text-muted-foreground">
-                      {agentName(session?.agentId ?? null, deployment)}
+                      {agentName(session?.agentDid ?? null, deployment)}
                       {sessionNode && !isWorkingNode(sessionNode, homeDid)
                         ? ` on ${sessionNode.node.displayName ?? sessionNode.label}`
                         : null}
@@ -370,7 +370,7 @@ export function OpenSession() {
                 stop={stop}
                 stopping={stopping}
                 goal={session?.goal ?? null}
-                agentId={session?.agentId ?? null}
+                agentDid={session?.agentDid ?? null}
               />
             </div>
           </ScrollArea>
@@ -396,7 +396,7 @@ type ScreenFacts = Pick<
   DesktopSessionSnapshot,
   | "sessionId"
   | "nodeDid"
-  | "agentId"
+  | "agentDid"
   | "title"
   | "context"
   | "goal"
@@ -410,7 +410,7 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
   return {
     sessionId: session.sessionId,
     nodeDid: session.nodeDid,
-    agentId: session.agentId,
+    agentDid: session.agentDid,
     title: session.title,
     context: session.context,
     goal: session.goal,

@@ -309,11 +309,12 @@ impl TurnManager {
     ) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
         let session = child.session_id.as_str();
         let node = child.node_did.as_str();
-        let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
-            node,
-            session,
-            child.requester_did.as_deref(),
-        ));
+        let scope =
+            gents::session::public_request_filter(&gents_protocol::session::session_scope_filter(
+                node,
+                session,
+                child.requester_did.as_deref(),
+            ));
         let mut seen = RapidHashSet::new();
         let mut requests = Vec::new();
         let mut offset = 0usize;

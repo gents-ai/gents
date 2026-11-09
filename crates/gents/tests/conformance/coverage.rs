@@ -192,7 +192,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 18);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 53);
+    assert_eq!(lean_recovery_sweep_cases().len(), 55);
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
@@ -239,7 +239,7 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
     for field in [
         "child_request_id",
         "spawn_target_did",
-        "spawn_agent_id",
+        "spawn_agent_did",
         "delegated_input",
         "delegated_workspace",
         "cancel_policy",
@@ -476,6 +476,198 @@ fn lean_feature_matrix_covers_every_declared_required_surface() {
 fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let snapshot = lean_contract_snapshot();
     let mut emitted = BTreeSet::new();
+    assert!(!snapshot.identity_private_journal_policy.checks.is_empty());
+    if snapshot.mailbox_runtime_notice_case.is_object() {
+        emitted.insert((
+            "mailbox_runtime_notice_case".into(),
+            "MailboxRuntimeNoticeCase".into(),
+        ));
+    }
+    for (present, key, class) in [
+        (
+            !snapshot.workspace_quickstart_selection_cases.is_empty(),
+            "workspace_quickstart_selection_cases",
+            "WorkspaceQuickstartSelectionCases",
+        ),
+        (
+            !snapshot.workspace_callback_selection_cases.is_empty(),
+            "workspace_callback_selection_cases",
+            "WorkspaceCallbackSelectionCases",
+        ),
+        (
+            !snapshot.pack_placement_reader_cases.is_empty(),
+            "pack_placement_reader_cases",
+            "PackPlacementReaderCases",
+        ),
+        (
+            !snapshot.native_route_cases.is_empty(),
+            "native_route_cases",
+            "NativeRouteCases",
+        ),
+        (
+            !snapshot.workspace_datastore_write_cases.is_empty(),
+            "workspace_datastore_write_cases",
+            "WorkspaceDatastoreWriteCases",
+        ),
+        (
+            !snapshot.node_file_request_access_cases.is_empty(),
+            "node_file_request_access_cases",
+            "NodeFileRequestAccessCases",
+        ),
+        (
+            !snapshot.workspace_root_access_cases.is_empty(),
+            "workspace_root_access_cases",
+            "WorkspaceRootAccessCases",
+        ),
+        (
+            !snapshot.workspace_child_revocation_cases.is_empty(),
+            "workspace_child_revocation_cases",
+            "WorkspaceChildRevocationCases",
+        ),
+        (
+            !snapshot.workspace_quickstart_cases.is_empty(),
+            "workspace_quickstart_cases",
+            "WorkspaceQuickstartCases",
+        ),
+        (
+            snapshot.workspace_publication_cases.is_object(),
+            "workspace_publication_cases",
+            "WorkspacePublicationCases",
+        ),
+        (
+            !snapshot.workspace_cleanup_cases.is_empty(),
+            "workspace_cleanup_cases",
+            "WorkspaceCleanupCases",
+        ),
+        (
+            !snapshot.workspace_child_cases.is_empty(),
+            "workspace_child_cases",
+            "WorkspaceChildCases",
+        ),
+        (
+            !snapshot.workspace_admission_cases.is_empty(),
+            "workspace_admission_cases",
+            "WorkspaceAdmissionCases",
+        ),
+        (
+            !snapshot.workspace_liveness_cases.is_empty(),
+            "workspace_liveness_cases",
+            "WorkspaceLivenessCases",
+        ),
+        (
+            !snapshot.workspace_agent_selection_cases.is_empty(),
+            "workspace_agent_selection_cases",
+            "WorkspaceAgentSelectionCases",
+        ),
+        (
+            !snapshot.mailbox_sweep_actor_cases.is_empty(),
+            "mailbox_sweep_actor_cases",
+            "MailboxSweepActorCases",
+        ),
+        (
+            !snapshot.mailbox_claimed_recipient_cases.is_empty(),
+            "mailbox_claimed_recipient_cases",
+            "MailboxClaimedRecipientCases",
+        ),
+        (
+            !snapshot.workspace_root_completeness_cases.is_empty(),
+            "workspace_root_completeness_cases",
+            "WorkspaceRootCompletenessCases",
+        ),
+        (
+            !snapshot.workspace_completion_actor_cases.is_empty(),
+            "workspace_completion_actor_cases",
+            "WorkspaceCompletionActorCases",
+        ),
+        (
+            !snapshot.workspace_completion_access_cases.is_empty(),
+            "workspace_completion_access_cases",
+            "WorkspaceCompletionAccessCases",
+        ),
+        (
+            !snapshot.client_control_grant_cases.is_empty(),
+            "client_control_grant_cases",
+            "ClientControlGrantCases",
+        ),
+        (
+            !snapshot.client_process_claim_cases.is_empty(),
+            "client_process_claim_cases",
+            "ClientProcessClaimCases",
+        ),
+        (
+            !snapshot.client_process_receipt_cases.is_empty(),
+            "client_process_receipt_cases",
+            "ClientProcessReceiptCases",
+        ),
+        (
+            !snapshot.client_signed_control_cases.is_empty(),
+            "client_signed_control_cases",
+            "ClientSignedControlCases",
+        ),
+        (
+            !snapshot.cross_actor_authorization_cases.is_empty(),
+            "cross_actor_authorization_cases",
+            "CrossActorAuthorization",
+        ),
+        (
+            !snapshot.goal_link_cases.is_empty(),
+            "goal_link_cases",
+            "GoalLinks",
+        ),
+        (
+            !snapshot.identity_callback_parent_actor_cases.is_empty(),
+            "identity_callback_parent_actor_cases",
+            "CallbackParentActor",
+        ),
+        (
+            !snapshot.identity_parent_publication_cases.is_empty(),
+            "identity_parent_publication_cases",
+            "ParentPublication",
+        ),
+        (
+            !snapshot.pack_eval_subject_cases.is_empty(),
+            "pack_eval_subject_cases",
+            "PackEvalSubjectCases",
+        ),
+    ] {
+        if present {
+            emitted.insert((key.into(), class.into()));
+        }
+    }
+    if snapshot.mailbox_native_policy["checks"]
+        .as_array()
+        .is_some_and(|cases| !cases.is_empty())
+    {
+        emitted.insert((
+            "mailbox_native_policy".into(),
+            "MailboxNativePolicyCases".into(),
+        ));
+    }
+    if !snapshot.callback_workspace_actor_cases.is_empty() {
+        emitted.insert((
+            "callback_workspace_actor_cases".into(),
+            "CallbackWorkspaceActorCases".into(),
+        ));
+    }
+    emitted.insert((
+        "identity_private_journal_policy".into(),
+        "PrivateJournalPolicy".into(),
+    ));
+    assert!(!snapshot
+        .identity_private_journal_policy
+        .signer_checks
+        .is_empty());
+    emitted.insert((
+        "identity_private_journal_policy".into(),
+        "PrivateJournalSigner".into(),
+    ));
+    assert!(snapshot.client_optimistic_send_cases["traces"]
+        .as_array()
+        .is_some_and(|traces| !traces.is_empty()));
+    emitted.insert((
+        "client_optimistic_send_cases".into(),
+        "ClientOptimisticSendCases".into(),
+    ));
     assert!(!snapshot.goal_client_delivery_cases.is_empty());
     emitted.insert((
         "goal_client_delivery_cases".into(),
@@ -699,6 +891,27 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.pack_finality_cases.is_empty() {
         emitted.insert(("pack_finality_cases".into(), "PackFinalityCases".into()));
     }
+    if !snapshot.pack_wire_lock_cases.is_empty() {
+        emitted.insert(("pack_wire_lock_cases".into(), "PackWireLockCases".into()));
+    }
+    if !snapshot.hosted_pack_evidence_cases.is_empty() {
+        emitted.insert((
+            "hosted_pack_evidence_cases".into(),
+            "HostedPackEvidenceCases".into(),
+        ));
+    }
+    if !snapshot.hosted_pack_schema_cases.is_empty() {
+        emitted.insert((
+            "hosted_pack_schema_cases".into(),
+            "HostedPackSchemaCases".into(),
+        ));
+    }
+    if !snapshot.hosted_pack_home_cases.is_empty() {
+        emitted.insert((
+            "hosted_pack_home_cases".into(),
+            "HostedPackHomeCases".into(),
+        ));
+    }
     if !snapshot.agent_folded_binding_cases.is_empty() {
         emitted.insert((
             "agent_folded_binding_cases".into(),
@@ -787,64 +1000,14 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_order_entry_cases,
         ),
         (
-            "file_inventory_refusal_cases",
-            "FileInventoryRefusalCases",
-            &snapshot.file_inventory_refusal_cases,
-        ),
-        (
-            "file_inventory_reply_journal_cases",
-            "FileInventoryReplyJournalCases",
-            &snapshot.file_inventory_reply_journal_cases,
-        ),
-        (
-            "file_inventory_operator_owner_cases",
-            "FileInventoryOperatorOwnerCases",
-            &snapshot.file_inventory_operator_owner_cases,
-        ),
-        (
-            "file_inventory_client_scope_cases",
-            "FileInventoryClientScopeCases",
-            &snapshot.file_inventory_client_scope_cases,
-        ),
-        (
-            "file_inventory_client_progress_cases",
-            "FileInventoryClientProgressCases",
-            &snapshot.file_inventory_client_progress_cases,
-        ),
-        (
-            "file_inventory_preparation_cases",
-            "FileInventoryPreparationCases",
-            &snapshot.file_inventory_preparation_cases,
-        ),
-        (
-            "file_inventory_completion_cases",
-            "FileInventoryCompletionCases",
-            &snapshot.file_inventory_completion_cases,
-        ),
-        (
-            "file_inventory_page_grant_cases",
-            "FileInventoryPageGrantCases",
-            &snapshot.file_inventory_page_grant_cases,
-        ),
-        (
-            "file_inventory_demand_cases",
-            "FileInventoryDemandCases",
-            &snapshot.file_inventory_demand_cases,
-        ),
-        (
-            "file_inventory_issuance_cases",
-            "FileInventoryIssuanceCases",
-            &snapshot.file_inventory_issuance_cases,
+            "file_inventory_direct_reader_cases",
+            "FileInventoryDirectReaderCases",
+            &snapshot.file_inventory_direct_reader_cases,
         ),
         (
             "file_inventory_fork_cases",
             "FileInventoryForkCases",
             &snapshot.file_inventory_fork_cases,
-        ),
-        (
-            "file_inventory_selected_image_cases",
-            "FileInventorySelectedImageCases",
-            &snapshot.file_inventory_selected_image_cases,
         ),
         (
             "file_inventory_reader_cases",
@@ -857,19 +1020,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_source_projection_cases,
         ),
         (
-            "file_inventory_receiver_cases",
-            "FileInventoryReceiverCases",
-            &snapshot.file_inventory_receiver_cases,
-        ),
-        (
-            "file_image_hydration_cases",
-            "FileImageHydrationCases",
-            &snapshot.file_image_hydration_cases,
-        ),
-        (
-            "file_image_hydration_route_cases",
-            "FileImageHydrationRouteCases",
-            &snapshot.file_image_hydration_route_cases,
+            "file_review_route_cases",
+            "FileReviewRouteCases",
+            &snapshot.file_review_route_cases,
         ),
         (
             "scope_node_route_cases",
@@ -880,26 +1033,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "file_review_subscription_cases",
             "FileReviewSubscriptionCases",
             &snapshot.file_review_subscription_cases,
-        ),
-        (
-            "file_image_hydration_completion_cases",
-            "FileImageHydrationCompletionCases",
-            &snapshot.file_image_hydration_completion_cases,
-        ),
-        (
-            "file_image_attempt_cases",
-            "FileImageAttemptCases",
-            &snapshot.file_image_attempt_cases,
-        ),
-        (
-            "stored_file_image_access_cases",
-            "StoredFileImageAccessCases",
-            &snapshot.stored_file_image_access_cases,
-        ),
-        (
-            "file_image_read_grant_cases",
-            "FileImageReadGrantCases",
-            &snapshot.file_image_read_grant_cases,
         ),
         (
             "logical_output_obligation_cases",
@@ -1046,16 +1179,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     emitted.insert((
         "plugin_job_commit_kill_cases".into(),
         "PluginJobCommitKillCases".into(),
-    ));
-    assert!(!snapshot.operator_job_control_cases.is_empty());
-    emitted.insert((
-        "operator_job_control_cases".into(),
-        "OperatorJobControlCases".into(),
-    ));
-    assert!(!snapshot.operator_process_control_cases.is_empty());
-    emitted.insert((
-        "operator_process_control_cases".into(),
-        "OperatorProcessControlCases".into(),
     ));
     assert!(!snapshot.process_stop_action_cases.is_empty());
     emitted.insert((
@@ -1369,11 +1492,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "client_telemetry_cases".into(),
         "ClientTelemetryCases".into(),
     ));
-    assert!(!snapshot.client_observation_admission_cases.is_empty());
-    emitted.insert((
-        "client_observation_admission_cases".into(),
-        "ClientObservationAdmission".into(),
-    ));
     emitted.insert((
         "client_observation_scope_cases".into(),
         "ClientObservationScopeCases".into(),
@@ -1382,6 +1500,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     emitted.insert((
         "inference_observation_cases".into(),
         "InferenceObservationCases".into(),
+    ));
+    assert!(!snapshot.inference_visibility_cases.is_empty());
+    emitted.insert((
+        "inference_visibility_cases".into(),
+        "InferenceVisibilityCases".into(),
     ));
     assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
     for field in ["publications", "reuse"] {
@@ -1393,10 +1516,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "client_request_patch_publication_cases".into(),
         "ClientRequestPatchPublicationCases".into(),
     ));
-    assert!(!snapshot.client_session_delivery_cases.is_empty());
+    assert!(!snapshot.client_direct_session_read_cases.is_empty());
     emitted.insert((
-        "client_session_delivery_cases".into(),
-        "ClientSessionDeliveryCases".into(),
+        "client_direct_session_read_cases".into(),
+        "ClientDirectSessionReadCases".into(),
     ));
     assert!(!snapshot.storage_failure_cases.is_empty());
     emitted.insert(("storage_failure_cases".into(), "StorageFailureCases".into()));
@@ -1566,9 +1689,25 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     if !snapshot.session_input_edit_cases.is_empty() {
-        for domain in ["SessionInputEditCases", "SessionInputEditRemoteCases"] {
-            emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
-        }
+        emitted.insert((
+            "session_input_edit_cases".to_string(),
+            "SessionInputEditCases".to_string(),
+        ));
+    }
+    if !snapshot
+        .session_input_edit_native_discovery_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "session_input_edit_native_discovery_cases".to_string(),
+            "SessionCommandNativeDiscovery".to_string(),
+        ));
+    }
+    if !snapshot.session_input_edit_native_claim_cases.is_empty() {
+        emitted.insert((
+            "session_input_edit_native_claim_cases".to_string(),
+            "SessionInputEditNativeClaim".to_string(),
+        ));
     }
     if !snapshot
         .session_input_edit_client_observation_cases
@@ -1975,6 +2114,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "IdentityPermissionCases".to_string(),
         ));
     }
+    if !snapshot.identity_household_cases.is_empty() {
+        emitted.insert((
+            "identity_household_cases".to_string(),
+            "IdentityHouseholdCases".to_string(),
+        ));
+    }
+    if !snapshot.identity_derivation_cases.is_empty() {
+        emitted.insert((
+            "identity_derivation_cases".to_string(),
+            "IdentityDerivationCases".to_string(),
+        ));
+    }
     if !snapshot.identity_contracts.is_empty() {
         emitted.insert((
             "identity_contracts".to_string(),
@@ -2126,6 +2277,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalObservationCases",
         ),
         (
+            &snapshot.goal_session_observation_cases,
+            "goal_session_observation_cases",
+            "GoalSessionObservationCases",
+        ),
+        (
             &snapshot.plugin_approval_cases,
             "plugin_approval_cases",
             "PluginApprovalCases",
@@ -2191,46 +2347,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.callback_cases.is_empty() {
         emitted.insert(("callback_cases".to_string(), "CallbackCases".to_string()));
     }
-    if !snapshot.session_hydration_decision_cases.is_empty() {
+    if !snapshot.file_inventory_closure_cases.is_empty() {
         emitted.insert((
-            "session_hydration_cases".to_string(),
-            "SessionHydrationDecisionCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_closure_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_closure_cases".to_string(),
-            "SessionHydrationClosureCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_apply_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_apply_cases".to_string(),
-            "SessionHydrationApplyCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_progress_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_progress_cases".to_string(),
-            "SessionHydrationProgressCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_durable_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_durable_cases".to_string(),
-            "SessionHydrationDurableCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_start_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_start_cases".to_string(),
-            "SessionHydrationStartCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_admission_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_admission_cases".to_string(),
-            "SessionHydrationAdmissionCases".to_string(),
+            "file_inventory_closure_cases".to_string(),
+            "FileInventoryClosureCases".to_string(),
         ));
     }
     if !snapshot.enrollment_cases.is_empty() {
@@ -2313,16 +2433,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "EnrollmentDurableProjectionCases".into(),
         ));
     }
-    if !snapshot.enrollment_hydration_route_cases.is_empty() {
-        emitted.insert((
-            "enrollment_hydration_route_cases".into(),
-            "EnrollmentHydrationRoutes".into(),
-        ));
-    }
     if !snapshot.enrollment_pending_request_cases.is_empty() {
         emitted.insert((
             "enrollment_pending_request_cases".into(),
             "EnrollmentPendingRequests".into(),
+        ));
+    }
+    if !snapshot.client_sync_health_cases.is_empty() {
+        emitted.insert((
+            "client_sync_health_cases".into(),
+            "ClientSyncHealthCases".into(),
         ));
     }
     if !snapshot.pending_user_turn_cases.is_empty() {
@@ -2499,10 +2619,22 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PluginJobRecoveryCases",
             !snapshot.plugin_job_recovery_cases.is_empty(),
         ),
+        (
+            "plugin_job_wake_cases",
+            "PluginJobWakeCases",
+            !snapshot.plugin_job_wake_cases.is_empty(),
+        ),
     ] {
         assert!(present, "{category} must emit rows");
         emitted.insert((category.into(), domain.into()));
     }
+    assert!(!snapshot.pack_identity_reference_cases.is_empty());
+    emitted.insert((
+        "pack_identity_reference_cases".into(),
+        "PackIdentityReferenceCases".into(),
+    ));
+    assert!(!snapshot.pack_identity_cases.is_empty());
+    emitted.insert(("pack_identity_cases".into(), "PackIdentityCases".into()));
     assert!(!snapshot.initial_inference_cases.is_empty());
     emitted.insert((
         "initial_inference_cases".into(),

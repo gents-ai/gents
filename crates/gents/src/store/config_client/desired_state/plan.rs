@@ -65,6 +65,7 @@ pub struct DesiredStateApplyPlan {
     documents: Vec<DesiredStateApplyDocument>,
     removals: Vec<(Collection, String, String)>,
     expected: Vec<DesiredStateExpectation>,
+    repair_dangling_selections: bool,
 }
 impl DesiredStateApplyPlan {
     pub fn from_pack_config(config: &crate::documents::PackConfig) -> Result<Self> {
@@ -131,6 +132,7 @@ impl DesiredStateApplyPlan {
             documents,
             removals: Vec::new(),
             expected: Vec::new(),
+            repair_dangling_selections: false,
         })
     }
     pub fn with_removals(mut self, removals: Vec<(Collection, String, String)>) -> Result<Self> {
@@ -157,6 +159,19 @@ impl DesiredStateApplyPlan {
 
     pub fn removals(&self) -> &[(Collection, String, String)] {
         &self.removals
+    }
+
+    /// Request the explicit dangling-selection repair
+    /// (`Identity.Configuration.repairUsersetSelection`). Publication refuses
+    /// it with `ConfigClientError::DanglingSelectionRepairRefused` while no
+    /// complete-inventory read exists, and whenever NAC is disabled.
+    pub fn with_dangling_selection_repair(mut self) -> Self {
+        self.repair_dangling_selections = true;
+        self
+    }
+
+    pub fn repairs_dangling_selections(&self) -> bool {
+        self.repair_dangling_selections
     }
 
     pub fn documents(&self) -> &[DesiredStateApplyDocument] {
@@ -188,7 +203,7 @@ impl DesiredStateApplyPlan {
     }
 }
 
-pub(super) fn document_identity(collection: Collection, value: &Value) -> Result<(&str, &str)> {
+pub(crate) fn document_identity(collection: Collection, value: &Value) -> Result<(&str, &str)> {
     let owner = value
         .get("node_did")
         .and_then(Value::as_str)
@@ -274,13 +289,13 @@ fn ensure_expectations_match(
 }
 
 pub(super) fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<()> {
-    if let Some(default) = current.get("default_agent_id").and_then(Value::as_str) {
+    if let Some(default) = current.get("default_agent_did").and_then(Value::as_str) {
         anyhow::ensure!(
             candidate
-                .get("default_agent_id")
+                .get("default_agent_did")
                 .and_then(Value::as_str)
                 .is_some(),
-            "Node replacement would clear default_agent_id {default:?}; \
+            "Node replacement would clear default_agent_did {default:?}; \
              include the current default or another enabled agent in the replacement"
         );
     }

@@ -150,7 +150,7 @@ async fn missed_or_closed_feed_projects_final_output_before_returning_terminal()
         let (_directory, node, node_did) = test_node().await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(String::new(), &node_did),
+            test_config(String::new(), &node_did, &node).await,
         ));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
@@ -213,7 +213,7 @@ async fn missed_or_closed_feed_projects_final_output_before_returning_terminal()
             "final output is visible exactly once before terminal returns"
         );
         drop(manager);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -223,7 +223,10 @@ async fn session_discovery_read_profile() {
     let output = std::env::var_os("GENTS_SESSION_DISCOVERY_PROFILE")
         .expect("set GENTS_SESSION_DISCOVERY_PROFILE to the measurement output path");
     let (_directory, node, node_did) = test_node().await;
-    let manager = TurnManager::new(node.clone(), test_config(String::new(), &node_did));
+    let manager = TurnManager::new(
+        node.clone(),
+        test_config(String::new(), &node_did, &node).await,
+    );
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
     let unrelated = gents::collection_ids(&node, ["ToolServiceHealthState"])
@@ -297,5 +300,5 @@ async fn session_discovery_read_profile() {
     std::fs::write(output, serde_json::to_vec_pretty(&samples).unwrap()).unwrap();
     drop(manager);
     drop(engine);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+
+mod persistence;
+
+pub use persistence::{list_inference_profiles_in_txn, write_inference_profile_document};
 
 /// Complete selectable inference preset; multiple profiles may select different
 /// models or efforts through the same backend without duplicating credentials.
@@ -85,8 +89,8 @@ impl InferenceProfile {
     }
 }
 
-pub fn default_inference_profile_id_for_agent(agent_id: &str) -> String {
-    format!("{agent_id}-profile")
+pub fn default_inference_profile_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}-profile")
 }
 
 pub fn default_inference_profile_id_for_node(node_did: &str) -> String {
@@ -181,33 +185,4 @@ pub async fn list_inference_profile_records(
             Ok((doc_id, document))
         })
         .collect()
-}
-
-pub async fn upsert_inference_profile(
-    node: &std::sync::Arc<EmbeddedNode>,
-    profile: &InferenceProfile,
-) -> Result<()> {
-    profile.validate()?;
-    let value = serde_json::to_value(profile)?;
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
-            collection: crate::store::collection::Collection::InferenceProfile,
-            add: value.clone(),
-            update: value,
-        },
-    ])?;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "document_config.inference_profile.upsert",
-        |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan)
-                    .await
-                    .map(|_| ())
-            })
-        },
-    )
-    .await
 }

@@ -14,7 +14,7 @@ fn readiness_snapshot(agents: Vec<AgentReadinessEntry>) -> NodeReadinessSnapshot
         process_state: NodeReadinessProcessState::Ready,
         active_generation: 4,
         router_generation: 4,
-        default_agent_id: "a".to_string(),
+        default_agent_did: "a".to_string(),
         agents,
     }
 }
@@ -32,13 +32,13 @@ fn source_projection_is_sorted_and_unavailability_wins() {
         "a",
         [
             AgentReadinessSourceEntry {
-                agent_id: "b".to_string(),
+                agent_did: "b".to_string(),
                 dispatcher_present: true,
                 unavailable_reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
                 startup_demoted: false,
             },
             AgentReadinessSourceEntry {
-                agent_id: "a".to_string(),
+                agent_did: "a".to_string(),
                 dispatcher_present: true,
                 unavailable_reason: None,
                 startup_demoted: false,
@@ -46,14 +46,14 @@ fn source_projection_is_sorted_and_unavailability_wins() {
         ],
     )
     .unwrap();
-    assert_eq!(snapshot.agents[0].agent_id, "a");
+    assert_eq!(snapshot.agents[0].agent_did, "a");
     assert_eq!(snapshot.agents[1].state, AgentReadinessState::Unavailable);
 }
 
 #[test]
 fn ready_snapshot_does_not_expire_without_semantic_changes() {
     let snapshot = readiness_snapshot(vec![AgentReadinessEntry {
-        agent_id: "a".to_string(),
+        agent_did: "a".to_string(),
         state: AgentReadinessState::Ready,
         reason: None,
     }]);
@@ -73,12 +73,12 @@ fn ready_snapshot_does_not_expire_without_semantic_changes() {
 #[test]
 fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
     let ready = AgentReadinessEntry {
-        agent_id: "a".to_string(),
+        agent_did: "a".to_string(),
         state: AgentReadinessState::Ready,
         reason: None,
     };
     let unavailable = AgentReadinessEntry {
-        agent_id: "b".to_string(),
+        agent_did: "b".to_string(),
         state: AgentReadinessState::Unavailable,
         reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
     };
@@ -96,7 +96,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         readiness_snapshot(vec![ready.clone(), ready.clone()]),
         readiness_snapshot(vec![unavailable.clone(), ready.clone()]),
         readiness_snapshot(vec![AgentReadinessEntry {
-            agent_id: " a".to_string(),
+            agent_did: " a".to_string(),
             ..ready.clone()
         }]),
         readiness_snapshot(vec![AgentReadinessEntry {
@@ -104,7 +104,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
             ..ready.clone()
         }]),
         readiness_snapshot(vec![AgentReadinessEntry {
-            agent_id: "a".to_string(),
+            agent_did: "a".to_string(),
             state: AgentReadinessState::Unavailable,
             reason: None,
         }]),
@@ -131,7 +131,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
     );
 
     let mut whitespace_default = readiness_snapshot(vec![ready.clone()]);
-    whitespace_default.default_agent_id = "a ".to_string();
+    whitespace_default.default_agent_did = "a ".to_string();
     let row = readiness_row(
         "did:test:node",
         serde_json::to_string(&whitespace_default).unwrap(),
@@ -142,7 +142,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
     );
 
     let mut invalid_default = readiness_snapshot(vec![ready]);
-    invalid_default.default_agent_id = "missing".to_string();
+    invalid_default.default_agent_did = "missing".to_string();
     let row = readiness_row(
         "did:test:node",
         serde_json::to_string(&invalid_default).unwrap(),
@@ -160,7 +160,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
 
     let with_unknown_field = readiness_row(
         "did:test:node",
-        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_id":"a","agents":[{"agent_id":"a","state":"ready","reason":null,"extra":true}]}"#.to_string(),
+        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{"agent_did":"a","state":"ready","reason":null,"extra":true}]}"#.to_string(),
     );
     assert_eq!(
         projected_unknown(&with_unknown_field),
@@ -168,7 +168,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
     );
     let with_unknown_top_level_field = readiness_row(
         "did:test:node",
-        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_id":"a","agents":[{"agent_id":"a","state":"ready","reason":null}],"extra":true}"#.to_string(),
+        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{"agent_did":"a","state":"ready","reason":null}],"extra":true}"#.to_string(),
     );
     assert_eq!(
         project_node_readiness_summary(Some(&with_unknown_top_level_field), "did:test:node"),
