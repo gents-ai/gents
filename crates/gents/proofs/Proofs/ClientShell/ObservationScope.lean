@@ -65,6 +65,11 @@ namespace ClientWindowScope
 /-- `none`: the window is not registered (never created, or destroyed). -/
 abbrev Selections := Nat → Option (Option Nat)
 
+/-- A window's native creation registers it with no node selected; a window
+already registered keeps its selection. -/
+def register (s : Selections) (window : Nat) : Selections :=
+  fun other => if other = window then some (s window).join else s other
+
 def select (s : Selections) (window : Nat) (node : Option Nat) : Selections :=
   fun other => if other = window then (s window).map (fun _ => node) else s other
 
@@ -91,6 +96,15 @@ theorem destroy_preserves_other_windows (s : Selections) (window other : Nat)
     (explicit : Option Nat) (h : other ≠ window) :
     commandNode (destroy s window) other explicit = commandNode s other explicit := by
   simp [commandNode, destroy, h]
+
+theorem register_preserves_other_windows (s : Selections) (window other : Nat)
+    (explicit : Option Nat) (h : other ≠ window) :
+    commandNode (register s window) other explicit = commandNode s other explicit := by
+  simp [commandNode, register, h]
+
+theorem register_keeps_a_selection (s : Selections) (window : Nat) (explicit : Option Nat) :
+    commandNode (register s window) window explicit = commandNode s window explicit := by
+  simp [commandNode, register]
 
 theorem explicit_node_wins (s : Selections) (window node : Nat) :
     commandNode s window (some node) = some node := rfl

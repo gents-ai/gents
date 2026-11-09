@@ -78,12 +78,14 @@ def statusName : Status → String
   | .connecting => "connecting"
   | .connected => "connected"
   | .disconnected => "disconnected"
+  | .refused => "refused"
   | .noEndpoint => "noEndpoint"
 
 def presentationName : Presentation → String
   | .catchingUp => "catching_up"
   | .current => "current"
   | .retrying => "retrying"
+  | .refused => "refused"
   | .noEndpoint => "no_endpoint"
   | .stalled => "stalled"
 

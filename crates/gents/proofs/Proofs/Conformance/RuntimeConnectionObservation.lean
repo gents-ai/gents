@@ -7,6 +7,7 @@ def statusName : Status → String
   | .connecting => "connecting"
   | .connected => "connected"
   | .disconnected => "disconnected"
+  | .refused => "refused"
   | .noEndpoint => "noEndpoint"
 
 def eventName : Event → String
@@ -27,6 +28,7 @@ def reasonName : Reason → String
   | .connected => "connected"
   | .connecting => "connecting"
   | .disconnected => "disconnected"
+  | .refused => "refused"
   | .noEndpoint => "no_endpoint"
 
 def streamEndName : StreamEnd → String
@@ -39,7 +41,7 @@ def optionJson : Option String → String
   | none => "null"
   | some value => "\"" ++ value ++ "\""
 
-def statuses : List Status := [.connecting, .connected, .disconnected, .noEndpoint]
+def statuses : List Status := [.connecting, .connected, .disconnected, .refused, .noEndpoint]
 
 def events : List Event := [.sourceStarted, .subscriptionsReady, .snapshotSucceeded,
   .transportFailed, .refused, .renewed, .endpointMissing]
