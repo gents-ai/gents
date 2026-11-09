@@ -173,7 +173,25 @@ mod tests {
         }
     "#;
 
+    /// A receipt schema carrying the handoff route columns, as the canonical
+    /// WorkspaceReceipt now declares them.
+    const ROUTED_PROBE_SDL: &str = r#"
+        type LiveProbe {
+            batch: String
+        }
+        type WorkspaceReceipt {
+            workspace_id: String
+            handoff_id: String
+            reply_session_id: String
+            attempt: Int
+        }
+    "#;
+
     async fn probe_access(tempdir: &tempfile::TempDir) -> Result<ConfigAccess> {
+        probe_access_with(tempdir, PROBE_SDL).await
+    }
+
+    async fn probe_access_with(tempdir: &tempfile::TempDir, sdl: &str) -> Result<ConfigAccess> {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("data"))
@@ -181,7 +199,7 @@ mod tests {
                 .await?,
         );
         let access = ConfigAccess::local(node);
-        access.add_collection(PROBE_SDL).await?;
+        access.add_collection(sdl).await?;
         Ok(access)
     }
 
@@ -229,28 +247,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refuses_native_route_fields_without_the_runtime_preconditions() -> Result<()> {
+    async fn refuses_native_route_fields_the_receipt_schema_does_not_declare() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let access = probe_access(&tempdir).await?;
-        let grouped = receipt_manifest(
-            json ! ({ "correlation_field" : "workspace_id" , "group" : { "expected_count" : 2 } }),
-            true,
-        )?;
-        let errors = validate_manifest_against_live(&grouped, &access).await?;
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].contains("trigger on-review prompt_template references doc.attempt")
-                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
-            "{errors:?}"
-        );
-        let outcome_less = receipt_manifest(json ! ({ "event_kind" : "created" }), false)?;
-        let errors = validate_manifest_against_live(&outcome_less, &access).await?;
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].contains("trigger on-review prompt_template references doc.attempt")
-                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
-            "{errors:?}"
-        );
+        for manifest in [
+            receipt_manifest(
+                json ! ({ "correlation_field" : "workspace_id" , "group" : { "expected_count" : 2 } }),
+                true,
+            )?,
+            receipt_manifest(json ! ({ "event_kind" : "created" }), false)?,
+            receipt_manifest(json ! ({ "event_kind" : "created" }), true)?,
+        ] {
+            let errors = validate_manifest_against_live(&manifest, &access).await?;
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(
+                errors[0].contains("trigger on-review prompt_template references doc.attempt")
+                    && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
+                "{errors:?}"
+            );
+        }
         Ok(())
     }
 
@@ -276,12 +291,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepts_native_route_template_fields_the_schema_does_not_declare() -> Result<()> {
+    async fn accepts_native_route_template_fields_the_receipt_schema_declares() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
-        let access = probe_access(&tempdir).await?;
-        let manifest = receipt_manifest(json ! ({ "event_kind" : "created" }), true)?;
-        let errors = validate_manifest_against_live(&manifest, &access).await?;
-        assert_eq!(errors, Vec::<String>::new(), "{errors:?}");
+        let access = probe_access_with(&tempdir, ROUTED_PROBE_SDL).await?;
+        for emit_outcome in [true, false] {
+            let manifest = receipt_manifest(json ! ({ "event_kind" : "created" }), emit_outcome)?;
+            let errors = validate_manifest_against_live(&manifest, &access).await?;
+            assert_eq!(errors, Vec::<String>::new(), "{errors:?}");
+        }
         Ok(())
     }
 

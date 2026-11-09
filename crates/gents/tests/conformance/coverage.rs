@@ -495,6 +495,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "WorkspaceCallbackSelectionCases",
         ),
         (
+            !snapshot.pack_placement_reader_cases.is_empty(),
+            "pack_placement_reader_cases",
+            "PackPlacementReaderCases",
+        ),
+        (
+            !snapshot.native_route_cases.is_empty(),
+            "native_route_cases",
+            "NativeRouteCases",
+        ),
+        (
             !snapshot.workspace_datastore_write_cases.is_empty(),
             "workspace_datastore_write_cases",
             "WorkspaceDatastoreWriteCases",
