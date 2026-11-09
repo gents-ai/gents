@@ -1,15 +1,11 @@
 use anyhow::Result;
 #[cfg(test)]
-use defra_node::Node as EmbeddedNode;
-#[cfg(test)]
 use gents::documents::apply_desired_state_plan;
 use gents::store::collection::Collection;
 #[cfg(test)]
 use gents::store::config_client::read_desired_state_record_in_txn;
 use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::AgentDocument;
-#[cfg(test)]
-use std::sync::Arc;
 
 #[cfg(test)]
 #[path = "behavior/client_signed_tests.rs"]
@@ -48,39 +44,11 @@ pub(crate) async fn upsert_agent_with_publication_on(
         .await
 }
 
-#[cfg(test)]
-pub async fn delete_agent(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
-    super::delete_scoped_document_local(
-        node,
-        "desktop.agent.delete",
-        Collection::Agent,
-        node_did,
-        id,
-    )
-    .await
-}
-
 pub async fn delete_agent_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document(
         access,
         "desktop.agent.delete",
         Collection::Agent,
-        node_did,
-        id,
-    )
-    .await
-}
-
-#[cfg(test)]
-pub async fn delete_agent_context(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    id: &str,
-) -> Result<usize> {
-    super::delete_scoped_document_local(
-        node,
-        "desktop.context.delete",
-        Collection::AgentContext,
         node_did,
         id,
     )
@@ -105,15 +73,14 @@ pub async fn delete_agent_context_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::ServedRuntimeHome;
     use serde_json::json;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn context_delete_removes_the_scoped_document() -> Result<()> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
-        let owner = "did:test:context-delete";
-        gents::ensure_node(&node, owner).await?;
+        let runtime = ServedRuntimeHome::start().await;
+        let owner = runtime.node_did();
+        let access = runtime.user_access();
         let context = json!({
             "node_did": owner,
             "context_id": "temporary",
@@ -124,7 +91,7 @@ mod tests {
             add: context.clone(),
             update: context,
         }])?;
-        ConfigAccess::local(node.clone())
+        access
             .transact_write("test.context.create", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
@@ -134,18 +101,30 @@ mod tests {
             })
             .await?;
 
-        assert_eq!(delete_agent_context(&node, owner, "temporary").await?, 1);
-        assert_eq!(delete_agent_context(&node, owner, "temporary").await?, 0);
+        assert_eq!(
+            delete_agent_context_on(&access, owner, "temporary").await?,
+            1
+        );
+        assert_eq!(
+            delete_agent_context_on(&access, owner, "temporary").await?,
+            0
+        );
+        runtime.shutdown().await;
         Ok(())
     }
 
+    /// The runtime's own Node is `alpha`; `beta` is a second Node scope the
+    /// User publishes on the same store, holding same-named backend and
+    /// profile documents, so every delete is checked against its own scope.
     #[tokio::test]
     async fn agent_and_profile_deletion_obey_canonical_owned_references() -> Result<()> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node.clone());
-        for owner in ["did:test:alpha", "did:test:beta"] {
-            gents::ensure_node(&node, owner).await?;
+        let runtime = ServedRuntimeHome::start().await;
+        let access = runtime.user_access();
+        let alpha = runtime.node_did().to_owned();
+        let beta = runtime.publish_foreign_node().await;
+        let review_alpha = runtime.provision_agent().await;
+        let review_beta = runtime.provision_agent().await;
+        for (owner, review) in [(&alpha, &review_alpha), (&beta, &review_beta)] {
             let backend = serde_json::from_value(json!({
                 "node_did":owner, "backend_id":"backend", "name":"Backend",
                 "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}
@@ -156,23 +135,24 @@ mod tests {
             }))?;
             super::super::profile::upsert_inference_profile_on(&access, &profile).await?;
             let agent = serde_json::from_value(json!({
-                "node_did":owner,"agent_did":"review","inference_profile_id":"profile"
+                "node_did":owner,"agent_did":review.agent_did,"creation_nonce":review.creation_nonce,
+                "inference_profile_id":"profile"
             }))?;
             upsert_agent_on(&access, &agent).await?;
         }
+        let review = review_alpha.agent_did.as_str();
         let invalid = serde_json::from_value(json!({
-            "node_did":"did:test:alpha","agent_did":"review","inference_profile_id":"profile","context_id":"missing"
+            "node_did":alpha,"agent_did":review,"creation_nonce":review_alpha.creation_nonce,
+            "inference_profile_id":"profile","context_id":"missing"
         }))?;
         assert!(upsert_agent_on(&access, &invalid).await.is_err());
-        assert!(super::super::profile::delete_inference_profile(
-            &node,
-            "did:test:alpha",
-            "profile"
-        )
-        .await
-        .is_err());
+        assert!(
+            super::super::profile::delete_inference_profile_on(&access, &alpha, "profile")
+                .await
+                .is_err()
+        );
         let target = json!({
-            "node_did":"did:test:alpha","target_id":"target","target_node_did":"did:test:alpha","agent_did":"review","name":"reviewer"
+            "node_did":alpha,"target_id":"target","target_node_did":alpha,"agent_did":review,"name":"reviewer"
         });
         let target_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: Collection::AgentTarget,
@@ -188,21 +168,19 @@ mod tests {
                 })
             })
             .await?;
-        assert!(delete_agent(&node, "did:test:alpha", "review")
-            .await
-            .is_err());
-        assert_eq!(delete_agent(&node, "did:test:beta", "review").await?, 1);
+        assert!(delete_agent_on(&access, &alpha, review).await.is_err());
         assert_eq!(
-            super::super::profile::delete_inference_profile(&node, "did:test:beta", "profile")
-                .await?,
+            delete_agent_on(&access, &beta, &review_beta.agent_did).await?,
             1
         );
-        assert!(delete_agent(&node, "did:test:alpha", "review")
-            .await
-            .is_err());
+        assert_eq!(
+            super::super::profile::delete_inference_profile_on(&access, &beta, "profile").await?,
+            1
+        );
+        assert!(delete_agent_on(&access, &alpha, review).await.is_err());
         let remove_target = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
             Collection::AgentTarget,
-            "did:test:alpha".into(),
+            alpha.clone(),
             "target".into(),
         )])?;
         access
@@ -215,25 +193,24 @@ mod tests {
             })
             .await?;
         let fallback_profile = serde_json::from_value(json!({
-            "node_did":"did:test:alpha","profile_id":"fallback","backend_id":"backend","model_name":"model"
+            "node_did":alpha,"profile_id":"fallback","backend_id":"backend","model_name":"model"
         }))?;
         super::super::profile::upsert_inference_profile_on(&access, &fallback_profile).await?;
-        let fallback = serde_json::from_value(json!({
-            "node_did":"did:test:alpha","agent_did":"fallback","inference_profile_id":"fallback"
+        let fallback = runtime.provision_agent().await;
+        let fallback_agent = serde_json::from_value(json!({
+            "node_did":alpha,"agent_did":fallback.agent_did,"creation_nonce":fallback.creation_nonce,
+            "inference_profile_id":"fallback"
         }))?;
-        upsert_agent_on(&access, &fallback).await?;
-        for default in ["review", "fallback"] {
+        upsert_agent_on(&access, &fallback_agent).await?;
+        for default in [review, fallback.agent_did.as_str()] {
+            let alpha = alpha.as_str();
             access
                 .transact_write("test.node.default", |txn| {
                     Box::pin(async move {
-                        let (_, mut value) = read_desired_state_record_in_txn(
-                            txn,
-                            Collection::Node,
-                            "did:test:alpha",
-                            "did:test:alpha",
-                        )
-                        .await?
-                        .unwrap();
+                        let (_, mut value) =
+                            read_desired_state_record_in_txn(txn, Collection::Node, alpha, alpha)
+                                .await?
+                                .unwrap();
                         value["default_agent_did"] = json!(default);
                         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                             collection: Collection::Node,
@@ -245,16 +222,14 @@ mod tests {
                     })
                 })
                 .await?;
-            if default == "review" {
-                assert!(delete_agent(&node, "did:test:alpha", "review")
-                    .await
-                    .is_err());
-                let disable = super::super::principal::patch_config_components(
-                    &node,
-                    "did:test:alpha",
+            if default == review {
+                assert!(delete_agent_on(&access, alpha, review).await.is_err());
+                let disable = super::super::principal::patch_config_components_on(
+                    &access,
+                    alpha,
                     &[(
                         gents::store::config_client::patch::SelfConfigTarget::Agent,
-                        "review".into(),
+                        review.into(),
                         vec![("enabled".into(), Some(json!(false)))],
                     )],
                 )
@@ -266,12 +241,12 @@ mod tests {
                 );
             }
         }
-        assert_eq!(delete_agent(&node, "did:test:alpha", "review").await?, 1);
+        assert_eq!(delete_agent_on(&access, &alpha, review).await?, 1);
         assert_eq!(
-            super::super::profile::delete_inference_profile(&node, "did:test:alpha", "profile")
-                .await?,
+            super::super::profile::delete_inference_profile_on(&access, &alpha, "profile").await?,
             1
         );
+        runtime.shutdown().await;
         Ok(())
     }
 }

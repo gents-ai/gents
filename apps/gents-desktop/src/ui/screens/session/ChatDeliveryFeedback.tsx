@@ -14,6 +14,7 @@ import {
   loadChatDrafts,
   type ChatDraft,
 } from "../../../hooks/chatDrafts";
+import { deliveryAffordances, savedDelivery } from "../../../hooks/chatDeliveryView";
 
 /* sending, and a confirmed delivery, need nothing from the person; a draft
    that needed them stays in view until it settles */
@@ -116,8 +117,15 @@ function SavedMessage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const noun = draft.mailbox ? "answer" : "message";
-  const notDelivered = draft.result?.outcome === "notDelivered";
-  const confirmed = draft.result && !draft.result.outcome;
+  /* the actions of the settled view stay in place, disabled, while the
+     send or a check is in flight (`disabled`) */
+  const shown = deliveryAffordances(
+    savedDelivery(draft, false),
+    draft.mailbox !== undefined,
+  );
+  const notDelivered = shown.view === "notDelivered";
+  const confirmed = shown.view === "delivered";
+  const unprovable = shown.view === "unprovable";
   async function recover(resume: boolean) {
     if (busy || disabled) return;
     const intent = actions.captureComposeIntent();
@@ -139,7 +147,9 @@ function SavedMessage({
       if (!mounted.current) return;
       if (!result || result.outcome === "deliveryUnknown")
         setError(
-          `Delivery is still unconfirmed. Check again or resume the saved ${noun}.`,
+          shown.resume
+            ? `Delivery is still unconfirmed. Check again or resume the saved ${noun}.`
+            : `Delivery is still unconfirmed.`,
         );
       else if (
         !result.outcome &&
@@ -150,6 +160,25 @@ function SavedMessage({
         workspace.adoptNewSessionDock(result.sessionId);
         navigate({ name: "session", sessionId: result.sessionId });
       }
+    } catch (error) {
+      if (mounted.current)
+        setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
+  async function setAside() {
+    if (busy || disabled) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (draft.mailbox)
+        await actions.setAsideMailboxAnswer(
+          draft.mailbox.itemId,
+          draft.requestId,
+          () => mounted.current,
+        );
+      else await actions.setAsideChatMessage(draft.requestId, () => mounted.current);
     } catch (error) {
       if (mounted.current)
         setError(error instanceof Error ? error.message : String(error));
@@ -189,24 +218,30 @@ function SavedMessage({
               ? `Checking the saved ${noun}…`
               : submitting
                 ? `Sending the saved ${noun}…`
-                : draft.mailbox
-                  ? "Answer awaiting confirmation"
-                  : "Message awaiting confirmation"
+                : unprovable
+                  ? draft.mailbox
+                    ? "The answer's delivery can't be confirmed"
+                    : "The message's delivery can't be confirmed"
+                  : draft.mailbox
+                    ? "Answer awaiting confirmation"
+                    : "Message awaiting confirmation"
       }
       details={description(draft)}
       detailsText
       detailsLabel={`Saved ${noun}`}
       actions={
         <>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy || disabled}
-            onClick={() => void recover(false)}
-          >
-            {busy ? "Checking…" : `Check ${noun} delivery`}
-          </Button>
-          {notDelivered ? (
+          {shown.check && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || disabled}
+              onClick={() => void recover(false)}
+            >
+              {busy ? "Checking…" : `Check ${noun} delivery`}
+            </Button>
+          )}
+          {shown.dismiss && (
             <Button
               variant="ghost"
               size="sm"
@@ -215,21 +250,36 @@ function SavedMessage({
             >
               Dismiss saved {noun}
             </Button>
-          ) : (
-            !confirmed && (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy || disabled}
-                onClick={() => void recover(true)}
-              >
-                Resume saved {noun}
-              </Button>
-            )
+          )}
+          {shown.resume && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy || disabled}
+              onClick={() => void recover(true)}
+            >
+              Resume saved {noun}
+            </Button>
+          )}
+          {shown.setAside && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy || disabled}
+              onClick={() => void setAside()}
+            >
+              Set aside saved {noun}
+            </Button>
           )}
         </>
       }
     >
+      {unprovable && (
+        <p>
+          Its signed copy is no longer saved, so it can't be resent. It still appears
+          here if it was delivered; set it aside to keep writing.
+        </p>
+      )}
       {draft.result?.outcome === "deliveryUnknown" && (
         <StorageFullRecovery
           nodeDid={draft.nodeDid}

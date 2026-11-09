@@ -3,12 +3,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents_desktop_core::client::{
-    load_session_transcript_page, ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows,
-    DesktopPaths,
+    load_session_transcript_page, load_session_transcript_page_on, ClientCore, ClientCoreOptions,
+    ClientStore, ClientStoreRows, DesktopPaths,
 };
+use gents_desktop_core::test_fixtures::ServedRuntimeHome;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 
 #[test]
 fn focused_request_id_defaults_to_none() {
@@ -44,73 +45,97 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         ClientCoreOptions::local_only(),
     )
     .await?;
-    let created = core
-        .node()
-        .execute(
-            r#"mutation {
-        session: create_AgentSession(input: {
-            session_id: "session-1", node_did: "did:test:amy", requester_did: null,
-            agent_did: "default", created_at: "2026-08-21T18:07:35Z"
-        }) { _docID }
-        request: create_AgentRequest(input: {
-            purpose: "normal", request_id: "request-1", node_did: "did:test:amy", agent_did: "default",
-            session_id: "session-1", content: "run it", lifecycle_state: "processing",
-            created_at: "2026-08-21T18:07:35Z"
-        }) { _docID }
-    }"#,
-        )
-        .await;
-    assert!(!created.has_errors(), "seed request: {:?}", created.errors);
-    let request_doc_id = created
-        .data
-        .as_ref()
-        .and_then(|value| value.get("request"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(|value| value.as_str())
-        .context("created request doc id")?;
-    let request_doc_id = gents::store::graphql::escape_graphql_string(request_doc_id);
-    let output = core.node().execute(&format!(r#"mutation {{
-        segment: create_AgentOutputSegment(input: {{
-            node_did: "did:test:amy", session_id: "session-1",
-            request_doc_id: "{request_doc_id}",
-            source: {{kind: "authored", key: "answer"}},
-            ordinal: 0,
-            writer: {{kind: "request_execution", execution_generation: "generation"}},
-            runs: [{{stream: 0, bytes: 8, declaration: {{block_index: 0, part_index: 0, payload: {{kind: "text"}}}}}}],
-            payload: "complete",
-            close: {{kind: "closed", outcome: "complete", segments: 1, stream_bytes: [8]}},
-            created_at: "2026-08-21T18:07:36Z"
-        }}) {{ _docID }}
-    }}"#)).await;
-    assert!(!output.has_errors(), "seed output: {:?}", output.errors);
-    let close_doc_id = output
-        .data
-        .as_ref()
-        .and_then(|v| v.get("segment"))
-        .and_then(|v| v.as_array())
-        .and_then(|v| v.first())
-        .and_then(|v| v.get("_docID"))
-        .and_then(|v| v.as_str())
-        .context("created close doc id")?;
-    let close_doc_id = gents::store::graphql::escape_graphql_string(close_doc_id);
-    let header = core.node().execute(&format!(r#"mutation {{
-        create_AgentMessage(input: {{
-            message_key: "session-1:2", session_id: "session-1", node_did: "did:test:amy",
-            request_doc_id: "{request_doc_id}",
-            publication: {{kind: "request_execution", execution_generation: "generation"}},
-            outcome: "complete", sequence: 2, role: "assistant", native_id: "assistant-2",
-            blocks: [{{type: "text", text: {{output: {{close_doc_id: "{close_doc_id}", stream: 0}}, presentation: {{kind: "full"}}}}}}],
-            created_at: "2026-08-21T18:07:36Z"
-        }}) {{ _docID }}
-    }}"#)).await;
-    assert!(!header.has_errors(), "seed header: {:?}", header.errors);
+    let user = core.node_identity().did().to_owned();
+    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+        Arc::new(core.node_identity().clone()),
+    )
+    .await;
+    runtime.publish_node(serde_json::json!({})).await;
+    runtime.connect(&core).await;
+    let node_did = runtime.node_did().to_owned();
+    core.save_backend(&serde_json::from_value(serde_json::json!({
+        "node_did": node_did, "backend_id": "backend", "name": "Backend",
+        "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
+        "auth": {"kind": "unauthenticated"}
+    }))?)
+    .await?;
+    core.save_inference_profile(&serde_json::from_value(serde_json::json!({
+        "node_did": node_did, "profile_id": "profile", "backend_id": "backend",
+        "model_name": "model"
+    }))?)
+    .await?;
+    let agent = runtime.provision_agent().await;
+    core.save_agent(&serde_json::from_value(
+        runtime.agent_value(&agent, "profile"),
+    )?)
+    .await?;
+    let session_doc = runtime.agent_session(&agent, "session-1", &user).await;
+    let agent_doc = runtime.agent_doc_id(&agent).await;
+    let (node, user, agent_did) = (&node_did, &user, &agent.agent_did);
+    let (session_doc, agent_doc) = (&session_doc, &agent_doc);
+    runtime
+        .agent_access(&agent)
+        .await
+        .transact_write("test.request_refresh.transcript", |txn| {
+            Box::pin(async move {
+                let create = |collection: &'static str, input: serde_json::Value| async move {
+                    let response = txn
+                        .execute_with_variables(
+                            &format!("mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{_docID}} }}"),
+                            &serde_json::json!({"input": input}),
+                        )
+                        .await?;
+                    gents::store::graphql::created_doc_id(&response, collection)
+                };
+                let request = create("AgentRequest", serde_json::json!({
+                    "purpose": "normal", "request_id": "request-1", "node_did": node,
+                    "requester_did": user, "agent_did": agent_did, "session_id": "session-1",
+                    "content": "run it", "lifecycle_state": "processing",
+                    "created_at": "2026-08-21T18:07:35Z"
+                }))
+                .await?;
+                txn.add_resource_relationship("AgentRequest", &request, "parent", "agents", agent_doc)
+                    .await?;
+                txn.add_resource_relationship("AgentRequest", &request, "session", "sessions", session_doc)
+                    .await?;
+                let child = |extra: serde_json::Value| {
+                    let mut value = serde_json::json!({
+                        "node_did": node, "requester_did": user, "session_id": "session-1",
+                        "session_doc_id": session_doc, "agent_did": agent_did,
+                        "creator_did": agent_did, "parent_linked": true,
+                        "request_doc_id": request, "created_at": "2026-08-21T18:07:36Z",
+                    });
+                    value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+                    value
+                };
+                let segment = create("AgentOutputSegment", child(serde_json::json!({
+                    "source": {"kind": "authored", "key": "answer"}, "ordinal": 0,
+                    "writer": {"kind": "request_execution", "execution_generation": "generation"},
+                    "runs": [{"stream": 0, "bytes": 8, "declaration": {"block_index": 0, "part_index": 0, "payload": {"kind": "text"}}}],
+                    "payload": "complete",
+                    "close": {"kind": "closed", "outcome": "complete", "segments": 1, "stream_bytes": [8]}
+                })))
+                .await?;
+                txn.add_resource_relationship("AgentOutputSegment", &segment, "parent", "sessions", session_doc)
+                    .await?;
+                let message = create("AgentMessage", child(serde_json::json!({
+                    "message_key": "session-1:2",
+                    "publication": {"kind": "request_execution", "execution_generation": "generation"},
+                    "outcome": "complete", "sequence": 2, "role": "assistant", "native_id": "assistant-2",
+                    "blocks": [{"type": "text", "text": {"output": {"close_doc_id": segment, "stream": 0}, "presentation": {"kind": "full"}}}]
+                })))
+                .await?;
+                txn.add_resource_relationship("AgentMessage", &message, "parent", "sessions", session_doc)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await?;
 
     core.refresh_store().await?;
     assert!(core.store().snapshot().transcript_messages.is_empty());
     assert!(core.store().snapshot().output_segments.is_empty());
-    core.refresh_local_request("did:test:amy", "session-1", Some("request-1"), None, &[])
+    core.refresh_local_request(&node_did, "session-1", Some("request-1"), None, &[])
         .await?;
     let refreshed = core.store().snapshot();
     assert!(refreshed.transcript_messages.is_empty());
@@ -119,11 +144,11 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .requests
         .iter()
         .any(|row| row.request_id == "request-1"));
-    let page = load_session_transcript_page(
-        core.node(),
+    let page = gents_desktop_core::client::load_session_transcript_page_on(
+        &runtime.user_access(),
         "session-1",
-        Some("did:test:amy"),
-        None,
+        Some(&node_did),
+        Some(user),
         None,
         Some(40),
     )
@@ -131,6 +156,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     assert_eq!(page.store.transcript_messages.len(), 1);
     assert_eq!(page.store.output_segments.len(), 1);
     Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 
@@ -334,31 +360,61 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     Ok(())
 }
 
+/// A desktop whose client key is the User of a served runtime it routes to
+/// as its co-hosted local runtime; the observer reads only that runtime.
+async fn served_core() -> Result<(tempfile::TempDir, ClientCore, ServedRuntimeHome)> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    let runtime =
+        ServedRuntimeHome::start_unpublished_for(Arc::new(core.node_identity().clone())).await;
+    runtime.connect(&core).await;
+    Ok((tempdir, core, runtime))
+}
+
+/// Waits on the store's own update notice until `done` holds.
+async fn until<F>(core: &ClientCore, what: &str, mut done: F) -> Result<()>
+where
+    F: FnMut(&ClientCore) -> bool,
+{
+    let mut updates = core.store_updates();
+    timeout(Duration::from_secs(5), async {
+        while !done(core) {
+            updates.changed().await.context("store update channel closed")?;
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .with_context(|| format!("timed out waiting for {what}"))?
+}
+
+fn agent_message(alias: &str, key: &str, session: &str, node_did: &str, sequence: usize) -> String {
+    format!(
+        r#"{alias}: create_AgentMessage(input: {{
+            message_key: "{key}", session_id: "{session}", node_did: "{node_did}",
+            publication: {{kind: "fork", origin_message_doc_id: "origin-{key}"}},
+            outcome: "complete", sequence: {sequence}, role: "user",
+            native_id: "native-{key}", blocks: null,
+            created_at: "2026-05-07T00:00:00Z"
+        }}) {{ _docID }}"#
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let paths = DesktopPaths::from_root(tempdir.path());
-    let core =
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+    let (_tempdir, core, runtime) = served_core().await?;
     let store = core.store();
     let mut updates = core.store_updates();
 
     assert_eq!(store.snapshot().nodes.len(), 0);
     let baseline = *updates.borrow_and_update();
 
-    let response = core
-        .node()
-        .execute(
-            r#"mutation {
-                add_Node(input: {
-                    node_did: "did:test:test-agent"
-                    display_name: "Test Agent"
-                    enabled: true
-                }) { node_did }
-            }"#,
-        )
+    runtime
+        .publish_node(serde_json::json!({"display_name": "Test Agent", "enabled": true}))
         .await;
-    assert!(!response.has_errors(), "node mutation should succeed");
 
     timeout(Duration::from_secs(5), async {
         loop {
@@ -370,117 +426,95 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     })
     .await
     .context("timed out waiting for store update")??;
+    until(&core, "the refreshed snapshot", |core| core.store().snapshot().nodes.len() == 1).await?;
 
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if store.snapshot().nodes.len() == 1 {
-                return Ok::<(), anyhow::Error>(());
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .context("timed out waiting for refreshed snapshot")??;
-
-    assert_eq!(store.snapshot().nodes[0].node_did, "did:test:test-agent");
+    assert_eq!(store.snapshot().nodes[0].node_did, runtime.node_did());
     Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let paths = DesktopPaths::from_root(tmp.path());
-
-    let core =
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
-
+    let (_tempdir, core, runtime) = served_core().await?;
+    runtime.publish_node(serde_json::json!({"enabled": true})).await;
+    let node_did = gents::store::graphql::escape_graphql_string(runtime.node_did());
+    let requester = gents::store::graphql::escape_graphql_string(core.node_identity().did());
     for i in 0..20usize {
-        let mutation = format!(
-            r#"mutation {{
-                add_Node(input: {{
-                    node_did: "did:race-{i}",
-                    display_name: "race-{i}",
-                    enabled: true
-                }}) {{ node_did }}
-            }}"#
-        );
-        let response = core.node().execute(&mutation).await;
-        assert!(
-            !response.has_errors(),
-            "mutation {i} failed: {:?}",
-            response.errors
-        );
+        runtime
+            .user_graphql_access()
+            .write(
+                "test.client_store.race_session",
+                &format!(
+                    r#"mutation {{ create_AgentSession(input: {{ node_did: "{node_did}", session_id: "race-{i}", requester_did: "{requester}", agent_did: "{node_did}", created_at: "2026-11-04T00:00:00Z" }}) {{ _docID }} }}"#
+                ),
+            )
+            .await?;
     }
 
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if core.store().snapshot().nodes.len() >= 20 {
-                return Ok::<(), anyhow::Error>(());
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
+    until(&core, "all 20 sessions in the store", |core| {
+        let snapshot = core.store().snapshot();
+        (0..20usize).all(|i| {
+            snapshot
+                .sessions
+                .iter()
+                .any(|session| session.session_id == format!("race-{i}"))
+        })
     })
-    .await
-    .context("timed out waiting for all 20 nodes to appear in store")??;
-
-    let snap = core.store().snapshot();
-    let dids: rapidhash::RapidHashSet<&str> =
-        snap.nodes.iter().map(|p| p.node_did.as_str()).collect();
-    for i in 0..20usize {
-        let want = format!("did:race-{i}");
-        assert!(dids.contains(want.as_str()), "missing {want}");
-    }
+    .await?;
 
     Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Result<()> {
-    let tmp = tempfile::TempDir::new()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tmp.path()),
-        ClientCoreOptions::local_only(),
-    )
+    let (_tempdir, core, runtime) = served_core().await?;
+    runtime.publish_node(serde_json::json!({"enabled": true})).await;
+    until(&core, "the observer's first snapshot", |core| {
+        !core.store().snapshot().nodes.is_empty()
+    })
     .await?;
-    for i in 0..50usize {
-        let mutation = format!(
-            r#"mutation {{
-            create_AgentMessage(input: {{
-                message_key: "long:{i}", session_id: "long", node_did: "did:long",
-                publication: {{kind: "fork", origin_message_doc_id: "origin"}},
-                outcome: "complete", sequence: {i}, role: "user",
-                native_id: "native-{i}", blocks: [],
-                created_at: "2026-05-07T00:00:00Z"
-            }}) {{ _docID }}
-        }}"#
-        );
-        let response = core.node().execute(&mutation).await;
-        assert!(!response.has_errors(), "seed {i}: {:?}", response.errors);
-    }
+    let node_did = runtime.node_did().to_owned();
+    let messages = (0..50usize)
+        .map(|i| agent_message(&format!("m{i}"), &format!("long:{i}"), "long", &node_did, i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut updates = core.store_updates();
+    runtime
+        .user_graphql_access()
+        .write("test.client_store.transcript", &format!("mutation {{ {messages} }}"))
+        .await?;
     timeout(Duration::from_secs(5), async {
         loop {
             if core
                 .observer_metrics()
                 .await
-                .map(|m| m.transcript_invalidations > 0)
-                .unwrap_or(false)
+                .is_some_and(|metrics| metrics.transcript_invalidations > 0)
             {
                 return Ok::<(), anyhow::Error>(());
             }
-            sleep(Duration::from_millis(50)).await;
+            updates.changed().await.context("store update channel closed")?;
         }
     })
     .await
     .context("timed out waiting for canonical transcript invalidation")??;
     assert!(core.store().snapshot().transcript_messages.is_empty());
-    let page =
-        load_session_transcript_page(core.node(), "long", None, None, None, Some(40)).await?;
+    let page = load_session_transcript_page_on(
+        &runtime.user_access(),
+        "long",
+        Some(&node_did),
+        None,
+        None,
+        Some(40),
+    )
+    .await?;
     assert_eq!(page.message_query_limit, 41);
     assert_eq!(page.store.transcript_messages.len(), 40);
     assert_eq!(page.queried_rows, 41);
     Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 
@@ -533,103 +567,75 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
     Ok(())
 }
 
+/// The route is scoped to one Node: a neighbouring Node on the same runtime
+/// store never enters the observed projection, in the first snapshot or in
+/// the resnapshot a later change of the routed Node causes. (Before signed
+/// actors this test read a single local store holding every Node; scoping by
+/// route replaced that contract.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let paths = DesktopPaths::from_root(tmp.path());
-    let core =
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
+    let (_tempdir, core, runtime) = served_core().await?;
+    runtime.publish_node(serde_json::json!({"enabled": true})).await;
+    let alpha = runtime.node_did().to_owned();
+    let beta = runtime.publish_foreign_node().await;
+    let transcript = [
+        agent_message("alpha", "shared:alpha", "shared", &alpha, 1),
+        agent_message("beta", "shared:beta", "shared", &beta, 1),
+    ]
+    .join("\n");
+    runtime
+        .user_graphql_access()
+        .write("test.client_store.scoped_transcript", &format!("mutation {{ {transcript} }}"))
+        .await?;
 
-    for did in &["did:alpha", "did:beta"] {
-        let mutation = format!(
-            r#"mutation {{
-                create_Node(input: {{
-                    node_did: "{did}",
-                    display_name: "{did}",
-                    default_agent_did: "default",
-                    enabled: true,
-                    created_at: "2026-05-07T00:00:00Z",
-                    created_by: "test"
-                }}) {{ _docID }}
-            }}"#
-        );
-        let resp = core.node().execute(&mutation).await;
-        assert!(!resp.has_errors(), "seed {did}: {:?}", resp.errors);
-    }
-    let transcript = core
-        .node()
-        .execute(
-            r#"mutation {
-            alpha: create_AgentMessage(input: {
-                message_key: "shared:alpha", session_id: "shared", node_did: "did:alpha",
-                publication: {kind: "fork", origin_message_doc_id: "origin-alpha"},
-                outcome: "complete", sequence: 1, role: "user", native_id: "alpha",
-                blocks: [], created_at: "2026-05-07T00:00:00Z"
-            }) { _docID }
-            beta: create_AgentMessage(input: {
-                message_key: "shared:beta", session_id: "shared", node_did: "did:beta",
-                publication: {kind: "fork", origin_message_doc_id: "origin-beta"},
-                outcome: "complete", sequence: 1, role: "user", native_id: "beta",
-                blocks: [], created_at: "2026-05-07T00:00:00Z"
-            }) { _docID }
-        }"#,
-        )
-        .await;
-    assert!(
-        !transcript.has_errors(),
-        "seed scoped transcript: {:?}",
-        transcript.errors
+    core.set_selected_node_did(Some(alpha.clone()));
+    let only_alpha = |core: &ClientCore| {
+        let nodes = core.store().snapshot().nodes.clone();
+        assert!(nodes.iter().all(|node| node.node_did != beta), "{nodes:?}");
+        nodes.iter().any(|node| node.node_did == alpha)
+    };
+    until(&core, "the routed node", only_alpha).await?;
+
+    let escaped = gents::store::graphql::escape_graphql_string(&alpha);
+    let doc = runtime
+        .user_graphql_access()
+        .execute(&format!("{{ Node(filter: {{node_did: {{_eq: \"{escaped}\"}}}}) {{ _docID }} }}"))
+        .await?;
+    let doc = gents::store::graphql::escape_graphql_string(
+        doc["data"]["Node"][0]["_docID"].as_str().context("routed Node document")?,
     );
-
-    core.set_selected_node_did(Some("did:alpha".to_string()));
-
-    let observed = timeout(Duration::from_secs(5), async {
-        loop {
-            let snap = core.store().snapshot();
-            let dids: Vec<&str> = snap.nodes.iter().map(|p| p.node_did.as_str()).collect();
-            if dids.contains(&"did:alpha") && dids.contains(&"did:beta") {
-                return Ok::<(), anyhow::Error>(());
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-    if observed.is_err() {
-        let durable = gents::store::graphql::graphql_with_transaction_retry(
-            core.node(),
-            "{ Node { node_did } }",
-            "test.scope_timeout",
+    runtime
+        .user_graphql_access()
+        .write(
+            "test.client_store.resnapshot",
+            &format!("mutation {{ update_Node(docID: \"{doc}\", input: {{display_name: \"resnapshot\"}}) {{ _docID }} }}"),
         )
         .await?;
-        anyhow::bail!(
-            "timed out waiting for both nodes in store: snapshot={:?}, metrics={:?}, durable={:?}",
-            core.store().snapshot().nodes,
-            core.observer_metrics().await,
-            durable.data,
-        );
-    }
-    observed??;
+    until(&core, "the resnapshot of the routed node", |core| {
+        only_alpha(core)
+            && core
+                .store()
+                .snapshot()
+                .nodes
+                .iter()
+                .any(|node| node.display_name.as_deref() == Some("resnapshot"))
+    })
+    .await?;
 
-    let snap = core.store().snapshot();
-    let dids: Vec<&str> = snap.nodes.iter().map(|p| p.node_did.as_str()).collect();
-    assert!(dids.contains(&"did:alpha"), "did:alpha missing");
-    assert!(dids.contains(&"did:beta"), "did:beta missing");
-    let alpha_page = load_session_transcript_page(
-        core.node(),
+    let alpha_page = load_session_transcript_page_on(
+        &runtime.user_access(),
         "shared",
-        Some("did:alpha"),
+        Some(&alpha),
         None,
         None,
         Some(40),
     )
     .await?;
     assert_eq!(alpha_page.store.transcript_messages.len(), 1);
-    assert_eq!(
-        alpha_page.store.transcript_messages[0].message.node_did,
-        "did:alpha"
-    );
+    assert_eq!(alpha_page.store.transcript_messages[0].message.node_did, alpha);
 
     Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 

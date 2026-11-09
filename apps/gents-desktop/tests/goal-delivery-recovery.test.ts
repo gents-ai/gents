@@ -5,6 +5,7 @@ import type {
   GoalControlRequest,
   GoalControlResult,
   GoalSubmissionRecovery,
+  SessionGoalState,
   SessionGoalView,
 } from "@source-inc/gents-desktop-client";
 import { createChatActions } from "../src/hooks/chatActions";
@@ -13,6 +14,12 @@ import { loadGoalDrafts } from "../src/hooks/goalDrafts";
 import { selection } from "../src/hooks/selectionStore";
 import { admittingProjection, shellStores } from "./shell-fixture";
 import { appliedGoalResult as result } from "./goal-delivery-fixture";
+
+const observed = (observation: SessionGoalView): SessionGoalState => ({
+  kind: "observed",
+  observation,
+  next: observation.goal ? "control_goal" : "start_goal",
+});
 
 const records = new Map<string, string>();
 let denyWrite = false;
@@ -60,12 +67,14 @@ function fixture(sessionId: string | null = null) {
   const ack = vi
     .fn<() => Promise<void>>()
     .mockRejectedValue(new Error("Acknowledgement reply was lost"));
-  const goal = vi.fn<() => Promise<SessionGoalView>>().mockResolvedValue({
-    nodeDid: "node",
-    sessionId,
-    sessionDocId: "session-doc",
-    goal: { revision: { document: "goal-doc", composite: "goal-version" } },
-  } as SessionGoalView);
+  const goal = vi.fn<() => Promise<SessionGoalState>>().mockResolvedValue(
+    observed({
+      nodeDid: "node",
+      sessionId,
+      sessionDocId: "session-doc",
+      goal: { revision: { document: "goal-doc", composite: "goal-version" } },
+    } as SessionGoalView),
+  );
   const api = {
     controlGoal: control,
     recoverGoalSubmission: read,
@@ -256,7 +265,7 @@ it("refuses a later receipt that changes the observed signed preparation", async
 
 it("freezes the original folder while the Goal observation is pending", async () => {
   const f = fixture("session");
-  let finish!: (value: SessionGoalView) => void;
+  let finish!: (value: SessionGoalState) => void;
   f.goal.mockImplementationOnce(
     () =>
       new Promise((resolve) => {
@@ -267,19 +276,21 @@ it("freezes the original folder while the Goal observation is pending", async ()
   actions.setChatFolder("/original");
   const pending = actions.setGoal("Original goal");
   actions.setChatFolder("/newer");
-  finish({
-    nodeDid: "node",
-    sessionId: "session",
-    sessionDocId: "session-doc",
-    goal: null,
-  } as SessionGoalView);
+  finish(
+    observed({
+      nodeDid: "node",
+      sessionId: "session",
+      sessionDocId: "session-doc",
+      goal: null,
+    } as SessionGoalView),
+  );
   await pending;
   expect(f.control.mock.calls[0][0].cwd).toBe("/original");
 });
 
 it("refuses to reinterpret an authored Goal under a client selected during observation", async () => {
   const f = fixture("session");
-  let finish!: (value: SessionGoalView) => void;
+  let finish!: (value: SessionGoalState) => void;
   f.goal.mockImplementationOnce(
     () =>
       new Promise((resolve) => {
@@ -290,36 +301,68 @@ it("refuses to reinterpret an authored Goal under a client selected during obser
   f.stores.client.setState({
     snapshot: { client: { clientDid: "new-client" } } as DesktopClientSnapshot,
   });
-  finish({
-    nodeDid: "node",
-    sessionId: "session",
-    sessionDocId: "session-doc",
-    goal: null,
-  } as SessionGoalView);
+  finish(
+    observed({
+      nodeDid: "node",
+      sessionId: "session",
+      sessionDocId: "session-doc",
+      goal: null,
+    } as SessionGoalView),
+  );
   await pending;
   expect(f.control).not.toHaveBeenCalled();
   expect(loadGoalDrafts().goalDrafts).toHaveLength(0);
 });
 
-it.each(["unavailable", "different chat"])(
+it.each(["unknown", "unreadable", "different chat"])(
   "does not infer an empty Goal from an observation that is %s",
   async (kind) => {
     const f = fixture("session");
     f.goal.mockResolvedValueOnce(
-      kind === "unavailable"
-        ? (null as unknown as SessionGoalView)
-        : ({
-            nodeDid: "other-node",
-            sessionId: "other-session",
-            sessionDocId: "other-document",
-            goal: null,
-          } as SessionGoalView),
+      kind === "unknown"
+        ? {
+            kind: "unknown",
+            cause: "projection_missing",
+            next: "await_publication",
+            reason:
+              "This chat's Goal state is unknown: its Agent has not published it yet.",
+          }
+        : kind === "unreadable"
+          ? { kind: "no_readable_session", next: "send" }
+          : observed({
+              nodeDid: "other-node",
+              sessionId: "other-session",
+              sessionDocId: "other-document",
+              goal: null,
+            } as SessionGoalView),
     );
     await f.actions().setGoal("Original goal");
     expect(f.control).not.toHaveBeenCalled();
     expect(loadGoalDrafts().goalDrafts).toHaveLength(0);
+    expect(JSON.stringify(f.report.mock.calls)).toContain(
+      {
+        unknown: "its Agent has not published it yet",
+        unreadable: "Send a message to open it",
+        "different chat": "belongs to another chat",
+      }[kind],
+    );
   },
 );
+
+it("changes a Goal only from a state whose next action controls it", async () => {
+  const f = fixture("session");
+  f.goal.mockResolvedValueOnce(
+    observed({
+      nodeDid: "node",
+      sessionId: "session",
+      sessionDocId: "session-doc",
+      goal: null,
+    } as SessionGoalView),
+  );
+  await expect(f.actions().controlGoal("session", { kind: "pause" })).rejects.toThrow();
+  expect(f.control).not.toHaveBeenCalled();
+  expect(JSON.stringify(f.report.mock.calls)).toContain("Start one first");
+});
 
 it("persists confirmation before acknowledgement and recovers a lost acknowledgement without resubmission", async () => {
   const f = fixture();

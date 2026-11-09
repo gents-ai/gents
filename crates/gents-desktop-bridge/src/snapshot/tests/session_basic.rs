@@ -93,7 +93,7 @@ fn session_snapshot_is_node_scoped_when_session_ids_match() {
 
 #[test]
 fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
-    let agent = serde_json::from_value(serde_json::json!({"agent_did":"default","node_did":"did:test:amy","inference_profile_id":"large-context","context_id":"large-context-input"})).expect("agent");
+    let agent = serde_json::from_value(serde_json::json!({"agent_did":"default","creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","node_did":"did:test:amy","inference_profile_id":"large-context","context_id":"large-context-input"})).expect("agent");
     let profile = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","profile_id":"large-context","backend_id":"backend","model_name":"model","context_window":10000})).expect("profile");
     let context = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","context_id":"large-context-input","compaction_id":"compact"})).expect("context");
     let compaction = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","compaction_id":"compact","strategy":"StripThenSummarize","threshold":0.57})).expect("compaction");
@@ -158,7 +158,7 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
 
 #[test]
 fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
-    let agent = serde_json::json!({"agent_did":"default","node_did":"did:test:amy","inference_profile_id":"profile"});
+    let agent = serde_json::json!({"agent_did":"default","creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","node_did":"did:test:amy","inference_profile_id":"profile"});
     let backend = serde_json::json!({"node_did":"did:test:amy","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1","auth":{"kind":"unauthenticated"}});
     let advertised = |default: Option<i64>, maximum: Option<i64>| serde_json::json!({"backend_id":"backend","catalogs":[{"node_did":null,"observed_at":"now","models":[{"model_name":"model","context_window":default,"max_context_window":maximum}]}]});
     let observation = advertised(Some(272_000), Some(872_000));

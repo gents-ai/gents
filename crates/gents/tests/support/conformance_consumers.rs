@@ -1708,6 +1708,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_rescans_recover_lost_notifications",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::observation::contract_tests::generated_session_goal_reads_classify_and_bind",
+            package: "gents",
+            source_path: "crates/gents/src/goal/observation/contract_tests.rs",
+            module_path: "goal::observation::contract_tests",
+            function: "generated_session_goal_reads_classify_and_bind",
+        },
+        ConformanceConsumer::RustTest {
+            id: "gents_desktop_bridge::commands::goal::tests::generated_session_goal_views_name_their_cause",
+            package: "gents-desktop-bridge",
+            source_path: "crates/gents-desktop-bridge/src/commands/goal.rs",
+            module_path: "gents_desktop_bridge::commands::goal::tests",
+            function: "generated_session_goal_views_name_their_cause",
+        },
+        ConformanceConsumer::RustTest {
             id: "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants",
             package: "gents",
             source_path: "crates/gents/src/plugin/approval_contract_tests.rs",

@@ -7,15 +7,14 @@ use anyhow::{Context, Result};
 use gents::store::config_client::{
     ConfigAccess, ConfigClientError, ConfigRelationshipGrant, GraphqlEndpoint,
 };
-use gents::NodeIdentity;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// The served runtime, with the User's signed endpoint behind a proxy that
+/// records (and can fail) document relationship calls.
 struct Fixture {
-    _directory: tempfile::TempDir,
-    node: Arc<defra_node::Node>,
-    actor: gents::KeyIdentity,
-    agent: gents::KeyIdentity,
+    runtime: crate::test_fixtures::ServedRuntimeHome,
+    agent: gents_protocol::agent_identity::AgentIdentityBinding,
     access: ConfigAccess,
     parent_doc: String,
     fault: Arc<AtomicBool>,
@@ -25,77 +24,53 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Result<Self> {
-        let directory = tempfile::tempdir()?;
-        let actor = gents::KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
-        let agent = gents::KeyIdentity::load_or_create(directory.path().join("agent.key"), None)?;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let upstream = listener.local_addr()?;
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .enable_signing()
-                .with_node_acp_owner(actor.did().to_owned())
-                .with_http(defra_node::HttpConfig::with_listener(listener)?)
-                .build()
-                .await?,
-        );
-        let context =
-            defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned()));
-        let policy = node
-            .add_dac_policy_with_counter_as(
-                &context,
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-                0,
+        let runtime = crate::test_fixtures::ServedRuntimeHome::start().await;
+        let node_did = runtime.node_did().to_owned();
+        runtime
+            .apply_as_user(
+                "test.signing.seed",
+                vec![
+                    (
+                        gents::Collection::InferenceBackend,
+                        json!({"node_did":node_did,"backend_id":"backend","name":"Backend",
+                            "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
+                            "auth":{"kind":"unauthenticated"}}),
+                    ),
+                    (
+                        gents::Collection::InferenceProfile,
+                        json!({"node_did":node_did,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+                    ),
+                ],
             )
+            .await;
+        let nodes = runtime
+            .user_access()
+            .execute(&format!(
+                r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                gents::store::graphql::escape_graphql_string(&node_did)
+            ))
             .await?;
-        assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
-        for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
-            .iter()
-            .zip(gents_protocol::schemas::RUNTIME_ALL)
-            .chain(
-                gents_protocol::schemas::ALL_COLLECTION_NAMES
-                    .iter()
-                    .zip(gents_protocol::schemas::ALL),
-            )
-        {
-            if gents::Collection::ALL
-                .iter()
-                .any(|collection| collection.graphql_type() == *name)
-            {
-                node.add_collection(schema).await?;
-            }
-        }
-        let runtime = node.node_identity_did().context("runtime identity")?;
-        let local = ConfigAccess::local_as(node.clone(), identity::Did::new(actor.did())?);
-        let variables = json!({"node": {"node_did":runtime},
-            "backend": {"node_did":runtime,"backend_id":"backend","name":"Backend",
-                "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
-                "auth":{"kind":"unauthenticated"}},
-            "profile": {"node_did":runtime,"profile_id":"profile","backend_id":"backend","model_name":"model"}});
-        let seeded = local.transact_write("test.signing.seed", |txn| {
-            let variables = &variables;
-            Box::pin(async move {
-                txn.execute_with_variables(
-                    "mutation($node: NodeMutationInputArg!, $backend: InferenceBackendMutationInputArg!, $profile: InferenceProfileMutationInputArg!) { create_Node(input:$node) {_docID} create_InferenceBackend(input:$backend) {_docID} create_InferenceProfile(input:$profile) {_docID} }",
-                    variables,
-                ).await
-            })
-        }).await?;
-        let parent_doc = seeded["data"]["add_Node"][0]["_docID"]
+        let parent_doc = nodes["data"]["Node"][0]["_docID"]
             .as_str()
             .context("parent document")?
             .to_owned();
+        let agent = runtime.provision_agent().await;
+        let upstream: std::net::SocketAddr = reqwest::Url::parse(runtime.graphql())?
+            .socket_addrs(|| None)?
+            .into_iter()
+            .next()
+            .context("runtime address")?;
         let fault = Arc::new(AtomicBool::new(false));
         let relationships = Arc::new(Mutex::new(Vec::new()));
         let (url, proxy) = proxy(upstream, fault.clone(), relationships.clone()).await?;
+        let user = runtime.user();
         let access = ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(url, actor.did())
-                .with_client_signing_capability(actor.client_signing_capability()?)?
+            GraphqlEndpoint::as_principal(url, user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?
                 .with_client_signed_agent_creates(),
         );
         Ok(Self {
-            _directory: directory,
-            node,
-            actor,
+            runtime,
             agent,
             access,
             parent_doc,
@@ -107,8 +82,8 @@ impl Fixture {
 
     fn document(&self, context: Option<&str>) -> Result<gents::AgentDocument> {
         Ok(serde_json::from_value(json!({
-            "node_did": self.node.node_identity_did().unwrap(),
-            "agent_did": self.agent.did(), "creation_nonce":"desktop-client-signed",
+            "node_did": self.runtime.node_did(),
+            "agent_did": self.agent.agent_did, "creation_nonce": self.agent.creation_nonce,
             "inference_profile_id":"profile", "context_id":context,
             "display_name":"Desktop agent"
         }))?)
@@ -116,7 +91,7 @@ impl Fixture {
 
     async fn shutdown(self) -> Result<()> {
         self.proxy.abort();
-        self.node.shutdown().await?;
+        self.runtime.shutdown().await;
         Ok(())
     }
 }
@@ -196,7 +171,16 @@ async fn desktop_create_rolls_back_signed_agent_after_late_reference_failure() -
     );
     let rows = fixture.access.execute("{ Agent { _docID } }").await?;
     assert!(rows["data"]["Agent"].as_array().unwrap().is_empty());
-    assert!(fixture.relationships.lock().unwrap().is_empty());
+    // Only the Node manager usersets were staged before the context check,
+    // inside the transaction the failure rolled back; no grant naming the
+    // Agent's identity (`parent`, `executor`) was issued.
+    assert_eq!(
+        fixture.relationships.lock().unwrap().clone(),
+        vec![
+            ("POST".to_owned(), "administrator".to_owned()),
+            ("POST".to_owned(), "administrator".to_owned()),
+        ]
+    );
     fixture.shutdown().await
 }
 
@@ -217,7 +201,7 @@ async fn desktop_recovers_only_unfinished_grant_after_parent_is_revoked() -> Res
             }
         })
         .context("committed grant suffix")?;
-    assert_eq!(creator, fixture.actor.did());
+    assert_eq!(creator, fixture.runtime.user().did());
     let [ConfigRelationshipGrant::Actor {
         collection,
         doc_id,
@@ -229,7 +213,7 @@ async fn desktop_recovers_only_unfinished_grant_after_parent_is_revoked() -> Res
     };
     assert_eq!(
         (collection.as_str(), relation.as_str(), target.as_str()),
-        ("Agent", "executor", fixture.agent.did())
+        ("Agent", "executor", fixture.agent.agent_did.as_str())
     );
     let rows = fixture.access.execute("{ Agent { _docID } }").await?;
     assert_eq!(rows["data"]["Agent"][0]["_docID"], *doc_id);
@@ -245,6 +229,9 @@ async fn desktop_recovers_only_unfinished_grant_after_parent_is_revoked() -> Res
     assert_eq!(
         relationships,
         vec![
+            ("POST".into(), "administrator".into()),
+            ("POST".into(), "administrator".into()),
+            ("POST".into(), "selected_by".into()),
             ("POST".into(), "parent".into()),
             ("POST".into(), "executor".into()),
             ("DELETE".into(), "parent".into()),

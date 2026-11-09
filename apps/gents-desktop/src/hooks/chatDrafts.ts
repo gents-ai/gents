@@ -17,6 +17,8 @@ export type ChatDraft = {
   mailbox?: { nodeDid: string; itemId: string; summary: string };
   requestJson: string;
   result?: ChatSendResult;
+  /** A delivery check found no retained signed preparation for this send. */
+  unretained?: true;
 };
 
 const identifier = (value: unknown): value is string =>
@@ -72,6 +74,7 @@ function decode(value: unknown): ChatDraft {
     validateChatResult(draft, value.result as ChatSendResult);
     draft.result = value.result as ChatSendResult;
   }
+  if (value.unretained === true) draft.unretained = true;
   return draft;
 }
 

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use gents::store::config_client::ConfigAccess;
 
-use super::{ensure_peer_chat_ready_at, ClientCore};
+use super::{ensure_peer_chat_ready, ClientCore};
 use crate::client::observe::ObservedStore;
 use crate::client::store::{ClientStore, ClientStoreRows};
 
@@ -183,7 +183,7 @@ impl ClientCore {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready(node_did, peer.as_ref())?;
         if edit
             .messages
             .iter()

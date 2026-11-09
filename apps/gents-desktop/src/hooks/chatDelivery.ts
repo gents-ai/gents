@@ -13,6 +13,7 @@ import {
   validateChatResult,
   type ChatDraft,
 } from "./chatDrafts";
+import { deliveryAffordances, savedDelivery } from "./chatDeliveryView";
 import type { ShellStores } from "./shellProjection";
 
 type Applied = (result: ChatSendResult, draft: ChatDraft) => Promise<boolean>;
@@ -46,7 +47,7 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
   }
   async function settle(draft: ChatDraft, result: ChatSendResult, applied: Applied) {
     validateChatResult(draft, result);
-    saveChatDraft(stores.chat, { ...draft, result });
+    saveChatDraft(stores.chat, { ...draft, result, unretained: undefined });
     if (result.outcome === "deliveryUnknown") return result;
     const consumed =
       result.outcome !== "notDelivered" && (await applied(result, draft));
@@ -84,6 +85,7 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
       const actor = clientDid();
       if (request.clientDid && request.clientDid !== actor)
         throw new Error("The selected client changed before dispatch.");
+      const inFlight = stores.chat.getState().chatRequestsInFlight;
       if (
         chatDraftsFor(
           load(),
@@ -91,10 +93,12 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
           request.nodeDid,
           selectedSessionId,
           mailbox?.itemId,
-        ).some((draft) =>
-          mailbox
-            ? draft.result?.outcome !== "notDelivered"
-            : !draft.result || draft.result.outcome === "deliveryUnknown",
+        ).some(
+          (draft) =>
+            deliveryAffordances(
+              savedDelivery(draft, inFlight.has(draft.requestId)),
+              mailbox !== undefined,
+            ).blocksComposer,
         )
       )
         throw new Error(
@@ -137,7 +141,10 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
         if (recovered.kind === "prepared") {
           if (recovered.result.outcome !== "deliveryUnknown")
             return await settle(draft, recovered.result, applied);
-          draft = { ...draft, result: recovered.result };
+          draft = { ...draft, result: recovered.result, unretained: undefined };
+          saveChatDraft(stores.chat, draft);
+        } else if (draft.result?.outcome === "deliveryUnknown" && !draft.unretained) {
+          draft = { ...draft, unretained: true };
           saveChatDraft(stores.chat, draft);
         }
         if (!resume) return null;
@@ -147,7 +154,7 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
           );
         if (recovered.kind === "unconfirmed" && draft.result?.submissionReceipt)
           throw new Error(
-            "The original signed preparation is unavailable. Reconnect this history before resuming; no new message was submitted.",
+            "The original signed preparation is unavailable, so this message can't be resumed; no new message was submitted. Set it aside to keep writing: it still appears here if it was delivered.",
           );
         return await settle(
           draft,
@@ -169,6 +176,39 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
       void Promise.resolve()
         .then(() => api.acknowledgeChatSubmission(recovered.result.submissionReceipt!))
         .catch(() => {});
+    },
+    /** Set aside a send that can no longer be proven either way. It never
+     * claims non-delivery and sends nothing: a late landing of the original
+     * still appears in the session. */
+    async setAside(requestId: string, applied: Applied) {
+      let draft = original(requestId);
+      if (stores.chat.getState().chatRequestsInFlight.has(requestId))
+        throw new Error("This message is still being submitted or checked.");
+      const recovered = await query(draft);
+      if (recovered.kind === "prepared") {
+        if (recovered.result.outcome !== "deliveryUnknown") {
+          await settle(draft, recovered.result, applied);
+          return;
+        }
+        saveChatDraft(stores.chat, {
+          ...draft,
+          result: recovered.result,
+          unretained: undefined,
+        });
+        throw new Error(
+          "This message can still be confirmed. Check or resume it instead of setting it aside.",
+        );
+      }
+      if (draft.result?.outcome === "deliveryUnknown" && !draft.unretained) {
+        draft = { ...draft, unretained: true };
+        saveChatDraft(stores.chat, draft);
+      }
+      if (
+        !deliveryAffordances(savedDelivery(draft, false), draft.mailbox !== undefined)
+          .setAside
+      )
+        throw new Error("Check delivery before setting this message aside.");
+      removeChatDraft(stores.chat, draft);
     },
   };
 }

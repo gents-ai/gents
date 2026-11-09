@@ -1,0 +1,4 @@
+---- MODULE MCRuntimeConnectionTransportEnvelope ----
+EXTENDS RuntimeConnectionTransport
+
+====

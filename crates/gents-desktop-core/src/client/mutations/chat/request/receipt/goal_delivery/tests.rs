@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 struct Facts {
     root: tempfile::TempDir,
     nodes: BTreeMap<u64, KeyIdentity>,
+    clients: BTreeMap<u64, KeyIdentity>,
     digests: BTreeMap<String, u64>,
     authored: BTreeMap<String, u64>,
     commands: BTreeMap<String, SessionGoalControl>,
@@ -38,6 +39,7 @@ impl Facts {
         Ok(Self {
             root: tempfile::tempdir()?,
             nodes: BTreeMap::new(),
+            clients: BTreeMap::new(),
             digests: BTreeMap::new(),
             authored: BTreeMap::new(),
             commands: BTreeMap::new(),
@@ -54,10 +56,33 @@ impl Facts {
         Ok(self.nodes[&id].did().into())
     }
 
+    /// The modeled client's key: a desktop journal is written by the client
+    /// whose key is its local node identity.
+    pub(super) fn client(&mut self, id: u64) -> Result<String> {
+        if !self.clients.contains_key(&id) {
+            self.clients.insert(
+                id,
+                KeyIdentity::load_or_create(
+                    self.root.path().join(format!("client-{id}.key")),
+                    None,
+                )?,
+            );
+        }
+        Ok(self.clients[&id].did().into())
+    }
+
+    fn client_number(&self, did: &str) -> Result<u64> {
+        self.clients
+            .iter()
+            .find_map(|(id, key)| (key.did() == did).then_some(*id))
+            .context("fixture client")
+    }
+
     fn intent(&mut self, value: &Value) -> Result<Intent> {
         let authored = number(value, "authored")?;
+        let client = self.client(number(value, "client")?)?;
         let intent = Intent::new(
-            format!("did:key:client-{}", number(value, "client")?),
+            client,
             self.node(number(value, "node")?)?,
             format!("command-{}", number(value, "command")?),
             format!("session-{}", number(value, "session")?),
@@ -235,7 +260,7 @@ impl Facts {
     fn records_json(&self, records: &[Record]) -> Result<Value> {
         records.iter().map(|record| {
             let node = self.nodes.iter().find(|(_,key)|key.did()==record.intent.node_did).context("native fixture identity")?.0;
-            Ok(json!({"intent":{"client":suffix(&record.intent.client_did)?,"node":node,
+            Ok(json!({"intent":{"client":self.client_number(&record.intent.client_did)?,"node":node,
                 "command":suffix(&record.intent.command_id)?,"session":suffix(&record.intent.session_id)?,
                 "authored":self.authored[&record.intent.authored_hash]},
                 "prepared":self.reference_json(&record.reference)?,

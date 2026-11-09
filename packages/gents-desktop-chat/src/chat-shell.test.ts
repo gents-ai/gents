@@ -43,6 +43,13 @@ function operationalStateFor(
     dialSucceeded: true,
     runtimeConnection: "connected",
     chatSafe: routeReady,
+    chatRefusal: routeReady
+      ? null
+      : {
+          cause: "no_endpoint",
+          nextAction: "connect_runtime",
+          detail: "connect this runtime with its authenticated endpoint",
+        },
     lastError: null,
     runtime: null,
     node: {

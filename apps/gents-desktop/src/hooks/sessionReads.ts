@@ -16,6 +16,7 @@ import { timingConfig } from "./timing";
 import { mergeSessionTipSnapshot } from "@source-inc/gents-desktop-client";
 import {
   isSessionDeliveryPhase,
+  selectionMatches,
   sessionDeliveryPhase,
   type SessionLoadState,
 } from "../lib/loadingStatus";
@@ -35,6 +36,19 @@ const TRANSCRIPT_READ_SIZE = 80;
 const QUIET_AFTER_MS = 60_000;
 /** the least wait between full reads of a session that has gone quiet */
 const QUIET_READ_GAP_MS = 8_000;
+/** The re-reads a waiting phase is given, backing off. A selected request
+    that has not reached its owner, or a message still in delivery, may see
+    no store notice at all: the runtime holds no replica here. Once these are
+    spent the status offers its action instead (Lean
+    `ClientSessionLoad.rereadBudget`). A re-read runs only while an observer
+    follows the reads: it is requested on that observer's drain loop. */
+const WAITING_REREAD_MS = [1_000, 2_000, 4_000, 8_000, 15_000] as const;
+
+/** the delay before the next re-read of a waiting phase that has used
+    `used` re-reads, or null once they are spent */
+export function waitingRereadDelay(used: number): number | null {
+  return WAITING_REREAD_MS[used] ?? null;
+}
 
 /* a session's content apart from the store-wide revision, which moves when
    any document in the store changes */
@@ -68,6 +82,16 @@ export function createSessionReads({
   let readCost = 0;
   let changedAt = 0;
   let lastOutcome: string | null = null;
+  /* the scheduled re-read of a waiting phase, and the re-reads its streak has
+     used; any read the timer did not start begins a new streak */
+  let waitingTimer: ReturnType<typeof setTimeout> | undefined;
+  let waitingRereads = 0;
+  /* the observer's request for a re-read, while one follows these reads */
+  let requestReread: (() => void) | null = null;
+  const cancelWaitingReread = () => {
+    clearTimeout(waitingTimer);
+    waitingTimer = undefined;
+  };
   const noteRead = (sessionId: string, outcome: string, started: number) => {
     readAt = performance.now();
     readCost = readAt - started;
@@ -91,19 +115,65 @@ export function createSessionReads({
   const setSessionLoad = (load: SessionLoadState) =>
     writeSessionLoad(sessionStore, load);
 
-  async function refreshSession(
+  function refreshSession(
     nextSessionId: string | null,
     nodeDidOverride?: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
+    return readSelectedSession(nextSessionId, nodeDidOverride, false);
+  }
+
+  /* A waiting outcome schedules the next re-read while its streak has budget
+     and an observer follows; the load's `reread` says whether one follows. */
+  function scheduleWaitingReread() {
+    const delay = waitingRereadDelay(waitingRereads);
+    if (delay === null || !requestReread) return false;
+    waitingRereads += 1;
+    const captured = refreshSeq;
+    waitingTimer = setTimeout(() => {
+      waitingTimer = undefined;
+      /* a newer read owns what follows */
+      if (captured === refreshSeq) requestReread?.();
+    }, delay);
+    return true;
+  }
+
+  /* The latest read's selection moved and no read of the new selection has
+     started, which happens only while no observer runs: the load it held has
+     no read behind it any more. */
+  const settleMovedRead = () => {
+    const load = sessionStore.getState().load;
+    if (load.reread) setSessionLoad({ ...load, reread: false });
+  };
+
+  /* the selection the target names: the same session, and its node unless
+     either side names none (Lean `ClientSessionLoad.matchesSelection`) */
+  const selects = (sessionId: string, nodeDid: string | null) => {
+    const selected = store.getState();
+    return selectionMatches(selected.sessionId, selected.nodeDid, {
+      sessionId,
+      nodeDid,
+    });
+  };
+
+  async function readSelectedSession(
+    nextSessionId: string | null,
+    nodeDidOverride: string | null | undefined,
+    reread: boolean,
+  ): Promise<DesktopSessionSnapshot | null> {
+    const nodeDid =
+      nodeDidOverride === undefined ? store.getState().nodeDid : nodeDidOverride;
+    /* a read takes over the selection's load, so only the selection is read
+       (Lean `ClientSessionLoad.launch`); a moved selection reads itself */
+    if (nextSessionId && !selects(nextSessionId, nodeDid)) return null;
     const currentRefresh = refreshSeq + 1;
     refreshSeq = currentRefresh;
+    cancelWaitingReread();
+    if (!reread) waitingRereads = 0;
     if (!nextSessionId) {
       setSession(null);
       setSessionLoad(IDLE_LOAD);
       return null;
     }
-    const nodeDid =
-      nodeDidOverride === undefined ? store.getState().nodeDid : nodeDidOverride;
     const previous = sessionStore.getState().load;
     const sameSelection =
       previous.sessionId === nextSessionId && previous.nodeDid === nodeDid;
@@ -116,6 +186,7 @@ export function createSessionReads({
       /* looking again doesn't bring a missing session back until it's found */
       found: sameSelection && previous.found === false ? false : null,
       error: sameSelection ? previous.error : null,
+      reread: true,
     });
     const started = performance.now();
     try {
@@ -125,12 +196,28 @@ export function createSessionReads({
         trackedRequestId(),
         { limit: SESSION_TIMELINE_PAGE_SIZE },
       );
-      const stillCurrent =
-        acceptsAsyncResult(refreshSeq, currentRefresh) &&
-        store.getState().sessionId === nextSessionId &&
-        (!nodeDid || store.getState().nodeDid === nodeDid) &&
-        (!next || next.sessionId === nextSessionId);
-      if (!stillCurrent) return null;
+      /* a newer read owns the load, or the moved selection has its own read
+         queued (Lean `ClientSessionLoad.moved_read_leaves_read_queued`) */
+      if (!acceptsAsyncResult(refreshSeq, currentRefresh)) return null;
+      if (!selects(nextSessionId, nodeDid)) {
+        settleMovedRead();
+        return null;
+      }
+      /* A reply for another session cannot be shown, and asking again asks
+         the same question, so it fails visibly. */
+      if (next && next.sessionId !== nextSessionId) {
+        noteRead(nextSessionId, "mismatch", started);
+        setSessionLoad({
+          phase: "failed",
+          sessionId: nextSessionId,
+          nodeDid,
+          found: null,
+          error: "The runtime's answer did not match the selected session.",
+          reread: false,
+        });
+        return null;
+      }
+      waitingRereads = 0;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
       noteRead(nextSessionId, next ? sessionSignature(next) : "missing", started);
       setSessionLoad({
@@ -139,10 +226,13 @@ export function createSessionReads({
         nodeDid,
         found: next !== null,
         error: null,
+        reread: false,
       });
       return next;
     } catch (error) {
-      if (refreshSeq === currentRefresh) {
+      if (refreshSeq === currentRefresh && !selects(nextSessionId, nodeDid))
+        settleMovedRead();
+      else if (refreshSeq === currentRefresh) {
         const code = error instanceof BridgeInvokeError ? error.code : null;
         if (code === "permissionDenied") setSession(null);
         const delivery = code ? sessionDeliveryPhase(code) : null;
@@ -156,12 +246,14 @@ export function createSessionReads({
           phase === "failed" ? `failed ${message}` : phase,
           started,
         );
+        const waiting = phase === "pending" || isSessionDeliveryPhase(phase);
         setSessionLoad({
           phase,
           sessionId: nextSessionId,
           nodeDid,
           found: code === "notFound" ? false : null,
           error: message,
+          reread: waiting && scheduleWaitingReread(),
         });
       }
       return null;
@@ -275,6 +367,7 @@ export function createSessionReads({
           nodeDid,
           found: null,
           error: error.message,
+          reread: false,
         });
       }
       throw error;
@@ -321,12 +414,37 @@ export function createSessionReads({
   return {
     loadSessionContextDetails,
     readTranscript,
+    /** Requests each waiting phase's re-read through `request` until the
+        returned function stops following. */
+    followSessionReads(request: () => void) {
+      requestReread = request;
+      return () => {
+        if (requestReread === request) requestReread = null;
+      };
+    },
+    /** The observer stopped: its reads are dropped and no re-read follows, so
+        the held load names its next action rather than a read that will not
+        come (Lean `ClientSessionLoad.stop_leaves_action`). */
     invalidateSessionReads() {
+      cancelWaitingReread();
       runEpoch += 1;
       refreshSeq += 1;
       liveSeq += 1;
+      const load = sessionStore.getState().load;
+      if (load.phase === "loading")
+        setSessionLoad({
+          ...load,
+          phase: "failed",
+          error:
+            load.error ?? "The desktop client stopped before this session was read.",
+          reread: false,
+        });
+      else if (load.reread) setSessionLoad({ ...load, reread: false });
     },
     refreshSession,
+    /** a waiting phase's re-read, which continues its streak */
+    rereadSession: (sessionId: string | null) =>
+      readSelectedSession(sessionId, undefined, true),
     reloadSession,
     readSessionUpdate,
     loadSessionRows,

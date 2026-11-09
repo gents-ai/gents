@@ -99,6 +99,29 @@ pub async fn read_config_editor_on(
         .await
 }
 
+const SETTINGS_CHANGED: &str = "Configuration changed since this editor opened. Reopen Runtime Settings and apply your edits to the current version.";
+const ACCOUNTS_AUTH_CHANGED: &str =
+    "Configuration changed since Accounts opened. Reopen Accounts before changing authentication.";
+const ACCOUNTS_POOL_CHANGED: &str = "Configuration changed since Accounts opened. Reopen Accounts before changing the account pool.";
+
+/// A revision-guarded save that loses a concurrent commit is the same stale
+/// edit as one whose revision check failed. A dispatched client-signed write
+/// is never replayed after a conflict, so over the User's HTTP endpoint the
+/// loser sees the native conflict rather than a retried revision check.
+fn stale_on_conflict<T>(result: Result<T>, message: &'static str) -> Result<T> {
+    use gents::store::config_client::{ConfigClientError, TransactionFailure as _};
+    result.map_err(|error| {
+        if matches!(
+            error.config_client_error(),
+            Some(ConfigClientError::TransactionConflict(_))
+        ) {
+            error.context(message)
+        } else {
+            error
+        }
+    })
+}
+
 fn adopt_saved_projection(
     read_succeeded: bool,
     physical_matches: bool,
@@ -133,15 +156,32 @@ pub async fn save_backend_authentication_on(
     auth: &gents::documents::BackendAuth,
 ) -> Result<()> {
     let patch = vec![("auth".to_owned(), Some(serde_json::to_value(auth)?))];
-    access.transact_write("client.backend.authentication.save", |txn| {
-        let patch = &patch;
-        Box::pin(async move {
-            let (current, _) = read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
-            ensure!(revision_matches(Some(expected), Some(&current)), "Configuration changed since Accounts opened. Reopen Accounts before changing authentication.");
-            super::patch_config_components_in_txn(txn, node_did,
-                &[(SelfConfigTarget::InferenceBackend, id.to_owned(), patch.clone())]).await
-        })
-    }).await
+    stale_on_conflict(
+        access
+            .transact_write("client.backend.authentication.save", |txn| {
+                let patch = &patch;
+                Box::pin(async move {
+                    let (current, _) =
+                        read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
+                    ensure!(
+                        revision_matches(Some(expected), Some(&current)),
+                        ACCOUNTS_AUTH_CHANGED
+                    );
+                    super::patch_config_components_in_txn(
+                        txn,
+                        node_did,
+                        &[(
+                            SelfConfigTarget::InferenceBackend,
+                            id.to_owned(),
+                            patch.clone(),
+                        )],
+                    )
+                    .await
+                })
+            })
+            .await,
+        ACCOUNTS_AUTH_CHANGED,
+    )
 }
 
 /// Switches a subscription backend between one account and the account pool
@@ -154,15 +194,26 @@ pub async fn set_backend_rotation_on(
     expected: Option<&ConfigEditorRevision>,
     rotation: BackendRotation,
 ) -> Result<RotationOutcome> {
-    let backend = access.transact_write("client.backend.rotation.save", |txn| {
-        Box::pin(async move {
-            if let Some(expected) = expected {
-                let (current, _) = read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
-                ensure!(revision_matches(Some(expected), Some(&current)), "Configuration changed since Accounts opened. Reopen Accounts before changing the account pool.");
-            }
-            set_backend_rotation_in_txn(txn, node_did, id, rotation).await
+    let saved = access
+        .transact_write("client.backend.rotation.save", |txn| {
+            Box::pin(async move {
+                if let Some(expected) = expected {
+                    let (current, _) =
+                        read_in_txn(txn, node_did, SelfConfigTarget::InferenceBackend, id).await?;
+                    ensure!(
+                        revision_matches(Some(expected), Some(&current)),
+                        ACCOUNTS_POOL_CHANGED
+                    );
+                }
+                set_backend_rotation_in_txn(txn, node_did, id, rotation).await
+            })
         })
-    }).await?;
+        .await;
+    let backend = if expected.is_some() {
+        stale_on_conflict(saved, ACCOUNTS_POOL_CHANGED)?
+    } else {
+        saved?
+    };
     let members = backend_pool_members(access, &backend).await?;
     Ok(RotationOutcome { backend, members })
 }
@@ -189,24 +240,42 @@ pub async fn save_config_editor_on(
         proposed.keys().all(|key| fields.contains(&key.as_str())),
         "Only editable configuration fields are allowed. Authentication belongs in Accounts."
     );
-    let approved = access.transact_write("client.settings.save", |txn| {
-        let proposed = &proposed;
-        let fields = &fields;
-        Box::pin(async move {
-            let (current, retained) = read_in_txn(txn, node_did, target, id).await?;
-            ensure!(revision_matches(Some(expected), Some(&current)),
-                "Configuration changed since this editor opened. Reopen Runtime Settings and apply your edits to the current version.");
-            let retained = visible(target, &retained)?;
-            let patch: SelfConfigPatch = fields.iter().filter_map(|field| {
-                let candidate = proposed.get(*field);
-                (retained.get(*field) != candidate).then(|| ((*field).to_owned(), candidate.cloned()))
-            }).collect();
-            super::patch_config_components_in_txn(txn, node_did, &[(target, id.to_owned(), patch)]).await?;
-            let (_, canonical) = read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
-                .await?.context("Saved configuration disappeared in its transaction.")?;
-            visible(target, &canonical)
-        })
-    }).await?;
+    let approved = stale_on_conflict(
+        access
+            .transact_write("client.settings.save", |txn| {
+                let proposed = &proposed;
+                let fields = &fields;
+                Box::pin(async move {
+                    let (current, retained) = read_in_txn(txn, node_did, target, id).await?;
+                    ensure!(
+                        revision_matches(Some(expected), Some(&current)),
+                        SETTINGS_CHANGED
+                    );
+                    let retained = visible(target, &retained)?;
+                    let patch: SelfConfigPatch = fields
+                        .iter()
+                        .filter_map(|field| {
+                            let candidate = proposed.get(*field);
+                            (retained.get(*field) != candidate)
+                                .then(|| ((*field).to_owned(), candidate.cloned()))
+                        })
+                        .collect();
+                    super::patch_config_components_in_txn(
+                        txn,
+                        node_did,
+                        &[(target, id.to_owned(), patch)],
+                    )
+                    .await?;
+                    let (_, canonical) =
+                        read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
+                            .await?
+                            .context("Saved configuration disappeared in its transaction.")?;
+                    visible(target, &canonical)
+                })
+            })
+            .await,
+        SETTINGS_CHANGED,
+    )?;
     match read_config_editor_on(access, node_did, target, id).await {
         Ok(document) => {
             let content_matches = serde_json::from_str::<Map<String, Value>>(&document.content)
@@ -228,22 +297,23 @@ pub async fn save_config_editor_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::ServedRuntimeHome;
     use gents::documents::apply_desired_state_plan;
     use gents::store::config_client::DesiredStateApplyPlan;
     use serde_json::json;
-    use std::sync::Arc;
 
-    async fn fixture() -> Result<ConfigAccess> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
+    /// The runtime and the User's access to it, with one API-key backend.
+    async fn fixture() -> Result<(ServedRuntimeHome, ConfigAccess)> {
+        let runtime = ServedRuntimeHome::start().await;
+        let editor = runtime.node_did();
         let config = serde_json::from_value(json!({
-            "node": {"node_did":"did:test:editor"},
-            "inference_backends": [{"node_did":"did:test:editor","backend_id":"backend","name":"Original",
+            "node": {"node_did":editor},
+            "inference_backends": [{"node_did":editor,"backend_id":"backend","name":"Original",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
                 "auth":{"kind":"api_key","key":"private-test-credential"}}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-        let access = ConfigAccess::local(node);
+        let access = runtime.user_access();
         access
             .transact_write("test.editor.seed", |txn| {
                 let plan = &plan;
@@ -253,16 +323,17 @@ mod tests {
                 })
             })
             .await?;
-        Ok(access)
+        Ok((runtime, access))
     }
 
     #[tokio::test]
     async fn config_editor_saves_canonical_fields_and_retains_private_authentication() -> Result<()>
     {
-        let access = fixture().await?;
+        let (runtime, access) = fixture().await?;
+        let editor = runtime.node_did();
         let original = read_config_editor_on(
             &access,
-            "did:test:editor",
+            editor,
             SelfConfigTarget::InferenceBackend,
             "backend",
         )
@@ -274,7 +345,7 @@ mod tests {
         content.insert("name".into(), json!("Updated"));
         let saved = save_config_editor_on(
             &access,
-            "did:test:editor",
+            editor,
             SelfConfigTarget::InferenceBackend,
             "backend",
             &original.revision,
@@ -290,13 +361,9 @@ mod tests {
         access
             .transact_readonly("test.editor.verify", |txn| {
                 Box::pin(async move {
-                    let (_, value) = read_in_txn(
-                        txn,
-                        "did:test:editor",
-                        SelfConfigTarget::InferenceBackend,
-                        "backend",
-                    )
-                    .await?;
+                    let (_, value) =
+                        read_in_txn(txn, editor, SelfConfigTarget::InferenceBackend, "backend")
+                            .await?;
                     assert_eq!(value["name"], "Updated");
                     assert_eq!(value["auth"]["kind"], "credential");
                     assert!(value["auth"].get("key").is_none());
@@ -308,7 +375,7 @@ mod tests {
         private.insert("auth".into(), json!({"kind":"unauthenticated"}));
         assert!(save_config_editor_on(
             &access,
-            "did:test:editor",
+            editor,
             SelfConfigTarget::InferenceBackend,
             "backend",
             &saved.revision,
@@ -318,7 +385,7 @@ mod tests {
         .is_err());
         let after = read_config_editor_on(
             &access,
-            "did:test:editor",
+            editor,
             SelfConfigTarget::InferenceBackend,
             "backend",
         )
@@ -329,10 +396,11 @@ mod tests {
 
     #[tokio::test]
     async fn config_editor_allows_only_one_writer_from_the_same_revision() -> Result<()> {
-        let access = fixture().await?;
+        let (runtime, access) = fixture().await?;
+        let editor = runtime.node_did();
         let original = read_config_editor_on(
             &access,
-            "did:test:editor",
+            editor,
             SelfConfigTarget::InferenceBackend,
             "backend",
         )
@@ -342,7 +410,7 @@ mod tests {
         let (first, second) = tokio::join!(
             save_config_editor_on(
                 &access,
-                "did:test:editor",
+                editor,
                 SelfConfigTarget::InferenceBackend,
                 "backend",
                 &original.revision,
@@ -350,7 +418,7 @@ mod tests {
             ),
             save_config_editor_on(
                 &access,
-                "did:test:editor",
+                editor,
                 SelfConfigTarget::InferenceBackend,
                 "backend",
                 &original.revision,
@@ -365,7 +433,7 @@ mod tests {
         );
         let current = read_config_editor_on(
             &access,
-            "did:test:editor",
+            editor,
             SelfConfigTarget::InferenceBackend,
             "backend",
         )
@@ -377,44 +445,42 @@ mod tests {
     #[tokio::test]
     async fn config_editor_native_authentication_rejects_stale_edits_and_retains_public_settings(
     ) -> Result<()> {
-        let access = fixture().await?;
+        let (runtime, access) = fixture().await?;
+        let editor = runtime.node_did();
         let (revision, original) =
-            read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
+            read_backend_authentication_on(&access, editor, "backend").await?;
         let replacement = gents::documents::BackendAuth::ApiKey {
             key: "replacement-private-key".into(),
         };
-        save_backend_authentication_on(
-            &access,
-            "did:test:editor",
-            "backend",
-            &revision,
-            &replacement,
-        )
-        .await?;
-        let (current, saved) =
-            read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
+        save_backend_authentication_on(&access, editor, "backend", &revision, &replacement).await?;
+        let (current, saved) = read_backend_authentication_on(&access, editor, "backend").await?;
         assert!(matches!(
             saved.auth,
             gents::documents::BackendAuth::Credential { .. }
         ));
+        let stored = saved.auth.clone();
+        assert_ne!(
+            stored, original.auth,
+            "the replacement is a new credential version"
+        );
         assert_eq!(saved.endpoint, original.endpoint);
         assert_eq!(saved.name, original.name);
         assert!(save_backend_authentication_on(
             &access,
-            "did:test:editor",
+            editor,
             "backend",
             &revision,
             &gents::documents::BackendAuth::Unauthenticated
         )
         .await
         .is_err());
-        let (unchanged, saved) =
-            read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
+        let (unchanged, saved) = read_backend_authentication_on(&access, editor, "backend").await?;
         assert_eq!(current, unchanged);
-        assert_eq!(saved.auth, replacement);
+        // The rejected edit leaves the credential that stores the replacement.
+        assert_eq!(saved.auth, stored);
         let public = read_config_editor_on(
             &access,
-            "did:test:editor",
+            editor,
             SelfConfigTarget::InferenceBackend,
             "backend",
         )
@@ -423,9 +489,9 @@ mod tests {
         Ok(())
     }
 
-    async fn claude_backend(access: &ConfigAccess) -> Result<()> {
+    async fn claude_backend(access: &ConfigAccess, editor: &str) -> Result<()> {
         let backend: gents::InferenceBackend = serde_json::from_value(json!({
-            "node_did":"did:test:editor","backend_id":"claude","name":"Claude",
+            "node_did":editor,"backend_id":"claude","name":"Claude",
             "provider_kind":"ClaudeCliSubscription","endpoint":"claude-cli://subscription",
             "auth":{"kind":"node_oauth"}
         }))?;
@@ -435,9 +501,10 @@ mod tests {
 
     #[tokio::test]
     async fn backend_rotation_round_trips_and_keeps_the_other_fields() -> Result<()> {
-        let access = fixture().await?;
-        claude_backend(&access).await?;
-        let did = "did:test:editor";
+        let (runtime, access) = fixture().await?;
+        let editor = runtime.node_did();
+        claude_backend(&access, editor).await?;
+        let did = editor;
         let (revision, before) = read_backend_authentication_on(&access, did, "claude").await?;
         let pool = set_backend_rotation_on(
             &access,
@@ -489,9 +556,10 @@ mod tests {
 
     #[tokio::test]
     async fn backend_rotation_refuses_a_stale_revision_and_changes_nothing() -> Result<()> {
-        let access = fixture().await?;
-        claude_backend(&access).await?;
-        let did = "did:test:editor";
+        let (runtime, access) = fixture().await?;
+        let editor = runtime.node_did();
+        claude_backend(&access, editor).await?;
+        let did = editor;
         let (stale, _) = read_backend_authentication_on(&access, did, "claude").await?;
         set_backend_rotation_on(
             &access,
@@ -523,8 +591,9 @@ mod tests {
 
     #[tokio::test]
     async fn backend_rotation_refuses_a_backend_that_cannot_rotate() -> Result<()> {
-        let access = fixture().await?;
-        let did = "did:test:editor";
+        let (runtime, access) = fixture().await?;
+        let editor = runtime.node_did();
+        let did = editor;
         let (revision, _) = read_backend_authentication_on(&access, did, "backend").await?;
         let error = set_backend_rotation_on(
             &access,

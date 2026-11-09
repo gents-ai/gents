@@ -114,7 +114,8 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.addr = String::new();
         deployment.graphql = None;
         deployment.dial_succeeded = false;
-        deployment.runtime_connection = None;
+        // `runtime_connection` stays: it is this client's own observation and
+        // admission reads it (`RuntimeConnectionObservation.presentation`).
         deployment.pairing_ready = None;
         deployment.last_error = None;
     }
@@ -286,6 +287,7 @@ mod tests {
                     dial_succeeded: true,
                     runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
+                    chat_refusal: None,
                     pairing_ready: Some(true),
                     last_error: None,
                     node: NodeView {
@@ -300,7 +302,7 @@ mod tests {
                         "node_did":"did:test:agent","tags":["private-node"]
                     })).unwrap()),
                     agent_configs: vec![serde_json::from_value(serde_json::json!({
-                        "node_did":"did:test:agent","agent_did":"agent",
+                        "node_did":"did:test:agent","agent_did":"agent","creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "inference_profile_id":"profile","tags":["private-agent"]
                     })).unwrap()],
                     runtime: None,
@@ -452,6 +454,7 @@ mod tests {
         assert!(projected.bootstrap.saved_peers.is_empty());
         let client = projected.client.expect("client");
         let dep = &client.deployments[0];
+        assert_eq!(dep.runtime_connection.as_deref(), Some("connected"));
         assert!(dep.sessions.is_empty());
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 0);
@@ -485,6 +488,7 @@ mod tests {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::chat_package());
         let client = projected.client.as_ref().unwrap();
         let dep = &client.deployments[0];
+        assert_eq!(dep.runtime_connection.as_deref(), Some("connected"));
         assert_eq!(dep.sessions.len(), 1);
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.agent_environments[0].session_count, 1);

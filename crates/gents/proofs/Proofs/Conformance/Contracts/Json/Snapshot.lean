@@ -6,6 +6,7 @@ import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.ClientShell.SubmissionReceipt
+import Proofs.Conformance.ClientChatReadinessCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
@@ -140,6 +141,7 @@ import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientDelivery
 import Proofs.Conformance.GoalClientStart
 import Proofs.Conformance.GoalObservation
+import Proofs.Conformance.GoalSessionObservation
 import Proofs.Conformance.PluginApproval
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
@@ -424,6 +426,7 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
     ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
+    ++ "\"goal_session_observation_cases\":" ++ Conformance.GoalSessionObservationContracts.casesJson ++ ","
     ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
     ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
     ++ "\"workspace_command_root_cases\":" ++ Conformance.WorkspaceCommandRoot.casesJson.compress ++ ","
@@ -549,6 +552,14 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"enrollment_absent_peer_cases\":"
       ++ Conformance.EnrollmentPendingRequests.absentPeerCasesJson ++ ","
+    ++ "\"client_chat_readiness_cases\":"
+      ++ Conformance.ChatReadinessCases.casesJson ++ ","
+    ++ "\"client_chat_readiness_transitions\":"
+      ++ Conformance.ChatReadinessCases.transitionsJson ++ ","
+    ++ "\"client_chat_readiness_legs\":"
+      ++ Conformance.ChatReadinessCases.legsJson ++ ","
+    ++ "\"client_chat_readiness_causes\":"
+      ++ Conformance.ChatReadinessCases.causesJson ++ ","
     ++ "\"enrollment_route_readiness_cases\":"
       ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"

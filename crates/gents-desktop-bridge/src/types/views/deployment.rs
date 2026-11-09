@@ -356,6 +356,27 @@ impl From<&MailboxItemRow> for MailboxItemView {
     }
 }
 
+/// Why the native chat write fence refuses this deployment, with the next
+/// action that reopens it (`ClientChatReadiness.Cause` and `nextAction`).
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRefusalView {
+    pub cause: String,
+    pub next_action: String,
+    pub detail: String,
+}
+
+impl From<gents_desktop_core::client::ChatRouteCause> for ChatRefusalView {
+    fn from(cause: gents_desktop_core::client::ChatRouteCause) -> Self {
+        let action = cause.next_action();
+        Self {
+            cause: cause.token().to_owned(),
+            next_action: action.token().to_owned(),
+            detail: action.description().to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentView {
@@ -370,6 +391,7 @@ pub struct DeploymentView {
     #[ts(optional)]
     pub runtime_connection: Option<String>,
     pub chat_safe: bool,
+    pub chat_refusal: Option<ChatRefusalView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pairing_ready: Option<bool>,

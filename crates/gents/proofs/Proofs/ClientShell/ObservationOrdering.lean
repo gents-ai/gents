@@ -223,6 +223,8 @@ structure State where
   transcriptEpoch : Nat
   sharedEpoch : Nat := 0
   nodeEpoch : Nat → Nat := fun _ => 0
+  eventSharedEpoch : Nat := 0
+  eventNodeEpoch : Nat → Nat := fun _ => 0
 
 /-- Runtime documents are read from the selected runtime's authenticated database
 endpoint under the client DID. The observer arms its GraphQL subscriptions before
@@ -236,10 +238,13 @@ structure Read where
   requestEventEpoch : Nat
   sharedEpoch : Nat := 0
   nodeEpoch : Nat → Nat := fun _ => 0
+  eventSharedEpoch : Nat := 0
+  eventNodeEpoch : Nat → Nat := fun _ => 0
 
 def beginRead (s : State) : Read :=
   { dataEpoch := s.dataEpoch, requestEventEpoch := s.requestEventEpoch,
-    sharedEpoch := s.sharedEpoch, nodeEpoch := s.nodeEpoch }
+    sharedEpoch := s.sharedEpoch, nodeEpoch := s.nodeEpoch,
+    eventSharedEpoch := s.eventSharedEpoch, eventNodeEpoch := s.eventNodeEpoch }
 
 /-- The footprint includes every owner whose cached facts may change. Missing
 ownership, dropped notifications, and unretained lineage require `all`; an
@@ -250,12 +255,40 @@ def touch (s : State) (scope : Scope) : State :=
   | .nodes owners =>
       { s with nodeEpoch := fun node => s.nodeEpoch node + if node ∈ owners then 1 else 0 }
 
-def acceptsFor (s : State) (read : Read) (scope : Scope) : Bool :=
+/-- A request event moves its footprint on the request-event epochs only. -/
+def touchEvents (s : State) (scope : Scope) : State :=
   match scope with
-  | .all => decide (s.dataEpoch = read.dataEpoch ∧ s.requestEventEpoch = read.requestEventEpoch)
+  | .all => { s with eventSharedEpoch := s.eventSharedEpoch + 1 }
+  | .nodes owners =>
+      { s with eventNodeEpoch := fun node =>
+          s.eventNodeEpoch node + if node ∈ owners then 1 else 0 }
+
+/-- A snapshot reload replaces its scope with the runtime's rows as of its read.
+A request event publishes no rows, so it cannot make the reload older than what
+the store shows; the event's own resync request reads again after it. Only a
+publication into the same scope since the capture can, so reloads check the
+publication epochs alone. Without this, request events arriving at least once
+per load reject every reload of the node and its rows never catch up
+(`ObserverResync` TLA, `SustainedEvents` and `CrossNode`). -/
+def acceptsReloadFor (s : State) (read : Read) (scope : Scope) : Bool :=
+  match scope with
+  | .all => decide (s.dataEpoch = read.dataEpoch)
   | .nodes owners =>
       decide (s.sharedEpoch = read.sharedEpoch) &&
         owners.all (fun node => s.nodeEpoch node == read.nodeEpoch node)
+
+/-- A patch merges rows into the store, so a row it read before a deletion or
+change it was told about would survive the event. Patches also check the
+request-event epochs of their footprint. -/
+def eventsAcceptFor (s : State) (read : Read) (scope : Scope) : Bool :=
+  match scope with
+  | .all => decide (s.requestEventEpoch = read.requestEventEpoch)
+  | .nodes owners =>
+      decide (s.eventSharedEpoch = read.eventSharedEpoch) &&
+        owners.all (fun node => s.eventNodeEpoch node == read.eventNodeEpoch node)
+
+def acceptsFor (s : State) (read : Read) (scope : Scope) : Bool :=
+  acceptsReloadFor s read scope && eventsAcceptFor s read scope
 
 def accepts (s : State) (read : Read) : Bool :=
   acceptsFor s read .all
@@ -269,11 +302,23 @@ def publishFor (s : State) (read : Read) (scope : Scope) : State :=
 def publish (s : State) (read : Read) : State :=
   publishFor s read .all
 
+def reloadFor (s : State) (read : Read) (scope : Scope) : State :=
+  if acceptsReloadFor s read scope then dataChange s scope else s
+
 def requestEventFor (s : State) (scope : Scope) : State :=
-  { touch s scope with requestEventEpoch := s.requestEventEpoch + 1 }
+  { touchEvents s scope with requestEventEpoch := s.requestEventEpoch + 1 }
 
 def requestEvent (s : State) : State :=
   requestEventFor s .all
+
+/-- A delivered change on `source`'s subscription. Every change on a runtime,
+including one to a row of another node, arrives as an event of that runtime's
+node. Its footprint is that node because the desktop takes no other node's
+rows from that runtime: a reload of `source` publishes only `publishedRows
+source`, and another node's rows are read only from that node's runtime. An
+event without its source (a reconnect) stays unclassified (`requestEvent`). -/
+def observerEvent (s : State) (source : Nat) : State :=
+  requestEventFor s (.nodes [source])
 
 def transcriptInvalidation (s : State) : State :=
   { s with transcriptEpoch := s.transcriptEpoch + 1 }
@@ -281,11 +326,12 @@ def transcriptInvalidation (s : State) : State :=
 theorem newer_data_rejects_old_read (s : State) (read : Read)
     (h : read.dataEpoch < s.dataEpoch) : publish s read = s := by
   have hne : s.dataEpoch ≠ read.dataEpoch := by omega
-  simp [publish, publishFor, acceptsFor, hne]
+  simp [publish, publishFor, acceptsFor, acceptsReloadFor, hne]
 
 theorem uncached_request_event_rejects_old_read (s : State) :
     publish (requestEvent s) (beginRead s) = requestEvent s := by
-  simp [publish, publishFor, requestEvent, requestEventFor, beginRead, acceptsFor]
+  simp [publish, publishFor, requestEvent, requestEventFor, touchEvents, beginRead,
+    acceptsFor, eventsAcceptFor]
 
 theorem request_event_does_not_invalidate_lineage_cache (s : State) :
     (requestEvent s).provenanceEpoch = s.provenanceEpoch := by
@@ -293,33 +339,89 @@ theorem request_event_does_not_invalidate_lineage_cache (s : State) :
 
 theorem transcript_invalidation_preserves_read (s : State) :
     accepts (transcriptInvalidation s) (beginRead s) = true := by
-  simp [transcriptInvalidation, beginRead, accepts, acceptsFor]
+  simp [transcriptInvalidation, beginRead, accepts, acceptsFor, acceptsReloadFor,
+    eventsAcceptFor]
 
 theorem accepted_publication_advances_data_epoch (s : State) :
     (publish s (beginRead s)).dataEpoch = s.dataEpoch + 1 := by
-  simp [publish, publishFor, beginRead, acceptsFor, dataChange]
+  simp [publish, publishFor, beginRead, acceptsFor, acceptsReloadFor, eventsAcceptFor,
+    dataChange]
 
 theorem same_owner_data_rejects_scoped_read (s : State) (node : Nat) :
     acceptsFor (dataChange s (.nodes [node])) (beginRead s) (.nodes [node]) = false := by
-  simp [acceptsFor, dataChange, touch, beginRead]
+  simp [acceptsFor, acceptsReloadFor, dataChange, touch, beginRead]
 
 theorem same_owner_request_event_rejects_scoped_read (s : State) (node : Nat) :
     acceptsFor (requestEventFor s (.nodes [node])) (beginRead s) (.nodes [node]) = false := by
-  simp [acceptsFor, requestEventFor, touch, beginRead]
+  simp [acceptsFor, acceptsReloadFor, eventsAcceptFor, requestEventFor, touchEvents, beginRead]
 
 theorem unclassified_request_event_rejects_scoped_read (s : State) (node : Nat) :
     acceptsFor (requestEvent s) (beginRead s) (.nodes [node]) = false := by
-  simp [acceptsFor, requestEvent, requestEventFor, touch, beginRead]
+  simp [acceptsFor, acceptsReloadFor, eventsAcceptFor, requestEvent, requestEventFor,
+    touchEvents, beginRead]
 
 theorem unrelated_data_preserves_scoped_read (s : State) (node other : Nat)
     (h : node ≠ other) :
     acceptsFor (dataChange s (.nodes [other])) (beginRead s) (.nodes [node]) = true := by
-  simp [acceptsFor, dataChange, touch, beginRead, h]
+  simp [acceptsFor, acceptsReloadFor, eventsAcceptFor, dataChange, touch, beginRead, h]
 
 theorem unrelated_request_event_preserves_scoped_read (s : State) (node other : Nat)
     (h : node ≠ other) :
     acceptsFor (requestEventFor s (.nodes [other])) (beginRead s) (.nodes [node]) = true := by
-  simp [acceptsFor, requestEventFor, touch, beginRead, h]
+  simp [acceptsFor, acceptsReloadFor, eventsAcceptFor, requestEventFor, touchEvents,
+    beginRead, h]
+
+/-- NoStaleCommit for reloads: a publication into the reload's node since its
+capture rejects it, so an older read never replaces newer published rows. -/
+theorem same_owner_publication_rejects_reload (s : State) (node : Nat) :
+    acceptsReloadFor (dataChange s (.nodes [node])) (beginRead s) (.nodes [node]) = false := by
+  simp [acceptsReloadFor, dataChange, touch, beginRead]
+
+theorem full_replacement_rejects_reload (s : State) (scope : Scope) :
+    acceptsReloadFor (dataChange s .all) (beginRead s) scope = false := by
+  cases scope <;> simp [acceptsReloadFor, dataChange, touch, beginRead]
+
+/-- A request event of any footprint leaves every reload's fence in place. -/
+theorem request_event_preserves_reload (s : State) (event scope : Scope) :
+    acceptsReloadFor (requestEventFor s event) (beginRead s) scope = true := by
+  cases event <;> cases scope <;>
+    simp [acceptsReloadFor, requestEventFor, touchEvents, beginRead]
+
+def requestEvents (s : State) : List Scope → State
+  | [] => s
+  | event :: rest => requestEvents (requestEventFor s event) rest
+
+theorem request_events_preserve_publication_epochs (s : State) (events : List Scope) :
+    (requestEvents s events).dataEpoch = s.dataEpoch ∧
+      (requestEvents s events).sharedEpoch = s.sharedEpoch ∧
+      (requestEvents s events).nodeEpoch = s.nodeEpoch := by
+  induction events generalizing s with
+  | nil => simp [requestEvents]
+  | cons event rest ih =>
+    have h := ih (requestEventFor s event)
+    cases event <;> simpa [requestEvents, requestEventFor, touchEvents] using h
+
+/-- EventualPublication's safety half: however many request events, of any
+footprint, arrive while a reload is in flight, it publishes. -/
+theorem arbitrarily_many_request_events_preserve_reload
+    (s : State) (events : List Scope) (scope : Scope) :
+    acceptsReloadFor (requestEvents s events) (beginRead s) scope = true := by
+  obtain ⟨hData, hShared, hNodes⟩ := request_events_preserve_publication_epochs s events
+  cases scope <;> simp [acceptsReloadFor, beginRead, hData, hShared, hNodes]
+
+/-- An observer event from one node's subscription does not reject a read of
+another node, whether reload or patch. -/
+theorem observer_event_preserves_other_node_read (s : State) (node source : Nat)
+    (h : node ≠ source) :
+    acceptsFor (observerEvent s source) (beginRead s) (.nodes [node]) = true ∧
+      acceptsReloadFor (observerEvent s source) (beginRead s) (.nodes [node]) = true := by
+  exact ⟨unrelated_request_event_preserves_scoped_read s node source h,
+    request_event_preserves_reload s _ _⟩
+
+/-- A patch read before an event of its own node is still rejected. -/
+theorem observer_event_rejects_own_node_patch (s : State) (node : Nat) :
+    acceptsFor (observerEvent s node) (beginRead s) (.nodes [node]) = false :=
+  same_owner_request_event_rejects_scoped_read s node
 
 def unrelatedTraffic (s : State) (other : Nat) : Nat → State
   | 0 => s
@@ -337,7 +439,14 @@ theorem arbitrarily_many_unrelated_changes_preserve_scoped_read
     induction count with
     | zero => rfl
     | succ n ih => simpa [unrelatedTraffic, dataChange, touch, h] using ih
-  simp [acceptsFor, beginRead, shared, owned]
+  have events : (unrelatedTraffic s other count).eventSharedEpoch = s.eventSharedEpoch ∧
+      (unrelatedTraffic s other count).eventNodeEpoch = s.eventNodeEpoch := by
+    clear shared owned
+    induction count with
+    | zero => exact ⟨rfl, rfl⟩
+    | succ n ih => simpa [unrelatedTraffic, dataChange, touch] using ih
+  simp [acceptsFor, acceptsReloadFor, eventsAcceptFor, beginRead, shared, owned, events.1,
+    events.2]
 
 theorem scoped_publication_preserves_other_owner (s : State) (read : Read) (node other : Nat)
     (h : other ≠ node) :
@@ -589,6 +698,146 @@ theorem timer_retry_keeps_pending_work (r : Recovery) :
 theorem request_event_does_not_change_lineage (s : State) :
     (requestEvent s).provenanceEpoch = s.provenanceEpoch := by rfl
 
+/-- A delivered tool-call change. The observer projection drops tool-call rows,
+yet request lineage is derived from them, and the envelope names only the
+tool call's document, not the requests whose lineage it moves. The change is
+therefore an unclassified request event on the patch fence and moves the
+lineage-cache revision. It publishes no rows, so reloads keep their fence. -/
+def provenanceInvalidation (s : State) : State :=
+  { requestEventFor s .all with provenanceEpoch := s.provenanceEpoch + 1 }
+
+theorem provenance_invalidation_rejects_patch (s : State) (scope : Scope) :
+    acceptsFor (provenanceInvalidation s) (beginRead s) scope = false := by
+  cases scope <;>
+    simp [provenanceInvalidation, acceptsFor, acceptsReloadFor, eventsAcceptFor,
+      requestEventFor, touchEvents, beginRead]
+
+theorem provenance_invalidation_preserves_reload (s : State) (scope : Scope) :
+    acceptsReloadFor (provenanceInvalidation s) (beginRead s) scope = true := by
+  have h := request_event_preserves_reload s .all scope
+  cases scope <;> simpa [provenanceInvalidation, acceptsReloadFor, requestEventFor,
+    touchEvents] using h
+
+theorem provenance_invalidation_moves_lineage (s : State) :
+    (provenanceInvalidation s).provenanceEpoch = s.provenanceEpoch + 1 := rfl
+
+/-! The fence footprint of a node reload. A row is keyed by its merge key and
+carries its canonical owner, if known. -/
+
+structure FootprintRow where
+  key : String
+  owner : Option Nat
+  deriving DecidableEq, Repr
+
+/-- A reload of `node` publishes only the snapshot rows the node owns; rows the
+runtime returns for other owners or without an owner are dropped before the
+footprint is computed, so they cannot fence any other node's reads. -/
+def publishedRows (node : Nat) (incoming : List FootprintRow) : List FootprintRow :=
+  incoming.filter (fun row => row.owner == some node)
+
+/-- Current rows a published row replaces by merge key. -/
+def overwrittenRows (node : Nat) (current incoming : List FootprintRow) :
+    List FootprintRow :=
+  current.filter (fun row => (publishedRows node incoming).any (fun p => p.key == row.key))
+
+/-- The epochs the reload moves: its node and the owner of every row it
+overwrites. Overwriting a row with no known owner may change facts a read of
+any scope holds, so it moves every scope. -/
+def reloadFootprint (node : Nat) (current incoming : List FootprintRow) : Scope :=
+  let overwritten := overwrittenRows node current incoming
+  if overwritten.any (fun row => row.owner.isNone) then .all
+  else .nodes (node :: overwritten.filterMap FootprintRow.owner)
+
+/-- The epochs the reload checks: the shared epoch, its node and every known
+owner of a row it overwrites. A publication that changed a row without a known
+owner had that row in its own footprint and so moved the shared epoch, which
+this check sees. Checking every scope instead lets steady publications of
+unrelated nodes reject a widened reload, which never publishes and so never
+takes ownership of the row (`ObserverResync` TLA, `WidenedCheckAll`). -/
+def reloadCheck (node : Nat) (current incoming : List FootprintRow) : Scope :=
+  .nodes (node :: (overwrittenRows node current incoming).filterMap FootprintRow.owner)
+
+/-- The store after the reload: the node's previous rows and every overwritten
+row are replaced by the published rows. -/
+def reloadRows (node : Nat) (current incoming : List FootprintRow) : List FootprintRow :=
+  current.filter (fun row => row.owner != some node &&
+      !(publishedRows node incoming).any (fun p => p.key == row.key)) ++
+    publishedRows node incoming
+
+theorem foreign_rows_are_not_published (node : Nat) (incoming foreign : List FootprintRow)
+    (h : ∀ row ∈ foreign, row.owner ≠ some node) :
+    publishedRows node (incoming ++ foreign) = publishedRows node incoming := by
+  have hnil : foreign.filter (fun row => row.owner == some node) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro row hrow
+    simp [h row hrow]
+  simp [publishedRows, List.filter_append, hnil]
+
+/-- Rows the runtime returns for other owners change neither what the reload
+moves nor what it checks. -/
+theorem foreign_rows_have_no_footprint (node : Nat) (current incoming foreign : List FootprintRow)
+    (h : ∀ row ∈ foreign, row.owner ≠ some node) :
+    reloadFootprint node current (incoming ++ foreign) = reloadFootprint node current incoming ∧
+      reloadCheck node current (incoming ++ foreign) = reloadCheck node current incoming := by
+  have hp := foreign_rows_are_not_published node incoming foreign h
+  simp [reloadFootprint, reloadCheck, overwrittenRows, hp]
+
+theorem published_rows_owned (node : Nat) (incoming : List FootprintRow) :
+    ∀ row ∈ publishedRows node incoming, row.owner = some node := by
+  intro row hrow
+  simp [publishedRows] at hrow
+  exact hrow.2
+
+/-- A published reload takes ownership of every row it overwrote: reloading the
+same rows again moves only known owners. An unowned row therefore widens at
+most the one reload that first publishes over it. -/
+theorem reload_converts_unowned_rows (node : Nat) (current incoming : List FootprintRow) :
+    reloadFootprint node (reloadRows node current incoming) incoming ≠ .all := by
+  have hkept : (current.filter (fun row => row.owner != some node &&
+      !(publishedRows node incoming).any (fun p => p.key == row.key))).filter
+        (fun row => (publishedRows node incoming).any (fun p => p.key == row.key)) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro row hrow
+    simp only [List.mem_filter, Bool.and_eq_true, Bool.not_eq_true'] at hrow
+    simp [hrow.2.2]
+  have howned : ∀ row ∈ (publishedRows node incoming).filter
+      (fun row => (publishedRows node incoming).any (fun p => p.key == row.key)),
+      row.owner = some node := by
+    intro row hrow
+    exact published_rows_owned node incoming row (List.mem_filter.mp hrow).1
+  have hany : ((publishedRows node incoming).filter
+      (fun row => (publishedRows node incoming).any (fun p => p.key == row.key))).any
+        (fun row => row.owner.isNone) = false := by
+    apply List.any_eq_false.mpr
+    intro row hrow
+    simp [howned row hrow]
+  unfold reloadFootprint overwrittenRows reloadRows
+  rw [List.filter_append, hkept, List.nil_append]
+  simp only [hany]
+  simp
+
+/-- Publications into unrelated nodes never reject a reload, even one that
+overwrites an unowned row and so publishes into every scope. -/
+theorem unrelated_publication_preserves_widened_reload (s : State) (node other : Nat)
+    (current incoming : List FootprintRow)
+    (h : other ∉ node :: (overwrittenRows node current incoming).filterMap FootprintRow.owner) :
+    acceptsReloadFor (dataChange s (.nodes [other])) (beginRead s)
+      (reloadCheck node current incoming) = true := by
+  simp only [reloadCheck, acceptsReloadFor, dataChange, touch, beginRead]
+  simp only [decide_true, Bool.true_and, List.all_eq_true, beq_iff_eq]
+  intro member hmember
+  have hne : member ≠ other := by
+    intro heq
+    exact h (heq ▸ hmember)
+  simp [hne, List.mem_singleton]
+
+/-- An unclassified publication since the capture rejects every reload. -/
+theorem unclassified_publication_rejects_widened_reload (s : State) (node : Nat)
+    (current incoming : List FootprintRow) :
+    acceptsReloadFor (dataChange s .all) (beginRead s) (reloadCheck node current incoming) =
+      false :=
+  full_replacement_rejects_reload s _
+
 end ClientDataPublication
 
 namespace ClientLiveDelta
@@ -695,24 +944,42 @@ end EnrollmentActivationObservation
 
 namespace RuntimeConnectionObservation
 
+/-- The desktop's observed connection to one runtime it reaches over
+authenticated HTTP as the User. `noEndpoint` is a directory peer with no
+operator GraphQL endpoint (a discovery- or enrollment-only peer): nothing can
+be observed, and the state says so instead of reading as a connection attempt.
+A peer that is absent from the directory has no state. -/
 inductive Status where
-  | connecting | connected | disconnected | denied
+  | connecting | connected | disconnected | denied | noEndpoint
   deriving DecidableEq, Repr
 
+/-- `renewed` is the source re-arming its subscriptions after a planned stream
+end: the pinned DefraDB HTTP server authenticates a subscription only at its
+handshake, so a locally minted bearer's subscription ends at half the bearer
+lifetime and re-authenticates. It is not a transport failure. `endpointMissing`
+is the reconcile of a peer that has no operator endpoint. -/
 inductive Event where
   | sourceStarted | subscriptionsReady | snapshotSucceeded | transportFailed | permissionDenied
+  | renewed | endpointMissing
   deriving DecidableEq, Repr
 
 /-- A direct runtime connection is established only after subscriptions are armed
 and an authenticated snapshot succeeds. A successful empty result is still a
 successful snapshot: ACP may filter every row without returning an error. P2P
-peer or replication observations do not determine this state. -/
+peer or replication observations do not determine this state. A planned
+renewal keeps the state, whatever it is: the source arms the replacement
+subscriptions before it drops the old ones, so no change goes undelivered and a
+`connected` snapshot stays current across it (TLA `ConnectedAfterArmedSnapshot`).
+A renewal says nothing about reachability or authorization; the resnapshot that
+follows it decides those (`snapshotEvent`). -/
 def observe (status : Status) (event : Event) : Status :=
   match event with
   | .sourceStarted | .subscriptionsReady => .connecting
   | .snapshotSucceeded => .connected
   | .transportFailed => .disconnected
   | .permissionDenied => .denied
+  | .renewed => status
+  | .endpointMissing => .noEndpoint
 
 def blocksAdmission (status : Status) : Bool := decide (status ≠ .connected)
 
@@ -724,6 +991,100 @@ theorem subscription_alone_is_not_a_completed_read (status : Status) :
 
 theorem denial_is_not_an_empty_result (status : Status) :
     observe status .permissionDenied = .denied := by rfl
+
+theorem renewal_keeps_connected : observe .connected .renewed = .connected := by rfl
+
+theorem renewal_is_not_an_outage (status : Status) (h : status ≠ .disconnected) :
+    observe status .renewed ≠ .disconnected := by
+  simpa [observe] using h
+
+/-- Only a completed authenticated snapshot enters `connected`; a renewal can
+only keep it. -/
+theorem only_snapshot_enters_connected (status : Status) (event : Event)
+    (h : status ≠ .connected) (hc : observe status event = .connected) :
+    event = .snapshotSucceeded := by
+  cases event <;> simp_all [observe]
+
+theorem missing_endpoint_is_not_connecting (status : Status) :
+    observe status .endpointMissing = .noEndpoint := by rfl
+
+/-- How a source's subscription stream ended. `renewalDue` is the planned
+re-authentication end of a subscription that keeps its own renewal deadline;
+the observer's source takes that cadence (`renewalStartMs`) and never sees it.
+`completed` is the runtime sending `complete`, which is not planned by the
+client and is reported as a transport failure until a re-arm proves otherwise.
+A failure is a denial exactly when the access owner classifies it as one (HTTP
+401/403 at the handshake, or a `PERMISSION_DENIED` GraphQL error envelope on the
+stream). The pinned served runtime produces neither for a revoked User; see
+`SnapshotOutcome`. -/
+inductive StreamEnd where
+  | renewalDue | completed | failed (denied : Bool)
+  deriving DecidableEq, Repr
+
+/-- The event a stream end publishes. A renewal publishes nothing until its
+re-arm: `renewed` when the new subscriptions are ready, or the re-arm's own
+failure. -/
+def streamEndEvent : StreamEnd → Option Event
+  | .renewalDue => none
+  | .completed => some .transportFailed
+  | .failed true => some .permissionDenied
+  | .failed false => some .transportFailed
+
+theorem renewal_publishes_no_failure : streamEndEvent .renewalDue = none := by rfl
+
+theorem classified_denial_is_denied : streamEndEvent (.failed true) = some .permissionDenied := by
+  rfl
+
+/-- The notice a source sends once every subscription of an arm is armed:
+`renewed` when the arm replaced a running set, `subscriptionsReady` otherwise.
+A source notice carries exactly one event; there is no precedence between
+notice fields. -/
+def armedEvent (renewal : Bool) : Event := if renewal then .renewed else .subscriptionsReady
+
+/-- Whether the source is armed after a notice of its task, so the observer
+may run a snapshot of it. An armed notice arms it; a failure or a denial
+disarms it until its next armed notice. The task sends no other event (the
+remaining cases leave it as it was): a snapshot result is the observer's own,
+and a snapshot that failed for a transport reason leaves the streams armed and
+is retried after `snapshotRetryDelayMs`. -/
+def armedAfter (wasArmed : Bool) : Event → Bool
+  | .subscriptionsReady | .renewed => true
+  | .transportFailed | .permissionDenied => false
+  | .sourceStarted | .snapshotSucceeded | .endpointMissing => wasArmed
+
+theorem armed_notice_schedules_a_snapshot (wasArmed renewal : Bool) :
+    armedAfter wasArmed (armedEvent renewal) = true := by
+  cases renewal <;> rfl
+
+theorem stream_end_disarms (wasArmed : Bool) (streamEnd : StreamEnd) (event : Event)
+    (h : streamEndEvent streamEnd = some event) : armedAfter wasArmed event = false := by
+  cases streamEnd with
+  | renewalDue => simp [streamEndEvent] at h
+  | completed => simp [streamEndEvent] at h; subst h; rfl
+  | failed denied => cases denied <;> simp [streamEndEvent] at h <;> subst h <;> rfl
+
+/-- How the source's snapshot read ended. `refused` is an HTTP 401/403 or a
+`PERMISSION_DENIED` envelope (the access owner's classification).
+`rootWithheld` is external premise: the pinned served runtime answers a User
+whose grant was revoked with HTTP 200, no `errors`, and `data` that omits the
+selected roots; it also accepts that User's SSE handshake and keeps its streams
+silent (observe tests `revoked_user_is_answered_without_a_classified_denial`).
+An authorized reader whose rows ACP filters gets each root as an empty list
+(`denial_is_not_an_empty_result`), so an omitted root is the runtime refusing
+the collection and is the only signal a revocation produces. It is a denial:
+classifying it as a transport failure would show a reachable runtime as an
+outage, keep the rows the User may no longer read, and retry it at the
+transport rate forever. -/
+inductive SnapshotOutcome where
+  | succeeded | refused | rootWithheld | unreachable
+  deriving DecidableEq, Repr
+
+def snapshotEvent : SnapshotOutcome → Event
+  | .succeeded => .snapshotSucceeded
+  | .refused | .rootWithheld => .permissionDenied
+  | .unreachable => .transportFailed
+
+theorem withheld_root_is_a_denial : snapshotEvent .rootWithheld = .permissionDenied := by rfl
 
 /-- A denial is not terminal. A grant restored on the runtime emits nothing a
 denied reader can subscribe to, and a 401 from an expired or rotated bearer is
@@ -744,7 +1105,8 @@ def reprobeDelayMs (denials : Nat) : Nat := min (reprobeBaseMs * 2 ^ denials) re
 def nextDenials (denials : Nat) : Event → Nat
   | .permissionDenied => denials + 1
   | .snapshotSucceeded => 0
-  | .sourceStarted | .subscriptionsReady | .transportFailed => denials
+  | .sourceStarted | .subscriptionsReady | .transportFailed | .renewed | .endpointMissing =>
+    denials
 
 theorem denied_source_restarts :
     observe .denied .sourceStarted = .connecting := by rfl
@@ -767,4 +1129,424 @@ theorem reprobe_delay_monotone (denials : Nat) :
 theorem connected_snapshot_resets_reprobe (denials : Nat) :
     nextDenials denials .snapshotSucceeded = 0 := by rfl
 
+theorem renewal_keeps_reprobe (denials : Nat) : nextDenials denials .renewed = denials := by rfl
+
+/-- A source whose stream failed for a transport reason re-arms after this
+fixed delay. It is not a backoff: an unreachable runtime is re-dialed (every
+subscription re-armed) at this rate until it answers. Whether to back off,
+which would delay noticing a recovered runtime, is an open product decision. A
+denial, including a withheld root, is never retried at this rate; it waits
+`reprobeDelayMs`. -/
+def transportRetryDelayMs : Nat := 250
+
+/-- A snapshot whose read failed for a transport reason, or whose result
+raced a newer store write, is retried after this delay while its source stays
+armed. It is the same decision as `transportRetryDelayMs` and named separately
+because the observer owns two timers. -/
+def snapshotRetryDelayMs : Nat := transportRetryDelayMs
+
+theorem transport_retry_positive : 0 < transportRetryDelayMs := by decide
+
+theorem transport_retry_below_first_reprobe : transportRetryDelayMs < reprobeDelayMs 0 := by
+  decide
+
+/-- Half the locally minted bearer lifetime (60s): how long the source keeps
+an armed subscription set before it re-authenticates by arming a replacement. -/
+def renewalPeriodMs : Nat := 30000
+
+/-- When the next renewal starts, given when the current one started and how
+long its arm took. The period is measured from the completed arm, not from a
+handshake's start: measured from the handshake, an arm slower than the period
+would leave the next renewal already due, and the source would re-arm and
+resnapshot without pause while reading `connected`. -/
+def renewalStartMs (startedMs armMs : Nat) : Nat := startedMs + armMs + renewalPeriodMs
+
+theorem renewals_are_spaced_by_a_period (startedMs armMs : Nat) :
+    startedMs + armMs + renewalPeriodMs ≤ renewalStartMs startedMs armMs := Nat.le_refl _
+
+theorem a_slow_arm_does_not_make_renewal_due (startedMs armMs : Nat) :
+    startedMs + armMs < renewalStartMs startedMs armMs := by
+  unfold renewalStartMs renewalPeriodMs; omega
+
+/-- What the user sees for a runtime connection. `waiting` states progress
+without the user: the source is connecting, or it retries an outage on
+`transportRetryDelayMs`. `blocked` states name a cause the user may need to act
+on: a denial (re-probed on `reprobeDelayMs`, but restored only by a grant on the
+runtime) or a peer with no endpoint, which nothing in the client can connect. -/
+inductive Tone where
+  | ready | waiting | blocked
+  deriving DecidableEq, Repr
+
+inductive Reason where
+  | connected | connecting | disconnected | permissionDenied | noEndpoint
+  deriving DecidableEq, Repr
+
+/-- `none` is a peer the observer has not yet reconciled. The desktop bridge
+never withholds a reconciled status from a viewer: admission reads it
+(`blocksAdmission`), so a hidden status would block the composer forever. -/
+def presentation : Option Status → Tone × Reason
+  | none | some .connecting => (.waiting, .connecting)
+  | some .connected => (.ready, .connected)
+  | some .disconnected => (.waiting, .disconnected)
+  | some .denied => (.blocked, .permissionDenied)
+  | some .noEndpoint => (.blocked, .noEndpoint)
+
+/-- A served runtime held steady while the observer runs. -/
+structure Served where
+  reachable : Bool
+  granted : Bool
+  deriving DecidableEq, Repr
+
+def Served.read (served : Served) : SnapshotOutcome :=
+  if !served.reachable then .unreachable
+  else if !served.granted then .rootWithheld
+  else .succeeded
+
+/-- The event the observer next produces by itself at `status` against a
+steady runtime, or `none` when only an outside change moves it. A `connecting`
+source arms and reads a snapshot. A disconnected source re-arms after
+`transportRetryDelayMs`. A connected source sees a lost runtime as a stream
+failure; it sees a revocation only through the resnapshot after its next
+renewal (`renewalPeriodMs`), because the served runtime keeps a revoked User's
+streams open and silent. A denied source restarts after `reprobeDelayMs`. -/
+def sourceEvent (served : Served) : Status → Option Event
+  | .connecting =>
+    if served.reachable then some (snapshotEvent served.read) else some .transportFailed
+  | .disconnected => some (if served.reachable then .subscriptionsReady else .transportFailed)
+  | .connected =>
+    if !served.reachable then some .transportFailed
+    else if !served.granted then some (snapshotEvent served.read)
+    else none
+  | .denied => some .sourceStarted
+  | .noEndpoint => none
+
+def step (served : Served) (status : Status) : Status :=
+  match sourceEvent served status with
+  | some event => observe status event
+  | none => status
+
+def run (served : Served) : Nat → Status → Status
+  | 0, status => status
+  | n + 1, status => run served n (step served status)
+
+theorem run_succ (served : Served) (n : Nat) (status : Status) :
+    run served (n + 1) status = run served n (step served status) := rfl
+
+theorem run_add (served : Served) (m n : Nat) (status : Status) :
+    run served (m + n) status = run served n (run served m status) := by
+  induction m generalizing status with
+  | zero => simp [run]
+  | succ m ih => rw [Nat.add_right_comm, run_succ, run_succ, ih]
+
+/-- A reachable runtime that granted the User: every status with an endpoint
+is `connected` within two source steps, and stays there. -/
+theorem healthy_settles_connected (status : Status) (h : status ≠ .noEndpoint) (n : Nat) :
+    run ⟨true, true⟩ (n + 2) status = .connected := by
+  have fixed : ∀ k, run ⟨true, true⟩ k .connected = .connected := by
+    intro k; induction k with
+    | zero => rfl
+    | succ k ih => rw [run_succ]; exact ih
+  rw [Nat.add_comm, run_add]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+
+/-- A revoked User at a reachable runtime: after one source step the status
+is only ever `denied` or the `connecting` of a re-probe, which reads the
+withheld root and returns to `denied`. It never reads as an outage. -/
+theorem revoked_alternates_denied_and_reprobe (status : Status) (h : status ≠ .noEndpoint)
+    (n : Nat) : run ⟨true, false⟩ (n + 1) status = .denied ∨
+      run ⟨true, false⟩ (n + 1) status = .connecting := by
+  have closed : ∀ k s, (s = Status.denied ∨ s = .connecting) →
+      (run ⟨true, false⟩ k s = .denied ∨ run ⟨true, false⟩ k s = .connecting) := by
+    intro k; induction k with
+    | zero => intro s hs; exact hs
+    | succ k ih =>
+      intro s hs; rw [run_succ]; apply ih
+      rcases hs with rfl | rfl <;> simp [step, sourceEvent, observe, snapshotEvent, Served.read]
+  rw [Nat.add_comm, run_add]
+  apply closed
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+
+theorem revoked_reaches_denied (status : Status) (h : status ≠ .noEndpoint) :
+    run ⟨true, false⟩ 1 status = .denied ∨ run ⟨true, false⟩ 2 status = .denied := by
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+
+/-- An unreachable runtime: every status with an endpoint is `disconnected`
+within two source steps and stays there, retrying, until the runtime answers. -/
+theorem unreachable_settles_disconnected (granted : Bool) (status : Status)
+    (h : status ≠ .noEndpoint) (n : Nat) :
+    run ⟨false, granted⟩ (n + 2) status = .disconnected := by
+  have fixed : ∀ k, run ⟨false, granted⟩ k .disconnected = .disconnected := by
+    intro k; induction k with
+    | zero => rfl
+    | succ k ih => rw [run_succ]; simpa [step, sourceEvent, observe] using ih
+  rw [Nat.add_comm, run_add]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+
+/-- What a steady runtime settles into reads as its cause: `ready` exactly for
+a healthy runtime, `blocked` with `permissionDenied` for a revoked User (between
+re-probes), and `waiting` with `disconnected` only for an unreachable one. A
+revoked User is never shown an outage. -/
+theorem settled_presentation_names_the_cause (status : Status) (h : status ≠ .noEndpoint)
+    (n : Nat) :
+    presentation (some (run ⟨true, true⟩ (n + 2) status)) = (.ready, .connected) ∧
+    (presentation (some (run ⟨true, false⟩ (n + 1) status)) = (.blocked, .permissionDenied) ∨
+      presentation (some (run ⟨true, false⟩ (n + 1) status)) = (.waiting, .connecting)) ∧
+    presentation (some (run ⟨false, false⟩ (n + 2) status)) = (.waiting, .disconnected) ∧
+    presentation (some (run ⟨false, true⟩ (n + 2) status)) = (.waiting, .disconnected) := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · rw [healthy_settles_connected status h n]; rfl
+  · rcases revoked_alternates_denied_and_reprobe status h n with e | e <;> rw [e] <;> simp [presentation]
+  · rw [unreachable_settles_disconnected false status h n]; rfl
+  · rw [unreachable_settles_disconnected true status h n]; rfl
+
+/-- Distinct statuses name distinct reasons, so an outage never reads as a
+connection attempt and a missing endpoint never reads as either. -/
+theorem presentation_reason_injective (a b : Status)
+    (h : (presentation (some a)).2 = (presentation (some b)).2) : a = b := by
+  cases a <;> cases b <;> simp_all [presentation]
+
+theorem ready_is_exactly_connected (status : Status) :
+    (presentation (some status)).1 = .ready ↔ status = .connected := by
+  cases status <;> simp [presentation]
+
+theorem admission_blocked_unless_ready (status : Status) :
+    blocksAdmission status = true ↔ (presentation (some status)).1 ≠ .ready := by
+  cases status <;> simp [blocksAdmission, presentation]
+
 end RuntimeConnectionObservation
+
+/-! The observer's per-node load loop and what it shows the user. One loop owns
+every node: a queued node starts one load, which captures the store fence,
+reads the runtime and publishes through `ClientDataPublication.reloadFor`.
+Liveness of the loop (EventualPublication, Convergence) is checked by the
+`ObserverResync` TLA model; the theorems here are the per-step safety and
+ownership facts it relies on. -/
+namespace ObserverResync
+
+open ClientDataPublication
+open RuntimeConnectionObservation (Status)
+
+/-- How a finished snapshot load settles. -/
+inductive Settlement where
+  | published
+  /-- A publication into the epochs the reload checks since the capture
+  rejected it. The store already shows newer rows; the next load needs no
+  back-off. -/
+  | superseded
+  | transportFailed
+  | denied
+  deriving DecidableEq, Repr
+
+inductive LoadResult where
+  | rows | transportFailed | denied
+  deriving DecidableEq, Repr
+
+/-- `check` is the reload's `reloadCheck`. -/
+def settlement (s : State) (read : Read) (check : Scope) : LoadResult → Settlement
+  | .rows => if acceptsReloadFor s read check then .published else .superseded
+  | .transportFailed => .transportFailed
+  | .denied => .denied
+
+structure Slot where
+  pending : Bool
+  /-- The retry timer must fire before the next load (transport back-off). -/
+  waiting : Bool
+  loading : Bool
+  /-- The node's current source has armed every root. While it has not, the
+  source's transport task owns progress: it retries the subscription after
+  its back-off until every root arms or the runtime denies the User
+  (`observe/remote.rs`; this premise is outside the model). -/
+  armed : Bool
+  status : Status
+  deriving DecidableEq, Repr
+
+def initial : Slot :=
+  { pending := false, waiting := false, loading := false, armed := false, status := .connecting }
+
+/-- `SourceStarted`: a new source for the node, configured, replaced or
+re-probed after a denial. The previous source's load is aborted. -/
+def sourceStarted (n : Slot) : Slot :=
+  { n with loading := false, armed := false, status := .connecting }
+
+/-- `SubscriptionsReady`: every root is armed, so the snapshot may start. -/
+def armed (n : Slot) : Slot := { n with pending := true, armed := true, status := .connecting }
+
+/-- A delivered event, a direct refresh the fence rejected, or an explicit
+resync request queues the node; queued requests coalesce into one load. -/
+def queue (n : Slot) : Slot := { n with pending := true }
+
+/-- A load starts only on an armed source. A denied slot is never armed. -/
+def startable (n : Slot) : Bool := n.pending && !n.waiting && !n.loading && n.armed
+
+def start (n : Slot) : Slot :=
+  if startable n then { n with pending := false, loading := true } else n
+
+def timer (n : Slot) : Slot := { n with waiting := false }
+
+/-- A dropped stream aborts the node's load and disarms the source. A queued
+load stays queued; it starts once the transport task re-arms the source. -/
+def streamFailed (n : Slot) : Slot :=
+  { n with loading := false, armed := false, status := .disconnected }
+
+def settle (n : Slot) : Settlement → Slot
+  | .published => { n with loading := false, status := .connected }
+  | .superseded => { n with loading := false, pending := true }
+  | .transportFailed =>
+      { n with loading := false, pending := true, waiting := true, status := .disconnected }
+  | .denied =>
+      { n with loading := false, pending := false, waiting := false, armed := false,
+               status := .denied }
+
+/-- A denial the stream reports settles the slot as a denied load does. -/
+def streamDenied (n : Slot) : Slot := settle n .denied
+
+/-- What the user sees for a node, and why it is not stuck. -/
+inductive Presentation where
+  /-- Rows are being loaded, a load is queued, or the source is arming. -/
+  | catchingUp
+  | current
+  /-- Cause: the runtime is unreachable. Next: the retry timer or the
+  transport's re-arm, then a load. -/
+  | retrying
+  /-- Cause: the runtime refused the User. Next: the re-probe schedule. -/
+  | denied
+  /-- Cause: the directory has no operator endpoint for the peer, so it has no
+  source. Next: a reconcile that supplies one starts a source
+  (`RuntimeConnectionObservation`). -/
+  | noEndpoint
+  /-- Nothing owns progress. No `Owned` slot presents this. -/
+  | stalled
+  deriving DecidableEq, Repr
+
+def present (n : Slot) : Presentation :=
+  match n.status with
+  | .denied => .denied
+  | .noEndpoint => .noEndpoint
+  | .disconnected =>
+      if n.pending || n.waiting || n.loading || !n.armed then .retrying else .stalled
+  | .connecting => if n.pending || n.loading || !n.armed then .catchingUp else .stalled
+  | .connected => if n.pending || n.loading then .catchingUp else .current
+
+/-- Every connecting or disconnected slot has a queued or running load or an
+unarmed source whose transport task owns the re-arm, and a waiting slot is
+queued: the user-visible state is progressing or names its cause. -/
+def Owned (n : Slot) : Prop :=
+  (n.waiting = true → n.pending = true) ∧
+    (n.status = .connecting → n.pending = true ∨ n.loading = true ∨ n.armed = false) ∧
+    (n.status = .disconnected → n.pending = true ∨ n.loading = true ∨ n.armed = false)
+
+theorem owned_never_stalls (n : Slot) (h : Owned n) : present n ≠ .stalled := by
+  obtain ⟨_, hConnecting, hDisconnected⟩ := h
+  cases n with
+  | mk pending waiting loading armed status =>
+    cases status <;> cases pending <;> cases waiting <;> cases loading <;> cases armed <;>
+      simp_all [present]
+
+/-- An owned connecting or disconnected slot names its next step: a load can
+start now, the retry timer is due, a load is running, or the source is
+arming. -/
+theorem owned_names_next_step (n : Slot) (h : Owned n)
+    (hs : n.status = .connecting ∨ n.status = .disconnected) :
+    startable n = true ∨ n.waiting = true ∨ n.loading = true ∨ n.armed = false := by
+  obtain ⟨hWaiting, hConnecting, hDisconnected⟩ := h
+  cases n with
+  | mk pending waiting loading armed status =>
+    rcases hs with hs | hs <;> subst hs <;>
+      cases pending <;> cases waiting <;> cases loading <;> cases armed <;>
+      simp_all [startable]
+
+theorem initial_owned : Owned initial := by
+  simp [Owned, initial]
+
+theorem source_started_owned (n : Slot) (h : Owned n) : Owned (sourceStarted n) := by
+  cases n; simp_all [Owned, sourceStarted]
+
+theorem armed_owned (n : Slot) : Owned (armed n) := by
+  simp [Owned, armed]
+
+theorem queue_owned (n : Slot) (h : Owned n) : Owned (queue n) := by
+  cases n; simp_all [Owned, queue]
+
+theorem start_owned (n : Slot) (h : Owned n) : Owned (start n) := by
+  unfold start
+  split
+  · cases n; simp_all [Owned, startable]
+  · exact h
+
+theorem settle_owned (n : Slot) (h : Owned n) (outcome : Settlement) :
+    Owned (settle n outcome) := by
+  cases n; cases outcome <;> simp_all [Owned, settle]
+
+theorem stream_failed_owned (n : Slot) (h : Owned n) : Owned (streamFailed n) := by
+  cases n; simp_all [Owned, streamFailed]
+
+theorem stream_denied_owned (n : Slot) (h : Owned n) : Owned (streamDenied n) :=
+  settle_owned n h .denied
+
+theorem timer_owned (n : Slot) (h : Owned n) : Owned (timer n) := by
+  cases n; simp_all [Owned, timer]
+
+/-- A dropped stream keeps a queued load from starting until the source
+re-arms; the re-arm queues it and it starts unless the retry timer is due. -/
+theorem stream_failure_waits_for_arm (n : Slot) :
+    startable (streamFailed n) = false ∧
+      startable (armed (streamFailed n)) = !n.waiting := by
+  simp [startable, streamFailed, armed]
+
+theorem denied_never_starts (n : Slot) : startable (streamDenied n) = false := by
+  simp [startable, streamDenied, settle]
+
+/-- A superseded load queues the node again with no back-off. -/
+theorem superseded_requeues_without_delay (n : Slot) :
+    (settle n .superseded).pending = true ∧ (settle n .superseded).waiting = n.waiting := by
+  simp [settle]
+
+/-- Only a transport failure arms the retry timer. -/
+theorem only_transport_failure_waits (n : Slot) (outcome : Settlement)
+    (h : outcome ≠ .transportFailed) (hw : n.waiting = false) :
+    (settle n outcome).waiting = false := by
+  cases outcome <;> simp_all [settle]
+
+/-- A safety step of EventualPublication, not the liveness property itself
+(that is the TLA model's): a load whose read began before any number of
+request events, of any footprint, publishes and shows the node connected. -/
+theorem request_events_never_supersede (s : State) (events : List Scope) (check : Scope)
+    (n : Slot) :
+    settlement (requestEvents s events) (beginRead s) check .rows = .published ∧
+      (settle n (settlement (requestEvents s events) (beginRead s) check .rows)).status =
+        .connected := by
+  have h := arbitrarily_many_request_events_preserve_reload s events check
+  simp [settlement, h, settle]
+
+/-- NoStaleCommit through the loop: a publication into the node since capture
+supersedes the load, and the node is queued for a fresh read. -/
+theorem publication_supersedes_and_requeues (s : State) (node : Nat) (n : Slot) :
+    settlement (dataChange s (.nodes [node])) (beginRead s) (.nodes [node]) .rows =
+        .superseded ∧
+      (settle n (settlement (dataChange s (.nodes [node])) (beginRead s) (.nodes [node])
+        .rows)).pending = true := by
+  have h := same_owner_publication_rejects_reload s node
+  simp [settlement, h, settle]
+
+/-- Queued requests coalesce: however many arrive while a load runs, the node
+is queued once and the next `start` begins one load. This bounds hosted reads
+by the batches of reasons to read, not below them: a node whose runtime emits
+a change during every load (a lease renewal) is read back to back. -/
+def queueAll (n : Slot) : Nat → Slot
+  | 0 => n
+  | k + 1 => queue (queueAll n k)
+
+theorem queued_requests_coalesce (n : Slot) (k : Nat) :
+    queueAll n (k + 1) = queue n := by
+  induction k with
+  | zero => rfl
+  | succ k ih => simp [queueAll] at ih ⊢; rw [ih]; simp [queue]
+
+theorem one_load_per_start (n : Slot) :
+    start (start n) = start n := by
+  unfold start startable
+  by_cases h : n.pending && !n.waiting && !n.loading && n.armed
+  · simp [h]
+  · simp [h]
+
+end ObserverResync

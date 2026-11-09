@@ -8,12 +8,13 @@ pub async fn desktop_session_goal(
     node_did: String,
     session_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<Option<crate::types::SessionGoalView>, BridgeError> {
+) -> Result<Option<crate::types::SessionGoalState>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
     crate::commands::session_goal(&core, &node_did, &session_id)
         .await
+        .map(Some)
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 

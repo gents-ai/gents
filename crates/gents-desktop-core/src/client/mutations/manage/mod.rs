@@ -7,15 +7,11 @@ mod task;
 mod tools;
 
 use anyhow::Result;
-#[cfg(test)]
-use defra_node::Node as EmbeddedNode;
 use gents::documents::apply_desired_state_plan;
 use gents::store::collection::Collection;
 use gents::store::config_client::{
     read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
-#[cfg(test)]
-use std::sync::Arc;
 
 pub async fn apply_plan(
     access: &ConfigAccess,
@@ -31,22 +27,6 @@ pub async fn apply_plan(
             })
         })
         .await
-}
-
-#[cfg(test)]
-pub async fn apply_plan_local(
-    node: &Arc<EmbeddedNode>,
-    operation: &'static str,
-    plan: DesiredStateApplyPlan,
-) -> Result<()> {
-    ConfigAccess::transact_local_write(node, None, operation, |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(())
-        })
-    })
-    .await
 }
 
 pub async fn delete_scoped_document(
@@ -73,32 +53,6 @@ pub async fn delete_scoped_document(
             })
         })
         .await
-}
-
-#[cfg(test)]
-pub async fn delete_scoped_document_local(
-    node: &Arc<EmbeddedNode>,
-    operation: &'static str,
-    collection: Collection,
-    node_did: &str,
-    id: &str,
-) -> Result<usize> {
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
-        collection,
-        node_did.to_owned(),
-        id.to_owned(),
-    )])?;
-    ConfigAccess::transact_local_write(node, None, operation, |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            let existed = read_desired_state_record_in_txn(txn, collection, node_did, id)
-                .await?
-                .is_some();
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(usize::from(existed))
-        })
-    })
-    .await
 }
 
 #[cfg(test)]

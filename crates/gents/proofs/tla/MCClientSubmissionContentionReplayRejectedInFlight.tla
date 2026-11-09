@@ -1,0 +1,4 @@
+---- MODULE MCClientSubmissionContentionReplayRejectedInFlight ----
+EXTENDS ClientSubmissionContention
+
+====

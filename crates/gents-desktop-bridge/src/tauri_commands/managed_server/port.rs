@@ -20,6 +20,9 @@ pub(super) enum PortReadiness {
     NotListening,
     /// The runtime publicly reports ready, but the User could not read its
     /// private status, so its authority (tool root, ceiling) is unobserved.
+    /// It reports only on the managed service; the client's runtime
+    /// connection status has one owner, `client::observe`
+    /// (`RuntimeConnectionObservation`), and this never writes it.
     StatusUnreadable {
         public: ManagedServerStatus,
         cause: HostedRuntimeStatusError,
