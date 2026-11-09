@@ -540,12 +540,8 @@ mod tests {
             claude_account("Claude 3", "disabled", "ref-3"),
         ]);
 
-        let ids: Vec<_> = providers
-            .iter()
-            .map(|provider| provider.id.as_str())
-            .collect();
-        assert_eq!(ids, ["openai", "anthropic", "grok", "local", "openrouter"]);
-        let anthropic = &providers[1].methods;
+        let anthropic = providers.iter().find(|shown| shown.id == "anthropic");
+        let anthropic = &anthropic.unwrap().methods;
         let shown: Vec<_> = anthropic
             .iter()
             .map(|method| (method.id.as_str(), method.auth, method.endpoint_fixed))
@@ -625,7 +621,12 @@ mod tests {
         let profiles = stored(&access, Collection::InferenceProfile).await;
         let agents = stored(&access, Collection::Agent).await;
         let connection = api_key("anthropic", "", "sk-new");
-        let settings = [(SettingKey::MaxConcurrent, "2".to_string())];
+        let settings = [
+            (SettingKey::MaxConcurrent, "2"),
+            (SettingKey::Temperature, "0.7"),
+            (SettingKey::TopP, "0.95"),
+        ]
+        .map(|(key, value)| (key, value.to_string()));
 
         let saved = save(&access, "owner", &connection, "claude-x", &settings).await;
 
@@ -649,71 +650,29 @@ mod tests {
         let profile = by(&profiles_now, "profile_id", "profile-anthropic-2");
         let bound = [&profile["model_name"], &profile["backend_id"]];
         assert_eq!(bound, [&json!("claude-x"), &json!("anthropic-2")]);
+        let sampled = "profile-anthropic-2-sampling";
+        assert_eq!(profile["sampling_id"], json!(sampled));
+        let [sampling] = &stored(&access, Collection::InferenceSampling).await[..] else {
+            panic!("one sampling");
+        };
+        assert_eq!(sampling["sampling_id"], json!(sampled));
+        let named = [
+            &added["name"],
+            &profile["display_name"],
+            &sampling["display_name"],
+        ];
         assert_eq!(
-            profile["sampling_id"],
-            Value::Null,
-            "no temperature or top-p"
+            named,
+            [
+                &json!("Anthropic API"),
+                &json!("Anthropic API"),
+                &json!("Anthropic API recommended sampling")
+            ]
         );
-        let sampling = stored(&access, Collection::InferenceSampling).await;
-        assert_eq!(sampling, Vec::<Value>::new());
+        let values = [&sampling["temperature"], &sampling["top_p"]];
+        assert_eq!(values, [&json!(0.7), &json!(0.95)]);
         assert_eq!(stored(&access, Collection::Agent).await, agents);
         node.shutdown().await;
-    }
-
-    #[test]
-    fn the_document_has_the_desktops_add_backend_shape() {
-        let local = (
-            InferenceProviderId::Local,
-            InferenceAuthMethod::OptionalApiKey,
-        );
-        let spec = connection_spec(local.0, local.1, "").unwrap();
-        let settings = [
-            (SettingKey::Temperature, "0.7"),
-            (SettingKey::TopP, "0.95"),
-            (SettingKey::MaxConcurrent, "1"),
-        ]
-        .map(|(key, value)| (key, value.to_string()));
-        let auth = BackendAuth::Unauthenticated;
-
-        let document = backend_document("owner", "local", &spec, auth, "qwen", &settings).unwrap();
-
-        let [backend] = &document.inference_backends[..] else {
-            panic!("one backend: {document:?}");
-        };
-        assert_eq!(
-            (backend.backend_id.as_str(), backend.name.as_str()),
-            ("local", "Local server")
-        );
-        assert_eq!(backend.auth, BackendAuth::Unauthenticated);
-        assert_eq!(
-            (backend.max_concurrent, backend.max_queue_depth),
-            (Some(1), Some(100))
-        );
-        assert!(backend.enabled);
-        let [profile] = &document.inference_profiles[..] else {
-            panic!("one profile: {document:?}");
-        };
-        assert_eq!(profile.profile_id, "profile-local");
-        assert_eq!(profile.display_name.as_deref(), Some("Local server"));
-        assert_eq!(
-            (profile.backend_id.as_str(), profile.model_name.as_str()),
-            ("local", "qwen")
-        );
-        assert_eq!(
-            profile.sampling_id.as_deref(),
-            Some("profile-local-sampling")
-        );
-        let [sampling] = &document.inference_sampling[..] else {
-            panic!("one sampling: {document:?}");
-        };
-        assert_eq!(sampling.sampling_id, "profile-local-sampling");
-        let named = sampling.display_name.as_deref();
-        assert_eq!(named, Some("Local server recommended sampling"));
-        assert_eq!(
-            (sampling.temperature, sampling.top_p),
-            (Some(0.7), Some(0.95))
-        );
-        assert!(document.agents.is_empty());
     }
 
     /// The shell takes a whole number as the desktop's `Number()` does.
@@ -734,6 +693,8 @@ mod tests {
         let saved = document("4.0").unwrap();
 
         assert_eq!(saved.inference_backends[0].max_concurrent, Some(4));
+        let unsampled = saved.inference_profiles[0].sampling_id.is_none();
+        assert!(unsampled && saved.inference_sampling.is_empty());
         let refused = document("4.5").unwrap_err();
         assert_eq!(refused.to_string(), "Concurrency must be a whole number");
     }

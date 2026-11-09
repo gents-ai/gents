@@ -483,28 +483,8 @@ pub(super) fn event_in_words(source: &Value) -> String {
 mod tests {
     use serde_json::json;
 
+    use super::super::testing::{agent, shown_rows};
     use super::*;
-
-    fn texts(rows: &[MenuRow]) -> Vec<(&str, Tone)> {
-        rows.iter()
-            .map(|row| (row.text.as_str(), row.tone))
-            .collect()
-    }
-
-    fn agent(id: &str, name: &str) -> AgentView {
-        AgentView {
-            agent_id: id.to_string(),
-            node_did: "did:key:z".to_string(),
-            display_name: name.to_string(),
-            description: None,
-            context_id: None,
-            inference_profile_id: None,
-            enabled: true,
-            is_default: false,
-            tags: Vec::new(),
-            created_at: None,
-        }
-    }
 
     fn sources() -> Sources {
         Sources {
@@ -525,7 +505,7 @@ mod tests {
                 json!({ "task_id": "padded", "display_name": " Padded ", "agent_id": "engineer", "enabled": true }),
                 json!({ "task_id": "blank", "display_name": "  ", "agent_id": "engineer", "enabled": true }),
             ],
-            agents: vec![agent("engineer", "Engineer")],
+            agents: vec![agent("engineer", "Engineer", true, false)],
         }
     }
 
@@ -594,7 +574,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            texts(&rows),
+            shown_rows(&rows),
             [
                 (" + New skill", Tone::Accent),
                 (" ● Review   2 tools", Tone::Plain),
@@ -647,7 +627,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            texts(&schedules(&[])),
+            shown_rows(&schedules(&[])),
             [
                 (" + New schedule", Tone::Accent),
                 (" No schedules.", Tone::Label),
@@ -721,7 +701,7 @@ mod tests {
         );
 
         assert_eq!(
-            texts(&rows[1..]),
+            shown_rows(&rows[1..]),
             [
                 (
                     " ● Nightly   Every day at 02:00 · run Triage with Engineer",
@@ -763,7 +743,7 @@ mod tests {
 
         let words = "Every day at 02:00 · run Triage with Engineer";
         assert_eq!(
-            texts(&rows[1..]),
+            shown_rows(&rows[1..]),
             [(
                 format!(" ● Nightly   {words}   Engineer: agent is disabled").as_str(),
                 Tone::Warn
@@ -786,7 +766,7 @@ mod tests {
         );
 
         assert_eq!(
-            texts(&rows[1..]),
+            shown_rows(&rows[1..]),
             [
                 (
                     " ● A   No source · run Triage with Engineer   Schedule is missing",
@@ -864,7 +844,7 @@ mod tests {
             .format("%Y-%m-%d %H:%M");
         let words = "Every day at 02:00 · run Triage with Engineer";
         assert_eq!(
-            texts(&rows[1..]),
+            shown_rows(&rows[1..]),
             [
                 (
                     format!(" ● Failed   {words}   Last run failed: the agent timed out").as_str(),
@@ -909,18 +889,18 @@ mod tests {
         })]);
 
         assert_eq!(
-            texts(&schedule_rows[1..]),
+            shown_rows(&schedule_rows[1..]),
             [
                 (" Daily   0 9 * * *", Tone::Plain),
                 (" often   every 900s", Tone::Plain),
             ]
         );
         assert_eq!(
-            texts(&event_rows[1..]),
+            shown_rows(&event_rows[1..]),
             [(" Requests   AgentRequest", Tone::Plain)]
         );
         assert_eq!(
-            texts(&tool_rows[1..]),
+            shown_rows(&tool_rows[1..]),
             [(" Local   127.0.0.1", Tone::Plain)]
         );
         let rows = [&schedule_rows[1..], &event_rows[1..], &tool_rows[1..]].concat();
@@ -1001,7 +981,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            texts(&rows),
+            shown_rows(&rows),
             [
                 (" board   board · Pack · acme/notes", Tone::Plain),
                 (
@@ -1023,7 +1003,7 @@ mod tests {
             pack("acme/alpha/board", "acme/alpha"),
         ]);
         assert_eq!(
-            texts(&twins),
+            shown_rows(&twins),
             [
                 (" board   board · Pack · acme/zeta", Tone::Plain),
                 (" board   board · Pack · acme/alpha", Tone::Plain),

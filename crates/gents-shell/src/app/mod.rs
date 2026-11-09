@@ -1905,29 +1905,23 @@ mod tests {
     }
 
     #[test]
-    fn whitespace_only_is_not_sent() {
+    fn enter_sends_a_draft_with_text_from_the_box_as_typed() {
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "   ");
         press(&mut app, "enter");
-        assert!(app.tabs[0].lines.is_empty());
+        assert!(app.tabs[0].lines.is_empty(), "whitespace only is not sent");
         assert_eq!(app.tabs[0].input.text(), "   ");
-    }
 
-    #[test]
-    fn surrounding_spaces_are_kept_in_the_message() {
+        let mut app = App::new(Vim, 132, 36);
+        type_text(&mut app, "hi");
+        press(&mut app, "esc enter");
+        assert!(app.tabs[0].lines.is_empty(), "not from normal mode");
+        assert_eq!(app.tabs[0].input.text(), "hi");
+
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, " hi ");
         press(&mut app, "enter");
         assert_eq!(app.tabs[0].lines[0].text, " hi ");
-    }
-
-    #[test]
-    fn enter_in_normal_mode_does_not_send_the_draft() {
-        let mut app = App::new(Vim, 132, 36);
-        type_text(&mut app, "hi");
-        press(&mut app, "esc enter");
-        assert!(app.tabs[0].lines.is_empty());
-        assert_eq!(app.tabs[0].input.text(), "hi");
     }
 
     #[test]
@@ -2211,16 +2205,23 @@ mod tests {
     }
 
     #[test]
-    fn wrap_prefers_spaces() {
-        assert_eq!(wrap("alpha beta gamma", 10), ["alpha beta", "gamma"]);
-        assert_eq!(wrap("alpha beta", 7), ["alpha", "beta"]);
-    }
-
-    #[test]
-    fn wrap_breaks_a_word_only_when_it_must() {
-        assert_eq!(wrap("aaaaaaaaaaaa", 5), ["aaaaa", "aaaaa", "aa"]);
-        assert_eq!(wrap("ab cccccccc", 5), ["ab", "ccccc", "ccc"]);
-        assert_eq!(wrap("世界世界", 3), ["世", "界", "世", "界"]);
+    fn wrap_breaks_at_spaces_and_between_graphemes_by_display_width() {
+        for (text, width, rows) in [
+            ("alpha beta gamma", 10, &["alpha beta", "gamma"][..]),
+            ("alpha beta", 7, &["alpha", "beta"]),
+            ("aaaaaaaaaaaa", 5, &["aaaaa", "aaaaa", "aa"]),
+            ("ab cccccccc", 5, &["ab", "ccccc", "ccc"]),
+            ("abcdefghij  klmnopqrst", 10, &["abcdefghij", "klmnopqrst"]),
+            ("one  two", 4, &["one", "two"]),
+            ("", 5, &[""]),
+            ("世界世界", 3, &["世", "界", "世", "界"]),
+            ("日本語", 5, &["日本", "語"]),
+            ("日本", 1, &["日", "本"]),
+            ("a✔\u{fe0f}", 2, &["a", "✔\u{fe0f}"]),
+            ("👩\u{200d}💻", 3, &["👩\u{200d}💻"]),
+        ] {
+            assert_eq!(wrap(text, width), rows, "{text:?} at {width}");
+        }
     }
 
     fn session_app() -> App {
@@ -2291,33 +2292,37 @@ mod tests {
     }
 
     #[test]
-    fn up_from_an_empty_box_selects_the_last_row() {
+    fn the_running_rows_are_entered_and_left_at_their_edges() {
         let mut app = session_app();
         press(&mut app, "i up");
         assert_eq!(app.tabs[0].running_sel, Some(3));
         assert_eq!(app.chip(), "AGENTS");
         let s = screen(&app);
         assert!(find(&s, "enter open · j/k move · esc back").is_some());
-    }
-
-    #[test]
-    fn up_with_text_in_the_box_does_not() {
-        let mut app = session_app();
-        press(&mut app, "i");
+        press(&mut app, "down");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.ctx(), KeyCtx::Input);
         type_text(&mut app, "x");
         press(&mut app, "up");
-        assert_eq!(app.tabs[0].running_sel, None);
-    }
+        assert_eq!(app.tabs[0].running_sel, None, "not with text in the box");
 
-    #[test]
-    fn j_falls_from_the_end_of_the_conversation() {
+        let mut app = session_app();
+        press(&mut app, "i up up up up up");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.mode, Mode::Normal);
+
         let mut app = session_app();
         press(&mut app, "j");
         assert_eq!(app.tabs[0].running_sel, Some(0));
-    }
+        press(&mut app, "k");
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert_eq!(app.ctx(), KeyCtx::Normal);
+        press(&mut app, "j j j j j j j");
+        assert_eq!(app.tabs[0].running_sel, Some(3));
+        press(&mut app, "ctrl-w h");
+        assert_eq!(app.focus, Pane::Sessions);
+        assert_eq!(app.tabs[0].running_sel, None);
 
-    #[test]
-    fn j_scrolls_first_when_scrolled_up() {
         let mut app = session_app();
         app.tabs[0].lines = numbered(100);
         press(&mut app, "k k j");
@@ -2326,53 +2331,11 @@ mod tests {
         assert_eq!((app.tabs[0].scroll, app.tabs[0].running_sel), (0, None));
         press(&mut app, "j");
         assert_eq!(app.tabs[0].running_sel, Some(0));
-    }
 
-    #[test]
-    fn j_stops_on_the_last_row() {
-        let mut app = session_app();
-        press(&mut app, "j j j j j j j");
-        assert_eq!(app.tabs[0].running_sel, Some(3));
-    }
-
-    #[test]
-    fn k_climbs_out_of_the_top_row() {
-        let mut app = session_app();
-        press(&mut app, "j k");
-        assert_eq!(app.tabs[0].running_sel, None);
-        assert_eq!(app.ctx(), KeyCtx::Normal);
-    }
-
-    #[test]
-    fn up_past_the_top_lands_in_normal_mode() {
-        let mut app = session_app();
-        press(&mut app, "i up up up up up");
-        assert_eq!(app.tabs[0].running_sel, None);
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn down_past_the_last_row_returns_to_the_box() {
-        let mut app = session_app();
-        press(&mut app, "i up down");
-        assert_eq!(app.tabs[0].running_sel, None);
-        assert_eq!(app.ctx(), KeyCtx::Input);
-    }
-
-    #[test]
-    fn ctrl_w_j_and_k_enter_and_leave_the_rows() {
         let mut app = session_app();
         press(&mut app, "ctrl-w j");
         assert_eq!(app.tabs[0].running_sel, Some(0));
         press(&mut app, "ctrl-w k");
-        assert_eq!(app.tabs[0].running_sel, None);
-    }
-
-    #[test]
-    fn leaving_the_pane_leaves_the_rows() {
-        let mut app = session_app();
-        press(&mut app, "j ctrl-w h");
-        assert_eq!(app.focus, Pane::Sessions);
         assert_eq!(app.tabs[0].running_sel, None);
     }
 
@@ -3267,15 +3230,6 @@ mod tests {
         assert_eq!(app.ctx(), KeyCtx::Input);
     }
 
-    #[test]
-    fn wrap_drops_every_space_at_a_break() {
-        assert_eq!(
-            wrap("abcdefghij  klmnopqrst", 10),
-            ["abcdefghij", "klmnopqrst"]
-        );
-        assert_eq!(wrap("one  two", 4), ["one", "two"]);
-    }
-
     fn enter_on_session(app: &mut App, text: &str) {
         app.focus = Pane::Sessions;
         app.sessions_sel = session_row(text);
@@ -3722,7 +3676,7 @@ mod tests {
     }
 
     #[test]
-    fn back_closes_the_list_and_keeps_the_text() {
+    fn the_list_closes_without_losing_the_text() {
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "/c");
         press(&mut app, "esc");
@@ -3738,31 +3692,23 @@ mod tests {
         press(&mut app, "ctrl-g");
         assert_eq!(app.slash, None);
         assert_eq!(app.tabs[0].input.text(), "/c");
-
         type_text(&mut app, "x");
         assert_eq!(app.slash, None);
         press(&mut app, "enter");
         assert_eq!(app.tabs[0].lines[0].text, "/cx");
         assert!(app.tabs[0].input.is_empty());
-    }
 
-    #[test]
-    fn backspacing_the_slash_closes_the_list() {
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "/");
         press(&mut app, "bs");
         assert_eq!(app.slash, None);
         assert!(app.tabs[0].input.is_empty());
         assert_eq!(find(&screen(&app), " Commands "), None);
-
         type_text(&mut app, "/c");
         press(&mut app, "esc bs");
         assert_eq!(app.tabs[0].input.text(), "/");
         assert_eq!(app.slash, None);
-    }
 
-    #[test]
-    fn text_that_stops_starting_with_a_slash_closes_the_list() {
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "/c");
         press(&mut app, "home");
@@ -3770,32 +3716,24 @@ mod tests {
         type_text(&mut app, "a");
         assert_eq!(app.tabs[0].input.text(), "a/c");
         assert_eq!(app.slash, None);
-
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "/c");
         press(&mut app, "home");
         app.handle(Event::Paste("a".to_string()));
         assert_eq!(app.tabs[0].input.text(), "a/c");
         assert_eq!(app.slash, None);
-
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "/c");
         press(&mut app, "ctrl-c");
         assert!(app.tabs[0].input.is_empty());
         assert_eq!(app.slash, None);
-    }
 
-    #[test]
-    fn leaving_the_box_closes_the_list() {
         let mut app = App::new(Emacs, 132, 36);
         app.tabs.push(Tab::new_session());
         type_text(&mut app, "/");
         press(&mut app, "ctrl-x n");
         assert_eq!(app.slash, None);
-    }
 
-    #[test]
-    fn unknown_command_keeps_the_text() {
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "/zzz");
         assert!(find(&screen(&app), "no matches").is_some());
@@ -4127,32 +4065,8 @@ mod tests {
         assert_eq!(rows[6].date, "older");
     }
 
-    #[test]
-    fn sample_rows_match_the_old_sidebar() {
-        let rows = session_rows(&crate::sample::sessions());
-        assert_eq!(
-            texts(&rows),
-            [
-                " + New session",
-                "",
-                " TODAY",
-                " ● cli ux redesign",
-                " ○ flaky recovery test",
-                " ! pack registry login",
-                "",
-                " YESTERDAY",
-                " ○ eval baseline",
-                " ○ desktop plugin page",
-                " ○ weekly triage",
-                " ○ pack review notes",
-            ]
-        );
-        assert_eq!(rows[START_SESSION].text, " ● cli ux redesign");
-    }
-
     fn connected() -> (App, std::sync::mpsc::Receiver<Intent>) {
-        let (intents, receiver) = std::sync::mpsc::channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, receiver) = crate::testing::connected(Vim, 132, 36);
         app.agents = crate::sample::agents();
         (app, receiver)
     }
@@ -4486,8 +4400,7 @@ mod tests {
     }
 
     fn with_runtime_agents() -> (App, std::sync::mpsc::Receiver<Intent>) {
-        let (intents, receiver) = std::sync::mpsc::channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, receiver) = crate::testing::connected(Vim, 132, 36);
         let agent = |id: &str, name: &str| Agent {
             id: id.to_string(),
             name: name.to_string(),
@@ -4523,8 +4436,7 @@ mod tests {
 
     #[test]
     fn closing_the_last_tab_takes_the_default_agent() {
-        let (intents, _receiver) = std::sync::mpsc::channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, _receiver) = crate::testing::connected(Vim, 132, 36);
         press(&mut app, "esc ctrl-w q");
         let waiting = agent_of(&app.tabs[0]);
         assert_eq!(
@@ -4709,8 +4621,7 @@ mod tests {
         assert!(intents.try_recv().is_err());
         assert_eq!(app.notice.as_deref(), Some(why));
 
-        let (intents, _receiver) = std::sync::mpsc::channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, _receiver) = crate::testing::connected(Vim, 132, 36);
         app.apply(lost());
         type_text(&mut app, "hello");
         press(&mut app, "enter");

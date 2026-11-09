@@ -140,24 +140,8 @@ fn hop(typed: &str) -> Result<Option<u32>, FormError> {
 mod tests {
     use chrono::{DateTime, Local};
 
-    use super::super::hinted;
-    use super::super::testing::sent;
     use super::*;
-
-    fn agent(id: &str, name: &str, enabled: bool) -> AgentView {
-        AgentView {
-            agent_id: id.to_string(),
-            node_did: "did:key:zNode".to_string(),
-            display_name: name.to_string(),
-            description: None,
-            context_id: None,
-            inference_profile_id: None,
-            enabled,
-            is_default: false,
-            tags: Vec::new(),
-            created_at: None,
-        }
-    }
+    use crate::commands::shell::testing::{agent, options, sent, shown_values};
 
     #[test]
     fn node_form_mirrors_the_desktop() {
@@ -174,8 +158,8 @@ mod tests {
             "tags": ["gents:pack:home", "desk"],
         });
         let agents = [
-            agent("engineer", "Engineer", true),
-            agent("scout", "Scout", false),
+            agent("engineer", "Engineer", true, false),
+            agent("scout", "Scout", false, false),
         ];
 
         let shown = form(&node, &agents);
@@ -183,57 +167,28 @@ mod tests {
         assert_eq!(shown.form, FormRef::Node);
         assert_eq!(shown.title, "Node");
         assert_eq!(shown.note, ["Studio   Disabled"]);
+        let created = DateTime::parse_from_rfc3339("2026-01-01T12:00:00Z").unwrap();
+        let created = created.with_timezone(&Local).format("%Y-%m-%d").to_string();
+        assert_eq!(
+            shown_values(&shown),
+            [
+                ("naming", ""),
+                ("display_name", "Studio"),
+                ("tags", "desk"),
+                ("enabled", "off"),
+                ("details", ""),
+                ("default_agent_id", "engineer"),
+                ("max_request_hop", "3"),
+                ("identity", ""),
+                ("node_did", "did:key:zNode"),
+                ("created_at", created.as_str()),
+            ]
+        );
         let agents = [
             ("engineer", "Engineer"),
             ("scout", "Scout · disabled, enabled when saved as default"),
         ];
-        let default = field(
-            "default_agent_id",
-            "Default agent",
-            choice(agents),
-            "engineer",
-        );
-        let hop = field(
-            "max_request_hop",
-            "Maximum request hop",
-            FieldKind::Text,
-            "3",
-        );
-        let created = DateTime::parse_from_rfc3339("2026-01-01T12:00:00Z").unwrap();
-        let created = created.with_timezone(&Local).format("%Y-%m-%d").to_string();
-        assert_eq!(
-            shown.fields,
-            [
-                field("naming", "Name and tags", FieldKind::Heading, ""),
-                helped(
-                    field("display_name", "Display name", FieldKind::Text, "Studio"),
-                    "How this node is named across the desktop."
-                ),
-                hinted(
-                    helped(
-                        field("tags", "Tags", FieldKind::Text, "desk"),
-                        "Optional discovery labels."
-                    ),
-                    "Add a tag"
-                ),
-                helped(
-                    switch("enabled", "Enabled", false),
-                    "A disabled node accepts no requests."
-                ),
-                field("details", "Node details", FieldKind::Heading, ""),
-                helped(default, "Used when a session does not choose one."),
-                helped(
-                    hop,
-                    "Limits how far requests can be chained. Leave blank for no limit; 0 permits only root requests."
-                ),
-                field("identity", "Identity", FieldKind::Heading, ""),
-                helped(
-                    field("node_did", "Node DID", FieldKind::Fixed, "did:key:zNode"),
-                    "The node's cryptographic identity. Permissions and audit are keyed by it."
-                ),
-                field("created_at", "Created", FieldKind::Fixed, &created),
-            ]
-        );
+        assert_eq!(options(&shown, "default_agent_id"), agents);
         assert_eq!(shown.actions, []);
 
         let bare = json!({ "node_did": "did:key:zNode", "default_agent_id": "engineer" });

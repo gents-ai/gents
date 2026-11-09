@@ -441,7 +441,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{channel, Receiver};
+    use std::sync::mpsc::Receiver;
 
     use super::*;
     use crate::app::{Mode, Pane};
@@ -450,7 +450,8 @@ mod tests {
     use crate::sample::{self, MENUS};
     use crate::source::{Doc, EditedChoice, FormRef, PackAct, Update};
     use crate::testing::{
-        buffer, find, kinds, press, screen, type_text, with_right_pane, with_sample_session,
+        buffer, connected, drain, find, kinds, press, screen, type_text, with_right_pane,
+        with_sample_session,
     };
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::Event;
@@ -462,11 +463,6 @@ mod tests {
     const SKILLS: LayerKind = LayerKind::Menu(MenuId::Skills);
     const MORE: LayerKind = LayerKind::Menu(MenuId::More);
     const APP: LayerKind = LayerKind::Menu(MenuId::AppSettings);
-
-    fn connected() -> (App, Receiver<Intent>) {
-        let (intents, intended) = channel();
-        (App::connected(Vim, 132, 36, intents), intended)
-    }
 
     fn menu_row(text: &str, enter: Option<MenuAct>, d: Option<MenuAct>) -> MenuRow {
         MenuRow {
@@ -487,10 +483,6 @@ mod tests {
             more,
             ..menu_row(text, None, None)
         }
-    }
-
-    fn sent(intended: &Receiver<Intent>) -> Vec<Intent> {
-        intended.try_iter().collect()
     }
 
     fn plain(texts: &[&str]) -> Vec<MenuRow> {
@@ -611,16 +603,16 @@ mod tests {
             ("Packs", MenuId::Packs),
             ("UX Plugins", MenuId::UxPlugins),
         ] {
-            let (mut app, intended) = connected();
+            let (mut app, intended) = connected(Vim, 132, 36);
             app.push_layer(NODE);
             app.layers[0].selected = row_named(MenuId::NodeSettings, name);
             press(&mut app, "enter");
             assert_eq!(kinds(&app), [NODE, LayerKind::Menu(id)], "{name}");
-            assert_eq!(sent(&intended), [Intent::ReadMenu(id)], "{name}");
+            assert_eq!(drain(&intended), [Intent::ReadMenu(id)], "{name}");
             assert!(find(&screen(&app), &format!(" {} ", id.name())).is_some());
         }
 
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.push_layer(NODE);
         app.layers[0].selected = row_named(MenuId::NodeSettings, "Node");
         press(&mut app, "enter");
@@ -629,12 +621,12 @@ mod tests {
             form: FormRef::Node,
             opening: 1,
         };
-        assert_eq!(sent(&intended), [node]);
+        assert_eq!(drain(&intended), [node]);
     }
 
     #[test]
     fn an_empty_section_says_what_the_desktop_says() {
-        let (mut app, _intended) = connected();
+        let (mut app, _intended) = connected(Vim, 132, 36);
         app.push_layer(LayerKind::Menu(MenuId::AllowedFolders));
         read(&mut app, MenuId::AllowedFolders, Vec::new());
         assert_eq!(
@@ -657,8 +649,7 @@ mod tests {
     #[test]
     fn a_section_menu_shows_the_desktops_copy_uncut() {
         for (set, back) in [(Vim, "esc back"), (Emacs, "ctrl-g back")] {
-            let (intents, _intended) = channel();
-            let mut app = App::connected(set, 132, 36, intents);
+            let (mut app, _intended) = connected(set, 132, 36);
             app.push_layer(LayerKind::Menu(MenuId::AllowedFolders));
             read(&mut app, MenuId::AllowedFolders, Vec::new());
             let s = screen(&app);
@@ -671,7 +662,7 @@ mod tests {
 
     #[test]
     fn a_profiles_answer_for_another_agent_is_dropped() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.push_layer(LayerKind::Menu(MenuId::Agents));
         let choose = MenuAct::ChooseProfile {
             agent: "a1".to_string(),
@@ -709,7 +700,7 @@ mod tests {
 
     #[test]
     fn dot_opens_the_rows_more_menu_and_runs_its_choice() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.push_layer(SKILLS);
         let duplicate = MenuAct::Duplicate(Doc::Skill, "s1".to_string());
         let rows = vec![
@@ -721,7 +712,7 @@ mod tests {
 
         press(&mut app, ".");
         assert_eq!(kinds(&app), [SKILLS, MORE]);
-        assert_eq!(sent(&intended), [], "More reads nothing");
+        assert_eq!(drain(&intended), [], "More reads nothing");
         let rect = app.top_layer_rect().expect("More");
         let s = screen(&app);
         assert!(s[usize::from(rect.y)].contains(" Code review "));
@@ -733,17 +724,17 @@ mod tests {
             menu: MenuId::Skills,
             act: duplicate,
         };
-        assert_eq!(sent(&intended), [act]);
+        assert_eq!(drain(&intended), [act]);
         assert_eq!(kinds(&app), [SKILLS]);
 
         press(&mut app, "j .");
         assert_eq!(kinds(&app), [SKILLS], "a row without more ignores it");
-        assert_eq!(sent(&intended), []);
+        assert_eq!(drain(&intended), []);
     }
 
     #[test]
     fn delete_from_more_asks_for_the_name() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.push_layer(SKILLS);
         let delete = MenuAct::ConfirmDelete {
             doc: Doc::Skill,
@@ -758,12 +749,12 @@ mod tests {
         press(&mut app, ". enter");
         assert_eq!(kinds(&app), [SKILLS, LayerKind::Form]);
         assert!(find(&screen(&app), " Delete Review? ").is_some());
-        assert_eq!(sent(&intended), []);
+        assert_eq!(drain(&intended), []);
     }
 
     #[test]
     fn p_is_gone_and_profiles_come_from_more() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         let agents = LayerKind::Menu(MenuId::Agents);
         let profiles = LayerKind::Menu(MenuId::Profiles);
         app.push_layer(agents);
@@ -780,12 +771,12 @@ mod tests {
 
         press(&mut app, "p");
         assert_eq!(kinds(&app), [agents]);
-        assert_eq!(sent(&intended), []);
+        assert_eq!(drain(&intended), []);
 
         press(&mut app, ". enter");
         assert_eq!(kinds(&app), [agents, profiles]);
         let agent = "a1".to_string();
-        assert_eq!(sent(&intended), [Intent::ReadProfiles { agent }]);
+        assert_eq!(drain(&intended), [Intent::ReadProfiles { agent }]);
         assert!(find(&screen(&app), " Inference profile ").is_some());
 
         let set = MenuAct::SetAgentProfile {
@@ -804,12 +795,12 @@ mod tests {
             menu: MenuId::Profiles,
             act: set,
         };
-        assert_eq!(sent(&intended), [act]);
+        assert_eq!(drain(&intended), [act]);
         assert_eq!(kinds(&app), [agents]);
 
         press(&mut app, "j . enter");
         let agent = "a2".to_string();
-        assert_eq!(sent(&intended), [Intent::ReadProfiles { agent }]);
+        assert_eq!(drain(&intended), [Intent::ReadProfiles { agent }]);
         assert_eq!(
             shown(&app, MenuId::Profiles),
             [(" reading…".to_string(), Tone::Label)],
@@ -819,37 +810,37 @@ mod tests {
 
     #[test]
     fn app_settings_saves_the_key_set() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         let general = LayerKind::Menu(MenuId::General);
         app.push_layer(APP);
         app.layers[0].selected = row_named(MenuId::AppSettings, "General");
         press(&mut app, "enter");
         assert_eq!(kinds(&app), [APP, general]);
-        assert_eq!(sent(&intended), [], "General reads nothing");
+        assert_eq!(drain(&intended), [], "General reads nothing");
         let s = screen(&app);
         assert!(find(&s, " Keys      vim").is_some());
         assert!(find(&s, " enter change · esc back").is_some());
 
         press(&mut app, "enter");
         assert_eq!(app.keymap.set(), Emacs);
-        assert_eq!(sent(&intended), [Intent::SaveKeys(Emacs)]);
+        assert_eq!(drain(&intended), [Intent::SaveKeys(Emacs)]);
         assert_eq!(kinds(&app), [APP, general]);
         assert!(find(&screen(&app), " Keys      emacs").is_some());
 
         press(&mut app, "enter");
         assert_eq!(app.keymap.set(), Vim);
-        assert_eq!(sent(&intended), [Intent::SaveKeys(Vim)]);
+        assert_eq!(drain(&intended), [Intent::SaveKeys(Vim)]);
     }
 
     #[test]
     fn switching_keys_from_the_bar_saves_them() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         press(&mut app, "ctrl-p");
         intended.try_iter().for_each(drop);
         type_text(&mut app, "Switch key set");
         press(&mut app, "enter");
         assert_eq!(app.keymap.set(), Emacs);
-        assert_eq!(sent(&intended), [Intent::SaveKeys(Emacs)]);
+        assert_eq!(drain(&intended), [Intent::SaveKeys(Emacs)]);
     }
 
     #[test]
@@ -858,7 +849,7 @@ mod tests {
             ("Developer", MenuId::Developer),
             ("Experimental features", MenuId::Experimental),
         ] {
-            let (mut app, intended) = connected();
+            let (mut app, intended) = connected(Vim, 132, 36);
             app.push_layer(APP);
             app.layers[0].selected = row_named(MenuId::AppSettings, name);
             press(&mut app, "enter");
@@ -866,7 +857,7 @@ mod tests {
             let s = screen(&app);
             assert!(find(&s, " Nothing to set up here on this computer.").is_some());
             assert!(find(&s, &format!(" {} ", id.name())).is_some());
-            assert_eq!(sent(&intended), [], "{name}");
+            assert_eq!(drain(&intended), [], "{name}");
         }
     }
 
@@ -1663,7 +1654,7 @@ mod tests {
 
     #[test]
     fn opening_a_menu_asks_the_source_for_it() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.push_layer(TASKS);
         let sent: Vec<_> = intended.try_iter().collect();
         assert_eq!(sent, [Intent::ReadMenu(MenuId::Tasks)]);
@@ -1680,7 +1671,7 @@ mod tests {
 
     #[test]
     fn a_menu_shows_reading_then_its_rows_or_why_not() {
-        let (mut app, _intended) = connected();
+        let (mut app, _intended) = connected(Vim, 132, 36);
         app.push_layer(TASKS);
         assert_eq!(
             shown(&app, MenuId::Tasks),
@@ -1707,7 +1698,7 @@ mod tests {
 
     #[test]
     fn enter_and_d_run_the_rows_acts() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.push_layer(TASKS);
         let run = MenuAct::RunTask {
             task: "t".to_string(),
@@ -1784,7 +1775,7 @@ mod tests {
 
     #[test]
     fn a_menu_on_a_lost_shell_says_why_without_asking() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.apply(Update::Connection(Connection::Lost("gone".to_string())));
         app.push_layer(LayerKind::Menu(MenuId::Status));
         assert!(intended.try_recv().is_err());
@@ -1793,7 +1784,7 @@ mod tests {
 
     #[test]
     fn rows_for_another_menu_leave_the_open_one_alone() {
-        let (mut app, _intended) = connected();
+        let (mut app, _intended) = connected(Vim, 132, 36);
         app.push_layer(TASKS);
         read(&mut app, MenuId::Tasks, plain(&[" a", " b", " c"]));
         press(&mut app, "j");
@@ -1808,7 +1799,7 @@ mod tests {
 
     #[test]
     fn a_reread_with_fewer_rows_keeps_the_selection_in_range() {
-        let (mut app, _intended) = connected();
+        let (mut app, _intended) = connected(Vim, 132, 36);
         app.push_layer(TASKS);
         read(&mut app, MenuId::Tasks, plain(&[" a", " b", " c"]));
         press(&mut app, "j j");
@@ -1821,7 +1812,7 @@ mod tests {
 
     #[test]
     fn a_menu_beneath_the_bar_keeps_its_selection_in_range() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         let mailbox = LayerKind::Menu(MenuId::Mailbox);
         app.push_layer(mailbox);
         read(&mut app, MenuId::Mailbox, plain(&[" a", " b", " c", " d"]));
@@ -1852,7 +1843,7 @@ mod tests {
 
     #[test]
     fn a_read_still_out_when_the_connection_is_lost_says_why() {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.push_layer(LayerKind::Menu(MenuId::Status));
         let sent: Vec<_> = intended.try_iter().collect();
         assert_eq!(sent, [Intent::ReadMenu(MenuId::Status)]);
@@ -1928,7 +1919,7 @@ mod tests {
 
     /// Packs, and over it the question for installing acme/git.
     fn asked() -> (App, Receiver<Intent>) {
-        let (mut app, intended) = connected();
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.push_layer(PACKS);
         intended.try_iter().for_each(drop);
         app.apply(install_question("acme/git"));
@@ -1940,7 +1931,7 @@ mod tests {
         let (mut app, intended) = asked();
 
         assert_eq!(kinds(&app), [PACKS, ASK]);
-        assert_eq!(sent(&intended), [], "an Ask reads nothing");
+        assert_eq!(drain(&intended), [], "an Ask reads nothing");
         let rect = app.top_layer_rect().expect("the Ask");
         let s = screen(&app);
         assert!(s[usize::from(rect.y)].contains(" Install acme/git "));
@@ -1963,7 +1954,7 @@ mod tests {
             menu: MenuId::Ask,
             act: allow("acme/git"),
         };
-        assert_eq!(sent(&intended), [act]);
+        assert_eq!(drain(&intended), [act]);
         assert_eq!(kinds(&app), [PACKS]);
     }
 
@@ -1981,7 +1972,7 @@ mod tests {
         assert!(screen(&app)[usize::from(rect.y)].contains(" Install acme/ocr "));
         press(&mut app, "enter");
         assert_eq!(
-            sent(&intended),
+            drain(&intended),
             [],
             "acme/git's cursor does not allow acme/ocr"
         );
@@ -1996,6 +1987,6 @@ mod tests {
         press(&mut app, "esc");
 
         assert_eq!(kinds(&app), [PACKS]);
-        assert_eq!(sent(&intended), []);
+        assert_eq!(drain(&intended), []);
     }
 }

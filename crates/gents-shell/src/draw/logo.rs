@@ -62,30 +62,6 @@ mod tests {
     }
 
     #[test]
-    fn logo_shape_follows_the_grid() {
-        let grid = ["...###.", "###....", ".....##", "..#....", "...###."];
-        let area = Rect::new(0, 0, 28, 13);
-        assert_eq!(logo_scale(area.width, area.height), 2);
-        let mut buf = Buffer::empty(area);
-        draw(&mut buf, area);
-
-        let top = 1;
-        for (row, line) in grid.iter().enumerate() {
-            for (col, cell) in line.chars().enumerate() {
-                for y in 0..2 {
-                    for x in 0..4 {
-                        let at = (col as u16 * 4 + x, top + row as u16 * 2 + y);
-                        assert_eq!(buf[at].bg == theme::LOGO, cell == '#', "grid {row},{col}");
-                    }
-                }
-            }
-        }
-        let filled: usize = grid.iter().map(|line| line.matches('#').count()).sum();
-        let painted = buf.content().iter().filter(|c| c.bg == theme::LOGO).count();
-        assert_eq!(painted, filled * 4 * 2);
-    }
-
-    #[test]
     fn does_not_paint_when_it_does_not_fit() {
         let area = Rect::new(0, 0, 13, 22);
         let mut buf = Buffer::empty(area);

@@ -443,28 +443,12 @@ fn choices(sources: &Sources) -> [Vec<(String, String)>; 3] {
 mod tests {
     use gents::documents::{ConcurrencyMode, Trigger, TriggerSource};
     use gents_desktop_core::inference::AgentView;
-    use gents_shell::source::{Doc, FieldKind, FormError, FormRef};
+    use gents_shell::source::{Doc, FormError, FormRef};
     use serde_json::json;
 
-    use super::super::testing::{sent, shown_values};
-    use super::super::{field, helped, hinted, shown_when, switch};
     use super::*;
     use crate::commands::shell::sections::{self, Sources};
-
-    fn agent(id: &str, name: &str, enabled: bool, is_default: bool) -> AgentView {
-        AgentView {
-            agent_id: id.to_string(),
-            node_did: "owner".to_string(),
-            display_name: name.to_string(),
-            description: None,
-            context_id: None,
-            inference_profile_id: None,
-            enabled,
-            is_default,
-            tags: Vec::new(),
-            created_at: None,
-        }
-    }
+    use crate::commands::shell::testing::{agent, conditions, options, sent, shown_values};
 
     fn sources() -> Sources {
         Sources {
@@ -514,86 +498,53 @@ mod tests {
             new.note,
             ["When it runs, what it does, and which agent does it. Everything else can be tuned afterwards."]
         );
-        let zone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
-        let presets = choice([
-            ("daily", "Every day at 09:00"),
-            ("weekdays", "Every weekday at 09:00"),
-            ("weekly", "Every Monday at 09:00"),
-            ("hourly", "Every hour"),
-            ("15min", "Every 15 minutes"),
-            ("custom", "Custom cron…"),
-        ]);
-        let kinds = choice([
-            ("schedule", "On a schedule"),
-            ("event", "When something happens"),
-        ]);
-        let schedules = choice([
+        assert_eq!(
+            shown_values(&new),
+            [
+                ("name", ""),
+                ("kind", "schedule"),
+                ("schedule", "new:"),
+                ("preset", "daily"),
+                ("cron", ""),
+                ("event", "new:"),
+                ("collection", ""),
+                ("event_kind", "created"),
+                ("task", "new:"),
+                ("prompt", ""),
+                ("agent", "engineer"),
+                ("enable", "off"),
+            ]
+        );
+        let schedules = [
             ("daily", "Daily"),
             ("night", "Every day at 02:00"),
             ("new:", "New schedule…"),
-        ]);
-        let events = choice([
+        ];
+        assert_eq!(options(&new, "schedule"), schedules);
+        let events = [
             ("asks", "When an AgentRequest is created"),
             ("new:", "New event source…"),
-        ]);
-        let tasks = choice([
+        ];
+        assert_eq!(options(&new, "event"), events);
+        let tasks = [
             ("triage", "Triage"),
             ("sweep", "sweep"),
             ("new:", "New task…"),
-        ]);
-        let agents = choice([("engineer", "Engineer (default)"), ("scout", "Scout · off")]);
-        let prompt = "Read the mailbox items from the last day and post a short digest.";
+        ];
+        assert_eq!(options(&new, "task"), tasks);
+        let agents = [("engineer", "Engineer (default)"), ("scout", "Scout · off")];
+        assert_eq!(options(&new, "agent"), agents);
         assert_eq!(
-            new.fields,
+            conditions(&new),
             [
-                hinted(
-                    field("name", "Name", FieldKind::Text, ""),
-                    "Morning mailbox digest"
-                ),
-                field("kind", "When", kinds, "schedule"),
-                shown_when(
-                    field("schedule", "Schedule", schedules, "new:"),
-                    "kind",
-                    "schedule"
-                ),
-                shown_when(
-                    helped(
-                        field("preset", "Cadence", presets, "daily"),
-                        &format!("Times are in {zone}.")
-                    ),
-                    "schedule",
-                    "new:"
-                ),
-                shown_when(
-                    hinted(
-                        field("cron", "Cron expression", FieldKind::Text, ""),
-                        "0 9 * * 1-5"
-                    ),
-                    "preset",
-                    "custom"
-                ),
-                shown_when(field("event", "Event", events, "new:"), "kind", "event"),
-                shown_when(
-                    hinted(
-                        field("collection", "Collection", FieldKind::Text, ""),
-                        "MailboxItem"
-                    ),
-                    "event",
-                    "new:"
-                ),
-                shown_when(
-                    field("event_kind", "Event kind", FieldKind::Text, "created"),
-                    "event",
-                    "new:"
-                ),
-                field("task", "What", tasks, "new:"),
-                shown_when(
-                    hinted(field("prompt", "Prompt", FieldKind::Lines, ""), prompt),
-                    "task",
-                    "new:"
-                ),
-                shown_when(field("agent", "Who", agents, "engineer"), "task", "new:"),
-                switch("enable", "Turn it on now", false),
+                ("schedule", "kind", "schedule"),
+                ("preset", "schedule", "new:"),
+                ("cron", "preset", "custom"),
+                ("event", "kind", "event"),
+                ("collection", "event", "new:"),
+                ("event_kind", "event", "new:"),
+                ("prompt", "task", "new:"),
+                ("agent", "task", "new:"),
             ]
         );
         assert_eq!(new.actions, []);
@@ -770,74 +721,45 @@ mod tests {
                 "Last run failed: agent busy"
             ]
         );
-        let tasks = choice([("triage", "Triage"), ("sweep", "sweep")]);
-        let sources_kinds = choice([("schedule", "Schedule"), ("event", "Event source")]);
-        let schedules = choice([("daily", "Daily"), ("night", "Every day at 02:00")]);
-        let events = choice([("asks", "When an AgentRequest is created")]);
-        let concurrency = choice([
-            ("", "Default (parallel)"),
-            ("parallel", "Parallel"),
-            ("serial", "Serial (skip when busy)"),
-            ("queued_serial", "Queued serial"),
-            ("latest_only", "Latest only"),
-        ]);
-        let session = "Optional session ID or template such as {{ doc.lead_session_id }}. Busy sessions queue the request. Blank starts a new session.";
-        let fixed =
-            |key: &str, label: &str, value: &str| field(key, label, FieldKind::Fixed, value);
+        let (attempt, next) = (
+            sections::local_time("2026-11-07T09:00:00Z"),
+            sections::local_time("2026-11-08T02:00:00Z"),
+        );
         assert_eq!(
-            edit.fields,
+            shown_values(&edit),
             [
-                field("trigger", "Trigger", FieldKind::Heading, ""),
-                fixed("trigger_id", "Trigger ID", "nightly"),
-                field("display_name", "Display name", FieldKind::Text, "Nightly"),
-                field(
-                    "description",
-                    "Description",
-                    FieldKind::Lines,
-                    "Sweeps.\nDaily."
-                ),
-                helped(
-                    field("task_id", "Task", tasks, "triage"),
-                    "The prompt that runs, and the agent that runs it."
-                ),
-                field("source", "Source", sources_kinds, "schedule"),
-                shown_when(
-                    field("schedule_id", "Schedule", schedules, "night"),
-                    "source",
-                    "schedule"
-                ),
-                shown_when(
-                    field("event_source_id", "Event source", events, "asks"),
-                    "source",
-                    "event"
-                ),
-                switch("enabled", "Enabled", true),
-                helped(
-                    field(
-                        "session_id_template",
-                        "Existing session template",
-                        FieldKind::Text,
-                        ""
-                    ),
-                    session
-                ),
-                field("concurrency", "Concurrency", concurrency, "serial"),
-                field("runs", "Runs", FieldKind::Heading, ""),
-                fixed("fired", "Fired", "3 times"),
-                fixed(
-                    "last_attempt",
-                    "Last attempt",
-                    &sections::local_time("2026-11-07T09:00:00Z")
-                ),
-                fixed("last_status", "Last status", "error"),
-                fixed("last_error", "Last error", "agent busy"),
-                fixed(
-                    "next_run",
-                    "Next run",
-                    &sections::local_time("2026-11-08T02:00:00Z")
-                ),
-                field("metadata", "Metadata", FieldKind::Heading, ""),
-                hinted(field("tags", "Tags", FieldKind::Text, "ops"), "Add a tag"),
+                ("trigger", ""),
+                ("trigger_id", "nightly"),
+                ("display_name", "Nightly"),
+                ("description", "Sweeps.\nDaily."),
+                ("task_id", "triage"),
+                ("source", "schedule"),
+                ("schedule_id", "night"),
+                ("event_source_id", "asks"),
+                ("enabled", "on"),
+                ("session_id_template", ""),
+                ("concurrency", "serial"),
+                ("runs", ""),
+                ("fired", "3 times"),
+                ("last_attempt", attempt.as_str()),
+                ("last_status", "error"),
+                ("last_error", "agent busy"),
+                ("next_run", next.as_str()),
+                ("metadata", ""),
+                ("tags", "ops"),
+            ]
+        );
+        let tasks = [("triage", "Triage"), ("sweep", "sweep")];
+        assert_eq!(options(&edit, "task_id"), tasks);
+        let schedules = [("daily", "Daily"), ("night", "Every day at 02:00")];
+        assert_eq!(options(&edit, "schedule_id"), schedules);
+        let events = [("asks", "When an AgentRequest is created")];
+        assert_eq!(options(&edit, "event_source_id"), events);
+        assert_eq!(
+            conditions(&edit),
+            [
+                ("schedule_id", "source", "schedule"),
+                ("event_source_id", "source", "event"),
             ]
         );
         assert_eq!(

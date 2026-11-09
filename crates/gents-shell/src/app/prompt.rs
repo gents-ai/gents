@@ -166,13 +166,13 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{channel, Receiver};
+    use std::sync::mpsc::Receiver;
 
     use crate::app::{App, Mode, Tab};
     use crate::keys::KeySet::{self, Emacs, Vim};
     use crate::sample::Tone;
     use crate::source::{Answer, Intent, Prompt, PromptKind, Update};
-    use crate::testing::{find, numbered, press, screen, sent, type_text};
+    use crate::testing::{connected, find, numbered, press, screen, sent, type_text};
 
     const MUST_ANSWER: &str = "this question needs an answer; it cannot be dismissed";
 
@@ -204,8 +204,7 @@ mod tests {
 
     /// A connected tab on session `s1` showing `prompts`, out of input mode.
     fn showing(set: KeySet, prompts: Vec<Prompt>) -> (App, Receiver<Intent>) {
-        let (intents, intended) = channel();
-        let mut app = App::connected(set, 132, 36, intents);
+        let (mut app, intended) = connected(set, 132, 36);
         app.tabs[0].session = Some("s1".to_string());
         app.tabs[0].lines = numbered(3);
         app.mode = Mode::Normal;
@@ -237,8 +236,7 @@ mod tests {
     }
 
     fn sent_hello() -> (App, Receiver<Intent>) {
-        let (intents, intended) = channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, intended) = connected(Vim, 132, 36);
         app.agents = crate::sample::agents();
         type_text(&mut app, "hello");
         press(&mut app, "enter");

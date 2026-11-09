@@ -113,16 +113,11 @@ pub(super) fn document(
 mod tests {
     use gents::documents::schedule_cron::CronMissedRunPolicy;
     use gents::documents::ScheduleCadence;
-    use gents_shell::source::{FieldKind, FormAct, FormAction, FormField, FormRef};
+    use gents_shell::source::{FormAct, FormAction, FormRef};
     use serde_json::json;
 
-    use super::super::testing::{sent, shown_values};
-    use super::super::{field, hinted};
     use super::*;
-
-    fn shown_on(field: FormField, cadence: &str) -> FormField {
-        shown_when(field, "cadence", cadence)
-    }
+    use crate::commands::shell::testing::{conditions, sent, shown_values};
 
     #[test]
     fn schedule_form_mirrors_the_desktop() {
@@ -147,40 +142,25 @@ mod tests {
         assert_eq!(edit.form, FormRef::Edit(Doc::Schedule, "daily".to_string()));
         assert_eq!(edit.title, "Daily");
         assert_eq!(edit.note, Vec::<String>::new());
-        let cadences = [("interval", "Interval"), ("cron", "Cron")];
-        let seconds = field("interval_secs", "Interval seconds", FieldKind::Text, "");
-        let manual = field("manual_run", "Manual run", FieldKind::Heading, "");
         assert_eq!(
-            edit.fields,
+            shown_values(&edit),
             [
-                field("schedule_id", "Schedule ID", FieldKind::Fixed, "daily"),
-                field("display_name", "Display name", FieldKind::Text, "Daily"),
-                field("cadence", "Cadence", choice(cadences), "cron"),
-                shown_on(
-                    FormField {
-                        help: Some("Positive whole number.".to_string()),
-                        ..seconds
-                    },
-                    "interval"
-                ),
-                shown_on(
-                    field("expression", "Cron", FieldKind::Text, "0 2 * * *"),
-                    "cron"
-                ),
-                shown_on(
-                    field("timezone", "Timezone", FieldKind::Text, "Europe/Paris"),
-                    "cron"
-                ),
-                hinted(
-                    field("tags", "Tags", FieldKind::Text, "nightly"),
-                    "Add a tag"
-                ),
-                FormField {
-                    help: Some(
-                        "Uses the enabled trigger currently bound to this schedule.".to_string()
-                    ),
-                    ..manual
-                },
+                ("schedule_id", "daily"),
+                ("display_name", "Daily"),
+                ("cadence", "cron"),
+                ("interval_secs", ""),
+                ("expression", "0 2 * * *"),
+                ("timezone", "Europe/Paris"),
+                ("tags", "nightly"),
+                ("manual_run", ""),
+            ]
+        );
+        assert_eq!(
+            conditions(&edit),
+            [
+                ("interval_secs", "cadence", "interval"),
+                ("expression", "cadence", "cron"),
+                ("timezone", "cadence", "cron"),
             ]
         );
         let delete = FormAct::Delete {

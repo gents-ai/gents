@@ -4,8 +4,6 @@ mod node;
 mod remote_tool;
 mod schedule;
 pub(super) mod skill;
-#[cfg(test)]
-mod testing;
 mod trigger;
 
 use std::fmt::Display;
@@ -412,8 +410,8 @@ pub(super) fn whole(
 mod tests {
     use serde_json::json;
 
-    use super::testing::sent;
     use super::*;
+    use crate::commands::shell::testing::sent;
 
     #[test]
     fn a_tag_is_saved_once() {

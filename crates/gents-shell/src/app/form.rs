@@ -413,7 +413,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{channel, Receiver};
+    use std::sync::mpsc::Receiver;
 
     use ratatui::crossterm::event::Event;
 
@@ -421,7 +421,7 @@ mod tests {
     use crate::draw::theme;
     use crate::keys::KeySet::{self, Emacs, Vim};
     use crate::source::Connection;
-    use crate::testing::{buffer, find, kinds, press, screen, type_text};
+    use crate::testing::{buffer, connected, drain, find, kinds, press, screen, type_text};
 
     fn skill() -> FormRef {
         FormRef::Edit(Doc::Skill, "s1".to_string())
@@ -480,8 +480,7 @@ mod tests {
 
     /// `form` opened and answered at `height`, with what opening it sent drained.
     fn opened_at(set: KeySet, height: u16, form: Form) -> (App, Receiver<Intent>) {
-        let (tx, rx) = channel();
-        let mut app = App::connected(set, 132, height, tx);
+        let (mut app, rx) = connected(set, 132, height);
         app.open_form(form.form.clone());
         app.apply(Update::Form {
             form: form.form.clone(),
@@ -499,10 +498,6 @@ mod tests {
 
     fn opened(form: Form) -> (App, Receiver<Intent>) {
         opened_at(Vim, 36, form)
-    }
-
-    fn sent(rx: &Receiver<Intent>) -> Vec<Intent> {
-        rx.try_iter().collect()
     }
 
     fn values(pairs: &[(&str, &str)]) -> FormValues {
@@ -542,14 +537,13 @@ mod tests {
 
     #[test]
     fn a_form_opens_and_esc_closes_it_without_a_write() {
-        let (tx, rx) = channel();
-        let mut app = App::connected(Vim, 132, 36, tx);
+        let (mut app, rx) = connected(Vim, 132, 36);
         app.open_form(skill());
         let open = Intent::OpenForm {
             form: skill(),
             opening: 1,
         };
-        assert_eq!(sent(&rx), [open]);
+        assert_eq!(drain(&rx), [open]);
         assert_eq!(kinds(&app), [LayerKind::Form]);
         assert!(shows(&app, "Loading…"));
 
@@ -566,7 +560,7 @@ mod tests {
 
         press(&mut app, "esc");
         assert_eq!(kinds(&app), []);
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
 
         app.open_form(skill());
         app.apply(Update::Form {
@@ -602,7 +596,7 @@ mod tests {
         assert!(shows(&app, &row("Name", "ac")));
         assert!(shows(&app, &row("Skill ID", "s1")));
         assert!(shows(&app, &row("Description", "bd")));
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
     }
 
     #[test]
@@ -613,7 +607,7 @@ mod tests {
         press(&mut app, "left bs");
         assert!(shows(&app, &row("Name", "Reviewdk")));
         assert_eq!(kinds(&app), [LayerKind::Form]);
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
     }
 
     #[test]
@@ -629,14 +623,14 @@ mod tests {
         type_text(&mut app, "b");
         assert!(shows(&app, &row("Body", "a")));
         assert!(shows(&app, &row("", "b")));
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
 
         press(&mut app, "home bs");
         assert!(shows(&app, &row("Body", "ab")));
         assert!(!shows(&app, &row("", "b")));
 
         press(&mut app, "enter ctrl-s");
-        assert_eq!(sent(&rx), [save(&[("name", ""), ("body", "a\nb")])]);
+        assert_eq!(drain(&rx), [save(&[("name", ""), ("body", "a\nb")])]);
     }
 
     #[test]
@@ -651,7 +645,7 @@ mod tests {
         let (mut app, rx) = opened(form(fields(), Vec::new()));
         assert!(shows(&app, &row("", "    return;")));
         press(&mut app, "ctrl-s");
-        assert_eq!(sent(&rx), [save(&[("name", ""), ("body", body)])]);
+        assert_eq!(drain(&rx), [save(&[("name", ""), ("body", body)])]);
 
         let (mut app, rx) = opened(form(fields(), Vec::new()));
         press(&mut app, "tab");
@@ -659,7 +653,7 @@ mod tests {
         app.handle(Event::Paste("a\tb\nc".to_string()));
         press(&mut app, "ctrl-s");
         let edited = "if x {!a\tb\nc\n\treturn;\n}";
-        assert_eq!(sent(&rx), [save(&[("name", ""), ("body", edited)])]);
+        assert_eq!(drain(&rx), [save(&[("name", ""), ("body", edited)])]);
     }
 
     fn schedule_fields() -> Vec<FormField> {
@@ -705,7 +699,7 @@ mod tests {
         assert!(shows(&app, &row("Cadence", "Cron")));
         press(&mut app, "left ctrl-s");
         assert_eq!(
-            sent(&rx),
+            drain(&rx),
             [save(&[("cadence", "interval"), ("interval", "")])]
         );
     }
@@ -737,7 +731,7 @@ mod tests {
         assert!(!shows(&app, &row("Schedule", "New")));
         assert!(!shows(&app, "Cron expression"));
         press(&mut app, "ctrl-s");
-        assert_eq!(sent(&rx), [save(&[("kind", "event")])]);
+        assert_eq!(drain(&rx), [save(&[("kind", "event")])]);
     }
 
     #[test]
@@ -757,10 +751,10 @@ mod tests {
         let (mut app, rx) = opened(form(fields, Vec::new()));
         let saved = save(&[("a", "1"), ("mode", "x"), ("c", "3\n4")]);
         press(&mut app, "enter");
-        assert_eq!(sent(&rx), std::slice::from_ref(&saved));
+        assert_eq!(drain(&rx), std::slice::from_ref(&saved));
         assert!(shows(&app, "Saving…"));
         press(&mut app, "tab tab ctrl-s");
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
         assert!(shows(&app, "Saving…"));
     }
 
@@ -769,7 +763,7 @@ mod tests {
         let (mut app, rx) = opened(skill_form());
         press(&mut app, "ctrl-s");
         assert_eq!(
-            sent(&rx),
+            drain(&rx),
             [save(&[("name", "Review"), ("description", "")])]
         );
         let required = FormError {
@@ -795,8 +789,7 @@ mod tests {
 
     #[test]
     fn a_saved_form_closes_and_rereads_its_list() {
-        let (tx, rx) = channel();
-        let mut app = App::connected(Vim, 132, 36, tx);
+        let (mut app, rx) = connected(Vim, 132, 36);
         app.push_layer(LayerKind::Menu(MenuId::Skills));
         app.open_form(skill());
         app.apply(Update::Form {
@@ -809,14 +802,13 @@ mod tests {
         app.apply(saved(1, Ok("Saved".to_string())));
         assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::Skills)]);
         assert_eq!(app.notice.as_deref(), Some("Saved"));
-        assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Skills)]);
+        assert_eq!(drain(&rx), [Intent::ReadMenu(MenuId::Skills)]);
     }
 
     /// Drawn masked as Setup's API key is, and never printed by its save's `Debug`.
     #[test]
     fn a_secret_field_draws_masked_and_its_save_never_prints_it() {
-        let (tx, rx) = channel();
-        let mut app = App::connected(Vim, 132, 36, tx);
+        let (mut app, rx) = connected(Vim, 132, 36);
         app.push_layer(LayerKind::Menu(MenuId::Packs));
         app.open_form(FormRef::PackSignIn);
         let token = FormField {
@@ -838,7 +830,7 @@ mod tests {
         assert!(shows(&app, &row("Registry token", "••••••••••")));
         assert!(!shows(&app, "tok-secret"));
         press(&mut app, "ctrl-s");
-        let told = sent(&rx);
+        let told = drain(&rx);
         let saved = Intent::SaveForm {
             form: FormRef::PackSignIn,
             opening: 1,
@@ -854,13 +846,12 @@ mod tests {
         });
         assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::Packs)]);
         assert_eq!(app.notice.as_deref(), Some("Signed in to the registry"));
-        assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Packs)]);
+        assert_eq!(drain(&rx), [Intent::ReadMenu(MenuId::Packs)]);
     }
 
     #[test]
     fn a_pack_search_saves_without_a_notice_and_rereads_packs() {
-        let (tx, rx) = channel();
-        let mut app = App::connected(Vim, 132, 36, tx);
+        let (mut app, rx) = connected(Vim, 132, 36);
         app.push_layer(LayerKind::Menu(MenuId::Packs));
         app.open_form(FormRef::PackSearch);
         app.apply(Update::Form {
@@ -882,7 +873,7 @@ mod tests {
         });
         assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::Packs)]);
         assert_eq!(app.notice.as_deref(), Some("earlier"));
-        assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Packs)]);
+        assert_eq!(drain(&rx), [Intent::ReadMenu(MenuId::Packs)]);
     }
 
     #[test]
@@ -914,7 +905,7 @@ mod tests {
         });
         assert_eq!(kinds(&app), [LayerKind::Form]);
         assert_eq!(app.notice, None);
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
         let s = screen(&app);
         assert!(find(&s, &row("Name", "Review!")).is_some());
         assert_eq!(find(&s, "Other name"), None);
@@ -923,8 +914,7 @@ mod tests {
 
     #[test]
     fn a_save_answered_after_its_form_closed_is_a_notice() {
-        let (tx, rx) = channel();
-        let mut app = App::connected(Vim, 132, 36, tx);
+        let (mut app, rx) = connected(Vim, 132, 36);
         let skills = LayerKind::Menu(MenuId::Skills);
         app.push_layer(skills);
         let open = |app: &mut App| {
@@ -946,7 +936,7 @@ mod tests {
         app.apply(saved(first, Err(required)));
         assert_eq!(kinds(&app), [skills]);
         assert_eq!(app.notice.as_deref(), Some("Description is required"));
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
 
         let second = open(&mut app);
         press(&mut app, "ctrl-s esc");
@@ -957,7 +947,7 @@ mod tests {
         assert_eq!(kinds(&app), [skills, LayerKind::Form]);
         assert!(shows(&app, &row("Name", "Review!")));
         assert_eq!(app.notice.as_deref(), Some("Saved"));
-        assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Skills)]);
+        assert_eq!(drain(&rx), [Intent::ReadMenu(MenuId::Skills)]);
     }
 
     #[test]
@@ -984,7 +974,7 @@ mod tests {
 
         type_text(&mut app, "Revie");
         press(&mut app, "enter tab enter ctrl-s");
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
         assert_eq!(kinds(&app), [LayerKind::Form]);
 
         press(&mut app, "shift-tab");
@@ -998,14 +988,14 @@ mod tests {
                 label: "Code review".to_string(),
             },
         };
-        assert_eq!(sent(&rx), std::slice::from_ref(&act));
+        assert_eq!(drain(&rx), std::slice::from_ref(&act));
         assert_eq!(kinds(&app), []);
 
         let (label, name) = ("Code review".to_string(), "Review".to_string());
         app.confirm_delete(Doc::Skill, "s1".to_string(), label, name);
         type_text(&mut app, " Review ");
         press(&mut app, "enter");
-        assert_eq!(sent(&rx), [act]);
+        assert_eq!(drain(&rx), [act]);
         assert_eq!(kinds(&app), []);
     }
 
@@ -1020,7 +1010,7 @@ mod tests {
         assert!(!shows(&app, "Saving…"));
 
         press(&mut app, "ctrl-s");
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
         assert!(shows(&app, gone));
         assert_eq!(kinds(&app), [LayerKind::Form]);
 
@@ -1029,7 +1019,7 @@ mod tests {
         assert!(!shows(&app, gone));
         type_text(&mut app, "Review");
         press(&mut app, "enter");
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
         assert_eq!(kinds(&app), [LayerKind::Form]);
         assert!(shows(&app, gone));
         assert_eq!(app.notice, None);
@@ -1054,10 +1044,10 @@ mod tests {
             act: FormAct::RunSchedule,
             values: values(&[("name", "Nightly")]),
         };
-        assert_eq!(sent(&rx), [run]);
+        assert_eq!(drain(&rx), [run]);
         assert!(shows(&app, "Starting…"));
         press(&mut app, "enter down enter shift-tab shift-tab ctrl-s");
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
 
         app.apply(Update::FormNote {
             form: schedule.clone(),
@@ -1075,7 +1065,7 @@ mod tests {
             act: FormAct::TestConnection,
             values: values(&[("name", "Nightly")]),
         };
-        assert_eq!(sent(&rx), [test]);
+        assert_eq!(drain(&rx), [test]);
         assert!(shows(&app, "Testing…"));
     }
 
@@ -1090,7 +1080,7 @@ mod tests {
         press(&mut app, "tab");
         app.handle(Event::Paste("a\nb".to_string()));
         press(&mut app, "ctrl-s");
-        assert_eq!(sent(&rx), [save(&[("name", "a b"), ("body", "a\nb")])]);
+        assert_eq!(drain(&rx), [save(&[("name", "a b"), ("body", "a\nb")])]);
     }
 
     #[test]
@@ -1121,11 +1111,11 @@ mod tests {
         type_text(&mut app, "A ");
         press(&mut app, "ctrl-s");
         assert_eq!(
-            sent(&rx),
+            drain(&rx),
             [save(&[("name", "A Reviews"), ("description", "djk")])]
         );
         press(&mut app, "ctrl-g");
         assert_eq!(kinds(&app), []);
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
     }
 }

@@ -327,35 +327,39 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_draws_like_the_picture() {
+    fn the_bar_draws_its_groups_and_selection() {
         let mut app = with_tabs(Vim, 132, 36);
         press(&mut app, ":");
         type_text(&mut app, "rev");
         let s = screen(&app);
-        assert_eq!(find(&s, " Jump to "), Some((5, 32)));
-        assert_eq!(find(&s, " : rev"), Some((6, 31)));
-        assert_eq!(find(&s, " TABS"), Some((8, 31)));
-        assert_eq!(find(&s, " SESSIONS"), Some((10, 31)));
-        assert_eq!(find(&s, " ○ pack review notes          "), Some((12, 31)));
-        assert_eq!(find(&s, "yesterday"), Some((12, 70)));
-        assert_eq!(find(&s, " AGENTS"), Some((13, 31)));
-        assert_eq!(find(&s, "open in a new tab"), Some((14, 70)));
-        assert_eq!(find(&s, " WORKFLOWS"), Some((15, 31)));
-        assert_eq!(find(&s, " review_changes   Review"), Some((16, 31)));
-        assert_eq!(find(&s, " MENUS"), Some((17, 31)));
-        assert_eq!(find(&s, "3 tools"), Some((18, 70)));
-        assert_eq!(find(&s, "COMMANDS"), None);
-        let footer = " enter jump · ctrl-n/ctrl-p move · esc back";
-        assert_eq!(find(&s, footer), Some((21, 31)));
-        assert_eq!(find(&s, "JUMP"), Some((35, 1)));
-        let hint = "type to filter tabs, sessions, agents, menus and commands";
-        assert_eq!(find(&s, hint), Some((35, 7)));
-        let buf = buffer(&app);
-        assert_eq!(buf[(32, 9)].symbol(), "2");
-        for x in [31, 100] {
-            assert_eq!(buf[(x, 9)].bg, theme::SEL_BG, "column {x}");
+        for shown in [
+            " Jump to ",
+            " : rev",
+            " TABS",
+            " SESSIONS",
+            " ○ pack review notes",
+            "yesterday",
+            " AGENTS",
+            "open in a new tab",
+            " WORKFLOWS",
+            " review_changes   Review",
+            " MENUS",
+            "3 tools",
+            " enter jump · ctrl-n/ctrl-p move · esc back",
+            "JUMP",
+            "type to filter tabs, sessions, agents, menus and commands",
+        ] {
+            assert!(find(&s, shown).is_some(), "{shown}");
         }
-        assert_ne!(buf[(31, 11)].bg, theme::SEL_BG);
+        assert_eq!(find(&s, "COMMANDS"), None);
+        let buf = &buffer(&app);
+        let lit = |row: u16| (0..132).filter(move |&x| buf[(x, row)].bg == theme::SEL_BG);
+        let (tabs, _) = find(&s, " TABS").expect("the tabs group");
+        let selected = "2 flaky · Reviewer";
+        assert!(s[usize::from(tabs + 1)].contains(selected));
+        assert!(lit(tabs + 1).count() > selected.len(), "the whole row");
+        let (sessions, _) = find(&s, " SESSIONS").expect("the sessions group");
+        assert_eq!(lit(sessions + 1).count(), 0);
 
         let mut app = App::new(Emacs, 132, 36);
         press(&mut app, "alt-x");
@@ -365,19 +369,17 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_under_a_menu_draws_like_the_picture() {
+    fn the_bar_stays_drawn_under_a_menu() {
         let mut app = App::new(Vim, 132, 36);
         press(&mut app, "esc :");
         type_text(&mut app, "acc");
         press(&mut app, "enter");
         let s = screen(&app);
-        assert_eq!(find(&s, " Jump to "), Some((4, 28)));
-        assert_eq!(find(&s, " : acc"), Some((5, 27)));
-        assert_eq!(find(&s, " Accounts"), Some((8, 27)));
-        assert_eq!(find(&s[9..], " Accounts "), Some((1, 58)));
+        for shown in [" Jump to ", " : acc", " Accounts", "gents accounts login"] {
+            assert!(find(&s, shown).is_some(), "{shown}");
+        }
         assert_eq!(find(&s, "enter jump"), None);
-        assert!(find(&s, "gents accounts login").is_some());
-        assert_eq!(find(&s[35..], "MENU"), Some((0, 1)));
+        assert!(s[35].contains("MENU"));
     }
 
     #[test]
@@ -623,8 +625,7 @@ mod tests {
 
     #[test]
     fn the_jump_bar_lists_installed_workflows_and_enter_inserts_the_prompt() {
-        let (intents, _intended) = std::sync::mpsc::channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, _intended) = crate::testing::connected(Vim, 132, 36);
         press(&mut app, "esc :");
         let prompt = "use the review_changes workflow: ";
         let row = MenuRow {

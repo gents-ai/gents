@@ -18,15 +18,18 @@ fn assert_usage_error(out: &Output) {
 
 #[test]
 fn piped_run_exits_2_and_leaves_the_terminal_alone() {
-    let out = run(&[]);
-    assert_eq!(out.status.code(), Some(2));
-    assert!(out.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("needs a terminal"));
+    for args in [&[][..], &["--keys", "vim"]] {
+        let out = run(args);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("needs a terminal"));
+    }
 }
 
 #[test]
 fn unknown_key_set_exits_2() {
     assert_usage_error(&run(&["--keys", "nano"]));
+    assert_usage_error(&run(&["vim"]));
 }
 
 #[test]

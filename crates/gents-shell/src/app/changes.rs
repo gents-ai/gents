@@ -431,7 +431,9 @@ mod tests {
     use crate::keys::KeySet::Vim;
     use crate::sample::{RowAction, Scope, Tone, View};
     use crate::source::{Change, ChangeKind, Connection, Intent, Update};
-    use crate::testing::{click_text, find, press, screen, session_row, with_right_pane};
+    use crate::testing::{
+        click_text, connected, drain, find, press, screen, session_row, with_right_pane,
+    };
 
     const EDIT: &str = "@@ -1 +1 @@\n-a\n+b\n";
 
@@ -454,8 +456,7 @@ mod tests {
 
     /// A connected tab showing `s1`, opened with `lines`.
     fn opened(lines: Vec<ChatLine>) -> (App, Receiver<Intent>) {
-        let (intents, receiver) = channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, receiver) = connected(Vim, 132, 36);
         app.tabs[0].session = Some("s1".to_string());
         app.apply(Update::Opened {
             session: "s1".to_string(),
@@ -865,10 +866,6 @@ mod tests {
         assert_eq!(view(&app)[app.view_sel[View::Diff as usize]], " A d.rs  +1");
     }
 
-    fn asked(intents: &Receiver<Intent>) -> Vec<Intent> {
-        intents.try_iter().collect()
-    }
-
     fn read_tree() -> Intent {
         Intent::WorkingTree {
             agent: "a".to_string(),
@@ -904,15 +901,15 @@ mod tests {
         let (mut app, intents) = opened(two_turns());
         app.tabs[0].agent_id = "a".to_string();
         app.set_scope(Scope::Tree);
-        assert_eq!(asked(&intents), [read_tree()]);
+        assert_eq!(drain(&intents), [read_tree()]);
         assert_eq!(view(&app), [" reading the working tree…"]);
 
         app.set_view(View::Workflows);
-        assert_eq!(asked(&intents), [Intent::Refresh]);
+        assert_eq!(drain(&intents), [Intent::Refresh]);
         app.set_view(View::Diff);
-        assert_eq!(asked(&intents), [read_tree()], "shown again, read again");
+        assert_eq!(drain(&intents), [read_tree()], "shown again, read again");
         app.run_effect(Effect::ShowDiff(Scope::Tree));
-        assert_eq!(asked(&intents), [read_tree()], "once from the bar");
+        assert_eq!(drain(&intents), [read_tree()], "once from the bar");
     }
 
     #[test]
@@ -979,18 +976,18 @@ mod tests {
     #[test]
     fn a_turn_ending_rereads_a_shown_working_tree() {
         let (mut app, intents) = on_the_tree();
-        asked(&intents);
+        drain(&intents);
         let ended = || Update::TurnEnded {
             session: "another tab's".to_string(),
             turn: "t7".to_string(),
         };
         app.apply(ended());
-        assert_eq!(asked(&intents), [read_tree()]);
+        assert_eq!(drain(&intents), [read_tree()]);
 
         app.set_scope(Scope::Session);
         app.apply(ended());
         assert!(
-            asked(&intents).is_empty(),
+            drain(&intents).is_empty(),
             "the session scope reads nothing"
         );
     }
@@ -1007,9 +1004,9 @@ mod tests {
         let (mut app, intents) = on_the_tree();
         press(&mut app, "esc ctrl-w ]");
         assert!(!app.tabs[0].sidebar);
-        asked(&intents);
+        drain(&intents);
         app.apply(turn_ended());
-        assert!(asked(&intents).is_empty());
+        assert!(drain(&intents).is_empty());
 
         // The sample answers a read at once, so a read shows as a tree.
         let mut narrow = with_right_pane(App::new(Vim, 104, 30));
@@ -1026,15 +1023,15 @@ mod tests {
     fn showing_the_pane_again_rereads_the_working_tree() {
         let (mut app, intents) = on_the_tree();
         press(&mut app, "esc ctrl-w ]");
-        asked(&intents);
+        drain(&intents);
         press(&mut app, "ctrl-w ]");
-        assert_eq!(asked(&intents), [read_tree()]);
+        assert_eq!(drain(&intents), [read_tree()]);
 
         press(&mut app, "ctrl-w ]");
         app.set_view(View::Workflows);
-        asked(&intents);
+        drain(&intents);
         press(&mut app, "ctrl-w ]");
-        assert!(asked(&intents).is_empty(), "another view reads no tree");
+        assert!(drain(&intents).is_empty(), "another view reads no tree");
     }
 
     #[test]
@@ -1043,16 +1040,16 @@ mod tests {
         let mut app = with_right_pane(App::connected(Vim, 104, 30, sender));
         app.tabs[0].agent_id = "a".to_string();
         app.set_scope(Scope::Tree);
-        asked(&intents);
+        drain(&intents);
         click_text(&mut app, "+0");
         assert_eq!(app.layers.len(), 1, "the rail opens the layer");
-        assert_eq!(asked(&intents), [read_tree()]);
+        assert_eq!(drain(&intents), [read_tree()]);
 
         press(&mut app, "esc");
         assert!(app.layers.is_empty());
         press(&mut app, "esc ctrl-w l");
         assert_eq!(app.layers.len(), 1, "ctrl-w l opens it too");
-        assert_eq!(asked(&intents), [read_tree()]);
+        assert_eq!(drain(&intents), [read_tree()]);
     }
 
     #[test]
@@ -1085,7 +1082,7 @@ mod tests {
             session: "s1".to_string(),
             turn: "t2".to_string(),
         });
-        assert!(asked(&intents).is_empty());
+        assert!(drain(&intents).is_empty());
     }
 
     #[test]

@@ -580,7 +580,7 @@ fn invalid(settings: &[SetupSetting], values: &[(SettingKey, String)]) -> Option
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{channel, Receiver};
+    use std::sync::mpsc::Receiver;
 
     use ratatui::crossterm::event::Event;
 
@@ -591,7 +591,7 @@ mod tests {
     use crate::sample::MenuId;
     use crate::source::SettingKey::{ContextWindow, MaxConcurrent, ReasoningEffort};
     use crate::source::{Discovered, MenuAct, MenuRow, SetupModel, SetupSetting};
-    use crate::testing::{buffer, find, kinds, press, screen, type_text};
+    use crate::testing::{buffer, connected, drain, find, kinds, press, screen, type_text};
 
     fn catalog() -> Vec<SetupProvider> {
         let method = |id: &str, name: &str, endpoint: &str, auth| SetupMethod {
@@ -648,8 +648,7 @@ mod tests {
 
     /// Enter on the Accounts menu's add row, before the catalog is read.
     fn open(set: KeySet) -> (App, Receiver<Intent>) {
-        let (tx, rx) = channel();
-        let mut app = App::connected(set, 132, 36, tx);
+        let (mut app, rx) = connected(set, 132, 36);
         app.push_layer(LayerKind::Menu(MenuId::Accounts));
         let add = MenuRow {
             text: " + Add a provider".to_string(),
@@ -681,10 +680,6 @@ mod tests {
         app.setup.as_ref().expect("a setup").step
     }
 
-    fn sent(rx: &Receiver<Intent>) -> Vec<Intent> {
-        rx.try_iter().collect()
-    }
-
     fn connection(provider: &str, method: &str, endpoint: &str) -> SetupConnection {
         SetupConnection {
             provider: provider.to_string(),
@@ -700,7 +695,7 @@ mod tests {
         let (mut app, rx) = open(Vim);
         assert_eq!(kinds(&app).last(), Some(&LayerKind::Setup));
         assert_eq!(
-            sent(&rx),
+            drain(&rx),
             [Intent::ReadMenu(MenuId::Accounts), Intent::ReadSetup]
         );
         let s = screen(&app);
@@ -744,7 +739,7 @@ mod tests {
             method: "claude_oauth".to_string(),
             label: Some("Work".to_string()),
         };
-        assert_eq!(sent(&rx), [sign_in]);
+        assert_eq!(drain(&rx), [sign_in]);
         assert_eq!(step(&app), Step::SigningIn);
         assert!(find(
             &screen(&app),
@@ -767,7 +762,7 @@ mod tests {
             account: Some("ref-1".to_string()),
             ..connection("anthropic", "claude_oauth", "claude-cli://subscription")
         };
-        assert_eq!(sent(&rx), [Intent::Discover(signed_in)]);
+        assert_eq!(drain(&rx), [Intent::Discover(signed_in)]);
         assert_eq!(step(&app), Step::Models);
         assert!(find(&screen(&app), " finding models…").is_some());
     }
@@ -780,7 +775,7 @@ mod tests {
         press(&mut app, "enter");
         let refused = "Another account is already labelled “Claude”. Choose another label.";
         assert!(find(&screen(&app), refused).is_some());
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
         assert_eq!(step(&app), Step::Connect);
     }
 
@@ -792,7 +787,7 @@ mod tests {
             account: Some("ref-0".to_string()),
             ..connection("anthropic", "claude_oauth", "claude-cli://subscription")
         };
-        assert_eq!(sent(&rx), [Intent::Discover(saved)]);
+        assert_eq!(drain(&rx), [Intent::Discover(saved)]);
         assert_eq!(step(&app), Step::Models);
     }
 
@@ -805,11 +800,11 @@ mod tests {
             method: "claude_oauth".to_string(),
             label: None,
         };
-        assert_eq!(sent(&rx), [unlabelled]);
+        assert_eq!(drain(&rx), [unlabelled]);
         assert_eq!(step(&app), Step::SigningIn);
 
         press(&mut app, "esc");
-        assert_eq!(sent(&rx), [Intent::CancelSignIn]);
+        assert_eq!(drain(&rx), [Intent::CancelSignIn]);
         assert_eq!(step(&app), Step::Connect);
         assert!(find(&screen(&app), " Sign-in cancelled.").is_some());
         press(&mut app, "esc esc");
@@ -878,7 +873,7 @@ mod tests {
             assert!(find(&screen(&app), edited).is_some(), "{set:?}");
             press(&mut app, "enter");
             let discover = Intent::Discover(connection("local", "optional_api_key", edited));
-            assert_eq!(sent(&rx), [discover], "{set:?}");
+            assert_eq!(drain(&rx), [discover], "{set:?}");
         }
     }
 
@@ -899,7 +894,7 @@ mod tests {
             label: None,
         };
         assert_eq!(
-            sent(&rx),
+            drain(&rx),
             [
                 sign_in.clone(),
                 Intent::CancelSignIn,
@@ -919,7 +914,7 @@ mod tests {
         assert_eq!(kinds(&app).last(), Some(&LayerKind::Setup));
         assert_eq!(step(&app), Step::Connect);
         assert!(find(&screen(&app), gone).is_some());
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
 
         let (mut app, _rx) = opened();
         press(&mut app, "enter enter enter");
@@ -952,7 +947,7 @@ mod tests {
     fn in_models() -> (App, Receiver<Intent>) {
         let (mut app, rx) = opened();
         press(&mut app, "down enter enter");
-        assert_eq!(sent(&rx), [Intent::Discover(local())]);
+        assert_eq!(drain(&rx), [Intent::Discover(local())]);
         (app, rx)
     }
 
@@ -1083,7 +1078,7 @@ mod tests {
             type_text(&mut app, value);
             press(&mut app, "enter");
             assert!(find(&screen(&app), why).is_some(), "{why}");
-            assert_eq!(sent(&rx), [], "{why}");
+            assert_eq!(drain(&rx), [], "{why}");
             assert_eq!(step(&app), Step::Settings, "{why}");
         }
     }
@@ -1101,7 +1096,7 @@ mod tests {
                 (ReasoningEffort, "high".to_string()),
             ],
         };
-        assert_eq!(sent(&rx), std::slice::from_ref(&save));
+        assert_eq!(drain(&rx), std::slice::from_ref(&save));
         assert_eq!(step(&app), Step::Saving);
         assert!(find(&screen(&app), " saving…").is_some());
 
@@ -1109,13 +1104,13 @@ mod tests {
         assert_eq!(step(&app), Step::Settings);
         assert!(find(&screen(&app), " could not write").is_some());
         press(&mut app, "enter");
-        assert_eq!(sent(&rx), [save]);
+        assert_eq!(drain(&rx), [save]);
 
         let saved = "saved anthropic-2: claude-sonnet";
         app.apply(Update::Saved(Ok(saved.to_string())));
         assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::Accounts)]);
         assert_eq!(app.notice.as_deref(), Some(saved));
-        assert_eq!(sent(&rx), [Intent::ReadMenu(MenuId::Accounts)]);
+        assert_eq!(drain(&rx), [Intent::ReadMenu(MenuId::Accounts)]);
     }
 
     #[test]
@@ -1124,7 +1119,7 @@ mod tests {
         app.apply(found(Vec::new(), Some("401 Unauthorized"), false));
         assert!(find(&screen(&app), "401 Unauthorized").is_some());
         press(&mut app, "enter");
-        assert_eq!(sent(&rx), [Intent::Discover(local())]);
+        assert_eq!(drain(&rx), [Intent::Discover(local())]);
         assert!(find(&screen(&app), " finding models…").is_some());
     }
 
@@ -1139,7 +1134,7 @@ mod tests {
             connection: local(),
             model: "llama3".to_string(),
         };
-        assert_eq!(sent(&rx), [recommend]);
+        assert_eq!(drain(&rx), [recommend]);
 
         app.apply(Update::Recommended {
             connection: local(),
@@ -1157,7 +1152,7 @@ mod tests {
         type_text(&mut app, "2");
         press(&mut app, "enter");
         let fixed = connection("local", "optional_api_key", "http://127.0.0.1:11434/v2");
-        assert_eq!(sent(&rx), [Intent::Discover(fixed.clone())]);
+        assert_eq!(drain(&rx), [Intent::Discover(fixed.clone())]);
 
         let old = model("old-model", "old-model", Vec::new());
         app.apply(found(vec![old], None, false));
@@ -1233,7 +1228,7 @@ mod tests {
         press(&mut app, "enter");
         let refused = "Another account is already labelled “Work”. Choose another label.";
         assert!(find(&screen(&app), refused).is_some());
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
     }
 
     #[test]
@@ -1244,7 +1239,7 @@ mod tests {
         app.apply(Update::Connection(Connection::Lost("gone".to_string())));
         press(&mut app, "esc");
         assert_eq!(step(&app), Step::Connect);
-        assert_eq!(sent(&rx), []);
+        assert_eq!(drain(&rx), []);
         assert!(find(&screen(&app), " could not reach the runtime: gone").is_some());
     }
 

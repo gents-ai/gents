@@ -29,6 +29,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::client::{Client, ClientError, ClientEvent, ANSWER_WAIT};
 use super::source::{self, Opening};
+use super::testing::{question, shown_rows};
 use super::work::{self, Work};
 use crate::commands::codex::tests::identity;
 use crate::commands::codex_shim::RuntimeIdentity;
@@ -4890,26 +4891,8 @@ async fn profile_rows(work: &Work, agent: &str) -> Vec<gents_shell::source::Menu
 }
 
 #[tokio::test]
-async fn the_agents_current_profile_is_marked() {
-    let (node, work, _home) = served(two_profiles()).await;
-    let rows = profile_rows(&work, "engineer").await;
-    let texts: Vec<_> = rows
-        .iter()
-        .map(|row| (row.text.as_str(), row.tone))
-        .collect();
-    assert_eq!(
-        texts,
-        [
-            ("   Other · other-model", Tone::Plain),
-            (" ● profile · model", Tone::Accent)
-        ]
-    );
-    node.shutdown().await;
-}
-
-#[tokio::test]
-async fn agent_rows_show_their_model_and_offer_a_profile() {
-    let (node, work, _home) = served(two_profiles()).await;
+async fn choosing_a_profile_moves_only_that_agent() {
+    let (node, work, home) = served(two_profiles()).await;
     let rows =
         super::menus::read_menu(&Ok(work.clone()), &work.home, "owner", MenuId::Agents).await;
     let rows = rows.unwrap();
@@ -4931,45 +4914,29 @@ async fn agent_rows_show_their_model_and_offer_a_profile() {
         )]
     };
     assert_eq!(rows[0].more, choose("engineer", "Engineer"));
+    assert_eq!(rows[1].more, choose("scout", "Scout"));
+    let engineer = profile_rows(&work, "engineer").await;
     assert_eq!(
-        rows[1].more,
-        [(
-            "Inference profile…".to_string(),
-            MenuAct::ChooseProfile {
-                agent: "scout".into(),
-                name: "Scout".into()
-            }
-        )]
+        shown_rows(&engineer),
+        [
+            ("   Other · other-model", Tone::Plain),
+            (" ● profile · model", Tone::Accent)
+        ]
     );
-    node.shutdown().await;
-}
-
-#[tokio::test]
-async fn choosing_a_profile_moves_only_that_agent() {
-    let (node, work, home) = served(two_profiles()).await;
     let choose = profile_rows(&work, "scout").await.remove(0).enter.unwrap();
 
     let done = super::menus::act(&work, home.path(), "owner", &choose).await;
 
     assert_eq!(done, Ok("Saved".to_string()));
-    let agents = |agent: &'static str| {
-        let work = work.clone();
-        async move {
-            profile_rows(&work, agent)
-                .await
-                .iter()
-                .map(|row| row.text.clone())
-                .collect::<Vec<_>>()
-        }
-    };
+    let scout = profile_rows(&work, "scout").await;
     assert_eq!(
-        agents("scout").await,
-        [" ● Other · other-model", "   profile · model"]
+        shown_rows(&scout),
+        [
+            (" ● Other · other-model", Tone::Accent),
+            ("   profile · model", Tone::Plain)
+        ]
     );
-    assert_eq!(
-        agents("engineer").await,
-        ["   Other · other-model", " ● profile · model"]
-    );
+    assert_eq!(profile_rows(&work, "engineer").await, engineer);
     node.shutdown().await;
 }
 
@@ -5052,12 +5019,6 @@ async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
     assert_eq!(*menu, MenuId::Agents);
     assert!(rows.as_ref().unwrap()[0].text.contains("Other"), "{rows:?}");
     node.shutdown().await;
-}
-
-fn shown_rows(rows: &[MenuRow]) -> Vec<(&str, Tone)> {
-    rows.iter()
-        .map(|row| (row.text.as_str(), row.tone))
-        .collect()
 }
 
 /// A registry search's answer.
@@ -5310,15 +5271,6 @@ fn edited_documents() -> PackChangeError {
         coordinate: "acme/git".to_string(),
         edited: vec!["skill review".to_string()],
     }
-}
-
-/// An Ask's title and its rows' text, tone and enter act.
-fn question(update: Update) -> (String, Vec<(String, Tone, Option<MenuAct>)>) {
-    let Update::Ask { title, rows } = update else {
-        panic!("{update:?}");
-    };
-    let rows = rows.into_iter().map(|row| (row.text, row.tone, row.enter));
-    (title, rows.collect())
 }
 
 fn choice(text: &str, act: MenuAct) -> (String, Tone, Option<MenuAct>) {

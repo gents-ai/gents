@@ -156,12 +156,11 @@ pub(in crate::commands::shell) async fn allowed(
 
 #[cfg(test)]
 mod tests {
-    use gents_shell::source::{FieldKind, FormAct, FormAction, FormRef};
+    use gents_shell::source::{FormAct, FormAction, FormRef};
     use serde_json::json;
 
-    use super::super::testing::{sent, shown_values};
-    use super::super::{choice, field};
     use super::*;
+    use crate::commands::shell::testing::{sent, shown_values};
 
     #[test]
     fn skill_form_mirrors_the_desktop() {
@@ -187,70 +186,21 @@ mod tests {
         assert_eq!(edit.form, FormRef::Edit(Doc::Skill, "commit".to_string()));
         assert_eq!(edit.title, "Commit");
         assert_eq!(edit.note, ["Used by Engineer, Reviewer · From git"]);
-        let on_off = choice([("on", "Enabled"), ("off", "Disabled")]);
-        let instructions = field(
-            "instructions",
-            "Instructions",
-            FieldKind::Lines,
-            "Stage, then commit.\nKeep it short.",
-        );
-        let tools = field(
-            "tool_refs",
-            "Tool dependencies",
-            FieldKind::Text,
-            "git, read",
-        );
         assert_eq!(
-            edit.fields,
+            shown_values(&edit),
             [
-                field("about", "About", FieldKind::Heading, ""),
-                field("name", "Name", FieldKind::Text, "commit"),
-                field("display_name", "Display name", FieldKind::Text, "Commit"),
-                helped(
-                    field(
-                        "description",
-                        "Description",
-                        FieldKind::Lines,
-                        "Writes commits"
-                    ),
-                    "Shown in the skills catalog."
-                ),
-                hinted(
-                    helped(instructions, "What an agent reads when it loads the skill."),
-                    "No instructions yet."
-                ),
-                field("details", "Details", FieldKind::Heading, ""),
-                helped(
-                    field("skill_id", "Skill ID", FieldKind::Fixed, "commit"),
-                    "Cannot be renamed after creation."
-                ),
-                helped(
-                    field(
-                        "source_directory",
-                        "Source directory",
-                        FieldKind::Text,
-                        "/skills/commit"
-                    ),
-                    "Where the skill's files live."
-                ),
-                hinted(
-                    helped(tools, "Intersected with the agent's ceiling."),
-                    "Add a tool"
-                ),
-                helped(
-                    field(
-                        "interface_json",
-                        "Interface JSON",
-                        FieldKind::Lines,
-                        "{\"args\":[]}"
-                    ),
-                    "Optional structured interface metadata. Must be valid JSON."
-                ),
-                hinted(
-                    field("tags", "Tags", FieldKind::Text, "vcs, daily"),
-                    "Add a tag"
-                ),
-                field("enabled", "Enabled", on_off, "on"),
+                ("about", ""),
+                ("name", "commit"),
+                ("display_name", "Commit"),
+                ("description", "Writes commits"),
+                ("instructions", "Stage, then commit.\nKeep it short."),
+                ("details", ""),
+                ("skill_id", "commit"),
+                ("source_directory", "/skills/commit"),
+                ("tool_refs", "git, read"),
+                ("interface_json", "{\"args\":[]}"),
+                ("tags", "vcs, daily"),
+                ("enabled", "on"),
             ]
         );
         let delete = FormAct::Delete {

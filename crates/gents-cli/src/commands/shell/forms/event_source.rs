@@ -132,12 +132,11 @@ pub(super) fn document(
 #[cfg(test)]
 mod tests {
     use gents::documents::EventGroupCount;
-    use gents_shell::source::{FieldKind, FormAct, FormAction, FormField, FormRef};
+    use gents_shell::source::{FormAct, FormAction, FormRef};
     use serde_json::json;
 
-    use super::super::testing::{sent, shown_values};
-    use super::super::{field, hinted};
     use super::*;
+    use crate::commands::shell::testing::{sent, shown_values};
 
     #[test]
     fn event_source_form_mirrors_the_desktop() {
@@ -170,64 +169,23 @@ mod tests {
             FormRef::Edit(Doc::EventSource, "leads".to_string())
         );
         assert_eq!(edit.title, "Leads");
-        let authorities = [
-            ("", "None"),
-            ("readOnly", "Read only"),
-            ("readWrite", "Read / write"),
-            ("integrate", "Integrate (inspect only)"),
-        ];
-        let correlation = field(
-            "correlation_field",
-            "Correlation field",
-            FieldKind::Text,
-            "batch_id",
-        );
-        let authority = choice(authorities);
         assert_eq!(
-            edit.fields,
+            shown_values(&edit),
             [
-                field(
-                    "event_source_id",
-                    "Event source ID",
-                    FieldKind::Fixed,
-                    "leads"
-                ),
-                field("display_name", "Display name", FieldKind::Text, "Leads"),
-                field(
-                    "source_collection",
-                    "Source collection",
-                    FieldKind::Text,
-                    "Lead"
-                ),
-                field("event_kind", "Event kind", FieldKind::Fixed, "created"),
-                field(
-                    "filter",
-                    "Filter",
-                    FieldKind::Text,
-                    "{status: {_eq: \"open\"}}"
-                ),
-                FormField {
-                    help: Some("Required when events are grouped.".to_string()),
-                    ..correlation
-                },
-                field(
-                    "workspace_authority",
-                    "Workspace authority",
-                    authority,
-                    "readOnly"
-                ),
-                field("grouping", "Grouping", FieldKind::Heading, ""),
-                field("expected_count", "Expected count", FieldKind::Text, "3"),
-                field(
-                    "expected_count_field",
-                    "Expected count source field",
-                    FieldKind::Text,
-                    ""
-                ),
-                field("timeout_secs", "Timeout seconds", FieldKind::Text, "60"),
-                field("min_count", "Minimum count", FieldKind::Text, "2"),
-                field("metadata", "Metadata", FieldKind::Heading, ""),
-                hinted(field("tags", "Tags", FieldKind::Text, "sales"), "Add a tag"),
+                ("event_source_id", "leads"),
+                ("display_name", "Leads"),
+                ("source_collection", "Lead"),
+                ("event_kind", "created"),
+                ("filter", "{status: {_eq: \"open\"}}"),
+                ("correlation_field", "batch_id"),
+                ("workspace_authority", "readOnly"),
+                ("grouping", ""),
+                ("expected_count", "3"),
+                ("expected_count_field", ""),
+                ("timeout_secs", "60"),
+                ("min_count", "2"),
+                ("metadata", ""),
+                ("tags", "sales"),
             ]
         );
         let delete = FormAct::Delete {

@@ -245,6 +245,7 @@ mod tests {
 
     use crate::app::layers::LayerKind;
     use crate::app::{App, Mode, Pane};
+    use crate::keys::KeyCtx;
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{MenuId, Scope, View};
     use crate::testing::{
@@ -276,18 +277,49 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_session_opens_it() {
-        let mut app = App::new(Vim, 132, 36);
-        click_text(&mut app, "pack registry");
-        assert_eq!(app.tabs[0].name, "packs");
-        assert_eq!(app.focus, Pane::Agent);
-    }
-
-    #[test]
-    fn a_click_on_new_session_opens_the_picker() {
-        let mut app = App::new(Vim, 132, 36);
-        click_text(&mut app, "+ New session");
-        assert_eq!(top(&app), Some(LayerKind::Picker));
+    fn a_click_on_a_target_does_what_it_shows() {
+        let fresh = || App::new(Vim, 132, 36);
+        let session = || session_app(132, 36);
+        let files = || with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
+        type Target = (fn() -> App, &'static str, &'static str, fn(&App) -> bool);
+        let targets: [Target; 10] = [
+            (fresh, "", "pack registry", |app| {
+                (app.tabs[0].name.as_str(), app.focus) == ("packs", Pane::Agent)
+            }),
+            (fresh, "", "+ New session", |app| {
+                top(app) == Some(LayerKind::Picker)
+            }),
+            (fresh, "ctrl-p", "App settings", |app| {
+                top(app) == Some(LayerKind::Menu(MenuId::AppSettings))
+            }),
+            (session, "", "Triage · inbox", |app| {
+                app.tabs[0].agent == "Triage" && app.ctx() == KeyCtx::Normal
+            }),
+            (session, "", "change unit", |app| {
+                let tab = &app.tabs[0];
+                app.view == View::Workflows && tab.sidebar && tab.running_sel.is_none()
+            }),
+            (session, "", "M cli/mod.rs", |app| {
+                app.diff == Some(1) && app.tabs[0].sidebar && app.focus == Pane::Agent
+            }),
+            (files, "", "M cli/mod.rs", |app| app.diff == Some(1)),
+            (session, "", "Message Engineer", |app| {
+                (app.focus, app.mode) == (Pane::Agent, Mode::Input)
+            }),
+            (session, "h", "Moving them", |app| {
+                app.focus == Pane::Agent && app.diff.is_none()
+            }),
+            (session, "j", "Moving them", |app| {
+                app.tabs[0].running_sel.is_none()
+            }),
+        ];
+        for (app, keys, target, done) in targets {
+            let mut app = app();
+            press(&mut app, keys);
+            assert!(!done(&app), "{target} before the click");
+            click_text(&mut app, target);
+            assert!(done(&app), "{target}");
+        }
     }
 
     #[test]
@@ -322,32 +354,6 @@ mod tests {
         click_text(&mut app, "1 packs");
         assert_eq!(app.tabs[0].name, "packs");
         assert_eq!(app.tabs[0].parent, None);
-    }
-
-    #[test]
-    fn a_click_on_a_running_subagent_steps_in() {
-        let mut app = session_app(132, 36);
-        click_text(&mut app, "Triage · inbox");
-        assert_eq!(app.tabs[0].agent, "Triage");
-        assert_eq!(app.ctx(), crate::keys::KeyCtx::Normal);
-    }
-
-    #[test]
-    fn a_click_on_a_running_workflow_opens_it() {
-        let mut app = session_app(132, 36);
-        click_text(&mut app, "change unit");
-        assert_eq!(app.view, View::Workflows);
-        assert!(app.tabs[0].sidebar);
-        assert_eq!(app.tabs[0].running_sel, None);
-    }
-
-    #[test]
-    fn a_click_on_a_file_in_the_conversation_opens_its_diff() {
-        let mut app = session_app(132, 36);
-        click_text(&mut app, "M cli/mod.rs");
-        assert_eq!(app.diff, Some(1));
-        assert!(app.tabs[0].sidebar);
-        assert_eq!(app.focus, Pane::Agent);
     }
 
     #[test]
@@ -389,13 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_file_in_the_right_pane_opens_its_diff() {
-        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
-        click_text(&mut app, "M cli/mod.rs");
-        assert_eq!(app.diff, Some(1));
-    }
-
-    #[test]
     fn a_click_on_the_back_row_closes_the_diff() {
         let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         click_text(&mut app, "M cli/mod.rs");
@@ -410,32 +409,6 @@ mod tests {
         assert_eq!(top(&app), Some(LayerKind::Sidebar));
         click_text(&mut app, "M cli/mod.rs");
         assert_eq!(app.diff, Some(1));
-    }
-
-    #[test]
-    fn a_click_on_the_message_box_enters_input_mode() {
-        let mut app = session_app(132, 36);
-        assert_eq!(app.mode, Mode::Normal);
-        click_text(&mut app, "Message Engineer");
-        assert_eq!((app.focus, app.mode), (Pane::Agent, Mode::Input));
-    }
-
-    #[test]
-    fn a_click_in_the_conversation_focuses_the_pane() {
-        let mut app = session_app(132, 36);
-        press(&mut app, "h");
-        assert_eq!(app.focus, Pane::Sessions);
-        click_text(&mut app, "Moving them");
-        assert_eq!(app.focus, Pane::Agent);
-        assert_eq!(app.diff, None);
-    }
-
-    #[test]
-    fn a_click_elsewhere_leaves_the_running_rows() {
-        let mut app = session_app(132, 36);
-        press(&mut app, "j");
-        click_text(&mut app, "Moving them");
-        assert_eq!(app.tabs[0].running_sel, None);
     }
 
     #[test]
@@ -478,14 +451,6 @@ mod tests {
         press(&mut app, "j j j j j j j j j j j j j");
         click_text(&mut app, " Tools ");
         assert_eq!(top(&app), Some(LayerKind::Menu(MenuId::Tools)));
-    }
-
-    #[test]
-    fn a_click_on_a_jump_row_acts_on_it() {
-        let mut app = App::new(Vim, 132, 36);
-        press(&mut app, "ctrl-p");
-        click_text(&mut app, "App settings");
-        assert_eq!(top(&app), Some(LayerKind::Menu(MenuId::AppSettings)));
     }
 
     #[test]

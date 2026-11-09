@@ -2,15 +2,7 @@ use gents_shell::sample::Tone::{Accent, Label, Plain, Warn};
 use serde_json::json;
 
 use super::*;
-
-/// An Ask's title and its rows' text, tone and enter act.
-fn question(update: Update) -> (String, Vec<(String, Tone, Option<MenuAct>)>) {
-    let Update::Ask { title, rows } = update else {
-        panic!("{update:?}");
-    };
-    let rows = rows.into_iter().map(|row| (row.text, row.tone, row.enter));
-    (title, rows.collect())
-}
+use crate::commands::shell::testing::question;
 
 fn shown(text: &str, tone: Tone, act: Option<PackAct>) -> (String, Tone, Option<MenuAct>) {
     (text.to_string(), tone, act.map(MenuAct::Pack))

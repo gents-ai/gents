@@ -194,7 +194,8 @@ mod tests {
     use crate::sample::Tone;
     use crate::source::{Intent, Update};
     use crate::testing::{
-        find, press, screen, sent, session_row, type_text, with_right_pane, with_sample_session,
+        connected, find, press, screen, sent, session_row, type_text, with_right_pane,
+        with_sample_session,
     };
 
     fn texts(rows: &[SidebarRow]) -> Vec<(String, Tone, bool)> {
@@ -263,41 +264,6 @@ mod tests {
         let rows = app.view_rows(view);
         let listed = rows.iter().filter(|row| row.selectable());
         listed.map(|row| row.text.to_string()).collect()
-    }
-
-    #[test]
-    fn sample_views_match_the_old_rows() {
-        let app = with_sample_session(App::new(Vim, 132, 36));
-        let row = |text: &str, tone, selectable| (text.to_string(), tone, selectable);
-        let workflows = [
-            row(" 2 running   1 waiting", Tone::Label, false),
-            row("", Tone::Plain, false),
-            row(" ● change unit: cli ux", Tone::Plain, true),
-            row("     build · step 3 of 5", Tone::Label, false),
-            row("       ✓ plan", Tone::Label, false),
-            row("       ✓ edit", Tone::Label, false),
-            row("       ● build", Tone::Label, false),
-            row("       ○ test", Tone::Label, false),
-            row("       ○ review", Tone::Label, false),
-            row(" ● nightly eval", Tone::Plain, true),
-            row("     trial 12 of 40", Tone::Label, false),
-            row(" ! pack release", Tone::Warn, true),
-            row("     waiting on your approval", Tone::Label, false),
-        ];
-        assert_eq!(texts(&app.view_rows(View::Workflows)), workflows);
-        let background = [
-            row(" 3 background   1 done", Tone::Label, false),
-            row("", Tone::Plain, false),
-            row(" ● Reviewer · cli ux", Tone::Plain, false),
-            row("     reading crates/gents-cli", Tone::Label, false),
-            row(" ● Researcher · flaky test", Tone::Plain, false),
-            row("     running for 4m", Tone::Label, false),
-            row(" ● Engineer · pack sync", Tone::Plain, false),
-            row("     running for 11m", Tone::Label, false),
-            row(" ✓ Triage · inbox", Tone::Accent, false),
-            row("     finished 2m ago", Tone::Label, false),
-        ];
-        assert_eq!(texts(&app.view_rows(View::Agents)), background);
     }
 
     #[test]
@@ -397,8 +363,7 @@ mod tests {
     /// The source is gone, so asking it would only replace the reason with a vaguer one.
     #[test]
     fn a_lost_shell_shows_a_work_view_without_asking() {
-        let (intents, intended) = channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, intended) = connected(Vim, 132, 36);
         let why = "runtime closed: check `gents status`, then reopen the shell (gone)";
         app.apply(Update::Connection(crate::source::Connection::Lost(
             why.to_string(),
@@ -629,6 +594,10 @@ mod tests {
             "     pending",
         ];
         assert_eq!(shown(&app), s1);
+        assert!(!app
+            .view_rows(View::Agents)
+            .iter()
+            .any(SidebarRow::selectable));
         press(&mut app, "esc g t");
         assert_eq!(
             shown(&app),

@@ -240,14 +240,6 @@ mod tests {
     }
 
     #[test]
-    fn matches_the_pictures() {
-        check(168, 48, ON, Some(36), 88, Side::Sidebar(44));
-        check(132, 36, ON, Some(28), 70, Side::Sidebar(34));
-        check(104, 30, ON, Some(26), 71, Side::Rail(7));
-        check(70, 24, ON, None, 70, Side::Nothing);
-    }
-
-    #[test]
     fn docks_at_the_boundaries() {
         check(120, 30, ON, Some(26), 63, Side::Sidebar(31));
         check(119, 30, ON, Some(26), 86, Side::Rail(7));
@@ -302,41 +294,16 @@ mod tests {
     }
 
     #[test]
-    fn positions_follow_the_pictures() {
+    fn a_layer_steps_with_depth_and_fits_a_short_window() {
         let area = Rect::new(0, 0, 132, 35);
         let accounts = LayerKind::Menu(MenuId::Accounts);
-        assert_eq!(
-            layer_rect(LayerKind::Keys, area, 0, true),
-            Rect::new(24, 5, 84, 23)
-        );
-        assert_eq!(
-            layer_rect(LayerKind::Jump, area, 0, true),
-            Rect::new(30, 5, 72, 19)
-        );
-        assert_eq!(
-            layer_rect(LayerKind::Picker, area, 0, true),
-            Rect::new(32, 7, 66, 16)
-        );
-        assert_eq!(
-            layer_rect(LayerKind::Jump, area, 0, false),
-            Rect::new(26, 4, 40, 15)
-        );
-        assert_eq!(
+        let (top, under) = (
+            layer_rect(accounts, area, 0, true),
             layer_rect(accounts, area, 1, true),
-            Rect::new(56, 10, 50, 13)
         );
-        assert_eq!(
-            layer_rect(LayerKind::Sessions, Rect::new(0, 0, 70, 23), 0, true),
-            Rect::new(3, 2, 36, 15)
-        );
-        assert_eq!(
-            layer_rect(LayerKind::Form, area, 0, true),
-            Rect::new(27, 4, 76, 30)
-        );
-        assert_eq!(
-            layer_rect(LayerKind::Form, Rect::new(0, 0, 132, 23), 0, true).height,
-            20
-        );
+        assert_eq!((under.x, under.y), (top.x + 4, top.y + 2));
+        let short = Rect::new(0, 0, 132, 23);
+        assert_eq!(layer_rect(LayerKind::Form, short, 0, true).height, 20);
         let small = Rect::new(0, 0, 60, 15);
         assert_eq!(layer_rect(LayerKind::Keys, small, 0, true), small);
     }

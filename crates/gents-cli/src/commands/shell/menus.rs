@@ -609,6 +609,7 @@ mod tests {
     use gents_shell::source::MenuAct;
     use serde_json::json;
 
+    use super::super::testing::agent;
     use super::super::tests::mailbox_item;
     use super::*;
 
@@ -655,21 +656,6 @@ mod tests {
                 row(" ○ personal   disabled", Tone::Label, None, None),
             ]
         );
-    }
-
-    fn agent(id: &str, name: &str, enabled: bool, is_default: bool) -> AgentView {
-        AgentView {
-            agent_id: id.to_string(),
-            node_did: "did:key:z".to_string(),
-            display_name: name.to_string(),
-            description: None,
-            context_id: None,
-            inference_profile_id: None,
-            enabled,
-            is_default,
-            tags: Vec::new(),
-            created_at: None,
-        }
     }
 
     #[test]

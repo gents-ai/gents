@@ -1,4 +1,4 @@
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{channel, Receiver};
 
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -11,6 +11,7 @@ use crate::app::layers::LayerKind;
 use crate::app::session_rows;
 use crate::app::{App, ChatLine};
 use crate::draw;
+use crate::keys::KeySet;
 use crate::sample::{self, Tone};
 use crate::source::Intent;
 
@@ -75,6 +76,17 @@ pub fn type_text(app: &mut App, text: &str) {
         };
         app.handle(Event::Key(KeyEvent::new(KeyCode::Char(c), shift)));
     }
+}
+
+/// An app on a runtime, and what it sends there.
+pub fn connected(set: KeySet, width: u16, height: u16) -> (App, Receiver<Intent>) {
+    let (intents, intended) = channel();
+    (App::connected(set, width, height, intents), intended)
+}
+
+/// Everything the app sent.
+pub fn drain(intents: &Receiver<Intent>) -> Vec<Intent> {
+    intents.try_iter().collect()
 }
 
 /// What the app sent, beside the skills it reads as the slash list opens.

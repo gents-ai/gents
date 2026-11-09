@@ -612,20 +612,6 @@ mod tests {
     }
 
     #[test]
-    fn lines_wrap_by_display_width() {
-        let tab = tab_of(&["abcdefgh", "", "日本語"]);
-        let rows = rows_at(&tab, 5);
-        assert_eq!(rows, ["abcde", "fgh", "", "日本", "語"]);
-    }
-
-    #[test]
-    fn a_character_wider_than_the_width_gets_its_own_row() {
-        let tab = tab_of(&["日本"]);
-        let rows = rows_at(&tab, 1);
-        assert_eq!(rows, ["日", "本"]);
-    }
-
-    #[test]
     fn conversation_fills_upward_from_the_bottom_when_it_overflows() {
         let mut app = App::new(Vim, 60, 16);
         let texts: Vec<String> = (0..20).map(|n| format!("line {n}")).collect();
@@ -654,20 +640,6 @@ mod tests {
         assert_eq!(buf[(68, 5)].symbol(), " ");
         assert_eq!(buf[(67, 5)].symbol(), "x");
         assert_eq!(buf[(2, 6)].symbol(), "x");
-    }
-
-    #[test]
-    fn a_variation_selector_wraps_with_its_character() {
-        let tab = tab_of(&["a✔\u{fe0f}"]);
-        let rows = rows_at(&tab, 2);
-        assert_eq!(rows, ["a", "✔\u{fe0f}"]);
-    }
-
-    #[test]
-    fn a_joined_emoji_is_never_split() {
-        let tab = tab_of(&["👩\u{200d}💻"]);
-        let rows = rows_at(&tab, 3);
-        assert_eq!(rows, ["👩\u{200d}💻"]);
     }
 
     #[test]
@@ -716,8 +688,7 @@ mod tests {
 
     #[test]
     fn the_first_tab_takes_the_default_agent() {
-        let (intents, _receiver) = std::sync::mpsc::channel();
-        let mut app = App::connected(Vim, 132, 36, intents);
+        let (mut app, _receiver) = crate::testing::connected(Vim, 132, 36);
         crate::testing::type_text(&mut app, "hi");
         press(&mut app, "enter");
         assert_eq!(

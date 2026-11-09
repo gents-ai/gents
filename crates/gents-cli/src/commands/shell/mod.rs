@@ -12,6 +12,8 @@ mod usage;
 mod work;
 
 #[cfg(test)]
+mod testing;
+#[cfg(test)]
 mod tests;
 
 use std::path::Path;

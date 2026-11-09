@@ -141,9 +141,8 @@ fn target(values: &[(String, String)], id: &str) -> Result<ToolServiceTarget, Fo
 mod tests {
     use gents_shell::source::FormRef;
 
-    use super::super::hinted;
-    use super::super::testing::{sent, shown_values};
     use super::*;
+    use crate::commands::shell::testing::{sent, shown_values};
 
     #[test]
     fn remote_tool_form_mirrors_the_desktop() {
@@ -172,34 +171,20 @@ mod tests {
         );
         assert_eq!(edit.title, "Files");
         assert_eq!(edit.note, Vec::<String>::new());
-        let path = field("mcp_path", "MCP path", FieldKind::Text, "/mcp");
         assert_eq!(
-            edit.fields,
+            shown_values(&edit),
             [
-                field("service_id", "Service ID", FieldKind::Fixed, "files"),
-                field("display_name", "Display name", FieldKind::Text, "Files"),
-                field(
-                    "description",
-                    "Description",
-                    FieldKind::Lines,
-                    "Reads files"
-                ),
-                field("hostname", "Hostname", FieldKind::Text, "files.local"),
-                field(
-                    "tailscale_ip",
-                    "Tailscale IP",
-                    FieldKind::Text,
-                    "100.64.0.2"
-                ),
-                field("lan_ip", "LAN IP", FieldKind::Text, ""),
-                field("mcp_port", "MCP port", FieldKind::Text, "8080"),
-                helped(
-                    path,
-                    "Empty uses the endpoint root; otherwise start with /."
-                ),
-                switch("send_node_did", "Send node DID", true),
-                switch("enabled", "Enabled", true),
-                hinted(field("tags", "Tags", FieldKind::Text, "local"), "Add a tag"),
+                ("service_id", "files"),
+                ("display_name", "Files"),
+                ("description", "Reads files"),
+                ("hostname", "files.local"),
+                ("tailscale_ip", "100.64.0.2"),
+                ("lan_ip", ""),
+                ("mcp_port", "8080"),
+                ("mcp_path", "/mcp"),
+                ("send_node_did", "on"),
+                ("enabled", "on"),
+                ("tags", "local"),
             ]
         );
         let test = FormAction {

@@ -137,8 +137,7 @@ mod tests {
                 at("sample data")
             );
 
-            let (intents, _receiver) = std::sync::mpsc::channel();
-            let mut app = App::connected(Vim, width, height, intents);
+            let (mut app, _receiver) = crate::testing::connected(Vim, width, height);
             assert_eq!(find(&screen(&app), "connecting"), at("connecting"));
             app.apply(Update::Connection(Connection::Ready));
             let s = screen(&app);
@@ -160,8 +159,7 @@ mod tests {
     #[test]
     fn the_status_bar_shows_the_branch_from_80_columns() {
         let ready = |width, height| {
-            let (intents, _receiver) = std::sync::mpsc::channel();
-            let mut app = App::connected(Vim, width, height, intents);
+            let (mut app, _receiver) = crate::testing::connected(Vim, width, height);
             app.apply(Update::Connection(Connection::Ready));
             app.apply(Update::Branch("main".to_string()));
             app
