@@ -25,7 +25,6 @@ pub use jsonl::{adapter_projection_jsonl_records, adapter_projection_native_json
 pub use schema::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
     adapter_projection_jsonl_record_schema, adapter_projection_native_json_schema,
-    adapter_projection_schema_index,
 };
 pub use validate::validate_adapter_projection_contract;
 
@@ -99,7 +98,7 @@ pub struct AdapterProjectionEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_agent_id: Option<String>,
+    pub source_agent_did: Option<String>,
     pub redaction_mode: ProjectionRedactionMode,
     pub provenance: ProjectionProvenance,
     /// Never bodies: the timeline never selects `request_json`, so a captured
@@ -268,7 +267,7 @@ pub enum OpenAiCodexTraceItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         node_did: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
+        agent_did: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         parent_request_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,7 +327,7 @@ pub struct LangGraphNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -377,7 +376,7 @@ pub struct MultiAgentParticipant {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub role: String,
 }
 
@@ -401,7 +400,7 @@ pub struct MultiAgentDelegation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

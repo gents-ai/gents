@@ -334,6 +334,7 @@ export function OnboardingWizard({
       });
       failedPhase = "client-error";
       await actions.commitLocalServerAutoStart(requestedName);
+      await actions.enrollLocalServer();
       await actions.awaitLocalServerPairing();
       await finishProvisioning(initialized.nodeDid);
     } catch (e) {
@@ -377,7 +378,8 @@ export function OnboardingWizard({
                 : activationError
                   ? "Access is approved. The client will retry the secure connection automatically."
                   : active?.state === "approved"
-                    ? "Approval received. Finishing your secure connection…"
+                    ? (target?.chatRefusal?.detail ??
+                      "Approval received. Finishing your secure connection…")
                     : !observed
                       ? "Approval status is unavailable. Refresh to check again."
                       : active
@@ -565,6 +567,9 @@ export function OnboardingWizard({
                   </Field>
                 </div>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Continuing connects this desktop and grants it access to the local node.
+              </p>
               {homeRoot ? (
                 <ManagedRuntimeAuthorityPicker
                   home={homeRoot}

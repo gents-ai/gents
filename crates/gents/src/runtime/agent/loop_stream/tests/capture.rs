@@ -483,7 +483,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             request_id: request_id.to_string(),
             node_did: "did:key:agent".to_string(),
             requester_did: String::new(),
-            agent_id: "general".to_string(),
+            agent_did: "general".to_string(),
             session_id: session_id.to_string(),
             model_name: "model".to_string(),
             provider_family: None,
@@ -535,31 +535,88 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
     let cases = crate::lean_vocab_test::lean_rendered_capture_cases();
     assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
 
+    // Captures are owned by the capturing Agent, so they are read as it.
     async fn rendered_rows(
-        node: &Arc<defra_node::EmbeddedNode>,
+        reader: &crate::ConfigAccess,
         capture_key: &str,
     ) -> Vec<serde_json::Value> {
         let query = format!(
             r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}) {{ capture_key capture_version request_json }} }}"#,
             escape_graphql_string(capture_key),
         );
-        let response = node.execute(&query).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        response.data.unwrap()["RenderedRequest"]
+        agent_query(reader, &query).await["data"]["RenderedRequest"]
             .as_array()
             .cloned()
             .expect("RenderedRequest row array")
     }
 
     for case in cases {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        // Each case runs under its own held node root, whose managed Agent signs
+        // the captures. The node DID, Agent and session are real, so the sink's
+        // signer and session-binding checks run unchanged.
+        let key_dir = tempfile::tempdir().unwrap();
+        let root: Arc<dyn crate::NodeIdentity> = Arc::new(
+            crate::KeyIdentity::load_or_create(key_dir.path().join("node.key"), None).unwrap(),
+        );
+        // The Lean node witness only distinguishes cases; each case's held root
+        // already gives it a distinct, real node DID.
+        let _ = case.node_did;
+        let node_did = root.did().to_owned();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(&node_did)
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let sink = DefraRenderedRequestSink::new(node.clone());
+        let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        let agent =
+            crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+        let agent_did = binding.agent_did.clone();
+        crate::test_support::install_test_agent_binding(
+            &node,
+            &node_did,
+            "Capture test agent",
+            &binding,
+        )
+        .await;
+        let session_id = format!("session-{}", case.session_id);
+        // The Agent creates the session it later captures into, so its own
+        // reads see the physical row (a node-created row is not visible to it).
+        let agent_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(&agent_did).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let session_created_at =
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        agent_access
+            .transact_write("test.capture.session", |txn| {
+                Box::pin(async {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        &session_id,
+                        &node_did,
+                        &agent_did,
+                        None,
+                        None,
+                        None,
+                        &session_created_at,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        let sink = DefraRenderedRequestSink::new_managed(node.clone(), agent.as_ref()).unwrap();
 
         let rendered_for_witness =
             |witness: u64| -> crate::inference::rendered_request::RenderedCompletionRequest {
-                let node_did = format!("did:key:z6Mk-sink-{}", case.node_did);
-                let session_id = format!("session-{}", case.session_id);
+                let node_did = node_did.clone();
+                let session_id = session_id.clone();
                 let request_doc_id = format!("bae-request-doc-{}", case.request_id);
                 let assembly_trace =
                     crate::inference::rendered_request::AssemblyTrace::from_effective_messages(
@@ -584,8 +641,8 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                     turn_index: case.turn_index,
                     attempt: case.attempt,
                     node_did,
-                    requester_did: "did:key:z6Mk-requester".to_string(),
-                    agent_id: "behavior-sink".to_string(),
+                    requester_did: String::new(),
+                    agent_did: agent_did.clone(),
                     session_id,
                     model_name: "sink-model".to_string(),
                     source: RenderedRequestSource::OpenAiChatCompletions,
@@ -628,7 +685,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
             }
             other => panic!("{}: unknown capture outcome {other}", case.name),
         }
-        let rows = rendered_rows(&node, &delivery_key).await;
+        let rows = rendered_rows(&agent_access, &delivery_key).await;
         assert_eq!(
             rows.len(),
             usize::from(case.durable_after.is_some()),
@@ -641,8 +698,8 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                 .and_then(|value| u32::try_from(value).ok())
                 .expect("numeric capture version");
             Some(
-                crate::inference::rendered_request::decode_capture_json_embedded(
-                    node.as_ref(),
+                crate::inference::rendered_request::decode_capture_json(
+                    &agent_access,
                     version,
                     row["request_json"].as_str().expect("request_json string"),
                     crate::inference::rendered_request::CapturePayloadKind::RequestBody,
@@ -660,7 +717,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
             "{}: the durable binding must match the capture contract",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 

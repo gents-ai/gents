@@ -1,5 +1,6 @@
 use super::GoalDocument;
-use crate::request::admission::verify_request_receipt_signature;
+use crate::store::identity::request_receipt::verify_request_receipt_signature;
+use gents_protocol::goal::RequestAssignmentScope;
 use gents_protocol::row::AgentRequestRow;
 
 /// Historical display uses the immutable signed request, independently of the
@@ -92,13 +93,6 @@ pub(super) fn observe_request_assignment(
     } else {
         RequestAssignmentObservation::None
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum RequestAssignmentScope {
-    Unassigned,
-    Unresolved { entry_doc_id: String },
-    Referenced(gents_protocol::request_input::GoalAssignmentInput),
 }
 
 fn request_assignment_scope(
@@ -258,16 +252,14 @@ pub(crate) fn latest_assignment_goals(
 }
 
 pub(crate) async fn load_request_assignment(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    access: &crate::ConfigAccess,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
-    crate::store::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        None,
-        "goal.assignment_requests",
-        |txn| Box::pin(load_request_assignment_in_txn(txn, request)),
-    )
-    .await
+    access
+        .transact_readonly("goal.assignment_requests", |txn| {
+            Box::pin(load_request_assignment_in_txn(txn, request))
+        })
+        .await
 }
 
 pub(crate) async fn load_request_assignment_in_txn(

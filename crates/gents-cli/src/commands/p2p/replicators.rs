@@ -2,17 +2,35 @@ use anyhow::{Context, Result};
 use gents::runtime::agent::p2p_reconcile::templates::{
     combine_filters, equality_filter, to_replication_filters, PairingFilters,
 };
+use gents::runtime::agent::p2p_reconcile::{
+    expand_p2p_collection_profile_ids, P2pCollectionProfile,
+};
 use serde_json::{json, Value};
 
-use crate::cli::args::{P2pAccessArgs, P2pReplicatorAddArgs, P2pReplicatorRemoveArgs};
+use crate::cli::args::{
+    P2pAccessArgs, P2pCollectionProfileArg, P2pReplicatorAddArgs, P2pReplicatorRemoveArgs,
+};
 use crate::shared::{P2pReplicatorDeleteRequest, P2pReplicatorRequest, P2pReplicatorRow};
 use crate::{http_send, print_json, resolve_graphql_endpoint, resolve_home_dir};
 
-use super::collections::expand_p2p_collection_args;
 use super::output::{
     fetch_live_http_p2p_status, flatten_p2p_fields, load_collection_name_by_id, p2p_replicator_rows,
 };
 use super::p2p_http_client;
+
+fn expand_p2p_collection_args(
+    explicit_collections: &[String],
+    profiles: &[P2pCollectionProfileArg],
+) -> Result<Vec<String>> {
+    let profile_ids = profiles.iter().map(|profile| match profile {
+        P2pCollectionProfileArg::Discovery => P2pCollectionProfile::Discovery.id(),
+    });
+    let collections = expand_p2p_collection_profile_ids(
+        explicit_collections.iter().map(String::as_str),
+        profile_ids,
+    )?;
+    Ok(collections.into_iter().collect())
+}
 
 pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;

@@ -26,7 +26,7 @@ async fn read_log_head(store: &dyn Store, log: &AppendLog) -> Option<Vec<u8>> {
     head
 }
 
-async fn write_credential(node: &defra_node::EmbeddedNode) {
+async fn write_credential(node: &defra_node::Node) {
     crate::store::schema::ensure_runtime_schemas(node)
         .await
         .expect("schemas");
@@ -38,7 +38,7 @@ async fn write_credential(node: &defra_node::EmbeddedNode) {
     assert!(!response.has_errors(), "{:?}", response.errors);
 }
 
-async fn read_refresh_token(node: &defra_node::EmbeddedNode) -> Option<String> {
+async fn read_refresh_token(node: &defra_node::Node) -> Option<String> {
     let response = node.execute("{ OAuthCredential { refresh_token } }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     response.data.as_ref()?["OAuthCredential"][0]["refresh_token"]
@@ -113,7 +113,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
         .await
         .unwrap();
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     drop(node);
 
     let reopened = Arc::new(
@@ -131,7 +131,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
         result["data"]["BudgetDocument"][0]["payload"].as_str(),
         Some(payload.as_str())
     );
-    reopened.shutdown().await;
+    reopened.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -151,7 +151,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
         .await
         .unwrap();
     write_credential(&node).await;
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     drop(node);
     for token in [ACCESS_TOKEN, REFRESH_TOKEN] {
         let leaked = files_containing(&data, token.as_bytes());
@@ -169,14 +169,14 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
         read_refresh_token(&reopened).await.as_deref(),
         Some(REFRESH_TOKEN)
     );
-    reopened.shutdown().await;
+    reopened.shutdown().await.expect("node shutdown");
 
     let plain = temp.path().join("plain");
     let mut plain_options = crate::store::local::storage_backend::regolith_options();
     plain_options.engine = plain_options
         .engine
         .compression(regolith::CompressionType::None);
-    let control = defra_node::EmbeddedNode::builder()
+    let control = defra_node::Node::builder()
         .with_node_identity_did(node_did)
         .data_path(&plain)
         .with_regolith_options(plain_options)
@@ -184,7 +184,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
         .await
         .unwrap();
     write_credential(&control).await;
-    control.shutdown().await;
+    control.shutdown().await.expect("node shutdown");
     drop(control);
     assert!(
         !files_containing(&plain, REFRESH_TOKEN.as_bytes()).is_empty(),
@@ -293,7 +293,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     )
     .unwrap();
     let data = crate::store::local::home::default_data_dir(&home);
-    let plain = defra_node::EmbeddedNode::builder()
+    let plain = defra_node::Node::builder()
         .with_node_identity_did(node_did)
         .data_path(&data)
         .with_storage_backend(defra_node::StorageBackend::Regolith)
@@ -301,7 +301,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
         .await
         .unwrap();
     write_credential(&plain).await;
-    plain.shutdown().await;
+    plain.shutdown().await.expect("node shutdown");
     drop(plain);
 
     let log = arrival_log();
@@ -351,7 +351,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     assert!(upgrade::pending_record(&data).unwrap().is_some());
     upgrade::finish(&data).unwrap();
     assert!(upgrade::pending_record(&data).unwrap().is_none());
-    encrypted.shutdown().await;
+    encrypted.shutdown().await.expect("node shutdown");
     drop(encrypted);
 
     let encrypted_store = storage::RegolithStore::open_with_options(
@@ -399,13 +399,13 @@ async fn a_store_with_data_but_no_recorded_key_is_refused() {
     let data = temp.path().join("data");
     reject_unrecorded_store(&data).expect("an absent store has nothing to refuse");
 
-    let legacy = defra_node::EmbeddedNode::builder()
+    let legacy = defra_node::Node::builder()
         .data_path(&data)
         .with_storage_backend(defra_node::StorageBackend::Regolith)
         .build()
         .await
         .unwrap();
-    legacy.shutdown().await;
+    legacy.shutdown().await.expect("node shutdown");
     drop(legacy);
 
     let error = reject_unrecorded_store(&data).unwrap_err();

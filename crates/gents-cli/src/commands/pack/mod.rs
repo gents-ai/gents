@@ -2,7 +2,7 @@ pub(crate) mod account;
 pub(crate) mod build;
 mod cache;
 mod check;
-mod cli_process;
+pub(crate) mod cli_process;
 mod edit;
 mod import;
 mod inspect;
@@ -25,8 +25,8 @@ pub(crate) use install::{
     install, install_documents_pack, install_documents_pack_resolved, wire_pack_plugins,
 };
 pub(crate) use scope::{
-    plugin_notification_scope, record_plugin_store_change, resolve_scope_owner,
-    warn_on_unrecorded_removal,
+    plugin_notification_scope, record_plugin_store_change, resolve_home_owner_under_plugin_store,
+    resolve_scope_owner, warn_on_unrecorded_removal,
 };
 use serde_json::json;
 use source::{asset_cache_root, materialize_cached_pack};

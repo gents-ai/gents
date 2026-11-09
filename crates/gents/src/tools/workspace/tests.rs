@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use tempfile::TempDir;
 
@@ -53,16 +52,17 @@ fn cleanup_caps() -> BTreeSet<String> {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_INDEX_FILE")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .expect("run git");
+    let output = gents::tools::exec::native_spawn::output_std(
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env("GIT_TERMINAL_PROMPT", "0"),
+    )
+    .expect("run git");
     assert!(
         output.status.success(),
         "git {} failed: {}",
@@ -108,6 +108,11 @@ impl Fixture {
         branch: &str,
     ) -> CreateWorkspaceAction {
         CreateWorkspaceAction {
+            writer_agent_did: None,
+            writer_agent_doc_id: None,
+            integrator_agent_did: None,
+            integrator_agent_doc_id: None,
+            readers: Vec::new(),
             path_capability: WorkspacePathCapability::exact_paths(
                 [
                     "README.md",
@@ -162,6 +167,7 @@ impl Fixture {
             caused_by_invocation_id: "inv-1".to_string(),
             caused_by_correlation: "corr-1".to_string(),
             documents: docs,
+            route: Default::default(),
         }
     }
 }
@@ -175,6 +181,11 @@ fn git_worktree_diff_policy() -> CommandExecutionPolicy {
 #[test]
 fn builtin_emitter_omits_absolute_destination() {
     let action = CreateWorkspaceAction {
+        writer_agent_did: None,
+        writer_agent_doc_id: None,
+        integrator_agent_did: None,
+        integrator_agent_doc_id: None,
+        readers: Vec::new(),
         path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
         workspace_id: "ws-1".into(),
         work_unit_id: "unit-1".into(),
@@ -244,6 +255,7 @@ fn isolated_workspace_mutation_has_no_host_path() {
         lifecycle_state: "ready".into(),
         caused_by_invocation_id: "inv-1".into(),
         caused_by_correlation: "corr-1".into(),
+        route: Default::default(),
     };
     let mutation = isolated_workspace_upsert_mutation(&doc);
     assert!(!mutation.contains("host_path"));
@@ -301,6 +313,7 @@ fn isolated_workspace_mutation_has_no_host_path() {
         diff_artifact: None,
         unresolved_conflicts: None,
         integration_instructions: None,
+        route: Default::default(),
     };
     let receipt_mutation = workspace_receipt_create_mutation(&receipt);
     assert!(receipt_mutation.contains("upsert_WorkspaceReceipt"));
@@ -2490,14 +2503,15 @@ fn generated_noncanonical_git_delta_is_rejected_without_filesystem_traversal() {
     for byte in blob.as_bytes().as_chunks::<2>().0 {
         tree.push(u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap());
     }
-    let mut child = Command::new("git")
-        .args(["hash-object", "--literally", "-t", "tree", "-w", "--stdin"])
-        .current_dir(&fx.repo)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = gents::tools::exec::native_spawn::spawn_std(
+        std::process::Command::new("git")
+            .args(["hash-object", "--literally", "-t", "tree", "-w", "--stdin"])
+            .current_dir(&fx.repo)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .unwrap();
     child.stdin.take().unwrap().write_all(&tree).unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(

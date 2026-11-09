@@ -410,41 +410,23 @@ mod wire {
     }
 
     #[test]
-    fn wiring_grants_the_plugins_pack_collections_for_p2p_when_enabled() {
+    fn wiring_never_grants_p2p_collections() {
         let mut plugin = installed(false, Some("amygdala/fleet-board"));
-        plugin.data_collection_fields = [
-            ("FleetBoardPost".to_owned(), strs(&["post_id"])),
-            ("DeploymentNote".to_owned(), strs(&["text"])),
-        ]
-        .into_iter()
-        .collect();
-        let (tools, context) = start(None);
-        let (unchanged, _, report) =
-            wire_plugin(&tools, &context, &plugin, None, &[], &[]).unwrap();
-        assert!(unchanged.built_ins.is_none());
-        assert!(!report.changed.iter().any(|line| line.contains("P2P")));
-
-        let mut enabled = tools.clone();
-        enabled.built_ins = Some(BuiltInTools {
+        plugin.data_collection_fields = [("FleetBoardPost".to_owned(), strs(&["post_id"]))]
+            .into_iter()
+            .collect();
+        let (mut tools, context) = start(None);
+        tools.built_ins = Some(BuiltInTools {
             enable_p2p_tool: Some(true),
-            p2p_collections: strs(&["DeploymentNote"]),
             ..BuiltInTools::default()
         });
-        let (wired, wired_context, report) =
-            wire_plugin(&enabled, &context, &plugin, None, &[], &[]).unwrap();
-        assert_eq!(
-            wired.built_ins.as_ref().unwrap().p2p_collections,
-            strs(&["DeploymentNote", "FleetBoardPost"])
-        );
-        assert!(report
-            .changed
-            .contains(&"granted P2P pairing of FleetBoardPost".to_owned()));
-        let (again, _, report) =
-            wire_plugin(&wired, &wired_context, &plugin, None, &[], &[]).unwrap();
-        assert_eq!(again.built_ins, wired.built_ins);
+        let (wired, _, report) = wire_plugin(&tools, &context, &plugin, None, &[], &[]).unwrap();
+        assert_eq!(wired.built_ins, tools.built_ins);
         assert!(!report.changed.iter().any(|line| line.contains("P2P")));
-        let (unwired, _, _) = unwire_plugin(&wired, &wired_context, &plugin, &[], &[]).unwrap();
-        assert_eq!(unwired.built_ins, wired.built_ins);
+        assert!(serde_json::from_value::<BuiltInTools>(
+            serde_json::json!({"enable_p2p_tool": true, "p2p_collections": ["FleetBoardPost"]})
+        )
+        .is_err());
     }
 
     #[test]

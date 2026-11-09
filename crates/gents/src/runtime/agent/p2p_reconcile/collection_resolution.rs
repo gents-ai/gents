@@ -1,4 +1,4 @@
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 
 use super::{RemoteP2pAdminError, RemoteP2pAdminResult};
 

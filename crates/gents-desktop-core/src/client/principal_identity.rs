@@ -74,6 +74,27 @@ impl PrincipalIdentity {
         })
     }
 
+    /// Synchronous callers may load an existing client key, but must never substitute
+    /// a co-hosted runtime key when client identity is unavailable.
+    pub fn load_existing(paths: &DesktopPaths) -> Result<Self> {
+        let identity = load_file_identity(paths.identity_key_path())?;
+        let did = identity.did().map_err(anyhow::Error::from)?.to_string();
+        let public_key_bytes = identity.public_key_bytes();
+        let private_key_bytes = identity.private_key_bytes().to_vec();
+        let metadata: NodeIdentityMetadata =
+            serde_json::from_slice(&std::fs::read(paths.principal_metadata_path())?)?;
+        anyhow::ensure!(
+            metadata.did == did && metadata.public_key_bytes == public_key_bytes,
+            "client identity metadata does not match its signing key"
+        );
+        register_ed25519_signing_identity(&did, &private_key_bytes, &public_key_bytes)?;
+        Ok(Self {
+            did,
+            public_key_bytes,
+            private_key_bytes,
+        })
+    }
+
     pub fn recorded_did(path: &Path) -> Option<String> {
         if !std::fs::symlink_metadata(path).ok()?.is_file() {
             return None;
@@ -117,6 +138,17 @@ impl PrincipalIdentity {
 
 #[async_trait::async_trait]
 impl NodeIdentity for PrincipalIdentity {
+    fn client_signing_capability(
+        &self,
+    ) -> std::result::Result<
+        gents::store::config_client::ClientSigningCapability,
+        gents::store::config_client::ConfigClientError,
+    > {
+        gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            self.private_key_bytes(),
+        )
+    }
+
     fn did(&self) -> &str {
         &self.did
     }

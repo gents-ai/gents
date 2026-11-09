@@ -165,15 +165,6 @@ pub(crate) async fn resolve_target_node_did(
     .await
 }
 
-pub(crate) fn rebind_manifest_to_node(
-    manifest: &mut DesiredStateManifest,
-    target_node_did: &str,
-    force_rebind_concrete_did: bool,
-) -> Result<()> {
-    enforce_manifest_rebind_safety(manifest, target_node_did, force_rebind_concrete_did)?;
-    rebind_manifest_node_did(manifest, target_node_did)
-}
-
 fn validation_report_for_manifest(
     root_display: String,
     manifest: &DesiredStateManifest,

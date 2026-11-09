@@ -3,11 +3,28 @@ use gents::store::config_client::ConfigAccess;
 
 use super::ClientCore;
 use crate::client::mutations;
+use crate::client::mutations::submission_journal::publication;
 
 impl ClientCore {
     pub async fn save_agent(&self, row: &gents::AgentDocument) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
-        let result = mutations::upsert_agent_on(&access, row).await;
+        let result = async {
+            publication::ensure_recovered(
+                &self.node,
+                &access,
+                self.node_identity.did(),
+                &row.node_did,
+                &row.agent_did,
+            )
+            .await?;
+            let observer = publication::Observer::new(
+                self.node.clone(),
+                self.node_identity.did().to_owned(),
+                vec![(row.agent_did.clone(), row.node_did.clone())],
+            );
+            mutations::upsert_agent_with_publication_on(&access, row, observer).await
+        }
+        .await;
         match result {
             Ok(()) => {
                 self.refresh_config_source(&row.node_did).await?;
@@ -15,7 +32,7 @@ impl ClientCore {
                 tracing::info!(
                     target: "gents_desktop_core::writes",
                     doc_type = "agent",
-                    row_id = %row.agent_id,
+                    row_id = %row.agent_did,
                     "desktop write saved"
                 );
                 Ok(())
@@ -115,7 +132,32 @@ impl ClientCore {
         document: &gents::documents::PackConfig,
     ) -> Result<()> {
         let access = self.operator_access(&document.node.node_did)?;
-        match mutations::apply_config_components_on(&access, document).await {
+        let result = async {
+            for agent in &document.agents {
+                publication::ensure_recovered(
+                    &self.node,
+                    &access,
+                    self.node_identity.did(),
+                    &agent.node_did,
+                    &agent.agent_did,
+                )
+                .await?;
+            }
+            let bindings = document
+                .agents
+                .iter()
+                .map(|agent| (agent.agent_did.clone(), agent.node_did.clone()))
+                .collect();
+            let observer = publication::Observer::new(
+                self.node.clone(),
+                self.node_identity.did().to_owned(),
+                bindings,
+            );
+            mutations::apply_config_components_with_publication_on(&access, document, observer)
+                .await
+        }
+        .await;
+        match result {
             Ok(()) => {
                 self.refresh_config_source(&document.node.node_did).await?;
                 self.clear_mutation_error();
@@ -144,9 +186,9 @@ impl ClientCore {
         }
     }
 
-    pub async fn set_default_agent(&self, node_did: &str, agent_id: &str) -> Result<()> {
+    pub async fn set_default_agent(&self, node_did: &str, agent_did: &str) -> Result<()> {
         let access = self.operator_access(node_did)?;
-        match mutations::set_default_agent_on(&access, node_did, agent_id).await {
+        match mutations::set_default_agent_on(&access, node_did, agent_did).await {
             Ok(()) => {
                 self.refresh_config_source(node_did).await?;
                 self.clear_mutation_error();
@@ -243,7 +285,7 @@ impl ClientCore {
     pub async fn select_agent_model(
         &self,
         node_did: &str,
-        agent_id: &str,
+        agent_did: &str,
         backend_id: &str,
         model_name: &str,
         reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
@@ -253,7 +295,7 @@ impl ClientCore {
         let saved = mutations::select_agent_model_on(
             &access,
             node_did,
-            agent_id,
+            agent_did,
             backend_id,
             model_name,
             reasoning_effort,
@@ -294,17 +336,7 @@ impl ClientCore {
         agent: &str,
         preferred: Option<&str>,
     ) -> Result<gents::plugin::approval::workspace::ReviewTaskSelection> {
-        let record = self
-            .sync_state
-            .records()
-            .into_iter()
-            .find(|record| record.node_did == node)
-            .context("Connect this runtime before setting up access review.")?;
-        anyhow::ensure!(gents::store::identity::can_mint_defradb_bearer(node),
-            "Open Runtime Settings to connect this runtime's configuration before choosing Approve for me.");
-        let access = crate::local_runtime::operator_endpoint(&record)
-            .map(ConfigAccess::Graphql)
-            .context("Access review setup requires this runtime's operator endpoint.")?;
+        let access = self.operator_access(node)?;
         mutations::prepare_access_review_task_on(&access, node, agent, preferred).await
     }
 

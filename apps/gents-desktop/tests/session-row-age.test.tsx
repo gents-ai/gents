@@ -40,7 +40,7 @@ describe("a working worker's run time in the workers surface", () => {
       sessionId,
       nodeDid: "did:key:a",
       requesterDid: null,
-      agentId: null,
+      agentDid: null,
       title: sessionId,
       turnState: "running",
       createdAt: "2026-10-03T11:56:00Z",

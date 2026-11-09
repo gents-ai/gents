@@ -24,7 +24,7 @@ pub(super) fn openai_codex_projection_schema() -> Value {
                                 "id": string_schema(),
                                 "status": optional_string_schema(),
                                 "node_did": optional_string_schema(),
-                                "agent_id": optional_string_schema(),
+                                "agent_did": optional_string_schema(),
                                 "parent_request_id": optional_string_schema(),
                                 "parent_tool_call_id": optional_string_schema(),
                                 "input": optional_string_schema(),
@@ -94,7 +94,7 @@ pub(super) fn langgraph_projection_schema() -> Value {
                         "kind": string_schema(),
                         "request_id": optional_string_schema(),
                         "node_did": optional_string_schema(),
-                        "agent_id": optional_string_schema(),
+                        "agent_did": optional_string_schema(),
                         "parent_request_id": optional_string_schema(),
                         "parent_tool_call_id": optional_string_schema(),
                         "status": optional_string_schema(),
@@ -152,7 +152,7 @@ pub(super) fn multi_agent_projection_schema() -> Value {
                     "required": ["role"],
                     "properties": {
                         "node_did": optional_string_schema(),
-                        "agent_id": optional_string_schema(),
+                        "agent_did": optional_string_schema(),
                         "role": string_schema()
                     }
                 }
@@ -183,7 +183,7 @@ pub(super) fn multi_agent_projection_schema() -> Value {
                         "child_request_id": string_schema(),
                         "parent_tool_call_id": optional_string_schema(),
                         "node_did": optional_string_schema(),
-                        "agent_id": optional_string_schema(),
+                        "agent_did": optional_string_schema(),
                         "status": optional_string_schema(),
                         "input": optional_string_schema()
                     }

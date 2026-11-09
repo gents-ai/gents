@@ -9,7 +9,7 @@ The canonical configuration graph is:
 
 ```text
 Node
-  -> default_agent_id -> Agent
+  -> default_agent_did -> Agent
 
 Agent
   -> context_id           -> AgentContext
@@ -50,7 +50,7 @@ not exist.
 The runtime resolves an agent in this order:
 
 1. Load the `Node` for the actor DID.
-2. Select its default agent or the request's explicit `agent_id`.
+2. Select its default agent or the request's explicit `agent_did`.
 3. Resolve the agent's `AgentContext` graph.
 4. Resolve its `InferenceProfile` graph.
 5. Intersect resolved tools with the host's `ToolCeiling`.
@@ -93,7 +93,7 @@ commit before send.
 ## Tasks and automation
 
 ```text
-Task     -> agent_id    -> Agent
+Task     -> agent_did    -> Agent
 Schedule -> task_id     -> Task
 Trigger  -> task_id     -> Task
           source.schedule_id     -> Schedule

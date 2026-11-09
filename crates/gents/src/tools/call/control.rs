@@ -1,108 +1,32 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
-use crate::store::config_client::ConfigAccess;
+use crate::store::config_client::{ConfigAccess, ConfigClientError};
 use crate::tools::background::job::control::control_by_doc_id;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
-use crate::tools::call::lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle, ToolRowKind};
+use crate::tools::call::lifecycle::{CancelCause, ToolCallLifecycle, ToolRowKind};
+use gents_protocol::tool_call::AwaitMode;
+
+pub mod client;
 
 pub use gents_protocol::process_control::ProcessControlOutcome as CancelBackgroundToolCallOutcome;
 
-/// Native adapter for `Background.ProcessControl.operatorProcessAuthorized`.
-pub fn operator_process_authorized(
-    executing: &str,
-    requested: &str,
-    owner: &str,
-    actor: Option<&str>,
-    requested_invocation: (&str, &str),
-    owned_invocation: (&str, &str),
-    eligibility: (bool, bool),
-) -> bool {
-    crate::tools::background::job::control::operator_control_authorized(
-        executing, requested, owner, actor,
-    ) && requested_invocation == owned_invocation
-        && eligibility.0
-        && eligibility.1
-}
-
-/// The transport authenticates `actor` through DefraDB. The process owner then
-/// revalidates the displayed invocation before signalling its existing guard.
-pub async fn operator_process_control(
-    node: Arc<EmbeddedNode>,
-    executions: &BackgroundExecutionRegistry,
-    actor: Option<&str>,
-    request: &gents_protocol::process_control::OperatorProcessControlRequest,
-) -> Result<CancelBackgroundToolCallOutcome> {
-    let executing = node
-        .node_identity_did()
-        .context("runtime has no node identity")?;
-    anyhow::ensure!(
-        crate::tools::background::job::control::operator_control_authorized(
-            executing,
-            &request.node_did,
-            executing,
-            actor,
-        ),
-        "runtime operator authorization is required"
-    );
-    let response = ConfigAccess::local(node.clone()).execute(&format!(
-        "{{AgentToolCall(filter: {{_docID: {{_eq: \"{}\"}}, node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, tool_call_id: {{_eq: \"{}\"}}}}, limit: 2) {{requester_did}}}}",
-        crate::store::graphql::escape_graphql_string(&request.tool_call_doc_id),
-        crate::store::graphql::escape_graphql_string(&request.node_did),
-        crate::store::graphql::escape_graphql_string(&request.session_id),
-        crate::store::graphql::escape_graphql_string(&request.tool_call_id),
-    )).await?;
-    #[derive(serde::Deserialize)]
-    struct Scope {
-        requester_did: Option<String>,
-    }
-    let scopes: Vec<Scope> = serde_json::from_value(response["data"]["AgentToolCall"].clone())
-        .context("reading the native invocation scope")?;
-    let [scope] = scopes.as_slice() else {
-        return Ok(CancelBackgroundToolCallOutcome::NotFound);
-    };
-    let Some(lifecycle) = ToolCallLifecycle::load_by_doc_id(
-        node.clone(),
-        &request.tool_call_doc_id,
-        &request.node_did,
-        &request.session_id,
-        scope.requester_did.as_deref(),
-    )
-    .await?
-    else {
-        return Ok(CancelBackgroundToolCallOutcome::NotFound);
-    };
-    let native = matches!(lifecycle.kind(), ToolRowKind::Native);
-    let physical = lifecycle
-        .doc_id()
-        .context("native invocation lacks physical identity")?;
-    if !operator_process_authorized(
-        executing,
-        &request.node_did,
-        lifecycle.node_did(),
-        actor,
-        (&request.tool_call_id, &request.tool_call_doc_id),
-        (lifecycle.tool_call_id(), physical),
-        (lifecycle.await_mode() == AwaitMode::Background, native),
-    ) {
-        return Ok(CancelBackgroundToolCallOutcome::NotBackground);
-    }
-    cancel_loaded_background_tool_call(node, executions, lifecycle, "explicit_cancel").await
-}
-
+/// `agent` is the owning Agent's managed access: ACP hides the Agent's tool
+/// calls from every other actor and their writes require its signer.
 pub async fn cancel_session_background_process(
-    node: Arc<EmbeddedNode>,
+    agent: &ConfigAccess,
     executions: &BackgroundExecutionRegistry,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
-    let Some(lifecycle) = ToolCallLifecycle::load(node.clone(), session_id, tool_call_id).await?
+    let Some((node, lifecycle)) =
+        load_owned_background_call(agent, session_id, tool_call_id).await?
     else {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     };
@@ -120,22 +44,62 @@ pub async fn cancel_session_background_process(
     {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     }
-    cancel_background_tool_call(node, executions, session_id, tool_call_id).await
+    cancel_loaded_background_tool_call(node, executions, lifecycle, "explicit_cancel").await
 }
 
+/// `agent` is the owning Agent's managed access; see
+/// [`cancel_session_background_process`].
 pub async fn cancel_background_tool_call(
-    node: Arc<EmbeddedNode>,
+    agent: &ConfigAccess,
     background_executions: &BackgroundExecutionRegistry,
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
-    let Some(lifecycle) = ToolCallLifecycle::load(node.clone(), session_id, tool_call_id).await?
+    let Some((node, lifecycle)) =
+        load_owned_background_call(agent, session_id, tool_call_id).await?
     else {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     };
 
     cancel_loaded_background_tool_call(node, background_executions, lifecycle, "explicit_cancel")
         .await
+}
+
+/// Splits the owning Agent's embedded managed access into the parts a tool
+/// lifecycle binds; an access without the Agent's signer cannot write its rows.
+fn managed_agent_parts(
+    agent: &ConfigAccess,
+) -> Result<(
+    Arc<EmbeddedNode>,
+    identity::Did,
+    crate::store::identity::ManagedAgentSigner,
+)> {
+    let node = agent
+        .local_node()
+        .cloned()
+        .ok_or(ConfigClientError::EmbeddedAccessRequired)?;
+    let signer = agent
+        .managed_agent_signer()
+        .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
+    let actor = identity::Did::new(signer.did())?;
+    Ok((node, actor, signer))
+}
+
+async fn load_owned_background_call(
+    agent: &ConfigAccess,
+    session_id: &str,
+    tool_call_id: &str,
+) -> Result<Option<(Arc<EmbeddedNode>, ToolCallLifecycle)>> {
+    let (node, actor, signer) = managed_agent_parts(agent)?;
+    let Some(mut lifecycle) =
+        ToolCallLifecycle::load_as(node.clone(), actor.clone(), session_id, tool_call_id)
+            .await?
+            .filter(|lifecycle| lifecycle.actor() == &actor)
+    else {
+        return Ok(None);
+    };
+    lifecycle.bind_agent_signer(Some(signer))?;
+    Ok(Some((node, lifecycle)))
 }
 
 pub(crate) async fn cancel_loaded_background_tool_call(
@@ -166,20 +130,24 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             node_did: lifecycle.node_did().into(),
             requester_did: lifecycle.requester_did().map(str::to_owned),
         };
-        let access = ConfigAccess::local(node.clone());
+        let access = lifecycle.access()?;
         let doc_id = lifecycle
             .doc_id()
             .context("job cancellation lacks physical identity")?;
         return Ok(
             match control_by_doc_id(&access, &scope, doc_id, JobControlKind::Stop).await {
+                Ok(JobControlOutcome::Queued { .. }) => {
+                    anyhow::bail!("local job control returned a queued outcome")
+                }
                 Ok(JobControlOutcome::Applied { .. }) => {
                     CancelBackgroundToolCallOutcome::Cancelled {
                         live_execution_cancelled: false,
                     }
                 }
                 Ok(JobControlOutcome::AlreadyTerminal { .. }) => {
-                    match ToolCallLifecycle::load_by_doc_id(
+                    match ToolCallLifecycle::load_by_doc_id_as(
                         node,
+                        lifecycle.actor().clone(),
                         doc_id,
                         &scope.node_did,
                         &scope.session_id,
@@ -232,8 +200,9 @@ pub(crate) async fn cancel_loaded_background_tool_call(
                 live_execution_cancelled: false,
             });
         }
-        let Some(current) = ToolCallLifecycle::load_by_doc_id(
+        let Some(mut current) = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            lifecycle.actor().clone(),
             lifecycle
                 .doc_id()
                 .context("background cancellation lacks physical identity")?,
@@ -245,6 +214,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
         else {
             return Ok(CancelBackgroundToolCallOutcome::NotFound);
         };
+        current.inherit_signer(&lifecycle)?;
         lifecycle = current;
         if lifecycle.is_terminal() {
             return Ok(CancelBackgroundToolCallOutcome::AlreadyTerminal {
@@ -293,8 +263,9 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             .await
     };
     if process == crate::tools::exec::ProcessStopOutcome::StillRunning {
-        if let Some(reloaded) = ToolCallLifecycle::load_by_doc_id(
+        if let Some(reloaded) = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            lifecycle.actor().clone(),
             &doc_id,
             lifecycle.node_did(),
             lifecycle.session_id(),
@@ -329,8 +300,9 @@ pub(crate) async fn cancel_loaded_background_tool_call(
         };
     }
     if process != crate::tools::exec::ProcessStopOutcome::Stopped {
-        if let Some(reloaded) = ToolCallLifecycle::load_by_doc_id(
+        if let Some(reloaded) = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            lifecycle.actor().clone(),
             &doc_id,
             lifecycle.node_did(),
             lifecycle.session_id(),
@@ -409,9 +381,83 @@ fn outcome_for_process(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn cancellation_uses_the_selected_agent_and_native_access() {
+        use crate::tools::call::lifecycle::admission_fixture::{
+            published_admission, PublishedAdmissionOptions,
+        };
+
+        let admission = published_admission(PublishedAdmissionOptions {
+            name: "control-actor-isolation".into(),
+            real_identity: true,
+            await_mode: super::AwaitMode::Background,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let actor = admission.tool.actor().clone();
+        // A second managed Agent of the same node: ACP hides the owner's rows.
+        let binding =
+            crate::store::identity::provision_agent_identity(admission.runtime.as_ref()).unwrap();
+        crate::test_support::install_test_agent_binding(
+            &admission.node,
+            admission.runtime.did(),
+            "foreign control Agent",
+            &binding,
+        )
+        .await;
+        let foreign =
+            crate::store::identity::resolve_agent_identity(admission.runtime.as_ref(), &binding)
+                .unwrap();
+        let foreign_access = super::ConfigAccess::local_managed_agent(
+            admission.node.clone(),
+            identity::Did::new(foreign.did()).unwrap(),
+            foreign.as_ref(),
+        )
+        .unwrap();
+        let registry = super::BackgroundExecutionRegistry::default();
+        let denied = super::cancel_background_tool_call(
+            &foreign_access,
+            &registry,
+            admission.tool.session_id(),
+            admission.tool.tool_call_id(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(denied, super::CancelBackgroundToolCallOutcome::NotFound);
+        // The owning Agent without its signer cannot settle its own rows.
+        let unsigned = super::ConfigAccess::local_as(admission.node.clone(), actor.clone());
+        let error = super::cancel_background_tool_call(
+            &unsigned,
+            &registry,
+            admission.tool.session_id(),
+            admission.tool.tool_call_id(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(
+                gents_protocol::error_chain::find_source::<super::ConfigClientError>(
+                    error.as_ref()
+                ),
+                Some(super::ConfigClientError::ManagedAgentSignerRequired)
+            ),
+            "{error:#}"
+        );
+        let (_, owned) = super::load_owned_background_call(
+            &admission.tool.access().unwrap(),
+            admission.tool.session_id(),
+            admission.tool.tool_call_id(),
+        )
+        .await
+        .unwrap()
+        .expect("the owning Agent sees its tool call");
+        assert_eq!(owned.actor(), &actor);
+        assert!(owned.access().unwrap().has_managed_agent_signer());
+    }
     use super::*;
     use crate::ensure_runtime_schemas;
-    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::request::lifecycle::RequestLifecycle;
     use crate::request::streaming::DefraStreamWriter;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::time::Duration;
@@ -450,9 +496,11 @@ mod tests {
         (fixture, owner, child)
     }
 
+    /// Reads the row as its owning Agent: ACP hides agent-owned rows from the node identity.
     async fn reload(child: &ToolCallLifecycle, node: &Arc<EmbeddedNode>) -> ToolCallLifecycle {
-        ToolCallLifecycle::load_by_doc_id(
+        let mut reloaded = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            child.actor().clone(),
             child.doc_id().unwrap(),
             child.node_did(),
             child.session_id(),
@@ -460,7 +508,9 @@ mod tests {
         )
         .await
         .unwrap()
-        .unwrap()
+        .unwrap();
+        reloaded.inherit_signer(child).unwrap();
+        reloaded
     }
 
     /// Adapted from Ivan's #3264 stop races onto the owning cancellation path.
@@ -554,7 +604,7 @@ mod tests {
                 expected => panic!("unexpected stop action {expected}: {case}"),
             }
             drop(owner);
-            fixture.node.shutdown().await;
+            fixture.node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(&fixture.path);
         }
     }
@@ -597,77 +647,29 @@ mod tests {
         worker.await.unwrap();
         assert!(reload(&child, &fixture.node).await.is_cancelled());
         drop(owner);
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(&fixture.path);
-    }
-
-    #[test]
-    fn operator_process_control_matches_executable_model() {
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().operator_process_control_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let string = |key: &str| case[key].as_str().unwrap();
-            assert_eq!(
-                operator_process_authorized(
-                    string("executing"),
-                    string("requested"),
-                    string("owner"),
-                    case["actor"].as_str(),
-                    (string("requested_id"), string("requested_doc")),
-                    (string("owned_id"), string("owned_doc")),
-                    (
-                        case["background"].as_bool().unwrap(),
-                        case["native"].as_bool().unwrap()
-                    ),
-                ),
-                case["expected"].as_bool().unwrap(),
-                "{case}",
-            );
-        }
-    }
-
-    async fn claimed_request(
-        node: &Arc<EmbeddedNode>,
-        request_id: &str,
-        session_id: &str,
-        node_did: &str,
-    ) -> RequestLifecycle {
-        let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let request_id = crate::store::graphql::escape_graphql_string(request_id);
-        let session_id = crate::store::graphql::escape_graphql_string(session_id);
-        let node_did = crate::store::graphql::escape_graphql_string(node_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "cancel fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
-        assert!(!created.has_errors(), "{:#?}", created.errors);
-        let row = node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        )).await;
-        let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&row, "AgentRequest")
-                .unwrap()
-                .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_node_did(
-            node.clone(),
-            "general",
-            &node_did,
-            row.try_into().unwrap(),
-            60,
-        );
-        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-        lifecycle
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn cancel_background_tool_call_terminalizes_row_and_token() {
+        use crate::store::identity::KeyIdentity;
+        use crate::tools::call::lifecycle::admission_fixture::claimed_signed_request;
+
         let data_path = std::env::temp_dir().join(format!(
             "agent-tool-control-cancel-{}",
             uuid::Uuid::new_v4()
         ));
+        std::fs::create_dir_all(&data_path).unwrap();
+        let node_identity =
+            Arc::new(KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap());
         let node = Arc::new(
-            crate::test_support::node_builder()
+            defra_node::Node::builder()
                 .data_path(&data_path)
+                .with_node_identity_did(crate::store::identity::NodeIdentity::did(
+                    node_identity.as_ref(),
+                ))
                 .build()
                 .await
                 .unwrap(),
@@ -676,8 +678,20 @@ mod tests {
 
         let owner = node.node_identity_did().unwrap().to_owned();
         let node_did = owner.as_str();
-        let mut request = claimed_request(&node, "request-cancel", "session-1", node_did).await;
-        let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
+        let mut request = claimed_signed_request(
+            &node,
+            "request-cancel",
+            "session-1",
+            node_identity.as_ref(),
+            None,
+        )
+        .await;
+        let agent = identity::Did::new(request.request().agent_did.as_str()).unwrap();
+        let agent_access = request.access().unwrap();
+        assert!(agent_access.has_managed_agent_signer());
+        let writer =
+            DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::from_millis(1))
+                .unwrap();
         request.begin_owned_execution(&writer).await.unwrap();
         writer
             .start_provider_attempt(
@@ -725,7 +739,7 @@ mod tests {
             let mut lifecycle = ToolCallLifecycle::from_accepted(
                 node.clone(),
                 node_did.to_string(),
-                None,
+                request.request().requester_did.clone(),
                 accepted,
                 deadline,
                 AwaitMode::Background,
@@ -747,13 +761,18 @@ mod tests {
         }
         let token = tokens["cancel-native-tool"].clone();
         let reservation = reservations.remove("cancel-native-tool").unwrap();
-        let physical = ToolCallLifecycle::load(node.clone(), "session-1", "cancel-native-tool")
-            .await
-            .unwrap()
-            .unwrap()
-            .doc_id()
-            .unwrap()
-            .to_owned();
+        let physical = ToolCallLifecycle::load_as(
+            node.clone(),
+            agent.clone(),
+            "session-1",
+            "cancel-native-tool",
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .doc_id()
+        .unwrap()
+        .to_owned();
         let process = crate::tools::exec::ownership::test_support::OwnedTestProcess::spawn(Some(
             registry.process_recorder("cancel-native-tool", &physical),
         ))
@@ -768,7 +787,7 @@ mod tests {
         };
 
         let denied = cancel_session_background_process(
-            node.clone(),
+            &agent_access,
             &registry,
             node_did,
             Some("foreign"),
@@ -783,31 +802,50 @@ mod tests {
             "unauthorized UI cancellation must not signal the worker"
         );
 
-        let command = gents_protocol::process_control::OperatorProcessControlRequest {
-            node_did: owner.clone(),
-            session_id: "session-1".into(),
-            tool_call_id: "cancel-native-tool".into(),
-            tool_call_doc_id: physical,
+        let requester_did = request.request().requester_did.clone();
+        let stop = |session_id: &'static str, tool_call_id: &'static str, doc: String| {
+            let agent_access = agent_access.clone();
+            let registry = registry.clone();
+            let node = node.clone();
+            let agent = agent.clone();
+            let requester_did = requester_did.clone();
+            async move {
+                let outcome = client::apply_claimed(
+                    &node,
+                    &agent_access,
+                    &registry,
+                    &agent,
+                    client::ClaimedTarget {
+                        node_did,
+                        session_id,
+                        requester_did: requester_did.as_deref(),
+                        tool_call_id,
+                        tool_call_doc_id: &doc,
+                        action: "process_stop",
+                    },
+                )
+                .await?;
+                match outcome {
+                    gents_protocol::process_control::ToolControlReceiptOutcome::Process(
+                        outcome,
+                    ) => Ok(outcome),
+                    other => anyhow::bail!("process stop produced {other:?}"),
+                }
+            }
         };
-        assert!(
-            operator_process_control(node.clone(), &registry, Some("foreign"), &command)
-                .await
-                .is_err()
-        );
-        let mut mismatches = [command.clone(), command.clone(), command.clone()];
-        mismatches[0].tool_call_id = "sibling-native-tool".into();
-        mismatches[1].session_id = "another-session".into();
-        mismatches[2].tool_call_doc_id = "missing-physical-row".into();
-        for wrong in mismatches {
-            assert_eq!(
-                operator_process_control(node.clone(), &registry, Some(node_did), &wrong)
-                    .await
-                    .unwrap(),
-                CancelBackgroundToolCallOutcome::NotFound
-            );
+        for (session, call, doc) in [
+            ("session-1", "sibling-native-tool", physical.clone()),
+            ("another-session", "cancel-native-tool", physical.clone()),
+            (
+                "session-1",
+                "cancel-native-tool",
+                "missing-physical-row".to_owned(),
+            ),
+        ] {
+            assert!(stop(session, call, doc).await.is_err());
         }
         assert!(!token.is_cancelled());
-        let outcome = operator_process_control(node.clone(), &registry, Some(node_did), &command)
+        let outcome = stop("session-1", "cancel-native-tool", physical.clone())
             .await
             .unwrap();
 
@@ -820,13 +858,18 @@ mod tests {
         assert!(token.is_cancelled());
         worker.await.unwrap();
 
-        let row = ToolCallLifecycle::load(node.clone(), "session-1", "cancel-native-tool")
-            .await
-            .unwrap()
-            .expect("tool row");
+        let row = ToolCallLifecycle::load_as(
+            node.clone(),
+            agent.clone(),
+            "session-1",
+            "cancel-native-tool",
+        )
+        .await
+        .unwrap()
+        .expect("tool row");
         assert!(row.is_cancelled());
         assert!(matches!(
-            operator_process_control(node.clone(), &registry, Some(node_did), &command)
+            stop("session-1", "cancel-native-tool", physical.clone())
                 .await
                 .unwrap(),
             CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
@@ -835,10 +878,15 @@ mod tests {
             !tokens["sibling-native-tool"].is_cancelled(),
             "killing one background task must not signal its sibling"
         );
-        let sibling = ToolCallLifecycle::load(node.clone(), "session-1", "sibling-native-tool")
-            .await
-            .unwrap()
-            .expect("sibling row");
+        let sibling = ToolCallLifecycle::load_as(
+            node.clone(),
+            agent.clone(),
+            "session-1",
+            "sibling-native-tool",
+        )
+        .await
+        .unwrap()
+        .expect("sibling row");
         assert!(sibling.is_running());
 
         let _ = std::fs::remove_dir_all(&data_path);
@@ -879,15 +927,16 @@ mod tests {
                 None
             };
             let outcome = cancel_background_tool_call(
-                admission.node.clone(),
+                &admission.tool.access().unwrap(),
                 &registry,
                 admission.tool.session_id(),
                 admission.tool.tool_call_id(),
             )
             .await
             .unwrap();
-            let row = ToolCallLifecycle::load(
+            let row = ToolCallLifecycle::load_as(
                 admission.node.clone(),
+                admission.tool.actor().clone(),
                 admission.tool.session_id(),
                 admission.tool.tool_call_id(),
             )
@@ -916,7 +965,11 @@ mod tests {
                 }
             }
             assert!(registry.process_record_list().is_empty(), "{name}");
-            admission.node.shutdown().await;
+            admission
+                .node
+                .shutdown()
+                .await
+                .expect("shut down test node");
             let _ = std::fs::remove_dir_all(admission.path);
         }
     }
@@ -925,7 +978,7 @@ mod tests {
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use crate::store::identity::NodeIdentity;
         use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
-        use crate::SIGNED_REQUEST_FIELDS;
+        use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
         let data_path = std::env::temp_dir().join(format!(
             "agent-tool-control-custom-cancel-{}",
             uuid::Uuid::new_v4()
@@ -936,7 +989,7 @@ mod tests {
                 .unwrap(),
         );
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .data_path(&data_path)
                 .with_node_identity_did(identity.did())
                 .build()
@@ -944,8 +997,12 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        crate::test_support::install_test_agent(&node, identity.did(), "general").await;
         let node_did = identity.did().to_string();
+        let node_scope = crate::store::graphql::escape_graphql_string(&node_did);
+        crate::ConfigAccess::local(node.clone()).write(
+            "test.custom_cancel.node",
+            &format!(r#"mutation {{ create_Node(input: {{node_did: "{node_scope}"}}) {{ _docID }} }}"#),
+        ).await.unwrap();
         let mut request = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request(
             &node,
             "request-custom",
@@ -954,7 +1011,9 @@ mod tests {
             None,
         )
         .await;
-        let writer = DefraStreamWriter::new(node.clone(), &node_did, Duration::from_millis(1));
+        let writer =
+            DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::from_millis(1))
+                .unwrap();
         request.begin_owned_execution(&writer).await.unwrap();
         writer
             .start_provider_attempt(
@@ -1004,12 +1063,17 @@ mod tests {
                 .unwrap(),
             "owned cancel must win the durable running-state compare"
         );
-        let row_response = node . execute (r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id node_did } }"# ,) . await ;
-        assert!(!row_response.has_errors(), "{:#?}", row_response.errors);
-        let row =
-            crate::store::graphql::first_row::<serde_json::Value>(&row_response, "AgentToolCall")
-                .unwrap()
-                .expect("cancelled background tool row");
+        // Rows are agent-owned: read them through the owning Agent's access, since ACP hides them from the node.
+        let agent_access = lifecycle.access().unwrap();
+        let row_response = agent_access
+            .execute(r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id node_did } }"#)
+            .await
+            .unwrap();
+        let row = row_response["data"]["AgentToolCall"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .cloned()
+            .expect("cancelled background tool row");
         assert_eq!(row["lifecycle_state"].as_str(), Some("cancelled"));
         assert_eq!(
             row["cancel_cause"].as_str(),
@@ -1022,27 +1086,30 @@ mod tests {
             Some("completionPending:operator requested drain"),
             "owned cancel must persist the custom completion reason as the redrive cursor"
         );
-        let report =
-            ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &node_did)
-                .await
-                .unwrap();
+        let agent_did = request.request().agent_did.clone();
+        let signer = lifecycle.access().unwrap().managed_agent_signer().unwrap();
+        let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
+        let report = ToolCallLifecycle::reconcile_background_completion_side_effects(
+            &node,
+            &node_did,
+            &identities,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             report.side_effects_converged, 1,
             "the cancelled background row must redrive its completion side effects"
         );
         let message_key = format!("background-completion-notification:{tool_doc_id}:tool");
         let message_key = crate::store::graphql::escape_graphql_string(&message_key);
-        let notification_response = node . execute (& format ! (r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#)) . await ;
-        assert!(
-            !notification_response.has_errors(),
-            "{:#?}",
-            notification_response.errors
+        let notification_query = format!(
+            r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#
         );
-        let notifications = crate::store::graphql::rows::<serde_json::Value>(
-            &notification_response,
-            "AgentMessage",
-        )
-        .unwrap();
+        let notification_response = agent_access.execute(&notification_query).await.unwrap();
+        let notifications = notification_response["data"]["AgentMessage"]
+            .as_array()
+            .cloned()
+            .expect("AgentMessage rows");
         assert_eq!(
             notifications.len(),
             1,
@@ -1053,14 +1120,13 @@ mod tests {
         assert_eq!(notification["node_did"].as_str(), Some(node_did.as_str()));
         assert_eq!(
             notification["requester_did"].as_str(),
-            Some(node_did.as_str())
+            request.request().requester_did.as_deref()
         );
         assert_eq!(notification["role"].as_str(), Some("user"));
         let escaped_session = crate::store::graphql::escape_graphql_string("session-custom");
         let escaped_agent = crate::store::graphql::escape_graphql_string(&node_did);
-        let wake_response = node
-            .execute(&format!(
-                r#"{{
+        let wake_query = format!(
+            r#"{{
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session}" }},
@@ -1070,12 +1136,12 @@ mod tests {
                     limit: 2
                 ) {{ {SIGNED_REQUEST_FIELDS} }}
             }}"#
-            ))
-            .await;
-        assert!(!wake_response.has_errors(), "{:#?}", wake_response.errors);
-        let wakes =
-            crate::store::graphql::rows::<serde_json::Value>(&wake_response, "AgentRequest")
-                .unwrap();
+        );
+        let wake_response = agent_access.execute(&wake_query).await.unwrap();
+        let wakes = wake_response["data"]["AgentRequest"]
+            .as_array()
+            .cloned()
+            .expect("AgentRequest rows");
         assert_eq!(
             wakes.len(),
             1,
@@ -1084,22 +1150,25 @@ mod tests {
         let wake = &wakes[0];
         assert_eq!(
             wake["admission_signer_did"].as_str(),
-            Some(node_did.as_str())
+            Some(agent_did.as_str())
         );
         assert!(
             !wake["admission_signature"]
                 .as_str()
                 .unwrap_or_default()
                 .is_empty(),
-            "wake request must be signed by the registered runtime node"
+            "wake request must be signed by the selected managed Agent"
         );
-        assert_eq!(wake["runtime_issuer_did"].as_str(), Some(node_did.as_str()));
+        assert_eq!(
+            wake["runtime_issuer_did"].as_str(),
+            Some(agent_did.as_str())
+        );
         assert_eq!(
             wake["runtime_source_request_id"].as_str(),
             Some("request-custom")
         );
         assert_eq!(wake["runtime_source_kind"].as_str(), Some("local-control"));
-        assert_eq!(wake["agent_id"].as_str(), Some("general"));
+        assert_eq!(wake["agent_did"].as_str(), Some(agent_did.as_str()));
         assert_eq!(
             wake["content"].as_str(),
             Some(BACKGROUND_COMPLETION_WAKE_PROMPT)

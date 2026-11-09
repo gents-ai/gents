@@ -1,0 +1,4 @@
+---- MODULE MCSessionHeadObservationNoTerminalizationOrder ----
+EXTENDS SessionHeadObservation
+
+====

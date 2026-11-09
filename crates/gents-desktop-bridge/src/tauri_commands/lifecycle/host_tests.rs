@@ -78,7 +78,7 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     wait_for_client_start_progress(receiver).await.unwrap();
     let state = app.state::<DesktopAppState>();
     let core = current_core(&state).unwrap();
-    let peer = core.local_peer_id().to_owned();
+    let client_did = core.node_identity().did().to_owned();
     core.set_selected_node_did(Some("did:scope:desktop".into()));
     let stream = local::connect(&paths).await.unwrap();
     let mut client = LengthDelimitedCodec::builder().new_framed(stream);
@@ -107,7 +107,7 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
             serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
         if reply["kind"] == "response" {
             assert!(reply["error"].is_null(), "{reply}");
-            assert_eq!(reply["result"]["client"]["localPeerId"], peer);
+            assert_eq!(reply["result"]["client"]["clientDid"], client_did);
             assert_eq!(reply["result"]["bootstrap"]["desktopHome"], "");
             break;
         }

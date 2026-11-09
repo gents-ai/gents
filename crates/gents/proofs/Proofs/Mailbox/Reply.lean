@@ -2,14 +2,18 @@ import Proofs.Mailbox.State
 
 namespace Mailbox
 
+/-- Requester is immutable session provenance, separate from the authenticated
+reply signer. Native ACP authorizes the acting signer. An unbound envelope starts
+a new client-owned session; a bound envelope retains its original session scope. -/
 structure ReplyEvidence where
   requestDocId : String
   sourceDocId : String
   requesterDid : String
   nodeDid : String
-  agentId : String
+  agentDid : String
   sessionId : String
   authenticated : Bool
+  recipientAuthorized : Bool
   interactive : Bool
   deriving DecidableEq, Repr
 
@@ -17,7 +21,7 @@ structure ReplyEnvelope where
   docId : String
   handling : Handling
   targetNodeDid : String
-  agentId : String
+  agentDid : String
   sessionId : Option String
   deadlineValid : Bool
   questionCurrent : Bool := true
@@ -25,13 +29,15 @@ structure ReplyEnvelope where
 
 def replyMatches (item : Item) (envelope : ReplyEnvelope) (reply : ReplyEvidence) : Prop :=
   envelope.handling = .startRequest ∧ reply.authenticated = true ∧ reply.interactive = true ∧
+  (reply.recipientAuthorized = true ∨
+    (item.status = .acted ∧ item.resolvedDocId = reply.requestDocId)) ∧
   (envelope.questionCurrent = true ∨
     (item.status = .acted ∧ item.resolvedDocId = reply.requestDocId)) ∧
   (envelope.deadlineValid = true ∨
     (item.status = .acted ∧ item.resolvedDocId = reply.requestDocId)) ∧
   reply.requestDocId ≠ "" ∧ reply.requesterDid ≠ "" ∧
-  reply.requesterDid = item.identity.requesterDid ∧ reply.nodeDid = envelope.targetNodeDid ∧
-  envelope.agentId ≠ "" ∧ reply.agentId = envelope.agentId ∧
+  reply.nodeDid = envelope.targetNodeDid ∧
+  envelope.agentDid ≠ "" ∧ reply.agentDid = envelope.agentDid ∧
   (envelope.sessionId = none ∨ envelope.sessionId = some reply.sessionId) ∧
   envelope.docId ≠ "" ∧ reply.sourceDocId = envelope.docId ∧ reply.nodeDid ≠ ""
 
@@ -94,9 +100,12 @@ theorem reply_claim_preserves_identity (item post : Item) (envelope : ReplyEnvel
       rfl
   · simp at h
 
-/-- Confirmation is a persisted, verified caller receipt. The observation is a
+/-- Confirmation is the runtime's reply to the answer's send (Lean
+`ClientOptimisticSend`): the runtime holds the request. The observation is a
 native read of the exact item; filtered-list absence supplies no observation.
-Acknowledgement must complete before the local answer cache is retired. -/
+The cache belongs to the acting client; an observed item's requester records
+session provenance and may name another user or the agent that created the
+session. -/
 structure AnswerCacheBinding where
   client : String
   node : String
@@ -119,30 +128,29 @@ structure AnswerCacheObservation where
   deriving DecidableEq, Repr
 
 def mayRetireAnswerCache (binding : AnswerCacheBinding)
-    (observation : Option AnswerCacheObservation) (currentClient : String)
-    (acknowledged : Bool) : Bool :=
-  binding.confirmed && acknowledged && currentClient == binding.client &&
+    (observation : Option AnswerCacheObservation) (currentClient : String) : Bool :=
+  binding.confirmed && currentClient == binding.client &&
     binding.sourceItem == binding.item &&
     [binding.client, binding.node, binding.agent, binding.session, binding.item].all (· != "") &&
     match observation with
     | none => false
     | some observed =>
-        observed.requester == binding.client && observed.node == binding.node &&
+        observed.node == binding.node &&
         observed.agent == binding.agent && observed.session == binding.session &&
         observed.item == binding.item && observed.kind == .ask &&
         observed.handling == .startRequest && observed.status.terminal
 
-theorem retirement_requires_confirmed_acknowledgement
+theorem retirement_requires_confirmation
     (binding : AnswerCacheBinding) (observation : Option AnswerCacheObservation)
-    (currentClient : String) (acknowledged : Bool)
-    (h : mayRetireAnswerCache binding observation currentClient acknowledged = true) :
-    binding.confirmed = true ∧ acknowledged = true := by
+    (currentClient : String)
+    (h : mayRetireAnswerCache binding observation currentClient = true) :
+    binding.confirmed = true := by
   simp only [mayRetireAnswerCache, Bool.and_eq_true] at h
   aesop
 
 theorem missing_item_cannot_retire_answer (binding : AnswerCacheBinding)
-    (currentClient : String) (acknowledged : Bool) :
-    mayRetireAnswerCache binding none currentClient acknowledged = false := by
+    (currentClient : String) :
+    mayRetireAnswerCache binding none currentClient = false := by
   simp [mayRetireAnswerCache]
 
 

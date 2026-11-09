@@ -20,7 +20,7 @@ async fn codex_shim_live_protocol_uses_real_backend() -> Result<()> {
         final_text.contains(prompt_token),
         "expected live Codex protocol stream to contain {prompt_token}, got:\n{final_text}"
     );
-    let (_request_id, session_id, _agent_id) =
+    let (_request_id, session_id, _agent_did) =
         wait_for_request(&smoke.graphql, &smoke.node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     assert_shim_trace_methods(
@@ -71,7 +71,7 @@ async fn codex_shim_live_gents_filesystem_tools_project_to_codex_items() -> Resu
         capture.completed_tools,
         capture.text
     );
-    let (_request_id, session_id, _agent_id) =
+    let (_request_id, session_id, _agent_did) =
         wait_for_request(&smoke.graphql, &smoke.node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     assert_shim_trace_methods(
@@ -178,7 +178,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         final_text.contains(prompt_token),
         "expected live Codex protocol stream to contain {prompt_token}, got:\n{final_text}"
     );
-    let (_request_id, session_id, _agent_id) =
+    let (_request_id, session_id, _agent_did) =
         wait_for_request(&smoke.graphql, &smoke.node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
 
@@ -194,7 +194,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
                     session_id
                     node_did
                     requester_did
-                    agent_id
+                    agent_did
                     closed_at
                     created_at
                     title
@@ -219,10 +219,10 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         session.get("requester_did").and_then(Value::as_str),
         Some(smoke.node_did.as_str())
     );
-    let expected_agent_id = format!("{}:default", smoke.node_did);
+    let expected_agent_did = format!("{}:default", smoke.node_did);
     assert_eq!(
-        session.get("agent_id").and_then(Value::as_str),
-        Some(expected_agent_id.as_str())
+        session.get("agent_did").and_then(Value::as_str),
+        Some(expected_agent_did.as_str())
     );
     assert!(session.get("closed_at").is_none_or(Value::is_null));
     assert!(
@@ -404,7 +404,7 @@ async fn codex_shim_live_protocol_supports_multiturn_memory() -> Result<()> {
     send_turn(&mut ws, &thread_id, &first_prompt).await?;
     let (_first_text, first_turn) = read_turn_to_completion(&mut ws).await?;
     assert_eq!(first_turn.status, codex::TurnStatus::Completed);
-    let (_request_id, session_id, _agent_id) =
+    let (_request_id, session_id, _agent_did) =
         wait_for_request(&smoke.graphql, &smoke.node_did, &first_prompt).await?;
     assert_eq!(session_id, thread_id);
 
@@ -417,7 +417,7 @@ async fn codex_shim_live_protocol_supports_multiturn_memory() -> Result<()> {
         second_text.contains(memory_token),
         "expected second live Codex protocol turn to remember {memory_token}, got:\n{second_text}"
     );
-    let (_request_id, session_id, _agent_id) =
+    let (_request_id, session_id, _agent_did) =
         wait_for_request(&smoke.graphql, &smoke.node_did, second_prompt).await?;
     assert_eq!(session_id, thread_id);
     assert_shim_trace_methods(
@@ -530,7 +530,7 @@ async fn codex_shim_live_three_prompt_regression_writes_codex_home_trace() -> Re
             "{label} turn/completed should not repeat streamed items: {:?}",
             capture.turn.items
         );
-        let (_request_id, session_id, _agent_id) =
+        let (_request_id, session_id, _agent_did) =
             wait_for_request(&smoke.graphql, &smoke.node_did, prompt).await?;
         assert_eq!(session_id, thread_id);
         captures.push(capture);

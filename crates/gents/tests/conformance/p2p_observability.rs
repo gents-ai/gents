@@ -49,6 +49,7 @@ fn pinned_upstream_wire() -> serde_json::Value {
         broadcast_coalesced_total: 41,
         push_updates_coalesced_total: 43,
         gossip_direction_filtered_total: 47,
+        gossip_unfollowed_dropped_total: 48,
         pending_dags: 13,
         pending_dag_capacity: 1_000,
         pending_dag_high_water: 14,
@@ -122,6 +123,7 @@ fn pinned_upstream_wire() -> serde_json::Value {
                 busy_ppm: 0,
                 in_flight: 2,
                 in_flight_bytes: 32_768,
+                estimates: Default::default(),
             },
             PeerFetchStats {
                 peer: "peer-fetch-b".into(),
@@ -135,6 +137,7 @@ fn pinned_upstream_wire() -> serde_json::Value {
                 busy_ppm: 1_000_000,
                 in_flight: 1,
                 in_flight_bytes: 4096,
+                estimates: Default::default(),
             },
         ],
         non_authoritative_broadcast_tasks: 7,
@@ -166,6 +169,11 @@ fn pinned_upstream_wire() -> serde_json::Value {
         next_pending_retry_in_ms: Some(71),
         pending_dag_terminal_quarantined: 73,
         quarantined_pending_dags: 79,
+        pending_dag_attempt_ewma_median_ms: None,
+        pending_dag_attempt_ewma_max_ms: None,
+        pending_dag_no_progress_median_ppm: None,
+        pending_dag_tie_reorders: 0,
+        pending_dag_peer_occupancy: Vec::new(),
         peers: vec![PeerSummary {
             peer_id: "peer-a".to_string(),
             connected: true,
@@ -245,6 +253,7 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
             broadcast_coalesced_total: 41,
             push_updates_coalesced_total: 43,
             gossip_direction_filtered_total: 47,
+            gossip_unfollowed_dropped_total: 48,
             pending_dags: 13,
             pending_dag_capacity: 1_000,
             pending_dag_high_water: 14,
@@ -382,8 +391,7 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
 }
 
 /// The DAG-fetch arbitration estimates DefraDB adds to `SyncStatus` and each
-/// peer fetch entry: a pin that carries them must decode, and one that does
-/// not (above) reads them as absent.
+/// peer fetch entry must decode when populated.
 #[test]
 fn arbitration_estimates_decode_when_the_pin_carries_them() {
     let mut wire = pinned_upstream_wire();

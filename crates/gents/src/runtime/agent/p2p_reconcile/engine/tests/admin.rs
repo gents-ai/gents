@@ -1,6 +1,5 @@
 #[derive(Default)]
 struct MockAdmin {
-    collections: Mutex<BTreeSet<String>>,
     replicators: Mutex<BTreeMap<String, RemoteReplicator>>,
     emitted: Mutex<Vec<DiffOp>>,
     connects: Mutex<Vec<Vec<String>>>,
@@ -132,10 +131,6 @@ impl RemoteP2pAdmin for MockAdmin {
         Ok(())
     }
 
-    async fn list_p2p_collections(&self) -> RemoteP2pAdminResult<Vec<String>> {
-        Ok(self.collections.lock().unwrap().iter().cloned().collect())
-    }
-
     async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
         Ok(Some(mock_collection_id(name)))
     }
@@ -146,69 +141,5 @@ impl RemoteP2pAdmin for MockAdmin {
             .and_then(|rest| rest.strip_suffix("_id"))
             .map(str::to_string))
     }
-
-    async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
-        for collection in collections {
-            self.collections
-                .lock()
-                .unwrap()
-                .insert(mock_collection_id(collection));
-            self.emitted
-                .lock()
-                .unwrap()
-                .push(DiffOp::InstallCollection(collection.clone()));
-        }
-        Ok(())
-    }
-
-    async fn delete_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
-        for collection in collections {
-            self.collections
-                .lock()
-                .unwrap()
-                .remove(&mock_collection_id(collection));
-            self.emitted
-                .lock()
-                .unwrap()
-                .push(DiffOp::TeardownCollection(collection.clone()));
-        }
-        Ok(())
-    }
-
-    async fn list_p2p_documents(&self) -> RemoteP2pAdminResult<Vec<String>> {
-        Ok(Vec::new())
-    }
-
-    async fn add_p2p_documents(&self, _doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
-        Ok(())
-    }
-
-    async fn delete_p2p_documents(&self, _doc_ids: &[String]) -> RemoteP2pAdminResult<()> {
-        Ok(())
-    }
-
-    async fn sync_documents(
-        &self,
-        _collection_name: &str,
-        _doc_ids: &[String],
-        _timeout: Option<Duration>,
-    ) -> RemoteP2pAdminResult<()> {
-        Ok(())
-    }
-
-    async fn sync_collection_versions(
-        &self,
-        _version_ids: &[String],
-        _timeout: Option<Duration>,
-    ) -> RemoteP2pAdminResult<()> {
-        Ok(())
-    }
-
-    async fn sync_branchable_collection(
-        &self,
-        _collection_id: &str,
-        _timeout: Option<Duration>,
-    ) -> RemoteP2pAdminResult<()> {
-        Ok(())
-    }
 }
+

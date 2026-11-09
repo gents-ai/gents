@@ -7,16 +7,32 @@ import type {
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
 import { createMailboxActions } from "../src/hooks/mailboxActions";
+import { loadChatDrafts } from "../src/hooks/chatDrafts";
 import { shellStores } from "./shell-fixture";
 
-const item = {
+const item: MailboxItemView = {
   itemId: "item-1",
+  itemKey: "item-1",
+  requesterDid: "test-client",
+  nodeDid: "did:source-node",
+  status: "open",
   action: "start_request",
   kind: "ask",
+  title: "Question",
+  summary: null,
+  payload: null,
+  sourceKind: "session",
+  sourceId: "session-1",
+  requestId: null,
+  causeDocId: null,
   targetNodeDid: "did:node",
-  targetAgentId: "engineer",
+  targetAgentDid: "engineer",
   sessionId: "session-1",
-} as MailboxItemView;
+  expectedCollection: null,
+  parentItemId: null,
+  deadlineAt: null,
+  createdAt: "2026-10-28T00:00:00Z",
+};
 
 function mailbox(api: DesktopApiAdapter) {
   const stores = shellStores({ deployments: [] });
@@ -44,13 +60,18 @@ describe("answering a mailbox question", () => {
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeDid: "did:node",
-        agentId: "engineer",
+        agentDid: "engineer",
         sessionId: "session-1",
         content: "",
         causedBySourceDocId: "item-1",
         answer,
       }),
     );
+    expect(loadChatDrafts().chatDrafts[0]?.mailbox).toEqual({
+      nodeDid: "did:source-node",
+      itemId: "item-1",
+      summary: "yes",
+    });
     expect(store.getState().mailboxRoute).toBeNull();
   });
 });

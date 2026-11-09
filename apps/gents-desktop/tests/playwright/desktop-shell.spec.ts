@@ -268,7 +268,7 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     await page.getByRole("link", { name: "Nodes" }).first().click();
     const sync = page.getByRole("button", { name: /Sync healthy/ });
-    const syncDialog = page.getByRole("dialog", { name: "Database sync details" });
+    const syncDialog = page.getByRole("dialog", { name: "Sync details" });
 
     await sync.click();
     await expect(syncDialog).toBeVisible();
@@ -286,7 +286,7 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
     const agent = page.getByRole("dialog", { name: "Filter by agent" });
-    const sync = page.getByRole("dialog", { name: "Database sync details" });
+    const sync = page.getByRole("dialog", { name: "Sync details" });
 
     await startDialogObservation(page);
     await filters.getByRole("combobox", { name: "Agent" }).click();
@@ -462,9 +462,7 @@ test.describe("kit shell", () => {
       .evaluate((element) => getComputedStyle(element).animationDuration);
     expect(closingDuration).toBe("0.6s");
     await page.getByRole("button", { name: /Sync healthy/ }).click();
-    await expect(
-      page.getByRole("dialog", { name: "Database sync details" }),
-    ).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Sync details" })).toBeVisible();
     await page.waitForTimeout(200);
 
     const observed = await finishDialogObservation(page);

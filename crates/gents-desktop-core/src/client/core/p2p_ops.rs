@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_p2p_adapter::{P2POperations as P2POps, ReplicatorInfo};
+use defra_p2p_adapter::P2POperations as P2POps;
 use tokio::time::timeout;
 
 use super::P2P_OPERATION_TIMEOUT;
@@ -57,24 +57,6 @@ pub(super) async fn p2p_notify_network_change(p2p: &Arc<dyn P2POps>) -> Result<(
             .map_err(anyhow::Error::msg)
             .context("refreshing desktop P2P network state"),
         Err(_) => anyhow::bail!("timed out refreshing desktop P2P network state"),
-    }
-}
-
-pub(super) async fn p2p_get_replicators(p2p: &Arc<dyn P2POps>) -> Result<Vec<ReplicatorInfo>> {
-    match timeout(P2P_OPERATION_TIMEOUT, p2p.get_replicators()).await {
-        Ok(result) => result
-            .map_err(anyhow::Error::msg)
-            .context("reading desktop P2P replicators"),
-        Err(_) => anyhow::bail!("timed out reading desktop P2P replicators"),
-    }
-}
-
-pub(super) async fn p2p_sync_status(p2p: &Arc<dyn P2POps>) -> Result<serde_json::Value> {
-    match timeout(P2P_OPERATION_TIMEOUT, p2p.sync_status()).await {
-        Ok(result) => result
-            .map_err(anyhow::Error::msg)
-            .context("reading desktop database sync status"),
-        Err(_) => anyhow::bail!("timed out reading desktop database sync status"),
     }
 }
 

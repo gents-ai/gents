@@ -697,9 +697,9 @@ if [ -z "${profile_id}" ]; then
 fi
 node_did=$(sed -n 's/^[[:space:]]*"node_did": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
 tools_id=$(sed -n 's/^[[:space:]]*"tools_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
-agent_id=$(sed -n 's/^[[:space:]]*"default_agent_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
-if [ -z "${node_did}" ] || [ -z "${tools_id}" ] || [ -z "${agent_id}" ]; then
-  echo "Gents init output did not contain node_did, default_agent_id, and tools_id" >&2
+agent_did=$(sed -n 's/^[[:space:]]*"default_agent_did": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+if [ -z "${node_did}" ] || [ -z "${tools_id}" ] || [ -z "${agent_did}" ]; then
+  echo "Gents init output did not contain node_did, default_agent_did, and tools_id" >&2
   exit 1
 fi
 
@@ -798,7 +798,7 @@ wait_for_server_ready
 
 "${GENTS_BINARY}" tools explain \
   --home "${GENTS_HOME}" \
-  --agent-id "${agent_id}" \
+  --agent-did "${agent_did}" \
   >"${tools_explain_log}"
 
 metadata=$(printf '{"harness":"harbor","model_name":"%s"}' "${GENTS_MODEL}")

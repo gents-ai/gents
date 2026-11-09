@@ -171,6 +171,86 @@ impl<'de> Deserialize<'de> for RequestLifecycleState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct EnqueuedAgentRequest {
+    pub doc_id: String,
+    pub request_id: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestHopCause {
+    Root,
+    CrossSession { cause_hop: u32 },
+    Return,
+    Continuation,
+}
+
+pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
+    match cause {
+        RequestHopCause::Root => 0,
+        RequestHopCause::CrossSession { cause_hop } => own.max(cause_hop.saturating_add(1)),
+        RequestHopCause::Return | RequestHopCause::Continuation => own,
+    }
+}
+
+pub fn request_hop_within_bound(max_request_hop: Option<u32>, hop: u32) -> bool {
+    max_request_hop.is_none_or(|bound| hop <= bound)
+}
+
+/// Lean `CausalHop` observation of a Node's `max_request_hop`: only a Node the
+/// reader can see supplies a cap, so a hidden or absent Node is unavailable
+/// rather than unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestHopCapObservation {
+    Unavailable,
+    Visible(Option<u32>),
+}
+
+impl RequestHopCapObservation {
+    /// The cap a reader observed: `None` when it could not read the Node.
+    pub fn of(observed: Option<Option<u32>>) -> Self {
+        observed.map_or(Self::Unavailable, Self::Visible)
+    }
+
+    /// Lean `CausalHop.admitObservedHop`: no decision without a visible Node.
+    pub fn admit(self, hop: u32) -> Option<bool> {
+        match self {
+            Self::Unavailable => None,
+            Self::Visible(cap) => Some(request_hop_within_bound(cap, hop)),
+        }
+    }
+
+    /// Lean `CausalHop.observedHopBound`.
+    pub fn bound(self) -> Option<u32> {
+        match self {
+            Self::Unavailable => Some(0),
+            Self::Visible(cap) => cap,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionMessageCause {
+    pub caller_node_did: String,
+    pub caller_agent_did: String,
+    pub caller_session_id: String,
+    pub caller_requester_did: Option<String>,
+    pub caller_request_id: String,
+    pub caller_request_doc_id: String,
+    pub caller_hop: u32,
+    pub tool_call_id: String,
+    pub tool_call_doc_id: String,
+    pub correlation: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionMessageTarget {
+    pub node_did: String,
+    pub agent_did: String,
+    pub session_id: String,
+}
+
 #[cfg(all(test, feature = "typescript"))]
 mod tests {
     use super::RequestLifecycleState;

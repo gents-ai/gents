@@ -1,3 +1,4 @@
+import type { AgentIdentityBinding } from "../generated/AgentIdentityBinding.js";
 import type { MailboxItemObservation } from "../generated/MailboxItemObservation.js";
 import type { MailboxItemObservationRequest } from "../generated/MailboxItemObservationRequest.js";
 import type { RequestAttachment } from "../generated/RequestAttachment.js";
@@ -19,7 +20,7 @@ import type { GoalControlResult } from "../generated/GoalControlResult.js";
 import type { GoalSubmissionQuery } from "../generated/GoalSubmissionQuery.js";
 import type { GoalSubmissionReceipt } from "../generated/GoalSubmissionReceipt.js";
 import type { GoalSubmissionRecovery } from "../generated/GoalSubmissionRecovery.js";
-import type { SessionGoalView } from "../generated/SessionGoalView.js";
+import type { SessionGoalState } from "../generated/SessionGoalState.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
 import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
@@ -31,6 +32,7 @@ import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest
 import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
+import type { AgentWorkspaceRoot } from "../generated/AgentWorkspaceRoot.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
@@ -53,9 +55,6 @@ import type {
   AgentSaveRequest,
   ChatSendRequest,
   ChatSendResult,
-  ChatSubmissionReceipt,
-  ChatSubmissionRecovery,
-  ChatSubmissionQuery,
   CodexLoginResult,
   ClaudeLoginResult,
   GrokLoginResult,
@@ -67,8 +66,6 @@ import type {
   SessionRenameRequest,
   SessionArchiveRequest,
   SessionArchiveReceipt,
-  SessionHistoryRequest,
-  SessionHistoryPage,
   SessionLiveDeltaView,
   SessionRowsView,
   SessionRowsWindow,
@@ -82,8 +79,6 @@ import type {
   MailboxItemView,
   MCPServiceHealthView,
   McpServiceProbeResult,
-  NetworkStatusView,
-  RequestResendResult,
   RequestTimelineView,
   ScheduleDeleteRequest,
   ScheduleRunRequest,
@@ -101,7 +96,6 @@ import type {
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
-  ToolSurfaceExplanationView,
   WorkspaceListingView,
 } from "../types.js";
 import type {
@@ -156,7 +150,7 @@ export type DesktopApiAdapter = {
   fetchSessionGoal: (
     nodeDid: string,
     sessionId: string,
-  ) => Promise<SessionGoalView | null>;
+  ) => Promise<SessionGoalState | null>;
   controlGoal: (request: GoalControlRequest) => Promise<GoalControlResult>;
   recoverGoalSubmission: (
     query: GoalSubmissionQuery,
@@ -175,6 +169,7 @@ export type DesktopApiAdapter = {
   startDesktopClient: () => Promise<DesktopClientSnapshot>;
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   managedServerStatus?: () => Promise<ManagedServerStatus>;
+  enrollManagedServer?: () => Promise<void>;
   startManagedServer?: (
     nodeName: string,
     authority?: ManagedServerAuthorityInput,
@@ -190,6 +185,11 @@ export type DesktopApiAdapter = {
   ) => Promise<ManagedServerResetResult>;
   quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
+  selectAgentWorkspaceRoot?: (
+    nodeDid: string,
+    agentDid: string,
+    path: string,
+  ) => Promise<AgentWorkspaceRoot>;
   openManagedServerLoginItems?: () => Promise<void>;
   commitManagedServerAutoStart?: (
     nodeName: string,
@@ -217,11 +217,6 @@ export type DesktopApiAdapter = {
     nodeDid: string,
     requestId: string,
   ) => Promise<RequestTimelineView>;
-  explainToolSurface: (
-    nodeDid: string,
-    agentId: string,
-  ) => Promise<ToolSurfaceExplanationView>;
-  fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionContextDetails?: (
     request: SessionContextDetailsRequest,
   ) => Promise<SessionContextDetails | null>;
@@ -231,10 +226,9 @@ export type DesktopApiAdapter = {
     requestId?: string | null,
     timelinePage?: {
       limit?: number;
-      beforeItemKey?: string | null;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
-  retrySessionHydration: (
+  reloadSession: (
     sessionId: string,
     nodeDid?: string | null,
   ) => Promise<void>;
@@ -265,17 +259,12 @@ export type DesktopApiAdapter = {
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
-  recoverChatSubmission: (
-    query: ChatSubmissionQuery,
-  ) => Promise<ChatSubmissionRecovery>;
-  acknowledgeChatSubmission: (receipt: ChatSubmissionReceipt) => Promise<void>;
   steerPendingMessage: (
     request: PendingMessageSteerRequest,
   ) => Promise<PendingQueueEditResult>;
   editPendingQueue: (
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;
-  listMailbox: () => Promise<MailboxItemView[]>;
   observeMailboxItem: (
     request: MailboxItemObservationRequest,
   ) => Promise<MailboxItemObservation | null>;
@@ -288,13 +277,6 @@ export type DesktopApiAdapter = {
   setSessionArchived: (
     request: SessionArchiveRequest,
   ) => Promise<SessionArchiveReceipt>;
-  sessionHistory: (
-    request: SessionHistoryRequest,
-  ) => Promise<SessionHistoryPage>;
-  resendRequest: (
-    requestId: string,
-    nodeDid?: string,
-  ) => Promise<RequestResendResult>;
   retryRequest: (
     requestId: string,
     nodeDid?: string,
@@ -311,6 +293,7 @@ export type DesktopApiAdapter = {
   setDefaultAgent: (
     request: DefaultAgentSetRequest,
   ) => Promise<DesktopClientSnapshot>;
+  provisionAgentIdentity: (nodeDid: string) => Promise<AgentIdentityBinding>;
   saveAgentConfig: (
     request: AgentSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

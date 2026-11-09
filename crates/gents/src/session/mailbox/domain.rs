@@ -56,11 +56,12 @@ fn validate_response_schema(version: &Value, field: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::identity::NodeIdentity as _;
 
     #[tokio::test]
     async fn installed_domain_schema_resolves_document_response_without_static_registration() {
         let node = super::super::tests::test_node().await;
-        let item = stamp_create(
+        let item = super::super::tests::stamp_create(
             &node,
             &super::super::tests::context("did:test:owner"),
             super::super::tests::args(MailboxAction::WriteDocument, "domain-response"),
@@ -68,11 +69,16 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            sweep_open_mailbox_items(&node, "did:test:agent", None)
-                .await
-                .unwrap()
-                .report
-                .acted,
+            sweep_open_mailbox_items(
+                &node,
+                super::super::tests::root_identity().did(),
+                &[super::super::tests::agent_identity()],
+                None
+            )
+            .await
+            .unwrap()
+            .report
+            .acted,
             0
         );
         let response = node.execute(&format!(
@@ -87,14 +93,19 @@ mod tests {
             .unwrap()
             .to_owned();
         assert_eq!(
-            sweep_open_mailbox_items(&node, "did:test:agent", None)
-                .await
-                .unwrap()
-                .report
-                .acted,
+            sweep_open_mailbox_items(
+                &node,
+                super::super::tests::root_identity().did(),
+                &[super::super::tests::agent_identity()],
+                None
+            )
+            .await
+            .unwrap()
+            .report
+            .acted,
             1
         );
-        let resolved = load_mailbox_item(&node, &item.doc_id)
+        let resolved = super::super::tests::load_as_creator(&node, &item.doc_id)
             .await
             .unwrap()
             .unwrap();
@@ -104,11 +115,16 @@ mod tests {
             Some(response_id.as_str())
         );
         assert_eq!(
-            sweep_open_mailbox_items(&node, "did:test:agent", None)
-                .await
-                .unwrap()
-                .report
-                .acted,
+            sweep_open_mailbox_items(
+                &node,
+                super::super::tests::root_identity().did(),
+                &[super::super::tests::agent_identity()],
+                None
+            )
+            .await
+            .unwrap()
+            .report
+            .acted,
             0
         );
     }
@@ -148,11 +164,15 @@ mod tests {
         for collection in ["InvalidResponse", "MissingResponse"] {
             let mut args = super::super::tests::args(MailboxAction::WriteDocument, collection);
             args.expected_collection = Some(collection.into());
-            assert!(stamp_create(&node, &context, args).await.is_err());
+            assert!(super::super::tests::stamp_create(&node, &context, args)
+                .await
+                .is_err());
         }
-        assert!(list_mailbox_items(&node, &context.requester_did, None)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            super::super::tests::list_as_creator(&node, &context.requester_did, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
