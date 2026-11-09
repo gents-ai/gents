@@ -169,6 +169,16 @@ impl PeerRecord {
                 .is_some_and(|sequence| sequence > 0)
     }
 
+    /// This client's enrollment into `node_did` reached an authorization
+    /// generation. The desktop's managed pairing grants Node administration
+    /// before it approves the request (`grant_then_approve_managed`), so for its
+    /// own co-hosted Node a completed generation records that this client key
+    /// administers it. The P2P lease is not consulted: it gates routes, not the
+    /// grant.
+    pub fn records_completed_enrollment_into(&self, node_did: &str) -> bool {
+        self.node_did == node_did && self.is_enrollment() && self.enrollment_generation_complete()
+    }
+
     /// An operator endpoint does not establish an authenticated enrollment route.
     pub fn is_enrollment_ready_at(&self, now: DateTime<Utc>) -> bool {
         self.is_enrollment()
