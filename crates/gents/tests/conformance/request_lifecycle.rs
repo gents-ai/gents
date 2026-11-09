@@ -17,6 +17,13 @@ fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> 
         ("pending" | "workspaceBindingPending", "superseded") => Some("dedupLose"),
         ("claimed", "processing") => Some("beginInference"),
         ("processing", "processing") => Some("continueProcessing"),
+        ("processing", "waitingForBackend") => Some("parkBackendClosed"),
+        ("waitingForBackend", "resumingBackend") => Some("resumeBackendReady"),
+        ("waitingForBackend", "failed") => Some("expireBackendWait"),
+        ("waitingForBackend", "interrupted") => Some("interruptBackendWait"),
+        ("resumingBackend", "processing") => Some("beginResumed"),
+        ("resumingBackend", "failed") => Some("expireResuming"),
+        ("resumingBackend", "interrupted") => Some("interruptResuming"),
         ("processing", "completed") => Some("finish"),
         ("processing", "failed") => Some("fail"),
         ("claimed", "failed") => Some("failBeforeStream"),
@@ -487,6 +494,95 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             crate::support::begin_owned_execution(&mut lifecycle, &db.node)
                 .await
                 .unwrap();
+        }
+        "parkBackendClosed"
+        | "resumeBackendReady"
+        | "beginResumed"
+        | "interruptBackendWait"
+        | "expireBackendWait"
+        | "interruptResuming"
+        | "expireResuming" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+                .await
+                .unwrap();
+            let generation = gents::__test_internals::backend_generation(&lifecycle)
+                .unwrap()
+                .to_owned();
+            let deadline = gents::__test_internals::backend_deadline(&lifecycle)
+                .expect("claimed request deadline");
+            let mut request = lifecycle.request().clone();
+            request.deadline = Some(deadline.to_rfc3339());
+            assert!(gents::__test_internals::park_backend(&mut lifecycle)
+                .await
+                .unwrap());
+            if matches!(action, "interruptBackendWait" | "expireBackendWait") {
+                let interrupted = action == "interruptBackendWait";
+                if interrupted {
+                    actors
+                        .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
+                        .await;
+                } else {
+                    let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+                    actors
+                        .update_request(&doc_id, serde_json::json!({ "deadline": past }))
+                        .await;
+                }
+                assert_eq!(
+                    gents::__test_internals::settle_parked_backend(
+                        &actors.agent_access,
+                        &doc_id,
+                        &generation,
+                        interrupted
+                    )
+                    .await
+                    .unwrap(),
+                    gents::request::lifecycle::TerminalizeResult::Won
+                );
+            } else if action != "parkBackendClosed" {
+                drop(lifecycle);
+                let mut resumed = actors.lifecycle(
+                    request,
+                    DEADLINE_SECS,
+                    ExecutionOrigin::Interactive,
+                    BACKEND_ID,
+                );
+                assert!(gents::__test_internals::wake_backend(&mut resumed)
+                    .await
+                    .unwrap());
+                if action == "beginResumed" {
+                    crate::support::begin_owned_execution(&mut resumed, &db.node)
+                        .await
+                        .unwrap();
+                } else if matches!(action, "interruptResuming" | "expireResuming") {
+                    let interrupted = action == "interruptResuming";
+                    if interrupted {
+                        actors
+                            .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
+                            .await;
+                    } else {
+                        let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+                        actors
+                            .update_request(&doc_id, serde_json::json!({ "deadline": past }))
+                            .await;
+                    }
+                    assert_eq!(
+                        resumed
+                            .terminalize_owned(
+                                if interrupted {
+                                    RequestTerminalOutcome::Interrupted
+                                } else {
+                                    RequestTerminalOutcome::Failed
+                                },
+                                gents_protocol::output::TerminalOutput::NoMessage,
+                                None,
+                            )
+                            .await
+                            .unwrap(),
+                        gents::request::lifecycle::TerminalizeResult::Won
+                    );
+                }
+            }
         }
         "finish" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);

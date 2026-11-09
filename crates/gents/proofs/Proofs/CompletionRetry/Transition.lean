@@ -53,6 +53,13 @@ def step? (s : State) : Action → Option State
                           transportUsed := s.transportUsed + 1,
                           attempt := s.attempt + 1 }
           else some { s with phase := .exhausted }
+      | .retracted .emptySample _ wake =>
+          if s.emptyUsed < s.budget.emptyRetries ∧
+              fitsDeadline wake s.deadline ∧ s.now ≤ wake then
+            some { s with phase := .backingOff wake,
+                          emptyUsed := s.emptyUsed + 1,
+                          attempt := s.attempt + 1 }
+          else some { s with phase := .exhausted }
       | .retracted .parseBadRequest error wake =>
           if s.lastParseError ≠ some error ∧
               s.resampleUsed < s.budget.resampleRetries ∧

@@ -55,6 +55,7 @@ pub fn failure_class(failure: &ClassifiedFailure) -> FailureClass {
 pub struct CompletionRetryPolicy {
     pub transport_backoff: Vec<Duration>,
     pub max_resample: u32,
+    pub max_empty_resample: u32,
     pub allow_repair: bool,
     /// Other eligible accounts of the pool: one immediate reissue each.
     pub account_hops: u32,
@@ -91,6 +92,10 @@ impl CompletionRetryPolicy {
                 .retry_max_resample
                 .and_then(nonnegative_u32)
                 .unwrap_or(default.max_resample),
+            max_empty_resample: fields
+                .retry_max_resample
+                .and_then(nonnegative_u32)
+                .unwrap_or(default.max_empty_resample),
             allow_repair: fields.retry_allow_repair.unwrap_or(default.allow_repair),
             account_hops: 0,
         }
@@ -111,6 +116,7 @@ impl CompletionRetryPolicy {
                 Duration::from_secs(120),
             ],
             max_resample: 1,
+            max_empty_resample: 1,
             allow_repair: true,
             account_hops: 0,
         }
@@ -120,6 +126,7 @@ impl CompletionRetryPolicy {
         Self {
             transport_backoff: vec![Duration::from_secs(2)],
             max_resample: 0,
+            max_empty_resample: 1,
             allow_repair: true,
             account_hops: 0,
         }
@@ -129,6 +136,7 @@ impl CompletionRetryPolicy {
         Self {
             transport_backoff: Vec::new(),
             max_resample: 0,
+            max_empty_resample: 0,
             allow_repair: false,
             account_hops: 0,
         }
@@ -142,6 +150,7 @@ impl CompletionRetryPolicy {
                 Duration::from_secs(2),
             ],
             max_resample: 0,
+            max_empty_resample: 0,
             allow_repair: false,
             account_hops: 0,
         }
@@ -222,6 +231,8 @@ pub struct CompletionRetryState {
     policy: CompletionRetryPolicy,
     transport_used: u32,
     resample_used: u32,
+    empty_used: u32,
+    empty_total: u32,
     repair_used: bool,
     compaction_used: bool,
     account_used: u32,
@@ -234,6 +245,8 @@ impl CompletionRetryState {
             policy,
             transport_used: 0,
             resample_used: 0,
+            empty_used: 0,
+            empty_total: 0,
             repair_used: false,
             compaction_used: false,
             account_used: 0,
@@ -242,7 +255,7 @@ impl CompletionRetryState {
     }
 
     pub fn retry_count(&self) -> u32 {
-        self.transport_used + self.resample_used
+        self.transport_used + self.resample_used + self.empty_total
     }
 
     pub fn mark_repair_used(&mut self) {
@@ -258,6 +271,7 @@ impl CompletionRetryState {
     /// completion, so the next turn of the same request may compact again.
     pub fn on_turn_accepted(&mut self) {
         self.compaction_used = false;
+        self.empty_used = 0;
     }
 
     pub fn on_pre_stream_failure(
@@ -384,6 +398,29 @@ impl CompletionRetryState {
                 }
             }
         }
+    }
+
+    pub fn on_no_visible_output(
+        &mut self,
+        now: DateTime<Utc>,
+        deadline: Option<DateTime<Utc>>,
+    ) -> MidStreamDirective {
+        if self.empty_used >= self.policy.max_empty_resample {
+            return MidStreamDirective::Fail {
+                reason: "empty completion retry budget exhausted".to_string(),
+            };
+        }
+        let base_delay = resample_delay(&self.policy.transport_backoff, self.empty_used)
+            .unwrap_or(Duration::ZERO);
+        let delay = jitter(base_delay, &mut rand::rng());
+        if exceeds_deadline(now, delay, deadline) {
+            return MidStreamDirective::Fail {
+                reason: deadline_reason(delay, deadline),
+            };
+        }
+        self.empty_used += 1;
+        self.empty_total = self.empty_total.saturating_add(1);
+        MidStreamDirective::RetractAndResample { delay }
     }
 
     pub fn on_mid_stream_failure(

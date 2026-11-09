@@ -89,6 +89,10 @@ def codexShimProjectionCases : List CodexShimProjectionCase :=
       .claimed false
   , codexShimProjectionCase "codex_shim.projection.processing"
       .processing false
+  , codexShimProjectionCase "codex_shim.projection.waiting_for_backend"
+      .waitingForBackend false
+  , codexShimProjectionCase "codex_shim.projection.resuming_backend"
+      .resumingBackend false
   , codexShimProjectionCase "codex_shim.projection.completed_request"
       .completed false
   , codexShimProjectionCase "codex_shim.projection.failed_request"
@@ -320,6 +324,10 @@ def codexShimThreadStatusCases : List CodexShimThreadStatusCase :=
       "codex_shim.thread_status.processing"
       ["CodexShim.active_request_projects_active_thread"]
       (some .processing)
+  , codexShimThreadStatusCase "codex_shim.thread_status.waiting_for_backend" []
+      (some .waitingForBackend)
+  , codexShimThreadStatusCase "codex_shim.thread_status.resuming_backend" []
+      (some .resumingBackend)
   , codexShimThreadStatusCase
       "codex_shim.thread_status.completed"
       ["CodexShim.completed_request_projects_idle_thread"]

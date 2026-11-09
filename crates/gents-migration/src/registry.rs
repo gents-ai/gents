@@ -377,6 +377,10 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::AGENT_REQUEST
     ),
     baseline_entry!(
+        gents_protocol::schemas::AGENT_REQUEST_BACKEND_WAIT_NAME,
+        gents_protocol::schemas::AGENT_REQUEST_BACKEND_WAIT
+    ),
+    baseline_entry!(
         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT
     ),

@@ -63,6 +63,12 @@ private theorem processing_not_terminal : ¬ isTerminal RequestState.processing 
         | inl h => cases h
         | inr h => cases h
 
+private theorem waiting_backend_not_terminal : ¬ isTerminal RequestState.waitingForBackend := by
+  simp [HasTerminal.isTerminal, RequestState.instHasTerminal]
+
+private theorem resuming_backend_not_terminal : ¬ isTerminal RequestState.resumingBackend := by
+  simp [HasTerminal.isTerminal, RequestState.instHasTerminal]
+
 theorem terminal_irreversibility
     {pre post : RequestContext}
     (h_terminal : isTerminal pre.state)
@@ -111,6 +117,13 @@ theorem terminal_irreversibility
   | interrupt_processing h_pre _ _ _ =>
     rw [h_pre] at h_terminal
     exact (processing_not_terminal h_terminal).elim
+  | park_backend h_pre _ _ _ _ _ => rw [h_pre] at h_terminal; exact (processing_not_terminal h_terminal).elim
+  | resume_backend h_pre _ _ _ _ _ => rw [h_pre] at h_terminal; exact (waiting_backend_not_terminal h_terminal).elim
+  | begin_resumed h_pre _ _ _ _ => rw [h_pre] at h_terminal; exact (resuming_backend_not_terminal h_terminal).elim
+  | interrupt_resuming h_pre _ _ _ => rw [h_pre] at h_terminal; exact (resuming_backend_not_terminal h_terminal).elim
+  | expire_resuming h_pre _ _ _ _ => rw [h_pre] at h_terminal; exact (resuming_backend_not_terminal h_terminal).elim
+  | interrupt_backend_wait h_pre _ _ _ => rw [h_pre] at h_terminal; exact (waiting_backend_not_terminal h_terminal).elim
+  | expire_backend_wait h_pre _ _ _ _ => rw [h_pre] at h_terminal; exact (waiting_backend_not_terminal h_terminal).elim
 
 theorem continue_processing_is_lifecycle_stutter
     {pre post : RequestContext}
@@ -150,6 +163,13 @@ theorem completed_not_deadline_expired
     simp [h_post] at h_completed
   | interrupt_processing _ _ _ h_post =>
     simp [h_post] at h_completed
+  | park_backend _ _ _ _ _ h_post => simp [h_post] at h_completed
+  | resume_backend _ _ _ _ _ h_post => simp [h_post] at h_completed
+  | begin_resumed _ _ _ _ h_post => simp [h_post] at h_completed
+  | interrupt_resuming _ _ _ h_post => simp [h_post] at h_completed
+  | expire_resuming _ _ _ _ h_post => simp [h_post] at h_completed
+  | interrupt_backend_wait _ _ _ h_post => simp [h_post] at h_completed
+  | expire_backend_wait _ _ _ _ h_post => simp [h_post] at h_completed
 
 theorem recovery_blocks_claims
     {s s' : ComposedState}
@@ -169,7 +189,7 @@ theorem recovery_blocks_claims
     exact absurd h_accepts (fun h => h)
   | slot_acquire h_claimed _ _ _ _ _ _ =>
     rw [h_pending] at h_claimed
-    cases h_claimed
+    rcases h_claimed with h | h <;> cases h
   | clock_advance _ _ h_req_eq _ _ _ _ =>
     left
     have : s'.request.state = s.request.state := by
@@ -237,6 +257,13 @@ theorem persistence_before_completion
     simp [h_post] at h_completed
   | interrupt_processing _ _ _ h_post =>
     simp [h_post] at h_completed
+  | park_backend _ _ _ _ _ h_post => simp [h_post] at h_completed
+  | resume_backend _ _ _ _ _ h_post => simp [h_post] at h_completed
+  | begin_resumed _ _ _ _ h_post => simp [h_post] at h_completed
+  | interrupt_resuming _ _ _ h_post => simp [h_post] at h_completed
+  | expire_resuming _ _ _ _ h_post => simp [h_post] at h_completed
+  | interrupt_backend_wait _ _ _ h_post => simp [h_post] at h_completed
+  | expire_backend_wait _ _ _ _ h_post => simp [h_post] at h_completed
 
 theorem deadline_structural_bound
     {pre post : RequestContext}
@@ -277,6 +304,13 @@ theorem claim_deadline_structural_bound
       simp [h_post] at h_claimed
   | interrupt_processing _ _ _ h_post =>
       simp [h_post] at h_claimed
+  | park_backend _ _ _ _ _ h_post => simp [h_post] at h_claimed
+  | resume_backend _ _ _ _ _ h_post => simp [h_post] at h_claimed
+  | begin_resumed _ _ _ _ h_post => simp [h_post] at h_claimed
+  | interrupt_resuming _ _ _ h_post => simp [h_post] at h_claimed
+  | expire_resuming _ _ _ _ h_post => simp [h_post] at h_claimed
+  | interrupt_backend_wait _ _ _ h_post => simp [h_post] at h_claimed
+  | expire_backend_wait _ _ _ _ h_post => simp [h_post] at h_claimed
 
 theorem interrupt_monotonicity
     {pre post : RequestContext}

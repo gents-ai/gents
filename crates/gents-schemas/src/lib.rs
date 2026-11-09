@@ -17,6 +17,9 @@ pub const NODE_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/node_directory_entry.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
+pub const AGENT_REQUEST_BACKEND_WAIT_NAME: &str = "AgentRequestBackendWait";
+pub const AGENT_REQUEST_BACKEND_WAIT: &str =
+    include_str!("../schemas/agent/agent_request_backend_wait.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
@@ -227,6 +230,7 @@ pub const ALL: &[&str] = &[
     CALLBACK_INVOCATION,
     CALLBACK_RESULT,
     AGENT_REQUEST,
+    AGENT_REQUEST_BACKEND_WAIT,
     AGENT_OUTPUT_SEGMENT,
     AGENT_SESSION,
     GOAL,
@@ -306,6 +310,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_INVOCATION_NAME,
     CALLBACK_RESULT_NAME,
     AGENT_REQUEST_NAME,
+    AGENT_REQUEST_BACKEND_WAIT_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,

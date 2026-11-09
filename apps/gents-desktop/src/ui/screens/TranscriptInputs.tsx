@@ -75,6 +75,8 @@ export function pendingInputState(
     case "pending":
     case "claimed":
     case "processing":
+    case "waitingForBackend":
+    case "resumingBackend":
     case "completed":
     case "superseded":
       return null;

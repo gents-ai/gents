@@ -45,6 +45,7 @@ where
 
         Ok(Self {
             node,
+            backend_health: None,
             agent_config,
             provider_family: provider_family.clone(),
             replay_issuer: None,
@@ -81,6 +82,14 @@ where
         registry: crate::observe::inference_observation::InferenceObservationRegistry,
     ) -> Self {
         self.inference_observations = registry;
+        self
+    }
+
+    pub(in crate::runtime::agent) fn with_backend_health(
+        mut self,
+        health: crate::inference::backends::health::BackendHealthMap,
+    ) -> Self {
+        self.backend_health = Some(health);
         self
     }
 

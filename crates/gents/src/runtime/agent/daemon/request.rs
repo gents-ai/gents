@@ -156,8 +156,10 @@ where
                     .await
                     .context("validating current WorkspaceRoot policy for fresh request")?;
             }
-            let resume_from_history =
-                session::retry_has_published_input(&self.node, &request).await?;
+            let resume_same_request = lifecycle.resumed_from_backend()
+                && session::resumed_request_has_published_input(&self.node, &request).await?;
+            let resume_from_history = resume_same_request
+                || session::retry_has_published_input(&self.node, &request).await?;
             let access = crate::store::config_client::ConfigAccess::local_managed_agent(
                 self.node.clone(),
                 identity::Did::new(request.agent_did.clone())?,
@@ -178,6 +180,7 @@ where
                 .await;
             Ok::<_, anyhow::Error>((
                 resume_from_history,
+                resume_same_request,
                 aggregate_token_budget,
                 context_calibration,
             ))
@@ -187,7 +190,8 @@ where
                 RequestInterruptionSource::Claimed,
             ));
         };
-        let (resume_from_history, aggregate_token_budget, context_calibration) = admitted?;
+        let (resume_from_history, resume_same_request, aggregate_token_budget, context_calibration) =
+            admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let agent_name = self.agent_config.agent_did.clone();
         let admission_context = AdmissionCallContext::for_request(
@@ -221,9 +225,21 @@ where
             capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );
+        let previous_scopes = if lifecycle.resumed_from_backend() && capture_scope.is_some() {
+            crate::inference::rendered_request::load_scope_allocations(
+                &lifecycle.access()?,
+                &request,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         if let Some(scope) = capture_scope.as_mut() {
             let scope = std::sync::Arc::get_mut(scope)
                 .context("fresh request capture scope unexpectedly shared")?;
+            scope
+                .restore_allocations(previous_scopes)
+                .map_err(anyhow::Error::msg)?;
             if let Some(family) = &self.compaction_provider_family {
                 scope.set_compaction_provider_family(family.clone());
             }
@@ -372,6 +388,7 @@ where
                         background_cutoff,
                         prior_cursor,
                         provider_profile,
+                        resume_same_request,
                     )
                     .instrument(tracing::info_span!(
                         "request.load_active_history",

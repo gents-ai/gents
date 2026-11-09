@@ -89,7 +89,9 @@ impl SubagentFinishStatus {
             RequestLifecycleState::WorkspaceBindingPending
             | RequestLifecycleState::Pending
             | RequestLifecycleState::Claimed
-            | RequestLifecycleState::Processing => None,
+            | RequestLifecycleState::Processing
+            | RequestLifecycleState::WaitingForBackend
+            | RequestLifecycleState::ResumingBackend => None,
         }
     }
 }

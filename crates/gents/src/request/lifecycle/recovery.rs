@@ -57,6 +57,7 @@ async fn recover_active_requests(
     let active_states = RequestLifecycleState::graphql_list([
         RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
+        RequestLifecycleState::ResumingBackend,
     ]);
     let escaped_node_did = escape_graphql_string(node_did);
     let mut rows = Vec::new();
@@ -74,6 +75,7 @@ async fn recover_active_requests(
             ) {{
                 _docID
                 request_id
+                lifecycle_state
                 node_did
                 requester_did
                 agent_did
@@ -186,6 +188,25 @@ async fn recover_active_requests(
         let access = accesses
             .get(agent_did)
             .context("request agent signer unavailable")?;
+        if row.lifecycle_state == Some(RequestLifecycleState::ResumingBackend) {
+            match super::backend_wait::repark_expired_resume(
+                access,
+                request_doc_id,
+                expected_generation,
+                expected_expiry,
+            )
+            .await
+            {
+                Ok(true) => report.requests.repaired += 1,
+                Ok(false) => report.requests.awaiting_outcome += 1,
+                Err(error) => {
+                    report.requests.failed += 1;
+                    tracing::warn!(request_doc_id, %error, "could not return expired resumed request to backend wait");
+                }
+            }
+            continue;
+        }
+
         match canonical_recovery::recover_expired_generation(
             access,
             row,
