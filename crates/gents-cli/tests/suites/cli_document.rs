@@ -164,9 +164,11 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
         "{canonical}"
     );
 
+    // With the runtime stopped, the home's owned node publishes through its signed loopback
+    // endpoint, still as the held User and against the live authored schema.
     serve.child.kill()?;
     serve.child.wait()?;
-    let offline = run_cli_failure_stderr(
+    let offline = run_cli_json(
         &home_dir,
         &[
             "document",
@@ -178,7 +180,39 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
             r#"{"note_id":"offline","objective":"o","status":"paused"}"#,
         ],
     )?;
-    assert!(offline.contains("running HTTP endpoint"), "{offline}");
+    assert_eq!(offline["collection"], "CliDocumentNote");
+    let offline_id = offline["doc_id"].as_str().context("offline doc_id")?;
+    assert_ne!(offline_id, doc_id);
+    let rows = run_cli_json(
+        &home_dir,
+        &[
+            "query",
+            "--collection",
+            "CliDocumentNote",
+            "--field",
+            "_docID",
+            "--filter",
+            r#"{"note_id":{"_eq":"offline"}}"#,
+        ],
+    )?;
+    assert_eq!(rows["returned_count"], 1, "{rows}");
+    assert_eq!(rows["results"][0]["_docID"], offline_id);
+    let offline_unknown = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "document",
+            "create",
+            "CliDocumentNote",
+            "--schema",
+            sdl,
+            "--json",
+            r#"{"no_such_field":"x"}"#,
+        ],
+    )?;
+    assert!(
+        offline_unknown.contains("no_such_field"),
+        "{offline_unknown}"
+    );
     Ok(())
 }
 
