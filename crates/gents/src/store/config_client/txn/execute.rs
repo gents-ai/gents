@@ -1180,7 +1180,7 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
-    async fn execute_local_response_with_actor(
+    pub(super) async fn execute_local_response_with_actor(
         &self,
         document: &str,
         identity: Option<identity::Did>,

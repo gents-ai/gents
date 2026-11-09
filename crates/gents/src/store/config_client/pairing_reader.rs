@@ -33,7 +33,7 @@ impl PairingReadReason {
         }
     }
 
-    fn relation(self) -> &'static str {
+    pub(super) fn relation(self) -> &'static str {
         match self {
             Self::RouteAdmission => "route_reader",
             Self::ToolView => "tool_reader",
@@ -44,9 +44,10 @@ impl PairingReadReason {
 impl ConfigApplyTxn<'_> {
     /// Stage a reader change with other authorized configuration writes
     /// (`Identity.OwnerStaged`, pairing readers). The runtime that owns the
-    /// observation stages it for a caller that may update its Node; over HTTP
-    /// the caller's own change is sent and native ACP decides it. This does not
-    /// authorize enrollment or permit writing the pairing observation.
+    /// observation stages it for a caller that may update the runtime's own
+    /// Node; over HTTP the caller's own change is sent and native ACP decides
+    /// it. This does not authorize enrollment or permit writing the pairing
+    /// observation.
     pub async fn set_pairing_reader(
         &self,
         observation: PairingObservation,
@@ -55,15 +56,8 @@ impl ConfigApplyTxn<'_> {
         agent: &identity::Did,
         grant: bool,
     ) -> Result<(), ConfigClientError> {
-        self.change_owner_staged_actor_relationship(
-            observation.collection(),
-            doc_id,
-            reason.relation(),
-            agent,
-            !grant,
-            super::OwnerStagedAuthority::NodeUpdate,
-        )
-        .await
+        self.change_owner_staged_pairing_reader(observation, doc_id, reason, agent, !grant)
+            .await
     }
 }
 

@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{plan::document_identity, read::read_record, ConfigApplyTxn, DesiredStateApplyPlan};
-use crate::store::config_client::OwnerStagedAuthority;
 use crate::Collection;
 
 const COLLECTION: Collection = Collection::RepositoryPlacement;
@@ -42,7 +41,6 @@ async fn change(
             "reader",
             &reader,
             !add,
-            OwnerStagedAuthority::DocumentUpdate,
         )
         .await?;
     }

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use super::OwnerStagedAuthority;
 use crate::store::config_client::{
-    ConfigAccess, ConfigApplyTxn, ConfigClientError, GraphqlEndpoint,
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, GraphqlEndpoint, PairingObservation,
+    PairingReadReason,
 };
 
 const POLICY: &str = "name: OwnerStaged\nresources:\n  - name: rows\n    relations:\n      - name: writer\n      - name: editor\n    permissions:\n      - name: read\n        expr: writer + editor\n      - name: update\n        expr: editor\n      - name: delete\n";
@@ -137,20 +137,20 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
 
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().owner_staged_relation_cases;
     assert!(!cases.is_empty());
-    for case in cases {
+    for case in cases.iter().filter(|case| case["path"] != "pairing_reader") {
         let (key, did) = match case["requester"].as_str().unwrap() {
             "user" => (&user, user_did.clone()),
             "admin" => (&admin, identity::Did::new(admin.did())?),
             "outsider" => (&outsider, identity::Did::new(outsider.did())?),
             other => panic!("unknown modeled requester {other}"),
         };
-        let authority = match case["path"].as_str().unwrap() {
-            "event_cursor_rebind" | "declared_placement_readers" | "workspace_selection" => {
-                OwnerStagedAuthority::DocumentUpdate
-            }
-            "pairing_reader" => OwnerStagedAuthority::NodeUpdate,
-            other => panic!("unknown modeled path {other}"),
-        };
+        assert!(
+            matches!(
+                case["path"].as_str().unwrap(),
+                "event_cursor_rebind" | "declared_placement_readers" | "workspace_selection"
+            ),
+            "unknown modeled path {case}"
+        );
         assert_eq!(visible().await?, 0, "{case}");
         let direct = client(key)?
             .transact_write("test.owner_staged.direct", |txn| {
@@ -179,11 +179,15 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
                 "writer",
                 &target_did,
                 false,
-                authority,
             )
             .await;
         let expected = case["staged"].as_bool().unwrap();
         assert_eq!(staged.is_ok(), expected, "{case}: {staged:?}");
+        assert_eq!(
+            case["outcome"],
+            if expected { "staged" } else { "denied" },
+            "{case}"
+        );
         if expected {
             txn.commit().await?;
         } else {
@@ -205,7 +209,287 @@ async fn owner_staged_relationships_follow_the_document_owner() -> anyhow::Resul
                 "writer",
                 &target_did,
                 true,
-                OwnerStagedAuthority::DocumentUpdate,
+            )
+            .await?;
+            txn.commit().await?;
+        }
+    }
+    // `unauthorized_refusal_independent_of_document`: an outsider learns
+    // nothing from a row that does not exist.
+    let missing = {
+        let txn = ConfigApplyTxn::begin_local(&node, Some(runtime_did.clone())).await?;
+        let created = txn
+            .execute("mutation { add_OwnerStagedRow(input: {label: \"missing\"}) { _docID } }")
+            .await?;
+        txn.discard().await?;
+        created["data"]["add_OwnerStagedRow"][0]["_docID"]
+            .as_str()
+            .expect("row ID")
+            .to_owned()
+    };
+    for row in [&doc, &missing] {
+        let txn = staging(&outsider, identity::Did::new(outsider.did())?).await?;
+        let refused = txn
+            .change_owner_staged_actor_relationship(
+                "OwnerStagedRow",
+                row,
+                "writer",
+                &target_did,
+                false,
+            )
+            .await;
+        assert!(
+            matches!(
+                &refused,
+                Err(ConfigClientError::OwnerStagedRelationshipDenied { doc_id, .. }) if doc_id == row
+            ),
+            "{row}: {refused:?}"
+        );
+        txn.commit().await?;
+        assert_eq!(visible().await?, 0, "{row}");
+    }
+    node.shutdown().await?;
+    Ok(())
+}
+
+/// Lean `Identity.OwnerStaged` pairing cases on the real pairing schema and
+/// `pairing_observations` policy: a requester that may update the runtime's
+/// own Node gets readers staged only on a pairing observation the runtime
+/// owns; every other request is refused before anything is staged.
+#[tokio::test]
+async fn pairing_readers_are_staged_only_on_runtime_owned_observations() -> anyhow::Result<()> {
+    use crate::store::identity::NodeIdentity;
+    let directory = tempfile::tempdir()?;
+    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+    let stranger = crate::KeyIdentity::load_or_create(directory.path().join("stranger"), None)?;
+    let managed = || -> anyhow::Result<Arc<dyn NodeIdentity>> {
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        Ok(crate::store::identity::resolve_agent_identity(
+            &runtime, &binding,
+        )?)
+    };
+    let (user, admin, outsider, other_admin, target) =
+        (managed()?, managed()?, managed()?, managed()?, managed()?);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(user.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let owner_context =
+        defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
+    for actor in [
+        admin.did(),
+        outsider.did(),
+        other_admin.did(),
+        runtime.did(),
+        target.did(),
+        stranger.did(),
+    ] {
+        for permission in [
+            acp::nac::NodePermission::CollectionGet,
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::DocumentUpdate,
+            acp::nac::NodePermission::DacRelationAdd,
+            acp::nac::NodePermission::DacRelationDelete,
+        ] {
+            node.add_nac_actor_relationship_as(&owner_context, permission.as_str(), actor)
+                .await?;
+        }
+    }
+    node.add_dac_policy_with_counter_as(
+        &owner_context,
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await?;
+    for schema in [
+        gents_protocol::schemas::NODE,
+        gents_protocol::schemas::PEER_PAIRING_DESIRED,
+    ] {
+        node.add_collection_as(&owner_context, schema).await?;
+    }
+    let client = |key: &Arc<dyn NodeIdentity>| -> anyhow::Result<ConfigAccess> {
+        Ok(ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(&endpoint, key.did())
+                .with_client_signing_capability(key.client_signing_capability()?)?,
+        ))
+    };
+    let did = |key: &str| identity::Did::new(key);
+    let user_access = client(&user)?;
+    // The runtime's Node, administered by `admin`, and another Node with a
+    // different `node_did`, administered by `other_admin`.
+    for (node_did, administrator) in [(runtime.did(), &admin), (stranger.did(), &other_admin)] {
+        let created = user_access
+            .write(
+                "test.owner_staged.pairing_node",
+                &format!(
+                    r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+                    crate::store::graphql::escape_graphql_string(node_did)
+                ),
+            )
+            .await?;
+        let created = gents_protocol::graphql::extract_mutation_doc_id(&created, "Node")?;
+        user_access
+            .add_actor_relationship(
+                "Node",
+                &created,
+                "administrator",
+                &did(administrator.did())?,
+            )
+            .await?;
+        if node_did == runtime.did() {
+            user_access
+                .add_actor_relationship("Node", &created, "runtime_reader", &did(runtime.did())?)
+                .await?;
+        }
+    }
+    let pairing = |author: &str, peer: &str| {
+        format!(
+            r#"mutation {{ create_PeerPairingDesired(input: {{node_did: "{author}", actor_did: "{author}",
+            peer_id: "{peer}", source: "enrollment", collections: ["AgentSessionInputEdit"],
+            replicator_addresses: ["{peer}-address"], parent_linked: false}}) {{_docID}} }}"#,
+            author = crate::store::graphql::escape_graphql_string(author),
+        )
+    };
+    let runtime_access = ConfigAccess::local_as(node.clone(), did(runtime.did())?);
+    let route = runtime_access
+        .write("test.owner_staged.route", &pairing(runtime.did(), "route"))
+        .await?;
+    let route = gents_protocol::graphql::extract_mutation_doc_id(&route, "PeerPairingDesired")?;
+    // The runtime may read the foreign observation, so it observes its owner.
+    let stranger_access = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(&endpoint, stranger.did())
+            .with_client_signing_capability(stranger.client_signing_capability()?)?,
+    );
+    let foreign = stranger_access
+        .write(
+            "test.owner_staged.foreign",
+            &pairing(stranger.did(), "foreign"),
+        )
+        .await?;
+    let foreign = gents_protocol::graphql::extract_mutation_doc_id(&foreign, "PeerPairingDesired")?;
+    stranger_access
+        .add_actor_relationship(
+            "PeerPairingDesired",
+            &foreign,
+            "route_reader",
+            &did(runtime.did())?,
+        )
+        .await?;
+    let missing = {
+        let txn = ConfigApplyTxn::begin_local(&node, Some(did(runtime.did())?)).await?;
+        let created = txn.execute(&pairing(runtime.did(), "missing")).await?;
+        txn.discard().await?;
+        gents_protocol::graphql::extract_mutation_doc_id(&created, "PeerPairingDesired")?
+    };
+    let target_did = did(target.did())?;
+    let target_access = ConfigAccess::local_as(node.clone(), target_did.clone());
+    let readable = || async {
+        anyhow::Ok(
+            gents_protocol::graphql::graphql_rows_from_response(
+                &target_access
+                    .execute("{ PeerPairingDesired { _docID } }")
+                    .await?,
+                "PeerPairingDesired",
+            )
+            .into_iter()
+            .filter_map(|row| row["_docID"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>(),
+        )
+    };
+    let staging = |key: &Arc<dyn NodeIdentity>| {
+        let signer = key.managed_agent_signer().expect("managed Agent signer");
+        ConfigApplyTxn::begin_local_with_signer(&node, did(key.did()).unwrap(), signer)
+    };
+
+    let cases: Vec<_> = crate::lean_vocab_test::lean_contract_snapshot()
+        .owner_staged_relation_cases
+        .iter()
+        .filter(|case| case["path"] == "pairing_reader")
+        .collect();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let key = match case["requester"].as_str().unwrap() {
+            "user" => &user,
+            "admin" => &admin,
+            "outsider" => &outsider,
+            "other-admin" => &other_admin,
+            other => panic!("unknown modeled requester {other}"),
+        };
+        let doc = match case["document"].as_str().unwrap() {
+            "route" => &route,
+            "foreign" => &foreign,
+            "missing" => &missing,
+            other => panic!("unknown modeled document {other}"),
+        };
+        assert!(readable().await?.is_empty(), "{case}");
+        let direct = client(key)?
+            .transact_write("test.owner_staged.pairing_direct", |txn| {
+                let target_did = &target_did;
+                Box::pin(async move {
+                    txn.add_actor_relationship(
+                        "PeerPairingDesired",
+                        doc,
+                        "route_reader",
+                        target_did,
+                    )
+                    .await
+                })
+            })
+            .await;
+        assert_eq!(
+            direct.is_ok(),
+            case["direct"].as_bool().unwrap(),
+            "{case}: {direct:?}"
+        );
+        let txn = staging(key).await?;
+        let staged = txn
+            .set_pairing_reader(
+                PairingObservation::Desired,
+                doc,
+                PairingReadReason::RouteAdmission,
+                &target_did,
+                true,
+            )
+            .await;
+        match case["outcome"].as_str().unwrap() {
+            "staged" => assert!(staged.is_ok(), "{case}: {staged:?}"),
+            "denied" => assert!(
+                matches!(
+                    &staged,
+                    Err(ConfigClientError::OwnerStagedRelationshipDenied { doc_id, .. })
+                        if doc_id == doc
+                ),
+                "{case}: {staged:?}"
+            ),
+            "unmanaged" => assert!(
+                matches!(
+                    &staged,
+                    Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { doc_id, .. })
+                        if doc_id == doc
+                ),
+                "{case}: {staged:?}"
+            ),
+            other => panic!("unexpected modeled outcome {other}"),
+        }
+        // A refused request staged nothing, even once its transaction commits.
+        txn.commit().await?;
+        let expected = case["staged"].as_bool().unwrap();
+        assert_eq!(readable().await? == vec![doc.clone()], expected, "{case}");
+        if expected {
+            let txn = staging(&user).await?;
+            txn.set_pairing_reader(
+                PairingObservation::Desired,
+                doc,
+                PairingReadReason::RouteAdmission,
+                &target_did,
+                false,
             )
             .await?;
             txn.commit().await?;

@@ -4,38 +4,41 @@
 //! every public route, so Gents never relies on that admission: the actor
 //! stages the change when it owns the document; otherwise the embedding
 //! runtime stages it as the owner, in the same transaction, for a requester
-//! that [`OwnerStagedAuthority`] admits. Over HTTP no runtime participates, so
+//! that the modeled authority admits. Over HTTP no runtime participates, so
 //! the requester's own change is sent and native ACP decides it.
 
 use std::sync::Arc;
+
+use serde_json::Value;
 
 use super::apply_txn::TxnBackend;
 use super::execute::native_relationship_error;
 use super::native::execute_owned_native;
 use super::{ConfigApplyTxn, ConfigClientError, Result};
+use crate::store::config_client::{PairingObservation, PairingReadReason};
 use crate::store::graphql::escape_graphql_string;
 
 /// What the requester must natively hold before the owner stages a change for
-/// it (`Identity.OwnerStaged.mayRequest` and the pairing-reader authority).
+/// it (`Identity.OwnerStaged.Authority`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OwnerStagedAuthority {
+enum Authority {
     /// `update` on the changed document itself.
     DocumentUpdate,
-    /// `update` on the runtime's Node, as client-requested runtime operations
-    /// are authorized; used where the document has no reader manager yet.
-    NodeUpdate,
+    /// `update` on the runtime's own Node row, only for a pairing
+    /// observation; the runtime stages only one that it owns.
+    PairingNode,
 }
 
 impl ConfigApplyTxn<'_> {
-    /// Stage an owner-managed actor relation (`Identity.OwnerStaged.ownerStaged`).
-    pub async fn change_owner_staged_actor_relationship(
+    /// Stage an owner-managed actor relation (`Identity.OwnerStaged.outcome`)
+    /// for a requester that may update the document.
+    pub(crate) async fn change_owner_staged_actor_relationship(
         &self,
         collection: &str,
         doc_id: &str,
         relation: &str,
         target: &identity::Did,
         delete: bool,
-        authority: OwnerStagedAuthority,
     ) -> Result<()> {
         self.change_owner_staged(
             collection,
@@ -43,28 +46,57 @@ impl ConfigApplyTxn<'_> {
             relation,
             target.as_str(),
             delete,
-            authority,
+            Authority::DocumentUpdate,
         )
         .await
     }
 
-    /// Stage an owner-managed relation to a native entity set.
-    pub async fn change_owner_staged_entity_set_relationship(
+    /// Stage an owner-managed relation to a native entity set for a requester
+    /// that may update the document.
+    pub(crate) async fn change_owner_staged_entity_set_relationship(
         &self,
         collection: &str,
         doc_id: &str,
         relation: &str,
         (target_resource, target_doc_id, target_relation): (&str, &str, &str),
         delete: bool,
-        authority: OwnerStagedAuthority,
     ) -> Result<()> {
         let target = super::super::relationships::entity_set_target(
             target_resource,
             target_doc_id,
             target_relation,
         )?;
-        self.change_owner_staged(collection, doc_id, relation, &target, delete, authority)
-            .await
+        self.change_owner_staged(
+            collection,
+            doc_id,
+            relation,
+            &target,
+            delete,
+            Authority::DocumentUpdate,
+        )
+        .await
+    }
+
+    /// Stage a pairing reader for a requester that may update the runtime's
+    /// own Node (`Identity.OwnerStaged.runtimeNode`). Only a pairing
+    /// observation the runtime owns is staged.
+    pub(in crate::store::config_client) async fn change_owner_staged_pairing_reader(
+        &self,
+        observation: PairingObservation,
+        doc_id: &str,
+        reason: PairingReadReason,
+        reader: &identity::Did,
+        delete: bool,
+    ) -> Result<()> {
+        self.change_owner_staged(
+            observation.collection(),
+            doc_id,
+            reason.relation(),
+            reader.as_str(),
+            delete,
+            Authority::PairingNode,
+        )
+        .await
     }
 
     async fn change_owner_staged(
@@ -74,7 +106,7 @@ impl ConfigApplyTxn<'_> {
         relation: &str,
         target: &str,
         delete: bool,
-        authority: OwnerStagedAuthority,
+        authority: Authority,
     ) -> Result<()> {
         crate::store::graphql::validate_collection_identifier(collection)?;
         if self.has_pack_interpreter() || matches!(self.backend, TxnBackend::Http { .. }) {
@@ -82,23 +114,12 @@ impl ConfigApplyTxn<'_> {
                 .change_document_relationship(collection, doc_id, relation, target, delete)
                 .await;
         }
-        let actor = self
-            .actor_did()
-            .ok_or(ConfigClientError::RelationshipActorRequired)?
-            .to_owned();
-        let owner = self
-            .document_owners(collection, &[doc_id.to_owned()])
-            .await?
-            .into_iter()
-            .find(|observation| observation.doc_id == doc_id)
-            .and_then(|observation| observation.owner);
-        if owner.as_ref().is_some_and(|owner| owner.as_str() == actor) {
-            return self
-                .change_document_relationship(collection, doc_id, relation, target, delete)
-                .await;
-        }
         let refused = |kind: fn(String, String) -> ConfigClientError| {
             Err(kind(collection.to_owned(), doc_id.to_owned()))
+        };
+        let unmanaged = |collection, doc_id| ConfigClientError::OwnerStagedRelationshipUnmanaged {
+            collection,
+            doc_id,
         };
         let TxnBackend::Embedded {
             node,
@@ -110,19 +131,17 @@ impl ConfigApplyTxn<'_> {
         else {
             return Err(ConfigClientError::LocalAccessRequired);
         };
-        let unmanaged = |collection, doc_id| ConfigClientError::OwnerStagedRelationshipUnmanaged {
-            collection,
-            doc_id,
-        };
-        let runtime = node
-            .node_identity_did()
-            .ok_or(ConfigClientError::LocalAccessRequired)?
-            .to_owned();
+        let runtime = identity::Did::new(
+            node.node_identity_did()
+                .ok_or(ConfigClientError::LocalAccessRequired)?,
+        )
+        .map_err(ConfigClientError::RelationshipTargetIdentity)?;
         let requester = identity
             .as_ref()
             .ok_or(ConfigClientError::RelationshipActorRequired)?;
         // Authority first: a requester that may not request the change learns
-        // nothing about who manages a document it may not even observe.
+        // nothing about whether the document exists or who owns it
+        // (`unauthorized_refusal_independent_of_document`).
         if !self
             .owner_staged_request_allowed(requester, &runtime, collection, doc_id, authority)
             .await?
@@ -131,25 +150,39 @@ impl ConfigApplyTxn<'_> {
                 ConfigClientError::OwnerStagedRelationshipDenied { collection, doc_id }
             });
         }
-        // An authorized requester need not observe the document itself: a
-        // Node operator asks for readers of a runtime-owned observation it
-        // cannot read yet. The runtime then classifies the owner.
-        let owner = match owner {
-            Some(owner) => Some(owner),
-            None => {
-                let runtime_did = identity::Did::new(runtime.clone())
-                    .map_err(ConfigClientError::RelationshipTargetIdentity)?;
-                self.document_owners_as(&runtime_did, collection, &[doc_id.to_owned()])
-                    .await?
-                    .into_iter()
-                    .find(|observation| observation.doc_id == doc_id)
-                    .and_then(|observation| observation.owner)
+        // `foundOwner`: as the requester observes it, else as the runtime does,
+        // so an authorized requester may change a runtime-owned document it
+        // cannot read yet.
+        let mut owner = None;
+        for reader in [requester, &runtime] {
+            owner = self
+                .document_owners_as(reader, collection, &[doc_id.to_owned()])
+                .await?
+                .into_iter()
+                .find(|observation| observation.doc_id == doc_id)
+                .and_then(|observation| observation.owner);
+            if owner.is_some() {
+                break;
             }
-        };
+        }
         let Some(owner) = owner else {
             return refused(unmanaged);
         };
-        if owner.as_str() != runtime && !self.configures_agent(&runtime, &owner).await? {
+        if &owner == requester {
+            return self
+                .change_document_relationship(collection, doc_id, relation, target, delete)
+                .await;
+        }
+        // `stagesAs`: an embedded transaction signs only as the runtime or one
+        // of its Agents, and the pairing authority reaches only observations
+        // the runtime itself owns.
+        let managed = match authority {
+            Authority::DocumentUpdate => {
+                owner == runtime || self.configures_agent(runtime.as_str(), &owner).await?
+            }
+            Authority::PairingNode => owner == runtime,
+        };
+        if !managed {
             return refused(unmanaged);
         }
         let context = defra_core::RequestContext::default().with_identity(Some(owner.to_string()));
@@ -196,29 +229,17 @@ impl ConfigApplyTxn<'_> {
     async fn owner_staged_request_allowed(
         &self,
         requester: &identity::Did,
-        runtime: &str,
+        runtime: &identity::Did,
         collection: &str,
         doc_id: &str,
-        authority: OwnerStagedAuthority,
+        authority: Authority,
     ) -> Result<bool> {
         let (collection, doc_id) = match authority {
-            OwnerStagedAuthority::DocumentUpdate => (collection.to_owned(), doc_id.to_owned()),
-            OwnerStagedAuthority::NodeUpdate => {
-                let response = self
-                    .execute(&format!(
-                        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
-                        escape_graphql_string(runtime),
-                    ))
-                    .await?;
-                let nodes = gents_protocol::graphql::graphql_rows_from_response(&response, "Node");
-                let [node] = nodes.as_slice() else {
-                    return Ok(false);
-                };
-                let Some(id) = node["_docID"].as_str().filter(|id| !id.is_empty()) else {
-                    return Ok(false);
-                };
-                ("Node".to_owned(), id.to_owned())
-            }
+            Authority::DocumentUpdate => (collection.to_owned(), doc_id.to_owned()),
+            Authority::PairingNode => match self.runtime_node_doc_id(runtime).await? {
+                Some(node) => ("Node".to_owned(), node),
+                None => return Ok(false),
+            },
         };
         let decisions = self
             .observe_document_access(
@@ -235,6 +256,36 @@ impl ConfigApplyTxn<'_> {
             decisions.as_slice(),
             [defra_node::DocumentAccessDecision::Allowed]
         ))
+    }
+
+    /// The single Node row the runtime reads for its own `node_did` in this
+    /// transaction; the requester's view never chooses it. A local write keeps
+    /// `node_did` unique against every live row whatever its writer may read,
+    /// but a replicated merge can keep a second, unindexed row, so more than
+    /// one row resolves to none rather than to either.
+    async fn runtime_node_doc_id(&self, runtime: &identity::Did) -> Result<Option<String>> {
+        let response = self
+            .execute_local_response_with_actor(
+                &format!(
+                    r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                    escape_graphql_string(runtime.as_str()),
+                ),
+                Some(runtime.clone()),
+                None,
+            )
+            .await?;
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("Node"))
+            .and_then(Value::as_array);
+        Ok(match rows.map(Vec::as_slice) {
+            Some([row]) => row["_docID"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
+            _ => None,
+        })
     }
 
     /// Whether `agent` is an Agent configured on the runtime's Node, as the

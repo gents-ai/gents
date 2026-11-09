@@ -1,6 +1,5 @@
 use super::{plan::document_identity, read, ConfigApplyTxn, DesiredStateApplyPlan};
 use crate::documents::references_of;
-use crate::store::config_client::OwnerStagedAuthority;
 use crate::Collection;
 use anyhow::Result;
 use serde_json::Value;
@@ -87,7 +86,6 @@ pub(super) async fn apply(txn: &ConfigApplyTxn<'_>, before: Capture) -> Result<(
                 "workspace_selected_by",
                 ("configuration", callback, "reader"),
                 true,
-                OwnerStagedAuthority::DocumentUpdate,
             )
             .await?;
         }
@@ -98,7 +96,6 @@ pub(super) async fn apply(txn: &ConfigApplyTxn<'_>, before: Capture) -> Result<(
                 "workspace_selected_by",
                 ("configuration", callback, "reader"),
                 false,
-                OwnerStagedAuthority::DocumentUpdate,
             )
             .await?;
         }

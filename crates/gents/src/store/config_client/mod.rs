@@ -144,7 +144,7 @@ pub use schema_install::{
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{
     ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
-    NativeOperationAbandoned, OwnerStagedAuthority, ReceiptWriteError, ReentrantEmbeddedWrite,
+    NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite,
 };
 
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
