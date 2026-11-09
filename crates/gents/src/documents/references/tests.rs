@@ -526,6 +526,17 @@ fn every_canonical_reference_field_reaches_reference_consumers() {
             json!({"node_did":"owner", "binding_id":"binding", "agent_did":"agent",
                 "event_source_id":"source", "callback_id":"callback", "input_fields":["name"]}),
         ),
+        (
+            Collection::Task,
+            json!({"node_did":"owner", "task_id":"task", "agent_did":"agent",
+                "prompt_template":"work", "emit_outcome":true,
+                "outcome_readers":[{"agent_did":"reader"}]}),
+        ),
+        (
+            Collection::RepositoryPlacement,
+            json!({"node_did":"owner", "repository_id":"repository", "host_path":"/repo",
+                "readers":[{"agent_did":"reader"}]}),
+        ),
     ];
     let mut reported = BTreeSet::new();
     for (collection, sample) in samples {

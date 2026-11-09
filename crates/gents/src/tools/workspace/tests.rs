@@ -167,6 +167,7 @@ impl Fixture {
             caused_by_invocation_id: "inv-1".to_string(),
             caused_by_correlation: "corr-1".to_string(),
             documents: docs,
+            route: Default::default(),
         }
     }
 }
@@ -254,6 +255,7 @@ fn isolated_workspace_mutation_has_no_host_path() {
         lifecycle_state: "ready".into(),
         caused_by_invocation_id: "inv-1".into(),
         caused_by_correlation: "corr-1".into(),
+        route: Default::default(),
     };
     let mutation = isolated_workspace_upsert_mutation(&doc);
     assert!(!mutation.contains("host_path"));
@@ -311,6 +313,7 @@ fn isolated_workspace_mutation_has_no_host_path() {
         diff_artifact: None,
         unresolved_conflicts: None,
         integration_instructions: None,
+        route: Default::default(),
     };
     let receipt_mutation = workspace_receipt_create_mutation(&receipt);
     assert!(receipt_mutation.contains("upsert_WorkspaceReceipt"));

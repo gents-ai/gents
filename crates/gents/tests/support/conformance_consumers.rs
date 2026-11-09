@@ -56,6 +56,20 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers",
+            package: "gents",
+            source_path: "crates/gents/src/pack/installation/tests.rs",
+            module_path: "pack::installation::tests",
+            function: "pack_install_applies_exactly_the_declared_placement_readers",
+        },
+        ConformanceConsumer::RustTest {
+            id: "triggers::engine::event_source::native_route_tests::native_documents_carry_the_modeled_route",
+            package: "gents",
+            source_path: "crates/gents/src/triggers/engine/event_source.rs",
+            module_path: "triggers::engine::event_source::native_route_tests",
+            function: "native_documents_carry_the_modeled_route",
+        },
+        ConformanceConsumer::RustTest {
             id: "store::config_client::desired_state::workspace_selection::tests::selected_callback_agents_follow_native_visibility",
             package: "gents",
             source_path: "crates/gents/src/store/config_client/desired_state/workspace_selection.rs",

@@ -82,7 +82,6 @@ impl Cycle {
         .await
         .unwrap();
         install_workspace_root(&cycle, root).await;
-        grant_repository_readers(&cycle).await;
         cycle
     }
 
@@ -1148,40 +1147,6 @@ async fn install_workspace_root(cycle: &Cycle, root: &Path) {
     .expect("publish the workspace root as the User");
 }
 
-/// The User grants the callback's workspace Agents read on the repository
-/// placement it authored, as the quickstart owner does when it publishes one
-/// (`WorkspaceAndFileRequests.workspaceRepositoryFixture`); a pack install
-/// selects those Agents but grants no placement reader.
-async fn grant_repository_readers(cycle: &Cycle) {
-    let (owner, access) = (cycle.owner.as_str(), &cycle.access);
-    let (placement, _) = access
-        .transact_readonly("workspace_cycle.read_repository", |txn| {
-            Box::pin(async move {
-                read_desired_state_record_in_txn(
-                    txn,
-                    Collection::RepositoryPlacement,
-                    owner,
-                    "change-unit-repository",
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap()
-        .expect("the pack publishes its repository placement");
-    for agent in cycle.agents(&[WRITER, INTEGRATOR, REVIEWER, REJECTER]) {
-        access
-            .add_actor_relationship(
-                "RepositoryPlacement",
-                &placement,
-                "reader",
-                &identity::Did::new(agent).unwrap(),
-            )
-            .await
-            .expect("grant a workspace Agent the repository placement as the User");
-    }
-}
-
 async fn disable_pack_writer_trigger(access: &ConfigAccess, owner: &str) {
     update_document(
         access,
@@ -1222,7 +1187,8 @@ async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
                 "task_id": "change-unit-test-failure-task",
                 "agent_did": writer,
                 "prompt_template": "Test failure stage for {{ doc.work_unit_id }}.",
-                "emit_outcome": true
+                "emit_outcome": true,
+                "outcome_readers": [{"agent_did": supervisor.agent_did}]
             },
             {
                 "node_did": owner,

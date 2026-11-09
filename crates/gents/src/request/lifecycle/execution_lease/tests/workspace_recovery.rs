@@ -116,6 +116,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         lifecycle_state: "ready".into(),
         caused_by_invocation_id: "invocation".into(),
         caused_by_correlation: "correlation".into(),
+        route: Default::default(),
     };
     let placement = crate::tools::workspace::WorkspacePlacementDoc {
         workspace_id: workspace.workspace_id.clone(),

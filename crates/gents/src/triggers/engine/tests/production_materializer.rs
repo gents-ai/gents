@@ -1732,6 +1732,7 @@ async fn publish_workspace_for_agent(
         lifecycle_state: "ready".into(),
         caused_by_invocation_id: "inv-1".into(),
         caused_by_correlation: "corr-1".into(),
+        route: Default::default(),
     };
     access
         .transact_write("test.agent_workspace", |txn| {

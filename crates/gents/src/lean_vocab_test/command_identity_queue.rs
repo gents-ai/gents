@@ -629,6 +629,8 @@ pub(crate) struct LeanIdentityHouseholdCase {
     pub(crate) event_group_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) task_receipt_cases: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) outcome_reader_cases: Vec<serde_json::Value>,
     #[serde(default, rename = "tool_grant_projection_cases")]
     pub(crate) _tool_grant_projection_cases: Vec<serde_json::Value>,
     #[serde(default, rename = "tool_grant_group_cases")]

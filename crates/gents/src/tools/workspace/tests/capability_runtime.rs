@@ -111,6 +111,7 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
         lifecycle_state: "ready".into(),
         caused_by_invocation_id: "invocation".into(),
         caused_by_correlation: "correlation".into(),
+        route: Default::default(),
     };
     selected_access
         .write(
@@ -748,6 +749,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
                 &integrator,
                 "denied-invocation",
                 "denied-correlation",
+                &Default::default(),
             )
         })
         .await??
@@ -792,6 +794,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         lifecycle_state: "ready".into(),
         caused_by_invocation_id: "invocation".into(),
         caused_by_correlation: "correlation".into(),
+        route: Default::default(),
     };
     let placement = WorkspacePlacementDoc {
         workspace_id: "workspace".into(),

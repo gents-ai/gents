@@ -361,6 +361,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
         lifecycle_state: "ready".into(),
         caused_by_invocation_id: "inv-1".into(),
         caused_by_correlation: "corr-1".into(),
+        route: Default::default(),
     };
     let placement = crate::tools::workspace::WorkspacePlacementDoc {
         workspace_id: "ws-1".into(),
@@ -830,6 +831,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
         caused_by_invocation_id: "inv-1".into(),
         caused_by_correlation: "corr-1".into(),
         documents: &mut docs,
+        route: Default::default(),
     };
     let outcome = execute_create_workspace_plan(&plan, &mut journal, &mut ctx).expect("provision");
     assert_eq!(
@@ -1383,6 +1385,7 @@ fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_strin
         work_unit_id: None,
         caused_by_correlation: None,
         created_at: Some("2024-01-01T00:00:00Z".to_owned()),
+        route: Default::default(),
     };
     let mutation = create_callback_result_mutation(&result, "agent-doc", false);
     assert!(mutation.contains("binding_id: null,"), "{mutation}");
@@ -1493,6 +1496,7 @@ async fn callback_results_are_selectable_by_their_binding() {
                 work_unit_id: None,
                 caused_by_correlation: None,
                 created_at: None,
+                route: Default::default(),
             },
         )
         .await
@@ -1543,6 +1547,7 @@ async fn callback_result_is_agent_owned_and_parent_link_grants_user_read() {
         work_unit_id: None,
         caused_by_correlation: None,
         created_at: None,
+        route: Default::default(),
     };
     super::documents::create_callback_result(&node, &super::test_agent_access(&node), &result)
         .await
@@ -1600,6 +1605,7 @@ async fn callback_result_visibility_and_repair_match_the_executable_cursor_contr
         work_unit_id: None,
         caused_by_correlation: None,
         created_at: None,
+        route: Default::default(),
     };
     let written = access
         .write(
@@ -2508,6 +2514,7 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
         work_unit_id: None,
         caused_by_correlation: None,
         created_at: None,
+        route: Default::default(),
     };
     super::documents::create_callback_result(&node, &agent, &result).await?;
     let query = "{CallbackResult(filter:{invocation_id:{_eq:\"atomic-invocation\"}}){_docID parent_linked}}";
@@ -3158,6 +3165,7 @@ async fn callback_result_never_falls_back_when_agent_key_is_unavailable() {
         work_unit_id: None,
         caused_by_correlation: None,
         created_at: None,
+        route: Default::default(),
     };
     let access =
         crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&result.agent_did).unwrap());
@@ -3215,6 +3223,7 @@ async fn callback_parent_requires_the_selected_authenticated_agent() {
             work_unit_id: None,
             caused_by_correlation: None,
             created_at: None,
+            route: Default::default(),
         };
         let selected_access = match actor {
             Some(actor) if actor.as_str() == agent => super::test_agent_access(&node),
@@ -3291,6 +3300,7 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
             work_unit_id: None,
             caused_by_correlation: None,
             created_at: None,
+            route: Default::default(),
         };
         let written = access
             .write(

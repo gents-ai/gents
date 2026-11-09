@@ -274,6 +274,9 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
     let sibling_binding = crate::store::identity::provision_agent_identity(&root)?;
     let agent = crate::store::identity::resolve_agent_identity(&root, &agent_binding)?;
     let sibling = crate::store::identity::resolve_agent_identity(&root, &sibling_binding)?;
+    let supervisor_binding = crate::store::identity::provision_agent_identity(&root)?;
+    let supervisor_identity =
+        crate::store::identity::resolve_agent_identity(&root, &supervisor_binding)?;
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(root.did())
@@ -379,6 +382,61 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
         .as_array()
         .unwrap()
         .is_empty());
+    // Lean `Identity.Automation.publishOutcome`: the worker publishes an
+    // outcome whose Task declares the supervisor as its outcome reader. The
+    // checks cover every actor's read and the declared reader's update.
+    let supervisor = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(supervisor_identity.did())?,
+        supervisor_identity.as_ref(),
+    )?;
+    let requested_doc = worker.transact_write("test.outcome.requested", |txn| {
+        let session_doc = &session_doc;
+        let agent = &agent;
+        let owner_did = &owner_did;
+        let reader = supervisor_identity.did();
+        Box::pin(async move {
+            let response = txn.execute(&format!("mutation {{create_FireOutcome(input:{{handoff_id:\"requested\",owner_did:\"{owner_did}\",session_id:\"session\"}}){{_docID}}}}")).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "FireOutcome")?;
+            crate::triggers::engine::durable::stage_session_child_relationships(txn, "FireOutcome", &doc, session_doc, agent.did()).await?;
+            crate::triggers::engine::durable::stage_outcome_reader(txn, &doc, reader).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    }).await?;
+    let outcome_cases = contract
+        .outcome_reader_cases
+        .iter()
+        .filter(|case| {
+            case["resource"] == "children"
+                && (case["permission"] == "read"
+                    || case["actor"] == "supervisor" && case["permission"] == "update")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(outcome_cases.len(), 10);
+    for case in outcome_cases {
+        let access = match case["actor"].as_str().unwrap() {
+            "user" => &user,
+            "agent" => &worker,
+            "supervisor" => &supervisor,
+            "sibling" => &other,
+            actor => panic!("unmodeled outcome actor {actor}"),
+        };
+        let doc = match case["id"].as_str().unwrap() {
+            "outcome" => &requested_doc,
+            "other-outcome" => &outcome_doc,
+            id => panic!("unmodeled outcome document {id}"),
+        };
+        let allowed = match case["permission"].as_str().unwrap() {
+            "read" => !access.execute(&format!("{{FireOutcome(filter:{{_docID:{{_eq:\"{}\"}}}}){{_docID}}}}", escape_graphql_string(doc))).await?["data"]["FireOutcome"].as_array().unwrap().is_empty(),
+            "update" => match access.write("test.outcome.update", &format!("mutation {{update_FireOutcome(docID:\"{}\",input:{{reason:\"changed\"}}){{_docID}}}}", escape_graphql_string(doc))).await {
+                Ok(response) => !response["data"]["update_FireOutcome"].as_array().unwrap().is_empty(),
+                Err(error) if error.is_graphql_rejection() => false,
+                Err(error) => return Err(error.into()),
+            },
+            _ => unreachable!(),
+        };
+        assert_eq!(allowed, case["after"].as_bool().unwrap(), "{case}");
+    }
     let mut shared = false;
     for observation in &contract.task_receipt_cases {
         if observation["producer_reader"] == true && !shared {

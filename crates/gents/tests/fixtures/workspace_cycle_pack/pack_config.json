@@ -72,8 +72,12 @@
           "writer_agent_did": "gents:agent-slot:change-unit-writer",
           "integrator_agent_did": "gents:agent-slot:change-unit-integrator",
           "readers": [
-            { "agent_did": "gents:agent-slot:change-unit-reviewer" },
-            { "agent_did": "gents:agent-slot:change-unit-rejected" }
+            {
+              "agent_did": "gents:agent-slot:change-unit-reviewer"
+            },
+            {
+              "agent_did": "gents:agent-slot:change-unit-rejected"
+            }
           ]
         }
       }
@@ -790,7 +794,21 @@
   "repository_placements": [
     {
       "host_path": "${GENTS_CHANGE_UNIT_ROOT:-.}",
-      "repository_id": "change-unit-repository"
+      "repository_id": "change-unit-repository",
+      "readers": [
+        {
+          "agent_did": "gents:agent-slot:change-unit-writer"
+        },
+        {
+          "agent_did": "gents:agent-slot:change-unit-reviewer"
+        },
+        {
+          "agent_did": "gents:agent-slot:change-unit-integrator"
+        },
+        {
+          "agent_did": "gents:agent-slot:change-unit-rejected"
+        }
+      ]
     }
   ],
   "agent_targets": [],
@@ -800,21 +818,39 @@
       "display_name": "Implement Change",
       "prompt_template": "./tasks/change_unit_writer_task/prompt.md",
       "task_id": "change-unit-writer-task",
-      "emit_outcome": true
+      "emit_outcome": true,
+      "outcome_readers": [
+        {
+          "agent_did": "gents:agent-slot:change-unit-rejected"
+        }
+      ]
     },
     {
       "agent_did": "gents:agent-slot:change-unit-reviewer",
       "display_name": "Review Sealed Change",
       "prompt_template": "./tasks/change_unit_review_task/prompt.md",
       "task_id": "change-unit-review-task",
-      "emit_outcome": true
+      "emit_outcome": true,
+      "outcome_readers": [
+        {
+          "agent_did": "gents:agent-slot:change-unit-rejected"
+        }
+      ]
     },
     {
       "agent_did": "gents:agent-slot:change-unit-integrator",
       "display_name": "Integrate Accepted Change",
       "prompt_template": "./tasks/change_unit_integrate_task/prompt.md",
       "task_id": "change-unit-integrate-task",
-      "emit_outcome": true
+      "emit_outcome": true,
+      "outcome_readers": [
+        {
+          "agent_did": "gents:agent-slot:change-unit-record"
+        },
+        {
+          "agent_did": "gents:agent-slot:change-unit-rejected"
+        }
+      ]
     },
     {
       "agent_did": "gents:agent-slot:change-unit-record",

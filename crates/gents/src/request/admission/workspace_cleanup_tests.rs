@@ -68,6 +68,7 @@ impl Fixture {
             lifecycle_state: "ready".into(),
             caused_by_invocation_id: "cleanup-invocation".into(),
             caused_by_correlation: "cleanup-correlation".into(),
+            route: Default::default(),
         };
         let placement = crate::tools::workspace::WorkspacePlacementDoc {
             workspace_id: workspace.workspace_id.clone(),

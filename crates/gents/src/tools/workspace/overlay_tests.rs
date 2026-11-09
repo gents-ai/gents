@@ -603,6 +603,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         caused_by_invocation_id: "artifact-invocation".into(),
         caused_by_correlation: "artifact-correlation".into(),
         documents: &mut documents,
+        route: Default::default(),
     };
     let created = execute_create_workspace_plan(
         &emit_create_workspace_plan(CreateWorkspaceAction {

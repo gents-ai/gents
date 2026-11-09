@@ -1012,6 +1012,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
                     work_unit_id: None,
                     caused_by_correlation: None,
                     created_at: None,
+                    route: Default::default(),
                 },
             )
             .await

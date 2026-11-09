@@ -4094,3 +4094,173 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
     assert_eq!(record.plugins.len(), 1);
     Ok(())
 }
+
+/// Lean `Identity.PackPlacementReaders`: installing the pack applies exactly
+/// the readers its RepositoryPlacement declares, an undeclared slot Agent stays
+/// denied, a reinstall does not restore a revoked reader, and removal revokes
+/// the declared readers and removes the placement.
+#[tokio::test]
+async fn pack_install_applies_exactly_the_declared_placement_readers() {
+    use crate::store::identity::{GrantSet, NodeIdentity as _};
+    let (db, user, user_access) =
+        crate::test_support::signed_test_node_without_agent("pack-placement-readers").await;
+    let runtime = db.node_identity.clone();
+    let root = tempfile::tempdir().unwrap();
+    let host_path = root.path().to_string_lossy().into_owned();
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("placement_fixture", &json!({}));
+    let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
+    let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
+    let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+        [
+            (crate::Collection::InferenceBackend, backend),
+            (crate::Collection::InferenceProfile, profile),
+        ]
+        .into_iter()
+        .map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect(),
+    )
+    .unwrap();
+    user_access
+        .transact_write("test.placement_readers.setup", |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+    let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
+    let environment =
+        move |name: &str| (name == "PLACEMENT_FIXTURE_ROOT").then(|| host_path.clone());
+    let install = || async {
+        let prepared = super::super::prepare_document_pack_archive_with_runtime(
+            &local,
+            runtime.did(),
+            &archive,
+            &requested,
+            &[],
+            None,
+            &environment,
+            runtime.as_ref(),
+        )
+        .await
+        .unwrap();
+        super::super::install_prepared_document_graph(
+            &user_access,
+            runtime.did(),
+            &archive,
+            &prepared,
+            DriftPolicy::Refuse,
+            None,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        prepared.agent_bindings
+    };
+    let bindings = install().await;
+    assert_eq!(bindings.len(), 3, "{bindings:?}");
+    let admin =
+        ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
+    let other = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    GrantSet::AgentBaseline
+        .grant(&admin, &identity::Did::new(&other.agent_did).unwrap())
+        .await
+        .unwrap();
+    let agent_access = |binding: &gents_protocol::agent_identity::AgentIdentityBinding| {
+        let key = crate::store::identity::resolve_agent_identity(runtime.as_ref(), binding).unwrap();
+        ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(&binding.agent_did).unwrap(),
+            key.as_ref(),
+        )
+        .unwrap()
+    };
+    let slot = |name: &str| &bindings[&format!("fixture-{name}")];
+    let actors = BTreeMap::from([
+        ("user", user_access.clone()),
+        ("writer", agent_access(slot("writer"))),
+        ("reviewer", agent_access(slot("reviewer"))),
+        ("integrator", agent_access(slot("integrator"))),
+        ("other", agent_access(&other)),
+    ]);
+    let readable = |actor: &'static str, access: ConfigAccess| async move {
+        let rows = access
+            .execute("{ RepositoryPlacement { repository_id } }")
+            .await
+            .unwrap();
+        assert!(rows.get("errors").is_none(), "{actor}: {rows}");
+        // A removed Agent's actor sees no collection at all: a native denial.
+        rows["data"]["RepositoryPlacement"]
+            .as_array()
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["repository_id"] == "placement-fixture-repository")
+            })
+    };
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_placement_reader_cases;
+    assert_eq!(cases.len(), 3);
+    for case in cases {
+        match case["state"].as_str().unwrap() {
+            "installed" => {}
+            "reinstalled_after_revoke" => {
+                let (doc, _) = user_access
+                    .transact_readonly("test.placement_readers.read", |txn| {
+                        let owner = runtime.did();
+                        Box::pin(async move {
+                            crate::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                crate::Collection::RepositoryPlacement,
+                                owner,
+                                "placement-fixture-repository",
+                            )
+                            .await
+                        })
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap();
+                user_access
+                    .delete_actor_relationship(
+                        "RepositoryPlacement",
+                        &doc,
+                        "reader",
+                        &identity::Did::new(&slot("reviewer").agent_did).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(install().await, bindings);
+            }
+            "removed" => {
+                super::super::remove_pack(
+                    &user_access,
+                    runtime.did(),
+                    "fixture/placement_fixture",
+                    DriftPolicy::Refuse,
+                )
+                .await
+                .unwrap();
+            }
+            state => panic!("unmodeled placement reader state {state}"),
+        }
+        for expected in case["readers"].as_array().unwrap() {
+            let actor = *actors
+                .keys()
+                .find(|known| **known == expected["actor"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                readable(actor, actors[actor].clone()).await,
+                expected["read"].as_bool().unwrap(),
+                "{} {actor}",
+                case["state"]
+            );
+        }
+    }
+    db.node.shutdown().await.unwrap();
+}

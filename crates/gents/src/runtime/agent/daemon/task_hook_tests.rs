@@ -714,6 +714,7 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         lifecycle_state: "ready".to_string(),
         caused_by_invocation_id: "hook-invocation".to_string(),
         caused_by_correlation: "hook-correlation".to_string(),
+        route: Default::default(),
     };
     let placement = crate::tools::workspace::WorkspacePlacementDoc {
         workspace_id: WORKSPACE_ID.to_string(),
