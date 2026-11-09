@@ -1,6 +1,6 @@
 use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
-use gents::session::canonical_rows::{
+use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
@@ -105,14 +105,19 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         .unwrap();
         let items = render_transcript_rows(&ClientStore::default(), &page, "origin");
         assert_eq!(items.len(), 4);
-        for (item, expected) in items.iter().zip([success, failure, wake]) {
+        for (item, (expected, notification)) in items
+            .iter()
+            .zip([(success, true), (failure, true), (wake, false)])
+        {
             assert!(matches!(item, RenderedTimelineItem::AutomatedInput {
-                origin: RequestOriginView::BackgroundCompletion, content: Some(content), ..
-            } if content == expected));
+                origin: RequestOriginView::BackgroundCompletion { notification: observed },
+                content: Some(content),
+                ..
+            } if content == expected && *observed == notification));
         }
         assert!(
             matches!(&items[3], RenderedTimelineItem::UserMessage { content: Some(content), .. } if content == wake)
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
 }
