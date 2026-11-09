@@ -352,7 +352,8 @@ pub(crate) struct EvalBatchArgs {
     /// use the batch's scope and JSON flags, not per-entry overrides.
     #[arg(long)]
     pub(crate) plan: PathBuf,
-    /// Maximum active trials across all entries; each run's own cap still applies.
+    /// Maximum active trials across all entries; each run's own cap still applies,
+    /// and embedded trials never exceed the runner's per-process ceiling.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     pub(crate) concurrency: u32,
     /// Print every run's report and execution error as one JSON result.
@@ -380,6 +381,8 @@ pub(crate) struct EvalRunArgs {
     pub(crate) trials: u32,
     #[arg(long, default_value_t = 1000)]
     pub(crate) seed_base: i64,
+    /// Trials run at once; embedded trials never exceed the runner's
+    /// per-process ceiling.
     #[arg(long, default_value_t = 1)]
     pub(crate) concurrency: u32,
     /// Why the run exists: `eval` by default, or `optimization:<job_id>`.
