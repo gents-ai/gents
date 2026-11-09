@@ -417,6 +417,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
     pub(crate) enrollment_pending_request_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_absent_peer_cases: Vec<serde_json::Value>,
+    pub(crate) client_chat_readiness_cases: Vec<serde_json::Value>,
+    pub(crate) client_chat_readiness_transitions: Vec<serde_json::Value>,
+    pub(crate) client_chat_readiness_legs: Vec<serde_json::Value>,
+    pub(crate) client_chat_readiness_causes: Vec<serde_json::Value>,
     pub(crate) enrollment_route_readiness_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_startup_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
@@ -4537,7 +4541,7 @@ const LEAN_CONTRACT_FILE: &str = "Proofs/Conformance/Contracts.lean";
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
     let proofs_dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../gents/proofs"));
     let stdout = gents_lean_contract::run_prepared_generator(
-        &proofs_dir,
+        proofs_dir,
         LEAN_CONTRACT_TARGET,
         LEAN_CONTRACT_FILE,
     )

@@ -2,7 +2,6 @@
 use gents_desktop_core::inference::backend_config_view;
 use rapidhash::RapidHashMap;
 
-use chrono::Utc;
 use gents::{BashMode, FileToolMode};
 use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
 use gents_protocol::row::{
@@ -294,7 +293,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .store()
                 .runtime_connection(&peer.node_did)
                 .map(|status| status.as_str().to_owned());
-            let chat_safe = peer.is_chat_ready_at(Utc::now());
+            let chat_refusal = peer.chat_refusal();
+            let chat_safe = chat_refusal.is_none();
             let pairing_ready = Some(peer.pairing_ready);
             let node_readiness = project_node_readiness(
                 store.node_readiness(&peer.node_did),
@@ -313,6 +313,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
                 runtime_connection,
                 chat_safe,
+                chat_refusal: chat_refusal.map(Into::into),
                 pairing_ready,
                 routes: status
                     .map(|status| {

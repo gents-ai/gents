@@ -46,7 +46,7 @@ pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
 pub use observation_scope::ClientObservationAttachment;
 pub use sync_state::RuntimeSchemaObservation;
-pub use writes::{LocalHomeAccessError, RefreshedRequestProjection};
+pub use writes::{ChatRouteRefusal, LocalHomeAccessError, RefreshedRequestProjection};
 
 /// Peer bootstrap retries need a deadline so an unreachable peer does not hold
 /// startup indefinitely.
@@ -520,8 +520,9 @@ impl ClientCore {
         self.sync_state.subscribe()
     }
 
-    // The signed enrollment remains durable; the replacement process must
-    // re-establish both route legs before chat writes reopen.
+    /// The signed enrollment remains durable; the replacement process must
+    /// re-establish both P2P route legs. Chat writes ride the operator
+    /// endpoint and are not gated here (`ClientChatReadiness.step .restart`).
     pub async fn mark_managed_runtime_restarting(&self, node_did: &str) -> Result<()> {
         let records = self.peer_records().await;
         for record in records.into_iter().filter(|record| {

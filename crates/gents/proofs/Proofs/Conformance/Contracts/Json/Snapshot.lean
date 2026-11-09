@@ -6,6 +6,7 @@ import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.ClientShell.SubmissionReceipt
+import Proofs.Conformance.ClientChatReadinessCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
@@ -551,6 +552,14 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"enrollment_absent_peer_cases\":"
       ++ Conformance.EnrollmentPendingRequests.absentPeerCasesJson ++ ","
+    ++ "\"client_chat_readiness_cases\":"
+      ++ Conformance.ChatReadinessCases.casesJson ++ ","
+    ++ "\"client_chat_readiness_transitions\":"
+      ++ Conformance.ChatReadinessCases.transitionsJson ++ ","
+    ++ "\"client_chat_readiness_legs\":"
+      ++ Conformance.ChatReadinessCases.legsJson ++ ","
+    ++ "\"client_chat_readiness_causes\":"
+      ++ Conformance.ChatReadinessCases.causesJson ++ ","
     ++ "\"enrollment_route_readiness_cases\":"
       ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"

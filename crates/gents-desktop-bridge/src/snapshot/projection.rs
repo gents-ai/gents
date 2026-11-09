@@ -310,6 +310,7 @@ mod tests {
                     dial_succeeded: true,
                     runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
+                    chat_refusal: None,
                     pairing_ready: Some(true),
                     pairing: vec![PairingCollectionStatusView {
                         collection_id: "AgentSession".into(),

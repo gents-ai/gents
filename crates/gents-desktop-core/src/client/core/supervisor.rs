@@ -144,7 +144,9 @@ pub(super) fn spawn_p2p_supervisor_task(
     })
 }
 
-async fn demote_enrollment_readiness_after_authority_failure(sync_state: &ClientSyncStateOwner) {
+pub(super) async fn demote_enrollment_readiness_after_authority_failure(
+    sync_state: &ClientSyncStateOwner,
+) {
     for record in sync_state
         .records()
         .into_iter()

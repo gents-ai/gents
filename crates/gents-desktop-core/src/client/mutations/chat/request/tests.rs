@@ -46,6 +46,59 @@ struct RetryRequestIdInjection {
     new_request_id: String,
 }
 
+/// A desktop whose client key is the User of a served runtime, routed to it,
+/// with one published chat Agent. Chat writes go through the desktop's own
+/// operator route; assertions read the owner as the User.
+struct ServedChat {
+    core: Arc<ClientCore>,
+    runtime: crate::test_fixtures::ServedRuntimeHome,
+    agent: gents_protocol::agent_identity::AgentIdentityBinding,
+    agent_did: String,
+    _temp: tempfile::TempDir,
+}
+
+impl ServedChat {
+    async fn start() -> Result<Self> {
+        let temp = tempfile::tempdir()?;
+        let core = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                DesktopPaths::from_root(temp.path()),
+                ClientCoreOptions::local_simulated_route(),
+            )
+            .await?,
+        );
+        let runtime = crate::test_fixtures::ServedRuntimeHome::start_unpublished_for(Arc::new(
+            core.node_identity().clone(),
+        ))
+        .await;
+        runtime.publish_node(serde_json::json!({})).await;
+        let agent = runtime.publish_chat_agent().await;
+        runtime.connect(&core).await;
+        Ok(Self {
+            core,
+            runtime,
+            agent_did: agent.agent_did.clone(),
+            agent,
+            _temp: temp,
+        })
+    }
+
+    fn node_did(&self) -> &str {
+        self.runtime.node_did()
+    }
+
+    /// The owner as the User reads and repairs it.
+    fn owner(&self) -> ConfigAccess {
+        self.runtime.user_graphql_access()
+    }
+
+    async fn shutdown(self) -> Result<()> {
+        self.core.shutdown().await?;
+        self.runtime.shutdown().await;
+        Ok(())
+    }
+}
+
 #[test]
 fn authored_submission_presence_matches_the_model_for_initial_and_retry_input() -> Result<()> {
     for case in &lean_contract_snapshot().request_input_cases {
@@ -62,19 +115,15 @@ fn authored_submission_presence_matches_the_model_for_initial_and_retry_input() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
+    let chat = ServedChat::start().await?;
+    let core = &chat.core;
     let result = async {
         let recovery = lean_contract_snapshot()
             .session_recovery_cases
             .iter()
             .find(|case| case.legal)
             .context("legal retry witness")?;
-        let pre = seed_session_recovery_pre_state(&core, recovery).await?;
+        let pre = seed_session_recovery_pre_state(&chat, recovery).await?;
         let captured = lean_contract_snapshot()
             .request_input_cases
             .iter()
@@ -84,54 +133,45 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             &request_id,
+            chat.node_did(),
             core.node_identity().did(),
-            core.node_identity().did(),
-            RECOVERY_AGENT_DID,
+            chat.agent_did.as_str(),
             &pre.session_id,
             captured["authored_text"].as_str().unwrap(),
             &recovery.pre_origin,
             canonical_request_created_at_after(pre.parent.created_at.as_deref())?,
-            test_local_admission(&core),
+            AgentRequestAdmissionRecord::client(core.node_identity().did()),
         );
         create.input = serde_json::from_value(captured["input"].clone())?;
         create.retry_count = recovery.pre_retry_count as i64;
         create.max_retries = recovery.max_retries as i64;
-        gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
-        ConfigAccess::write_local(
-            &core.node_arc(),
-            "test.capture_retry_parent",
-            &create.graphql_mutation().map_err(anyhow::Error::msg)?,
-        )
-        .await?;
+        submit_client_create_for_test(&chat, &mut create).await?;
         force_request_state_for_test(
-            &core.node_arc(),
+            &chat.owner(),
             &request_id,
             &forced_retry_parent_state(recovery),
         )
         .await?;
         core.refresh_store().await?;
-        let parent = fetch_request_row_for_test(core.node(), &request_id).await?;
+        let parent = fetch_request_row_for_test(&chat.owner(), &request_id).await?;
         gents::verify_request_receipt_signature(&parent)?;
         let snapshot = core.store().snapshot();
         let retry = retry_request(
-            &gents::store::config_client::ConfigAccess::local_as(
-                core.node_arc(),
-                core.node_identity().did().parse()?,
-            ),
+            &chat.runtime.user_access(),
             snapshot.as_ref(),
             &parent,
             core.node_identity().did(),
             core.node_identity(),
-            test_local_admission(&core),
+            AgentRequestAdmissionRecord::client(core.node_identity().did()),
         )
         .await?;
-        let row = fetch_request_row_for_test(core.node(), &retry.request_id).await?;
+        let row = fetch_request_row_for_test(&chat.owner(), &retry.request_id).await?;
         gents::verify_request_receipt_signature(&row)?;
         assert_eq!(row.content.as_deref(), Some(""));
         assert_eq!(row.input, parent.input);
         assert_eq!(row.retry_parent_request_doc_id, parent.doc_id);
         assert_eq!(
-            fetch_request_row_for_test(core.node(), &request_id)
+            fetch_request_row_for_test(&chat.owner(), &request_id)
                 .await?
                 .input,
             parent.input
@@ -139,10 +179,9 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    let shutdown = Arc::new(core).shutdown().await;
+    let shutdown = chat.shutdown().await;
     result?;
-    shutdown?;
-    Ok(())
+    shutdown
 }
 
 #[tokio::test]
@@ -252,14 +291,7 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
         "Lean SessionRecovery case split changed; update this desktop driver before bumping"
     );
 
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
-    core.add_local_standard_peer_for_test(core.node_identity().did())
-        .await?;
+    let chat = ServedChat::start().await?;
 
     let result = async {
         for case in cases {
@@ -278,7 +310,7 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
                 );
             }
 
-            drive_session_recovery_case_with_core(&core, case)
+            drive_session_recovery_case_with_core(&chat, case)
                 .await
                 .with_context(|| format!("driving Lean SessionRecovery case {}", case.name))?;
         }
@@ -286,18 +318,18 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    let shutdown = Arc::new(core).shutdown().await;
+    let shutdown = chat.shutdown().await;
     result?;
-    shutdown?;
-    Ok(())
+    shutdown
 }
 
 async fn drive_session_recovery_case_with_core(
-    core: &ClientCore,
+    chat: &ServedChat,
     case: &LeanSessionRecoveryCase,
 ) -> Result<()> {
-    let pre = seed_session_recovery_pre_state(core, case).await?;
-    let pre_count = request_count_for_session_for_test(core.node(), &pre.session_id).await?;
+    let core = &chat.core;
+    let pre = seed_session_recovery_pre_state(chat, case).await?;
+    let pre_count = request_count_for_session_for_test(&chat.owner(), &pre.session_id).await?;
     assert_eq!(
         pre_count, case.pre_request_count,
         "pre request count must match Lean witness for {}",
@@ -305,13 +337,13 @@ async fn drive_session_recovery_case_with_core(
     );
     if case.pre_latest_exists {
         assert_eq!(
-            latest_request_id_for_session_for_test(core.node(), &pre.session_id).await?,
+            latest_request_id_for_session_for_test(&chat.owner(), &pre.session_id).await?,
             pre.pre_latest_request_id,
             "pre latest request role must match Lean witness for {}",
             case.name
         );
         assert_eq!(
-            fetch_request_row_for_test(core.node(), &pre.pre_latest_request_id)
+            fetch_request_row_for_test(&chat.owner(), &pre.pre_latest_request_id)
                 .await?
                 .lifecycle_state
                 .map(|state| state.as_str()),
@@ -321,7 +353,7 @@ async fn drive_session_recovery_case_with_core(
         );
     } else {
         assert_eq!(
-            request_count_by_id_for_test(core.node(), &pre.pre_latest_request_id).await?,
+            request_count_by_id_for_test(&chat.owner(), &pre.pre_latest_request_id).await?,
             0,
             "missing latest request must be absent for {}",
             case.name
@@ -363,17 +395,17 @@ async fn drive_session_recovery_case_with_core(
     let injected_new_request_id = injected_new_request_id(case, &pre)?;
     let result = match injected_new_request_id.clone() {
         Some(injection) => {
-            retry_request_with_id_injection_for_test(core, &pre.parent, injection).await
+            retry_request_with_id_injection_for_test(chat, &pre.parent, injection).await
         }
         None => core.retry_request(&pre.parent).await,
     };
 
     if case.legal {
         let submitted = result?;
-        assert_legal_session_recovery_post_state(core, case, &pre, &submitted.request_id).await
+        assert_legal_session_recovery_post_state(chat, case, &pre, &submitted.request_id).await
     } else {
         assert_illegal_session_recovery_post_state(
-            core,
+            chat,
             case,
             &pre,
             result.unwrap_err().to_string(),
@@ -386,32 +418,11 @@ async fn drive_session_recovery_case_with_core(
 }
 
 async fn seed_session_recovery_pre_state(
-    core: &ClientCore,
+    chat: &ServedChat,
     case: &LeanSessionRecoveryCase,
 ) -> Result<RecoveryPreState> {
+    let core = &chat.core;
     let session_id = Uuid::new_v4().to_string();
-    let session = gents_protocol::session::AgentSession {
-        session_id: session_id.clone(),
-        node_did: core.node_identity().did().to_owned(),
-        requester_did: Some(core.node_identity().did().to_owned()),
-        agent_did: RECOVERY_AGENT_DID.to_owned(),
-        created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
-        observation: None,
-    };
-    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session)?)?;
-    gents::store::config_client::ConfigAccess::write_local(
-        &core.node_arc(),
-        "test.seed_recovery_session",
-        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
-    )
-    .await?;
     let failed_is_latest = case.pre_latest_id == case.failed_id;
     let should_seed_failed =
         case.pre_request_ids.contains(&case.failed_id) || !case.pre_failed_exists;
@@ -425,17 +436,17 @@ async fn seed_session_recovery_pre_state(
     if failed_is_latest {
         if should_seed_existing {
             existing =
-                Some(submit_recovery_seed_request(core, &session_id, case, "existing").await?);
+                Some(submit_recovery_seed_request(chat, &session_id, case, "existing").await?);
         }
         if should_seed_failed {
-            failed = Some(submit_recovery_seed_request(core, &session_id, case, "failed").await?);
+            failed = Some(submit_recovery_seed_request(chat, &session_id, case, "failed").await?);
         }
     } else {
         if should_seed_failed {
-            failed = Some(submit_recovery_seed_request(core, &session_id, case, "failed").await?);
+            failed = Some(submit_recovery_seed_request(chat, &session_id, case, "failed").await?);
         }
         if should_seed_existing {
-            existing = Some(submit_recovery_seed_request(core, &session_id, case, "latest").await?);
+            existing = Some(submit_recovery_seed_request(chat, &session_id, case, "latest").await?);
         }
     }
 
@@ -461,7 +472,7 @@ async fn seed_session_recovery_pre_state(
 
     if let Some(failed) = failed.as_ref() {
         force_request_state_for_test(
-            &core.node_arc(),
+            &chat.owner(),
             &failed.request_id,
             &forced_retry_parent_state(case),
         )
@@ -470,7 +481,7 @@ async fn seed_session_recovery_pre_state(
     if let Some(existing) = existing.as_ref() {
         if !failed_is_latest {
             force_request_state_for_test(
-                &core.node_arc(),
+                &chat.owner(),
                 &existing.request_id,
                 &forced_latest_request_state(case),
             )
@@ -478,12 +489,12 @@ async fn seed_session_recovery_pre_state(
         }
     }
     if !case.pre_failed_exists {
-        delete_request_by_id_for_test(core.node(), &failed_request_id).await?;
+        delete_request_by_id_for_test(&chat.owner(), &failed_request_id).await?;
     }
     core.refresh_store().await?;
 
     let parent = if case.pre_failed_exists {
-        let parent = fetch_request_row_for_test(core.node(), &failed_request_id).await?;
+        let parent = fetch_request_row_for_test(&chat.owner(), &failed_request_id).await?;
         assert_eq!(
             parent.lifecycle_state.map(|state| state.as_str()),
             Some(case.pre_failed_state.as_str()),
@@ -508,7 +519,9 @@ async fn seed_session_recovery_pre_state(
             case,
             &session_id,
             &failed_request_id,
+            chat.node_did(),
             core.node_identity().did(),
+            &chat.agent_did,
         )
     };
 
@@ -522,11 +535,12 @@ async fn seed_session_recovery_pre_state(
 }
 
 async fn submit_recovery_seed_request(
-    core: &ClientCore,
+    chat: &ServedChat,
     session_id: &str,
     case: &LeanSessionRecoveryCase,
     role: &str,
 ) -> Result<SubmittedRequest> {
+    let core = &chat.core;
     // Signed timestamps intentionally have whole-second precision. Encode the
     // Lean witness's intended latest-row order in this fixture's stable
     // request-ID tie-break instead of relying on UUID randomness.
@@ -540,14 +554,14 @@ async fn submit_recovery_seed_request(
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id.clone(),
+        chat.node_did(),
         core.node_identity().did(),
-        core.node_identity().did(),
-        RECOVERY_AGENT_DID,
+        chat.agent_did.as_str(),
         session_id,
         format!("{role} request for {}", case.name),
         case.pre_origin.clone(),
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(core.node_identity().did()),
+        AgentRequestAdmissionRecord::client(core.node_identity().did()),
     );
     create.retry_count = if role == "failed" {
         case.pre_retry_count as i64
@@ -555,20 +569,29 @@ async fn submit_recovery_seed_request(
         0
     };
     create.max_retries = case.max_retries as i64;
-    gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
-    gents::store::config_client::ConfigAccess::write_local(
-        &core.node_arc(),
-        "test.seed_recovery_request",
-        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
-    )
-    .await?;
+    submit_client_create_for_test(chat, &mut create).await?;
     core.refresh_store().await?;
     Ok(SubmittedRequest {
         request_id,
         session_id: session_id.to_string(),
-        node_did: core.node_identity().did().to_string(),
-        agent_did: Some(RECOVERY_AGENT_DID.to_string()),
+        node_did: chat.node_did().to_owned(),
+        agent_did: Some(chat.agent_did.clone()),
     })
+}
+
+/// Signs `create` as the desktop's client key and commits it to the owner over
+/// the operator route, reserving its session and Agent targets first.
+async fn submit_client_create_for_test(
+    chat: &ServedChat,
+    create: &mut AgentRequestCreate,
+) -> Result<()> {
+    let access = chat.runtime.user_access();
+    create.session_doc_id =
+        Some(gents::request::lifecycle::reserve_goal_session(&access, create).await?);
+    create.agent_doc_id = Some(chat.runtime.agent_doc_id(&chat.agent).await);
+    gents::sign_agent_request_create(chat.core.node_identity(), create).await?;
+    gents::request::lifecycle::submit_client_request(&access, create).await?;
+    Ok(())
 }
 
 fn synthetic_missing_retry_parent(
@@ -576,13 +599,15 @@ fn synthetic_missing_retry_parent(
     session_id: &str,
     request_id: &str,
     node_did: &str,
+    requester_did: &str,
+    agent_did: &str,
 ) -> AgentRequestRow {
     AgentRequestRow {
         request_id: request_id.to_string(),
         node_did: Some(node_did.to_string()),
-        requester_did: Some(node_did.to_owned()),
+        requester_did: Some(requester_did.to_owned()),
         input: None,
-        agent_did: Some(RECOVERY_AGENT_DID.to_string()),
+        agent_did: Some(agent_did.to_owned()),
         session_id: Some(session_id.to_string()),
         retry_parent_request: Some(String::new()),
         retry_root_request: Some(request_id.to_string()),
@@ -625,7 +650,7 @@ struct DocIdForTest {
     doc_id: String,
 }
 
-async fn delete_request_by_id_for_test(node: &EmbeddedNode, request_id: &str) -> Result<()> {
+async fn delete_request_by_id_for_test(node: &ConfigAccess, request_id: &str) -> Result<()> {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -642,28 +667,28 @@ async fn delete_request_by_id_for_test(node: &EmbeddedNode, request_id: &str) ->
                 delete_AgentRequest(docID: "{escaped_doc_id}") {{ _docID }}
             }}"#
     );
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        bail!("delete request {request_id} failed: {:?}", resp.errors);
-    }
+    node.write("delete_request_by_id_for_test", &mutation)
+        .await
+        .with_context(|| format!("delete request {request_id}"))?;
     Ok(())
 }
 
 async fn assert_legal_session_recovery_post_state(
-    core: &ClientCore,
+    chat: &ServedChat,
     case: &LeanSessionRecoveryCase,
     pre: &RecoveryPreState,
     new_request_id: &str,
 ) -> Result<()> {
+    let core = &chat.core;
     assert_eq!(case.pre_request_count + 1, case.post_request_count);
     assert_eq!(
-        request_count_for_session_for_test(core.node(), &pre.session_id).await?,
+        request_count_for_session_for_test(&chat.owner(), &pre.session_id).await?,
         case.post_request_count,
         "post request count must match Lean witness for {}",
         case.name
     );
     assert_eq!(
-        latest_request_id_for_session_for_test(core.node(), &pre.session_id).await?,
+        latest_request_id_for_session_for_test(&chat.owner(), &pre.session_id).await?,
         new_request_id,
         "new request must become latest for {}",
         case.name
@@ -673,7 +698,7 @@ async fn assert_legal_session_recovery_post_state(
         Some(new_request_id.to_string())
     );
 
-    let new_request = fetch_request_row_for_test(core.node(), new_request_id).await?;
+    let new_request = fetch_request_row_for_test(&chat.owner(), new_request_id).await?;
     assert_eq!(new_request.request_id, new_request_id);
     assert!(
         new_request.deadline.is_none(),
@@ -684,11 +709,11 @@ async fn assert_legal_session_recovery_post_state(
         new_request.session_id.as_deref(),
         Some(pre.session_id.as_str())
     );
+    assert_eq!(new_request.node_did.as_deref(), Some(chat.node_did()));
     assert_eq!(
-        new_request.node_did.as_deref(),
-        Some(core.node_identity().did())
+        new_request.agent_did.as_deref(),
+        Some(chat.agent_did.as_str())
     );
-    assert_eq!(new_request.agent_did.as_deref(), Some(RECOVERY_AGENT_DID));
     assert_eq!(
         new_request.content.as_deref(),
         pre.parent.content.as_deref()
@@ -743,7 +768,7 @@ async fn assert_legal_session_recovery_post_state(
         "retry parent is the exact physical failed attempt"
     );
 
-    let failed_request = fetch_request_row_for_test(core.node(), &pre.failed_request_id).await?;
+    let failed_request = fetch_request_row_for_test(&chat.owner(), &pre.failed_request_id).await?;
     assert_eq!(
         failed_request.lifecycle_state.map(|state| state.as_str()),
         Some(case.post_failed_state.as_str())
@@ -761,13 +786,13 @@ async fn assert_legal_session_recovery_post_state(
         Some(case.pre_origin.as_str())
     );
     assert_eq!(
-        request_count_by_id_for_test(core.node(), &pre.failed_request_id).await?,
+        request_count_by_id_for_test(&chat.owner(), &pre.failed_request_id).await?,
         if case.old_request_retained { 1 } else { 0 },
         "old failed request retention must match Lean witness for {}",
         case.name
     );
     assert_eq!(
-        request_count_by_id_for_test(core.node(), new_request_id).await?,
+        request_count_by_id_for_test(&chat.owner(), new_request_id).await?,
         if case.new_request_inserted { 1 } else { 0 },
         "new request insertion must match Lean witness for {}",
         case.name
@@ -777,7 +802,7 @@ async fn assert_legal_session_recovery_post_state(
 }
 
 async fn assert_illegal_session_recovery_post_state(
-    core: &ClientCore,
+    chat: &ServedChat,
     case: &LeanSessionRecoveryCase,
     pre: &RecoveryPreState,
     err: String,
@@ -790,14 +815,14 @@ async fn assert_illegal_session_recovery_post_state(
         case.name
     );
     assert_eq!(
-        request_count_for_session_for_test(core.node(), &pre.session_id).await?,
+        request_count_for_session_for_test(&chat.owner(), &pre.session_id).await?,
         case.pre_request_count,
         "illegal case {} must not insert a retry request",
         case.name
     );
     if case.pre_latest_exists {
         assert_eq!(
-            latest_request_id_for_session_for_test(core.node(), &pre.session_id).await?,
+            latest_request_id_for_session_for_test(&chat.owner(), &pre.session_id).await?,
             pre.pre_latest_request_id,
             "illegal case {} must not change latest request",
             case.name
@@ -805,7 +830,7 @@ async fn assert_illegal_session_recovery_post_state(
     }
     if let Some(request_id) = injected_new_request_id {
         assert_eq!(
-            request_count_by_id_for_test(core.node(), request_id).await?,
+            request_count_by_id_for_test(&chat.owner(), request_id).await?,
             1,
             "duplicate-id guard for {} must not add another colliding row",
             case.name
@@ -816,21 +841,19 @@ async fn assert_illegal_session_recovery_post_state(
 }
 
 async fn retry_request_with_id_injection_for_test(
-    core: &ClientCore,
+    chat: &ServedChat,
     parent: &AgentRequestRow,
     injection: RetryRequestIdInjection,
 ) -> Result<SubmittedRequest> {
+    let core = &chat.core;
     let snapshot = core.store().snapshot();
     let submitted = retry_request_with_request_id(
-        &gents::store::config_client::ConfigAccess::local_as(
-            core.node_arc(),
-            core.node_identity().did().parse()?,
-        ),
+        &chat.runtime.user_access(),
         snapshot.as_ref(),
         parent,
         core.node_identity().did(),
         core.node_identity(),
-        test_local_admission(core),
+        AgentRequestAdmissionRecord::client(core.node_identity().did()),
         injection.new_request_id,
     )
     .await?;
@@ -937,7 +960,7 @@ async fn request_from_store_for_test(
 }
 
 async fn fetch_request_row_for_test(
-    node: &EmbeddedNode,
+    node: &ConfigAccess,
     request_id: &str,
 ) -> Result<AgentRequestRow> {
     let escaped_request_id = escape_graphql_string(request_id);
@@ -954,7 +977,7 @@ async fn fetch_request_row_for_test(
 }
 
 async fn latest_request_id_for_session_for_test(
-    node: &EmbeddedNode,
+    node: &ConfigAccess,
     session_id: &str,
 ) -> Result<String> {
     let escaped_session_id = escape_graphql_string(session_id);
@@ -981,7 +1004,7 @@ async fn latest_request_id_for_session_for_test(
 }
 
 async fn request_count_for_session_for_test(
-    node: &EmbeddedNode,
+    node: &ConfigAccess,
     session_id: &str,
 ) -> Result<usize> {
     let escaped_session_id = escape_graphql_string(session_id);
@@ -999,7 +1022,7 @@ async fn request_count_for_session_for_test(
     .await
 }
 
-async fn request_count_by_id_for_test(node: &EmbeddedNode, request_id: &str) -> Result<usize> {
+async fn request_count_by_id_for_test(node: &ConfigAccess, request_id: &str) -> Result<usize> {
     let escaped_request_id = escape_graphql_string(request_id);
     query_row_count_for_test(
         node,
@@ -1016,7 +1039,7 @@ async fn request_count_by_id_for_test(node: &EmbeddedNode, request_id: &str) -> 
 }
 
 async fn request_count_by_retry_parent_for_test(
-    node: &EmbeddedNode,
+    node: &ConfigAccess,
     request_id: &str,
 ) -> Result<usize> {
     let escaped_request_id = escape_graphql_string(request_id);
@@ -1034,53 +1057,29 @@ async fn request_count_by_retry_parent_for_test(
     .await
 }
 
-async fn query_single_for_test<T>(node: &EmbeddedNode, query: &str, root: &str) -> Result<T>
+async fn query_single_for_test<T>(node: &ConfigAccess, query: &str, root: &str) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!(
-            "query {root} failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(root))
-        .and_then(|rows| rows.as_array())
+    let response = node
+        .execute(query)
+        .await
+        .with_context(|| format!("query {root} failed"))?;
+    let row = response["data"][root]
+        .as_array()
         .and_then(|rows| rows.first())
         .cloned()
         .with_context(|| format!("missing row for {root}"))?;
     Ok(serde_json::from_value(row)?)
 }
 
-async fn query_row_count_for_test(node: &EmbeddedNode, query: &str, root: &str) -> Result<usize> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!(
-            "query {root} count failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(root))
-        .and_then(|rows| rows.as_array())
+async fn query_row_count_for_test(node: &ConfigAccess, query: &str, root: &str) -> Result<usize> {
+    let response = node
+        .execute(query)
+        .await
+        .with_context(|| format!("query {root} count failed"))?;
+    Ok(response["data"][root]
+        .as_array()
         .map(Vec::len)
         .unwrap_or_default())
 }
@@ -1270,7 +1269,7 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
 }
 
 async fn force_request_state_for_test(
-    node: &Arc<EmbeddedNode>,
+    node: &ConfigAccess,
     request_id: &str,
     state: &ForcedRequestState,
 ) -> Result<()> {
@@ -1290,33 +1289,23 @@ async fn force_request_state_for_test(
                 ) {{ _docID }}
             }}"#
     );
-    Ok(gents::store::config_client::ConfigAccess::write_local(
-        node,
-        "force_request_state_for_test",
-        &mutation,
-    )
-    .await
-    .map(|_| ())?)
+    node.write("force_request_state_for_test", &mutation)
+        .await?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
-    core.add_local_standard_peer_for_test(core.node_identity().did())
-        .await?;
+    let chat = ServedChat::start().await?;
+    let core = &chat.core;
 
     let session_id = Uuid::new_v4().to_string();
     let original = core
         .submit_request(
             &session_id,
-            core.node_identity().did(),
+            chat.node_did(),
             "first attempt",
-            Some(RECOVERY_AGENT_DID),
+            Some(chat.agent_did.as_str()),
         )
         .await?;
     let mut parent = core
@@ -1330,7 +1319,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
 
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(
-        &core.node_arc(),
+        &chat.owner(),
         &original.request_id,
         &deadline.to_rfc3339(),
     )
@@ -1340,31 +1329,30 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
     parent.retry_count = Some(0);
     parent.max_retries = Some(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
 
-    let duplicate_request_id = "duplicate-retry-request-id";
-    seed_duplicate_request_id_for_test(
-        &core.node_arc(),
-        duplicate_request_id,
-        &session_id,
-        core.node_identity().did(),
-        "amy-code",
-    )
-    .await?;
+    // The occupant is an ordinary committed request; a second send in the
+    // parent's session waits on Goal observation, which this test does not own.
+    let occupant = core
+        .submit_request(
+            &Uuid::new_v4().to_string(),
+            chat.node_did(),
+            "existing duplicate request id occupant",
+            Some(chat.agent_did.as_str()),
+        )
+        .await?;
+    let duplicate_request_id = occupant.request_id.as_str();
     assert_eq!(
-        request_count_by_id_for_test(core.node(), duplicate_request_id).await?,
+        request_count_by_id_for_test(&chat.owner(), duplicate_request_id).await?,
         1
     );
 
     let snapshot = core.store().snapshot();
     let err = retry_request_with_request_id(
-        &gents::store::config_client::ConfigAccess::local_as(
-            core.node_arc(),
-            core.node_identity().did().parse()?,
-        ),
+        &chat.runtime.user_access(),
         snapshot.as_ref(),
         &parent,
         core.node_identity().did(),
         core.node_identity(),
-        test_local_admission(&core),
+        AgentRequestAdmissionRecord::client(core.node_identity().did()),
         duplicate_request_id.to_string(),
     )
     .await
@@ -1375,26 +1363,19 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         "duplicate new request id must be rejected before retry insert: {err}"
     );
     assert_eq!(
-        request_count_by_id_for_test(core.node(), duplicate_request_id).await?,
+        request_count_by_id_for_test(&chat.owner(), duplicate_request_id).await?,
         1,
         "failed duplicate retry must not add another row with the colliding request_id"
     );
 
-    Arc::new(core).shutdown().await?;
-    Ok(())
+    chat.shutdown().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
+    let chat = ServedChat::start().await?;
+    let core = &chat.core;
     let result = async {
-        core.add_local_standard_peer_for_test(core.node_identity().did())
-            .await?;
         for case in lean_contract_snapshot()
             .request_input_cases
             .iter()
@@ -1409,31 +1390,25 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
             let mut create = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 &request_id,
+                chat.node_did(),
                 core.node_identity().did(),
-                core.node_identity().did(),
-                RECOVERY_AGENT_DID,
+                chat.agent_did.as_str(),
                 &session_id,
                 case["authored_text"].as_str().unwrap(),
                 "interactive",
                 Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                test_local_admission(&core),
+                AgentRequestAdmissionRecord::client(core.node_identity().did()),
             );
             create.input = input.clone();
-            gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
-            ConfigAccess::write_local(
-                &core.node_arc(),
-                "test.goal_retry_parent",
-                &create.graphql_mutation().map_err(anyhow::Error::msg)?,
-            )
-            .await?;
+            submit_client_create_for_test(&chat, &mut create).await?;
             force_retry_parent_eligible_for_test(
-                &core.node_arc(),
+                &chat.owner(),
                 &request_id,
                 &(Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
             )
             .await?;
             core.refresh_store().await?;
-            let parent = fetch_request_row_for_test(core.node(), &request_id).await?;
+            let parent = fetch_request_row_for_test(&chat.owner(), &request_id).await?;
             gents::verify_request_receipt_signature(&parent)?;
             let mut expected: RequestInput =
                 serde_json::from_value(case["expected_reissued_input"].clone())?;
@@ -1445,23 +1420,20 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
             }
             let snapshot = core.store().snapshot();
             let submitted = retry_request(
-                &gents::store::config_client::ConfigAccess::local_as(
-                    core.node_arc(),
-                    core.node_identity().did().parse()?,
-                ),
+                &chat.runtime.user_access(),
                 snapshot.as_ref(),
                 &parent,
                 core.node_identity().did(),
                 core.node_identity(),
-                test_local_admission(&core),
+                AgentRequestAdmissionRecord::client(core.node_identity().did()),
             )
             .await?;
-            let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
+            let retried = fetch_request_row_for_test(&chat.owner(), &submitted.request_id).await?;
             gents::verify_request_receipt_signature(&retried)?;
             assert_eq!(retried.input.as_ref(), Some(&expected), "{}", case["name"]);
             assert_eq!(retried.retry_parent_request_doc_id, parent.doc_id);
             assert_eq!(
-                fetch_request_row_for_test(core.node(), &request_id)
+                fetch_request_row_for_test(&chat.owner(), &request_id)
                     .await?
                     .input,
                 Some(input),
@@ -1471,22 +1443,15 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    let shutdown = Arc::new(core).shutdown().await;
+    let shutdown = chat.shutdown().await;
     result?;
-    shutdown?;
-    Ok(())
+    shutdown
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
-    core.add_local_standard_peer_for_test(core.node_identity().did())
-        .await?;
+    let chat = ServedChat::start().await?;
+    let core = &chat.core;
 
     let session_id = Uuid::new_v4().to_string();
     let original_input = gents_protocol::request_input::RequestInput {
@@ -1502,32 +1467,26 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         &request_id,
+        chat.node_did(),
         core.node_identity().did(),
-        core.node_identity().did(),
-        RECOVERY_AGENT_DID,
+        chat.agent_did.as_str(),
         &session_id,
         "retry preserves its exact parent",
         "interactive",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        test_local_admission(&core),
+        AgentRequestAdmissionRecord::client(core.node_identity().did()),
     );
     create.input = original_input.clone();
-    gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
-    gents::store::config_client::ConfigAccess::write_local(
-        &core.node_arc(),
-        "test.seed_typed_retry_parent",
-        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
-    )
-    .await?;
+    submit_client_create_for_test(&chat, &mut create).await?;
     let original = SubmittedRequest {
         request_id,
         session_id: session_id.clone(),
-        node_did: core.node_identity().did().to_owned(),
-        agent_did: Some(RECOVERY_AGENT_DID.to_owned()),
+        node_did: chat.node_did().to_owned(),
+        agent_did: Some(chat.agent_did.clone()),
     };
     // The desktop snapshot holds live requests and session heads; this
     // claim-free fixture has no session, so only the pending row is projected.
-    let hydrated = request_from_store_for_test(&core, &original.request_id).await?;
+    let hydrated = request_from_store_for_test(core, &original.request_id).await?;
     assert_eq!(
         hydrated.input.as_ref(),
         Some(&original_input),
@@ -1535,16 +1494,16 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
     );
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(
-        &core.node_arc(),
+        &chat.owner(),
         &original.request_id,
         &deadline.to_rfc3339(),
     )
     .await?;
-    let parent = fetch_request_row_for_test(core.node(), &original.request_id).await?;
+    let parent = fetch_request_row_for_test(&chat.owner(), &original.request_id).await?;
 
     let submitted = core.retry_request(&parent).await?;
-    let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
-    let original_row = fetch_request_row_for_test(core.node(), &original.request_id).await?;
+    let retried = fetch_request_row_for_test(&chat.owner(), &submitted.request_id).await?;
+    let original_row = fetch_request_row_for_test(&chat.owner(), &original.request_id).await?;
     assert_eq!(original_row.input.as_ref(), Some(&original_input));
     assert_eq!(
         retried.input, original_row.input,
@@ -1572,39 +1531,31 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         "next claim selects its backend"
     );
 
-    Arc::new(core).shutdown().await?;
-    Ok(())
+    chat.shutdown().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
-    core.add_local_standard_peer_for_test(core.node_identity().did())
-        .await?;
-
+    let chat = ServedChat::start().await?;
+    let core = &chat.core;
     let session_id = Uuid::new_v4().to_string();
     let original = core
         .submit_request(
             &session_id,
-            core.node_identity().did(),
+            chat.node_did(),
             "retry exactly once",
-            Some(RECOVERY_AGENT_DID),
+            Some(&chat.agent_did),
         )
         .await?;
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(
-        &core.node_arc(),
+        &chat.owner(),
         &original.request_id,
         &deadline.to_rfc3339(),
     )
     .await?;
     core.refresh_store().await?;
-    let parent = fetch_request_row_for_test(core.node(), &original.request_id).await?;
+    let parent = fetch_request_row_for_test(&chat.owner(), &original.request_id).await?;
 
     let (left, right) = tokio::join!(core.retry_request(&parent), core.retry_request(&parent));
     let left = left?;
@@ -1615,21 +1566,19 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
         "concurrent retry intents must converge on the claimed successor"
     );
     assert_eq!(
-        request_count_by_retry_parent_for_test(core.node(), &original.request_id).await?,
+        request_count_by_retry_parent_for_test(&chat.owner(), &original.request_id).await?,
         1,
         "only one executable child may be created for a retry parent"
     );
     assert_eq!(
-        latest_request_id_for_session_for_test(core.node(), &session_id).await?,
+        latest_request_id_for_session_for_test(&chat.owner(), &session_id).await?,
         left.request_id
     );
-
-    Arc::new(core).shutdown().await?;
-    Ok(())
+    chat.shutdown().await
 }
 
 async fn force_retry_parent_eligible_for_test(
-    node: &Arc<EmbeddedNode>,
+    node: &ConfigAccess,
     request_id: &str,
     deadline: &str,
 ) -> Result<()> {
@@ -1646,85 +1595,40 @@ async fn force_retry_parent_eligible_for_test(
                 ) {{ _docID }}
             }}"#
     );
-    Ok(gents::store::config_client::ConfigAccess::write_local(
-        node,
-        "force_retry_parent_eligible_for_test",
-        &mutation,
-    )
-    .await
-    .map(|_| ())?)
-}
-
-async fn seed_duplicate_request_id_for_test(
-    node: &Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<()> {
-    let created_at = Utc::now().to_rfc3339();
-    let request_field = build_add_agent_request_field(
-        "duplicate",
-        request_id,
-        node_did,
-        "did:test:desktop",
-        agent_did,
-        session_id,
-        "",
-        None,
-        "",
-        "existing duplicate request id occupant",
-        &created_at,
-        0,
-        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-        "",
-        "interactive",
-        "",
-    );
-    let mutation = format!("mutation {{\n{request_field}\n}}");
-    Ok(gents::store::config_client::ConfigAccess::write_local(
-        node,
-        "seed_duplicate_request_id_for_test",
-        &mutation,
-    )
-    .await
-    .map(|_| ())?)
+    node.write("force_retry_parent_eligible_for_test", &mutation)
+        .await?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_simulated_route(),
-    )
-    .await?;
-    core.add_local_standard_peer_for_test(core.node_identity().did())
-        .await?;
+    let chat = ServedChat::start().await?;
+    let core = &chat.core;
     let case = lean_contract_snapshot()
         .session_recovery_cases
         .iter()
         .find(|case| case.legal)
         .context("legal retry witness")?;
-    let pre = seed_session_recovery_pre_state(&core, case).await?;
-    let node = escape_graphql_string(core.node_identity().did());
+    let pre = seed_session_recovery_pre_state(&chat, case).await?;
+    let node = escape_graphql_string(chat.node_did());
     let session = escape_graphql_string(&pre.session_id);
     let request_id = escape_graphql_string(&format!("foreign-{}", Uuid::new_v4()));
-    gents::store::config_client::ConfigAccess::write_local(
-        &core.node_arc(),
-        "test.foreign_requester_row",
-        &format!(
-            r#"mutation {{ create_AgentRequest(input: {{
+    let agent = escape_graphql_string(&chat.agent_did);
+    chat.owner()
+        .write(
+            "test.foreign_requester_row",
+            &format!(
+                r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{request_id}", node_did: "{node}", requester_did: "did:test:other-requester",
-        session_id: "{session}", agent_did: "amy-code", content: "other requester",
+        session_id: "{session}", agent_did: "{agent}", content: "other requester",
         lifecycle_state: "processing", execution_origin: "interactive",
         created_at: "2099-01-01T00:00:00Z"
     }}) {{ _docID }} }}"#
-        ),
-    )
-    .await?;
+            ),
+        )
+        .await?;
     let retried = core.retry_request(&pre.parent).await?;
-    let row = fetch_request_row_for_test(core.node(), &retried.request_id).await?;
+    let row = fetch_request_row_for_test(&chat.owner(), &retried.request_id).await?;
     assert_eq!(
         row.requester_did.as_deref(),
         Some(core.node_identity().did())
@@ -1739,6 +1643,5 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
         )
     );
     assert!(row.backend_id.is_none());
-    Arc::new(core).shutdown().await?;
-    Ok(())
+    chat.shutdown().await
 }

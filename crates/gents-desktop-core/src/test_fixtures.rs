@@ -139,6 +139,36 @@ impl ServedRuntimeHome {
             .unwrap()
     }
 
+    /// Provisions a managed Agent and publishes it as the User with the
+    /// inference backend and profile a chat target needs.
+    pub async fn publish_chat_agent(&self) -> AgentIdentityBinding {
+        let binding = self.provision_agent().await;
+        let node_did = self.node_did();
+        self.apply_as_user(
+            "test.served_runtime.chat_agent",
+            vec![
+                (
+                    Collection::InferenceBackend,
+                    serde_json::json!({
+                        "node_did": node_did, "backend_id": "backend", "name": "Fixture",
+                        "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
+                        "auth": {"kind": "unauthenticated"},
+                    }),
+                ),
+                (
+                    Collection::InferenceProfile,
+                    serde_json::json!({
+                        "node_did": node_did, "profile_id": "profile",
+                        "backend_id": "backend", "model_name": "model",
+                    }),
+                ),
+                (Collection::Agent, self.agent_value(&binding, "profile")),
+            ],
+        )
+        .await;
+        binding
+    }
+
     /// The managed Agent's own signed local access, holding the baseline
     /// grants production projects from its Agent document.
     pub async fn agent_access(&self, binding: &AgentIdentityBinding) -> ConfigAccess {

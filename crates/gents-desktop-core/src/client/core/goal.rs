@@ -8,7 +8,7 @@ use gents_protocol::goal_control::{
 };
 use gents_protocol::request_input::{GoalAssignmentInput, QueueDelivery, RequestInput};
 
-use super::writes::ensure_peer_chat_ready_at;
+use super::writes::ensure_peer_chat_ready;
 use super::ClientCore;
 
 mod delivery;
@@ -107,7 +107,7 @@ impl ClientCore {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready(node_did, peer.as_ref())?;
         if matches!(operation, GoalOperation::Stop {})
             || (matches!(operation, GoalOperation::Create { .. }) && expected.is_some())
         {
