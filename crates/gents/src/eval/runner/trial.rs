@@ -155,6 +155,11 @@ pub(super) async fn execute_trial(
         &spec.trial_dir,
         EvidenceRecord {
             evidence_digest: evidence.evidence_digest.clone(),
+            subject_agent: evidence
+                .stages
+                .iter()
+                .find_map(|stage| stage.subject_agent.clone()),
+            evaluator_did: Some(spec.evaluator_did.clone()),
             anchor: evidence.anchor.clone(),
             ended_at: Some(completion.ended_at.clone()),
             live: progress.live_of(&planned.trial_id),

@@ -7,7 +7,7 @@ fn session() -> AgentSession {
         session_id: "sess-1".into(),
         node_did: "did:test:amy".into(),
         requester_did: None,
-        agent_id: "default".into(),
+        agent_did: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -26,7 +26,7 @@ fn request(id: &str, session_id: &str, second: u32) -> AgentRequestRow {
         doc_id: Some(format!("doc-{id}")),
         request_id: id.into(),
         node_did: Some("did:test:amy".into()),
-        agent_id: Some("default".into()),
+        agent_did: Some("default".into()),
         session_id: Some(session_id.into()),
         content: Some(format!("{id} text")),
         lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -515,7 +515,7 @@ fn legacy_question_reply_requires_the_matching_observed_question() {
         "_docID": "question-doc", "item_key": "question", "requester_did": "did:test:person",
         "node_did": "did:test:amy", "status": "resolved", "kind": "ask", "action": "start_request",
         "title": "Question", "source_kind": "request", "source_id": "source", "session_id": "sess-1",
-        "target_node_did": "did:test:amy", "target_agent_id": "default", "created_at": "2026-04-21T12:00:00Z"
+        "target_node_did": "did:test:amy", "target_agent_did": "default", "created_at": "2026-04-21T12:00:00Z"
     })).unwrap();
     questions.mailbox_items.push(question);
     let view = crate::snapshot::session::question_reply_view(&store, &questions, &answer).unwrap();

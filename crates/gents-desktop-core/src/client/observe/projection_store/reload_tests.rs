@@ -94,7 +94,7 @@ fn provenance_revision_ignores_transcript_and_lease_but_tracks_remote_completion
 fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
     let (store, _) = ObservedStore::new(requests(&["parent"]));
     let captured = store.capture_read();
-    store.invalidate_projection(true);
+    store.merge_chat_patch(requests(&["parent"]));
     let current = store.projection_revision();
     assert!(!store.replace_reloaded_snapshot_at_read(&captured, None, requests(&["parent"]),));
     assert_eq!(store.projection_revision(), current);
@@ -110,6 +110,8 @@ fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
     );
 }
 
+/// A tool-call change is a request event: it rejects a patch read before it
+/// but not a reload, whose own resync reads after it.
 #[test]
 fn late_reload_cannot_erase_a_request_refreshed_after_capture() {
     for scope in [None, Some("did:test:reload")] {
@@ -260,7 +262,7 @@ fn generated_scoped_replacement_case_matches_client_store_ownership() {
                         "session_id": row["key"],
                         "node_did": did(owner),
                         "requester_did": null,
-                        "agent_id": "agent",
+                        "agent_did": "agent",
                         "created_at": "2026-01-01T00:00:00Z",
                         "title": {"text": row["value"], "source": "user"}
                     }))
@@ -483,7 +485,7 @@ async fn generated_scoped_publications_preserve_independent_nodes_during_a_block
                     serde_json::from_value(serde_json::json!({
                         "node_did": did(row["owner"].as_u64().unwrap()),
                         "session_id": row["key"],
-                        "agent_id": "agent",
+                        "agent_did": "agent",
                         "created_at": "2026-01-01T00:00:00Z",
                         "title": {"text": row["value"], "source": "user"}
                     }))
@@ -706,4 +708,32 @@ async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
         assert_eq!(full, expected_full);
         assert_eq!(pending, expected_scopes, "modeled recovery case {name}");
     }
+}
+
+#[test]
+fn denied_resource_read_invalidates_stale_snapshot_and_allows_fresh_visible_rows() {
+    let (store, _) = ObservedStore::new(requests(&["before"]));
+    let read = store.capture_read();
+    let node = "did:test:reload";
+    store.observe_runtime_connection(node, RuntimeConnectionEvent::SnapshotSucceeded);
+    store.clear_node_after_refused_read(node);
+    assert_eq!(
+        store.runtime_connection(node),
+        Some(RuntimeConnectionStatus::Connected)
+    );
+    assert!(store.snapshot().requests.is_empty());
+    assert!(!store.replace_reloaded_snapshot_at_read(&read, Some(node), requests(&["stale"])));
+    assert!(store.snapshot().requests.is_empty());
+    assert_eq!(store.take_resync_requests(), (false, vec![node.to_owned()]));
+    let fresh = store.capture_read();
+    assert!(store.replace_reloaded_snapshot_at_read(
+        &fresh,
+        Some(node),
+        requests(&["unrelated-visible"])
+    ));
+    assert_eq!(store.snapshot().requests[0].request_id, "unrelated-visible");
+    assert_eq!(
+        store.runtime_connection(node),
+        Some(RuntimeConnectionStatus::Connected)
+    );
 }

@@ -24,7 +24,7 @@ end SessionRetry
 
 structure SessionState where
   sessionId : SessionId
-  agentId : AgentId
+  agentDid : AgentDid
   requestIds : Finset RequestId
   ctx : RequestId → SessionRetry.Request
   latest : RequestId
@@ -76,7 +76,7 @@ theorem reissue_requires_eligible_parent {pre post : SessionState} {failedId new
 
 theorem reissue_publishes_successor {pre post : SessionState} {failedId newId : RequestId}
     (h : step? pre (.reissueFailed failedId newId) = some post) :
-    post.sessionId = pre.sessionId ∧ post.agentId = pre.agentId ∧
+    post.sessionId = pre.sessionId ∧ post.agentDid = pre.agentDid ∧
     post.latest = newId ∧ newId ∈ post.requestIds ∧ failedId ∈ post.requestIds ∧
     (post.ctx newId).state = .pending ∧ (post.ctx newId).admission = .released ∧
     (post.ctx newId).deadline = none ∧
@@ -118,7 +118,7 @@ def retryFromRows? (pre : SessionState) (session : AgentSession.Document)
   | none => none
   | some parent =>
     if parent.observed.docId = parentDoc ∧ parent.observed.requestId = failedId ∧
-        parent.agent = session.agent ∧ pre.agentId = session.agent ∧
+        parent.agent = session.agent ∧ pre.agentDid = session.agent ∧
         pre.sessionId = session.scope.session ∧ parent.observed.state = (pre.ctx failedId).state ∧
         rows.all (fun row => row.observed.requestId != newId) then
       step? { pre with latest := parent.observed.requestId } (.reissueFailed failedId newId)

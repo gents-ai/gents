@@ -27,19 +27,19 @@ pub(super) fn diff_counts(
     let removed = current_ids.difference(&proposed_ids).count();
     let updated = current_ids
         .intersection(&proposed_ids)
-        .filter(|agent_id| {
+        .filter(|agent_did| {
             let current_agent = current
                 .agents
-                .get(*agent_id)
+                .get(*agent_did)
                 .expect("intersection must exist in current agents");
             let proposed_agent = proposed
                 .agents
-                .get(*agent_id)
+                .get(*agent_did)
                 .expect("intersection must exist in proposed agents");
             format!("{current_agent:?}") != format!("{proposed_agent:?}")
                 || match (
-                    current.tool_surfaces.get(*agent_id),
-                    proposed.tool_surfaces.get(*agent_id),
+                    current.tool_surfaces.get(*agent_did),
+                    proposed.tool_surfaces.get(*agent_did),
                 ) {
                     (Some(current_tools), Some(proposed_tools)) => {
                         format!("{current_tools:?}") != format!("{proposed_tools:?}")
@@ -53,7 +53,7 @@ pub(super) fn diff_counts(
         added,
         removed,
         updated,
-        default_changed: current.default_agent_id != proposed.default_agent_id,
+        default_changed: current.default_agent_did != proposed.default_agent_did,
         unavailable_changed: current.unavailable_agents != proposed.unavailable_agents,
     }
 }

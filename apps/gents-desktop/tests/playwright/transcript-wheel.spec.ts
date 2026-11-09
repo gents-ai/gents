@@ -35,7 +35,9 @@ test("wheeling up past an open activity box keeps the transcript moving", async 
     .toBeLessThan(before - 200);
 });
 
-test("a group with a failed command says so and stays folded", async ({ page }) => {
+test("a group with a failed command says so and opens its first failure", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await gotoHarness(page, "mobile-performance");
   await page.locator('[data-testid="session-session-large"]').click();
@@ -45,8 +47,14 @@ test("a group with a failed command says so and stays folded", async ({ page }) 
   const group = panel.getByRole("button", { name: /6 commands/ });
   await group.scrollIntoViewIfNeeded();
   await expect(group).toHaveText(/Ran 6 commands, 2 failed/);
-  await expect(group).toHaveAttribute("aria-expanded", "false");
+  await expect(group).toHaveAttribute("aria-expanded", "true");
   await expect(group).toHaveAttribute("data-failed", "true");
+  await expect(panel.locator('[data-step-key="batch-exec-4"]')).toHaveAttribute(
+    "data-open",
+  );
+  const passed = panel.locator('[data-step-key="batch-exec-0"]');
+  await expect(passed).toBeVisible();
+  await expect(passed).not.toHaveAttribute("data-open");
 });
 
 test("a command's long output scrolls inside its own box", async ({ page }) => {

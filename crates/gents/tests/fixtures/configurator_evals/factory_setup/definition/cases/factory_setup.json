@@ -26,7 +26,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -175,7 +175,7 @@
           },
           "fields": [
             "task_id",
-            "agent_id",
+            "agent_did",
             "enabled",
             "emit_outcome",
             "prompt_template"
@@ -195,7 +195,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         },
         {
@@ -236,19 +236,8 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "_not": {
-              "_or": [
-                {
-                  "agent_id": {
-                    "_like": "%:engineer"
-                  }
-                },
-                {
-                  "agent_id": {
-                    "_eq": "engineer"
-                  }
-                }
-              ]
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
             },
             "purpose": {
               "_eq": "normal"
@@ -256,7 +245,7 @@
           },
           "fields": [
             "request_id",
-            "agent_id",
+            "agent_did",
             "lifecycle_state"
           ]
         },
@@ -369,7 +358,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -449,7 +438,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "planner",
+                  "agent_did": "planner",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -521,7 +510,7 @@
                   }
                 },
                 {
-                  "agent_id": "researcher",
+                  "agent_did": "researcher",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -595,7 +584,7 @@
                   }
                 },
                 {
-                  "agent_id": "analyst",
+                  "agent_did": "analyst",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -679,7 +668,7 @@
                   }
                 },
                 {
-                  "agent_id": "reviewer",
+                  "agent_did": "reviewer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -757,7 +746,7 @@
                   }
                 },
                 {
-                  "agent_id": "publisher",
+                  "agent_did": "publisher",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -833,7 +822,7 @@
                   }
                 },
                 {
-                  "agent_id": "coordinator",
+                  "agent_did": "coordinator",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -921,7 +910,7 @@
                   }
                 },
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "category": "delegation",
                   "delegates": {
                     "targets": "targets",
@@ -1669,9 +1658,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -1696,9 +1685,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -1723,9 +1712,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -1750,9 +1739,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -1777,9 +1766,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -1915,7 +1904,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -2064,7 +2053,7 @@
           },
           "fields": [
             "task_id",
-            "agent_id",
+            "agent_did",
             "enabled",
             "emit_outcome",
             "prompt_template"
@@ -2084,7 +2073,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         },
         {
@@ -2125,19 +2114,8 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "_not": {
-              "_or": [
-                {
-                  "agent_id": {
-                    "_like": "%:engineer"
-                  }
-                },
-                {
-                  "agent_id": {
-                    "_eq": "engineer"
-                  }
-                }
-              ]
+            "agent_did": {
+              "_ne": "gents:agent-slot:engineer"
             },
             "purpose": {
               "_eq": "normal"
@@ -2145,7 +2123,7 @@
           },
           "fields": [
             "request_id",
-            "agent_id",
+            "agent_did",
             "lifecycle_state"
           ]
         },
@@ -2258,7 +2236,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -2338,7 +2316,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "planner",
+                  "agent_did": "planner",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2410,7 +2388,7 @@
                   }
                 },
                 {
-                  "agent_id": "researcher",
+                  "agent_did": "researcher",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2484,7 +2462,7 @@
                   }
                 },
                 {
-                  "agent_id": "analyst",
+                  "agent_did": "analyst",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2568,7 +2546,7 @@
                   }
                 },
                 {
-                  "agent_id": "reviewer",
+                  "agent_did": "reviewer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2646,7 +2624,7 @@
                   }
                 },
                 {
-                  "agent_id": "publisher",
+                  "agent_did": "publisher",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2722,7 +2700,7 @@
                   }
                 },
                 {
-                  "agent_id": "coordinator",
+                  "agent_did": "coordinator",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2810,7 +2788,7 @@
                   }
                 },
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "category": "delegation",
                   "delegates": {
                     "targets": "targets",
@@ -3558,9 +3536,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -3585,9 +3563,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -3612,9 +3590,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -3639,9 +3617,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"
@@ -3666,9 +3644,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "agent_id",
+                    "field": "agent_did",
                     "target_capture": "agents",
-                    "target_key": "agent_id"
+                    "target_key": "agent_did"
                   }
                 ],
                 "category": "automation"

@@ -1,8 +1,8 @@
-use crate::session::origin::SessionScope;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::native::FileChanges;
 use anyhow::{ensure, Context, Result};
+use gents_protocol::session::SessionScope;
 
 #[derive(Clone)]
 pub(super) enum FileCapture {
@@ -53,9 +53,10 @@ pub(super) async fn retain_inventory(
         "changes": changes, "verified_unchanged": verified_unchanged,
     });
     let existing = txn.execute(&format!(
-        r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
+        r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{
         _docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes verified_unchanged }} }}"#,
         escape_graphql_string(tool_call_doc_id),
+        escape_graphql_string(&scope.session_id),
     )).await?;
     let rows = existing["data"]["ToolFileInventory"]
         .as_array()
@@ -75,6 +76,13 @@ pub(super) async fn retain_inventory(
             observed == input,
             "file inventory conflicts with an existing projection"
         );
+        let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+            txn,
+            &scope.node_did,
+            &scope.session_id,
+        )
+        .await?
+        .context("file inventory source session is unavailable")?;
         let owners = txn
             .document_owners("ToolFileInventory", std::slice::from_ref(&id))
             .await?;
@@ -84,8 +92,8 @@ pub(super) async fn retain_inventory(
                 && owners[0]
                     .owner
                     .as_ref()
-                    .is_some_and(|owner| owner.as_str() == scope.node_did),
-            "file inventory projection is not owned by its source node"
+                    .is_some_and(|owner| owner.as_str() == session.session.agent_did),
+            "file inventory projection is not owned by its selected agent"
         );
         return Ok(());
     }

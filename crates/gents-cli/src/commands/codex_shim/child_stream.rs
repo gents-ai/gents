@@ -119,7 +119,7 @@ async fn project_child_request(
         request_id: link.latest_request_id.clone(),
         session_id: link.session_id.clone(),
         node_did: link.node_did.clone(),
-        agent_id: Some(link.agent_id.clone()),
+        agent_did: Some(link.agent_did.clone()),
         request_doc_id: link.latest_request_doc_id.clone(),
         requester_did: link.requester_did.clone(),
         input: None,

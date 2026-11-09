@@ -8,7 +8,7 @@ fn generated_title_text_cases_reach_history_and_transcript_without_rewriting_use
             session_id: "session".into(),
             node_did: "owner".into(),
             requester_did: None,
-            agent_id: "agent".into(),
+            agent_did: "agent".into(),
             created_at: "2026-10-18T00:00:00Z".into(),
             closed_at: None,
             archived_at: None,

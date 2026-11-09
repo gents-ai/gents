@@ -7,6 +7,13 @@ use anyhow::{Context, Result};
 use super::{HomePackInstall, InstalledPackPlugin, PackIdentity, PackKind};
 use crate::plugin::{install, store};
 
+/// Reviewed plugin records held by the staging owner until notification finishes.
+/// The private fields prevent a caller from inventing installed manifest facts.
+pub struct PluginStageChanges {
+    pub(crate) previous: Vec<store::InstalledPlugin>,
+    pub(crate) installed: Vec<store::InstalledPlugin>,
+}
+
 /// A local publication and its node notification are driven by one owned task,
 /// so cancellation cannot mistake an unconfirmed commit for a refusal.
 #[allow(clippy::too_many_arguments)]
@@ -16,7 +23,7 @@ pub async fn install<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
-    notify: impl FnOnce(PackIdentity) -> F + Send + 'static,
+    notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
@@ -36,7 +43,7 @@ pub async fn install_plugin<F>(
     home: &Path,
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
-    notify: impl FnOnce(PackIdentity) -> F + Send + 'static,
+    notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
@@ -56,7 +63,7 @@ async fn install_owned<F>(
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
     operator: bool,
-    notify: impl FnOnce(PackIdentity) -> F + Send + 'static,
+    notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
@@ -83,6 +90,7 @@ where
             manifest: manifest.clone(), digest: digest.clone(), assets, bindings,
         }], consent, &owner).await?;
         let plugins = stage.installed.clone();
+        let changes = PluginStageChanges { previous: stage.previous_plugins(), installed: plugins.clone() };
         let record = HomePackInstall {
             coordinate: coordinate.clone(), version: manifest.version.clone(), digest: digest.clone(),
             kind: manifest.metadata.kind.clone(), assets: relative_root, dependency_assets: Vec::new(),
@@ -111,7 +119,7 @@ where
             Err(error) => { stage.finish(false).await?; return Err(error).context("publishing the local pack install record"); }
         };
         let notification = if record.plugins.is_empty() { Ok(()) } else {
-            notify(PackIdentity::new(&manifest, &digest, record.plugins.clone())).await
+            notify(PackIdentity::new(&manifest, &digest, record.plugins.clone()), changes).await
         };
         if matches!(&notification, Err(super::PluginStoreChangeError::PinConflict(_) | super::PluginStoreChangeError::Rejected(_))) {
             let restore_home = home.clone();
@@ -243,7 +251,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::from([("model".into(), "profile".into())]),
-            |_| async { panic!("refused install must not notify") },
+            |_, _| async { panic!("refused install must not notify") },
         )
         .await
         .unwrap_err();
@@ -316,7 +324,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async {
+            |_, _| async {
                 Err(super::super::PluginStoreChangeError::Unconfirmed(
                     anyhow::anyhow!("notification failed"),
                 ))
@@ -338,7 +346,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { Ok(()) },
+            |_, _| async { Ok(()) },
         )
         .await
         .unwrap();
@@ -362,7 +370,7 @@ pub(crate) mod tests {
                     false,
                     None,
                     &BTreeMap::new(),
-                    move |_| async move {
+                    move |_, _| async move {
                         reached.notify_one();
                         release.notified().await;
                         completed.notify_one();
@@ -402,7 +410,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { Ok(()) }
+            |_, _| async { Ok(()) }
         )
         .await
         .is_err());
@@ -414,7 +422,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { Ok(()) },
+            |_, _| async { Ok(()) },
         )
         .await
         .unwrap();
@@ -427,7 +435,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
-            |_| async { Ok(()) }
+            |_, _| async { Ok(()) }
         )
         .await
         .is_err());

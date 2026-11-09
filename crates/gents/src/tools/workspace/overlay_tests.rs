@@ -520,7 +520,7 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
 pub(crate) struct ArtifactTestFixture {
     pub grant: crate::tools::workspace::ArtifactGrant,
     pub owner: crate::request::lifecycle::RequestLifecycle,
-    pub node: std::sync::Arc<defra_node::EmbeddedNode>,
+    pub node: std::sync::Arc<defra_node::Node>,
     pub _dir: tempfile::TempDir,
 }
 
@@ -529,15 +529,16 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     use crate::tools::workspace::*;
     use std::{collections::BTreeSet, sync::Arc};
     fn git(root: &std::path::Path, args: &[&str]) -> String {
-        let output = std::process::Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_INDEX_FILE")
-            .output()
-            .unwrap();
+        let output = crate::tools::exec::native_spawn::output_std(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_COMMON_DIR")
+                .env_remove("GIT_INDEX_FILE"),
+        )
+        .unwrap();
         assert!(
             output.status.success(),
             "{:?}: {}",
@@ -546,7 +547,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         );
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
-    async fn execute(node: &defra_node::EmbeddedNode, query: &str) {
+    async fn execute(node: &defra_node::Node, query: &str) {
         let result = node.execute(query).await;
         assert!(!result.has_errors(), "{query}: {:?}", result.errors);
     }
@@ -574,7 +575,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     let workspace_owner = workspace_identity.did().to_owned();
     assert_ne!(workspace_owner, did);
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(root.join("db"))
             .with_node_identity_did(&did)
             .build()
@@ -602,9 +603,15 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         caused_by_invocation_id: "artifact-invocation".into(),
         caused_by_correlation: "artifact-correlation".into(),
         documents: &mut documents,
+        route: Default::default(),
     };
     let created = execute_create_workspace_plan(
         &emit_create_workspace_plan(CreateWorkspaceAction {
+            writer_agent_did: None,
+            writer_agent_doc_id: None,
+            integrator_agent_did: None,
+            integrator_agent_doc_id: None,
+            readers: Vec::new(),
             path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
             workspace_id: "artifact-workspace".into(),
             work_unit_id: "artifact-unit".into(),
@@ -647,7 +654,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         "artifact-reader",
         &did,
         &did,
-        "general",
+        &did,
         "artifact-session",
         "Review sealed source",
         "interactive",
@@ -665,21 +672,16 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     let result = node
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::store::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
-    let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
-    let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
-        node.clone(),
-        "general",
-        &did,
-        request,
-        300,
-    );
+    let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
+    let mut owner =
+        crate::request::lifecycle::RequestLifecycle::new_with_node_did(node.clone(), request, 300);
     owner.claim().await.unwrap();
     let workspace =
         super::load_isolated_workspace_record(&node, "artifact-workspace", &workspace_owner)
@@ -846,7 +848,7 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
     };
     use crate::tools::native::{CommandConstraints, CommandNetworkMode};
 
-    async fn execute(node: &defra_node::EmbeddedNode, mutation: &str) {
+    async fn execute(node: &defra_node::Node, mutation: &str) {
         let result = node.execute(mutation).await;
         assert!(!result.has_errors(), "{mutation}: {:?}", result.errors);
     }
@@ -1026,8 +1028,12 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
             .unwrap();
     let result = node.execute(&mutation).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
+    let admin = crate::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    );
     let error = crate::tools::workspace::cleanup_workspace(
-        &node,
+        &admin,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),
@@ -1044,11 +1050,20 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         )
         .await
         .unwrap();
-    crate::tools::workspace::release_writer_binding(&node, owner.request())
+    admin
+        .transact_write("test.workspace.release", |txn| {
+            Box::pin(super::super::runtime::release_writer_binding_in_txn(
+                txn,
+                &owner.request().doc_id,
+                &owner.request().request_id,
+                "artifact-workspace",
+                owner.request().workspace_owner_node_did.as_deref().unwrap(),
+            ))
+        })
         .await
         .unwrap();
     crate::tools::workspace::cleanup_workspace(
-        &node,
+        &admin,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),
@@ -1089,15 +1104,11 @@ async fn artifact_alternate_owner(
     crate::request::lifecycle::ClaimOutcome,
 )> {
     use crate::store::identity::NodeIdentity;
-    let identity = crate::store::identity::KeyIdentity::load_or_create(
-        fx._dir.path().join(if binding["owner_matches"] == false {
-            "foreign.key"
-        } else {
-            "agent.key"
-        }),
-        None,
-    )
-    .unwrap();
+    // The local Agent signs every alternate request; an owner mismatch is
+    // the request naming a workspace owner other than the workspace's own.
+    let identity =
+        crate::store::identity::KeyIdentity::load_or_create(fx._dir.path().join("agent.key"), None)
+            .unwrap();
     let did = identity.did();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -1105,7 +1116,7 @@ async fn artifact_alternate_owner(
         name,
         did,
         did,
-        "general",
+        did,
         format!("artifact-session-{name}"),
         "Review source",
         "interactive",
@@ -1115,7 +1126,12 @@ async fn artifact_alternate_owner(
     if !binding.is_null() {
         create.workspace_id = Some("artifact-workspace".into());
         create.workspace_owner_node_did = if binding["owner_matches"] == false {
-            Some(did.to_owned())
+            let foreign = crate::store::identity::KeyIdentity::load_or_create(
+                fx._dir.path().join("foreign.key"),
+                None,
+            )
+            .unwrap();
+            Some(foreign.did().to_owned())
         } else {
             fx.owner.request().workspace_owner_node_did.clone()
         };
@@ -1134,18 +1150,16 @@ async fn artifact_alternate_owner(
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}) {{ {} }} }}"#,
-            crate::request::admission::SIGNED_REQUEST_FIELDS
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::store::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
-    let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+    let request = gents_protocol::row::AgentRequest::try_from(row).unwrap();
     let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         fx.node.clone(),
-        "general",
-        did,
         request,
         300,
     );

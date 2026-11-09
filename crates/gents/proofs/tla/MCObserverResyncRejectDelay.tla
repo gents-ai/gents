@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncRejectDelay ----
+EXTENDS ObserverResync
+
+====

@@ -1,9 +1,9 @@
 use anyhow::{ensure, Context, Result};
 use serde_json::{Map, Value};
 
-use super::{
-    build_paged_query, build_query, CollectionSchema, CollectionScope, DefraQueryParams, MAX_LIMIT,
-};
+use super::schema::visible_fields;
+use super::{build_paged_query, build_query, CollectionScope, DefraQueryParams, MAX_LIMIT};
+use crate::store::config_client::schema_introspection::CollectionSchema;
 use crate::store::graphql::escape_graphql_string;
 
 pub(super) const SCORE_FIELD: &str = "_score";
@@ -35,7 +35,7 @@ pub(super) fn build_search_query(
     };
     build_query(&guard, scope)?;
     for field in &fields {
-        ensure!(schema.visible_fields(&params.collection).iter()
+        ensure!(visible_fields(schema, &params.collection).iter()
             .any(|f| f.name == *field && f.named_type() == "String"),
             "search field {field:?} must be an available String field; call query with argv:[fields]");
     }

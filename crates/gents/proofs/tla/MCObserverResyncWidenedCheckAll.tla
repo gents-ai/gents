@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncWidenedCheckAll ----
+EXTENDS ObserverResync
+
+====

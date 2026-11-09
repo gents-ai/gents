@@ -1,11 +1,9 @@
-use super::{editor_review, fake_llm, Attachment, ChatAction};
+use super::{fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
 use base64::Engine;
 use gents::{store::graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
 use gents_protocol::{
-    goal_control::{
-        GoalControlOutcome, GoalOperation, SessionGoalControl, SessionGoalControlReceipt,
-    },
+    goal_control::{GoalControlOutcome, GoalOperation, SessionGoalControl},
     request_lifecycle::RequestLifecycleState,
     row::AgentRequestRow,
 };
@@ -157,9 +155,9 @@ pub async fn verify(
         ensure!(ui[name] == true, "installed Undo evidence omitted {name}");
     }
     let value = access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} Goal(filter: {{node_did: {{_eq: "{}"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: "{}"}}}}) {{ intent_json receipt_json }} }}"#,
+        r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} Goal(filter: {{node_did: {{_eq: "{}"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID intent_json }} AgentSessionGoalReceipt {{ command_doc_id command_id receipt_json }} AgentSession(filter: {{node_did: {{_eq: "{}"}}}}) {{ session_id agent_did }} }}"#,
         escape_graphql_string(node), gents::SIGNED_REQUEST_FIELDS,
-        escape_graphql_string(node), gents::goal::GOAL_FIELDS, escape_graphql_string(node),
+        escape_graphql_string(node), gents_protocol::goal::GOAL_FIELDS, escape_graphql_string(node), escape_graphql_string(node),
     )).await?;
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value["data"]["AgentRequest"].clone())?;
     let mut sessions = std::collections::BTreeSet::new();
@@ -250,32 +248,7 @@ pub async fn verify(
                     );
                 }
             }
-            let receipts = editor_review::review_receipts(access, physical).await?;
-            ensure!(
-                !receipts.is_empty() && node != author,
-                "Undo bypassed enrolled image delivery"
-            );
-            for receipt in receipts {
-                let demand = gents_protocol::file_image_hydration::FileImageDemand {
-                    inventory_reference: None,
-                    admission: gents_protocol::session_hydration::HydrationRequest {
-                        request_key: text(&receipt, "request_key")?.into(),
-                        peer_id: text(&receipt, "peer_id")?.into(),
-                        requester_did: author.into(),
-                        node_did: node.into(),
-                        session_id: request.session_id.clone().context("Undo session")?,
-                    },
-                    request_doc_id: physical_request.into(),
-                    tool_call_doc_id: physical.into(),
-                };
-                editor_review::verify_model_receipt(verifier, &receipt, &demand).await?;
-                ensure!(
-                    receipt["status"] == "served"
-                        && receipt["observation_doc_id"] == retained[0]["_docID"]
-                        && receipt["outcome_signer_did"] == node,
-                    "Undo image read lost source-signed selection"
-                );
-            }
+            ensure!(node != author, "Undo must cross enrolled client identities");
             observations.push(json!({"requestId":request.request_id,"sessionId":request.session_id,"toolCallDocId":physical,"path":path}));
         }
     }
@@ -298,10 +271,19 @@ pub async fn verify(
     let mut paused = false;
     for control in controls {
         let command: SessionGoalControl = serde_json::from_str(text(control, "intent_json")?)?;
-        let receipt: SessionGoalControlReceipt =
-            serde_json::from_str(text(control, "receipt_json")?)?;
+        let receipt = super::goal_delivery::receipt_for(&value, control, &command)?;
         command.validate_shape()?;
-        receipt.validate_for(&command)?;
+        let sessions = value["data"]["AgentSession"]
+            .as_array()
+            .context("Undo sessions")?;
+        let selected = sessions
+            .iter()
+            .filter(|session| session["session_id"] == command.session_id)
+            .collect::<Vec<_>>();
+        ensure!(
+            selected.len() == 1 && selected[0]["agent_did"] == command.agent_did,
+            "Undo Goal control selected another agent"
+        );
         ensure!(
             command.node_did == node
                 && command.requester_did == author
@@ -313,7 +295,11 @@ pub async fn verify(
                 .verify(author, &command.signing_payload()?, &command.signature)
                 .await?
                 && verifier
-                    .verify(node, &receipt.signing_payload()?, &receipt.signature)
+                    .verify(
+                        &command.agent_did,
+                        &receipt.signing_payload()?,
+                        &receipt.signature
+                    )
                     .await?,
             "Undo Goal receipt lost its source signature"
         );

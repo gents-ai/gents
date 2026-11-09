@@ -57,7 +57,7 @@ test.each([false, true])(
     const session = {
       sessionId: "s",
       nodeDid: "did:x",
-      agentId: "a",
+      agentDid: "a",
       title: null,
       previewText: null,
       status: "active",

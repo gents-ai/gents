@@ -258,6 +258,7 @@ describe("first-run local agent name", () => {
           });
         },
       ),
+      enrollManagedServer: vi.fn(async () => {}),
       commitManagedServerAutoStart: vi.fn(async () => status()),
       fetchDesktopSnapshot: vi.fn(async () => ({
         bootstrap: forgeBootstrap,
@@ -330,6 +331,7 @@ describe("first-run local agent name", () => {
       ),
     );
     expect(api.startManagedServer).toHaveBeenCalledWith("Scout", expect.anything());
+    await waitFor(() => expect(api.enrollManagedServer).toHaveBeenCalledOnce());
     expect(await screen.findByText(/Scout is running/)).toBeInTheDocument();
   });
 

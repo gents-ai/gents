@@ -7,9 +7,10 @@ use serde_json::json;
 
 use super::RuntimeHttpState;
 
-/// Only the runtime's own operator may ask.
+/// Node visibility is decided by native ACP using the authenticated client.
 pub(super) async fn account_usage_read_handler(
     State(state): State<RuntimeHttpState>,
+    actor: defra_http::ExtractIdentity,
     axum::Json(command): axum::Json<crate::commands::accounts::UsageReadCommand>,
 ) -> Response {
     let error = |status: StatusCode, error: String| {
@@ -21,10 +22,16 @@ pub(super) async fn account_usage_read_handler(
             "runtime is not ready".to_string(),
         );
     };
+    if actor.did().map(identity::Did::as_str) != Some(command.signer_did.as_str()) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "authenticated client does not match usage signer".to_owned(),
+        );
+    }
     let authenticated = match command.validate_at(chrono::Utc::now()) {
         Ok(()) => {
             service
-                .authenticate_signed(
+                .authenticate_node_reader(
                     &command.signer_did,
                     &command.signing_payload(),
                     &command.sig,

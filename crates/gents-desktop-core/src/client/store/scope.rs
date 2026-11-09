@@ -316,7 +316,7 @@ mod tests {
             "source_kind": "request",
             "source_id": "source",
             "target_node_did": node_did,
-            "target_agent_id": "agent",
+            "target_agent_did": "agent",
             "created_at": "2026-01-01T00:00:00Z"
         }))
         .expect("mailbox row")

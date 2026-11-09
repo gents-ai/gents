@@ -87,6 +87,12 @@ pub struct InstalledPlugin {
     /// write to a collection absent here is refused.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub data_collection_fields: std::collections::BTreeMap<String, Vec<String>>,
+    /// Each collection of `declaration.data` that the pack declares alone in
+    /// one schema file, with that file's exact SDL. A client-signed write
+    /// signs its document graph against this trusted schema; a collection
+    /// absent here can only be written natively by the runtime.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub data_collection_schemas: std::collections::BTreeMap<String, String>,
 }
 
 impl InstalledPlugin {
@@ -130,11 +136,22 @@ pub fn check_plugin_ownership(
     }
 }
 
+fn any_error<E>(
+    error: &(dyn std::error::Error + 'static),
+    mut predicate: impl FnMut(&E) -> bool,
+) -> bool
+where
+    E: std::error::Error + 'static,
+{
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause.downcast_ref::<E>().filter(|error| predicate(error))
+    })
+    .is_some()
+}
+
 pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    any_error::<std::io::Error>(error.as_ref(), |io| {
+        io.kind() == std::io::ErrorKind::NotFound
     })
 }
 
@@ -226,6 +243,28 @@ pub fn content_digest_hex(bytes: &[u8]) -> String {
     format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))
 }
 
+impl InstalledPlugin {
+    /// The facts the node's plugin delete-source projection reads from an
+    /// installed record.
+    pub(crate) fn projected(&self) -> crate::store::local::ProjectedPlugin {
+        crate::store::local::ProjectedPlugin {
+            coordinate: format!("{}/{}", self.namespace, self.name),
+            digest: self.digest.clone(),
+            deletes: self
+                .declaration
+                .data
+                .as_ref()
+                .is_some_and(|data| data.ops.iter().any(|op| op == "delete")),
+        }
+    }
+}
+
+pub(crate) fn projected_plugins(
+    records: &[InstalledPlugin],
+) -> Vec<crate::store::local::ProjectedPlugin> {
+    records.iter().map(InstalledPlugin::projected).collect()
+}
+
 pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
     let path = store_path(home, digest_hex)?;
     std::fs::read(&path)
@@ -238,6 +277,10 @@ pub struct StoreGuard {
 }
 
 impl StoreGuard {
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// Prevents a held lock for one home from authorizing mutations in another.
     pub fn for_home(&self, home: &Path) -> Result<()> {
         anyhow::ensure!(
@@ -277,12 +320,44 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     })
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PublishedPluginReadError {
+    #[error("plugin store is busy; retry this pack operation")]
+    Busy,
+    #[error("reading the published plugin store")]
+    Read(#[source] anyhow::Error),
+}
+
+impl PublishedPluginReadError {
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Busy)
+    }
+
+    pub fn error_chain_is_busy(error: &(dyn std::error::Error + 'static)) -> bool {
+        any_error::<Self>(error, Self::is_busy)
+    }
+}
+
 /// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
 pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
+    try_lock_store_mode(home, true).map_err(Into::into)
+}
+
+pub(crate) fn try_lock_store_shared(
+    home: &Path,
+) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
+    try_lock_store_mode(home, false)
+}
+
+fn try_lock_store_mode(
+    home: &Path,
+    exclusive: bool,
+) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+            .with_context(|| format!("creating {}", parent.display()))
+            .map_err(PublishedPluginReadError::Read)?;
     }
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -290,20 +365,37 @@ pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
         .create(true)
         .truncate(false)
         .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
-    let lock = match crate::store::local::file_lock::FileLock::try_exclusive(file) {
+        .with_context(|| format!("opening {}", path.display()))
+        .map_err(PublishedPluginReadError::Read)?;
+    let result = if exclusive {
+        crate::store::local::file_lock::FileLock::try_exclusive(file)
+    } else {
+        crate::store::local::file_lock::FileLock::try_shared(file)
+    };
+    let lock = match result {
         Ok(lock) => lock,
-        Err(std::fs::TryLockError::WouldBlock) => {
-            anyhow::bail!("plugin store is busy; retry this pack operation")
-        }
+        Err(std::fs::TryLockError::WouldBlock) => return Err(PublishedPluginReadError::Busy),
         Err(std::fs::TryLockError::Error(error)) => {
-            return Err(error).with_context(|| format!("locking {}", path.display()));
+            return Err(PublishedPluginReadError::Read(
+                anyhow::Error::new(error).context(format!("locking {}", path.display())),
+            ));
         }
     };
     Ok(StoreGuard {
         home: home.to_owned(),
         _lock: lock,
     })
+}
+
+/// The guard keeps the plugin record and its pack provenance in one published observation.
+pub fn read_published_record(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+) -> std::result::Result<(InstalledPlugin, StoreGuard), PublishedPluginReadError> {
+    let guard = try_lock_store_shared(home)?;
+    let record = read_record(home, namespace, name).map_err(PublishedPluginReadError::Read)?;
+    Ok((record, guard))
 }
 
 pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Result<Vec<String>> {
@@ -488,6 +580,7 @@ mod tests {
             model_binding: None,
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
         }
     }
 

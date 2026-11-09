@@ -1,109 +1,40 @@
-use std::time::{Duration, SystemTime};
-
-use gents::runtime::agent::p2p_reconcile::session_hydration::{
-    ClientHydrationPhase, ClientHydrationProgress,
-};
 use gents_desktop_core::client::{
     project_sync_health, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
-    P2pSyncStatusSnapshot, PairingCollectionStatus, SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
+    RuntimeConnectionStatus,
 };
-use gents_desktop_core::remote_admin::PairingErrorClass;
 use serde_json::json;
 
-use crate::contract::EVENT_REASONS;
-use crate::snapshot::{to_hydration_view, to_pairing_collection_view, to_sync_health_view};
+use crate::snapshot::to_sync_health_view;
 use crate::types::ClientUpdateEvent;
 
-fn t(secs: u64) -> SystemTime {
-    SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
-}
-
-fn serving_progress() -> ClientHydrationProgress {
-    ClientHydrationProgress {
-        session_id: "session-1".into(),
-        node_did: "did:test:agent".into(),
-        phase: ClientHydrationPhase::Serving,
-        merged_count: 4,
-        covered_count: 3,
-        served_count: Some(11),
-        ..ClientHydrationProgress::default()
-    }
-}
-
 #[test]
-fn ownership_refusal_is_unreadable_not_a_retryable_failure() {
-    let failed = ClientHydrationProgress {
-        phase: ClientHydrationPhase::Failed,
-        ..serving_progress()
-    };
-    let view = to_hydration_view(
-        &failed,
-        Some(
-            gents::runtime::agent::p2p_reconcile::session_hydration::SESSION_OWNERSHIP_MISMATCH
-                .into(),
-        ),
-    );
-    assert_eq!(view.phase, "unreadable");
-    assert!(view
-        .detail
-        .is_some_and(|detail| detail.contains("another requester")));
-
-    let other = to_hydration_view(&failed, Some("peer pairing does not match".into()));
-    assert_eq!(other.phase, "failed");
-    assert_eq!(other.detail.as_deref(), Some("peer pairing does not match"));
-
-    assert_eq!(
-        to_hydration_view(&serving_progress(), Some("stale".into())).detail,
-        None
-    );
-}
-
-#[test]
-fn sync_health_view_keeps_database_quarantine_failed() {
-    let health = project_sync_health(&ClientSyncStateSnapshot {
+fn sync_health_view_names_the_cause_and_next_action() {
+    let sync = ClientSyncStateSnapshot {
         transport: P2PHealth {
-            status: P2PHealthStatus::Healthy,
-            consecutive_failures: 0,
-            connected_peer_count: 1,
-            replicator_count: 1,
-            last_error: None,
-            last_ok_at: Some(t(50)),
-            last_failure_at: None,
+            status: P2PHealthStatus::Degraded,
+            last_error: Some("probe failed".into()),
+            ..P2PHealth::default()
         },
-        database_sync: Some(P2pSyncStatusSnapshot {
-            quarantined_pending_dags: 1,
-            ..P2pSyncStatusSnapshot::default()
-        }),
-        database_sync_error: None,
-        peer_schema_skew: Default::default(),
         enrollment_activation_errors: Default::default(),
         directory: Vec::new(),
         peers: Vec::new(),
-    })
-    .unwrap();
-    assert_eq!(health.state, SyncHealthState::Failed);
-    let view = to_sync_health_view(&health);
-    assert_eq!(view.state, "failed");
-    assert_eq!(view.quarantined_dag_count, Some(1));
-}
+    };
+    let view = to_sync_health_view(&project_sync_health(
+        &sync,
+        [Some(RuntimeConnectionStatus::Connected)],
+    ));
+    assert_eq!(view.state, "blocked");
+    assert_eq!(view.cause.as_deref(), Some("discovery_offline"));
+    assert_eq!(view.next_action.as_deref(), Some("check_network"));
+    assert_eq!(view.last_error.as_deref(), Some("probe failed"));
 
-#[test]
-fn pairing_collection_view_preserves_retry_stuck_and_timestamps() {
-    let stuck_at = t(80);
-    let mut pairing = PairingCollectionStatus::new("AgentSession");
-    for _ in 0..STUCK_THRESHOLD_ATTEMPTS {
-        pairing.record_retry(PairingErrorClass::RpcTimeout);
-    }
-    pairing.update_stuck_indicator(stuck_at);
-    let view = to_pairing_collection_view(&pairing);
-    assert_eq!(view.collection_id, "AgentSession");
-    assert_eq!(view.pairing_retry_count, STUCK_THRESHOLD_ATTEMPTS);
-    assert_eq!(view.last_retry_error_class.as_deref(), Some("RpcTimeout"));
-    assert_eq!(
-        view.stuck_since.as_deref(),
-        crate::snapshot::system_time_rfc3339(Some(stuck_at)).as_deref()
-    );
-    assert!(view.last_retry_at.is_some());
+    let view = to_sync_health_view(&project_sync_health(
+        &sync,
+        [Some(RuntimeConnectionStatus::Refused)],
+    ));
+    assert_eq!(view.cause.as_deref(), Some("runtime_refused"));
+    assert_eq!(view.next_action.as_deref(), Some("restore_access"));
+    assert_eq!(view.last_error, None);
 }
 
 #[test]
@@ -113,6 +44,4 @@ fn client_update_event_serializes_store_reason_for_projection_wakes() {
         serde_json::to_value(&event).unwrap(),
         json!({ "reason": "store" })
     );
-    assert!(EVENT_REASONS.contains(&"store"));
-    assert!(!EVENT_REASONS.contains(&"hydration"));
 }

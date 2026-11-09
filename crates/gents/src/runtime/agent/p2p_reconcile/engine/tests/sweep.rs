@@ -44,7 +44,7 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
     let convergence_completed = Arc::new(tokio::sync::Notify::new());
     let store = MockStore {
         desired: Mutex::new(Ok(Some(PairingDesired {
-            collections: set(&["AgentRequest"]),
+            replicator_addresses: set(&["addr1"]),
             ..Default::default()
         }))),
         list_peer_ids_failures: Mutex::new(1),
@@ -104,7 +104,7 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
     assert_eq!(*store.list_peer_ids_calls.lock().unwrap(), 2);
     assert_eq!(
         *admin.emitted.lock().unwrap(),
-        vec![DiffOp::InstallCollection("AgentRequest".to_string())]
+        vec![DiffOp::InstallReplicator("addr1".to_string())]
     );
 
     cancel.cancel();
@@ -188,12 +188,10 @@ async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let installed = Arc::new(tokio::sync::Notify::new());
     let admin = MockAdmin {

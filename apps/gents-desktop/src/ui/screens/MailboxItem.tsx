@@ -97,7 +97,7 @@ export function ItemRow({
             className="absolute top-1/2 left-0 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand"
           />
         )}
-        <NodeAgentStack nodeDid={m.nodeDid} agentId={m.targetAgentId} />
+        <NodeAgentStack nodeDid={m.nodeDid} agentDid={m.targetAgentDid} />
         <span className="min-w-0">
           <span
             className={cn(
@@ -111,7 +111,7 @@ export function ItemRow({
             <Icon aria-hidden className={cn("size-3 shrink-0", kind.tone)} />
             <span className={cn("shrink-0", kind.tone)}>{kind.label}</span>
             <span aria-hidden>·</span>
-            <span className="shrink-0">{agentName(m.targetAgentId, filer)}</span>
+            <span className="shrink-0">{agentName(m.targetAgentDid, filer)}</span>
             {m.sessionId && (
               <>
                 <span aria-hidden>·</span>
@@ -460,7 +460,7 @@ function Opened({
               icon={
                 <NodeAgentStack
                   nodeDid={m.nodeDid}
-                  agentId={m.targetAgentId}
+                  agentDid={m.targetAgentDid}
                   size="sm"
                 />
               }
@@ -530,9 +530,9 @@ function Details({ item: m, now }: { item: MailboxItemView; now: number }) {
           </span>
         </div>
         <div className="flex min-w-0 items-center gap-2">
-          <NodeAgentStack nodeDid={m.nodeDid} agentId={m.targetAgentId} size="sm" />
+          <NodeAgentStack nodeDid={m.nodeDid} agentDid={m.targetAgentDid} size="sm" />
           <span className="min-w-0 truncate">
-            {agentName(m.targetAgentId, filer)}
+            {agentName(m.targetAgentDid, filer)}
             {m.sessionId && (
               <>
                 {" · in "}

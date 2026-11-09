@@ -9,12 +9,12 @@ import { useSelectedNodeDid } from "@/hooks/useClient";
 
 const LABEL = {
   retryLocal: "Try again",
-  retryHydration: "Try again",
+  reloadSession: "Try again",
   configureInference: "Configure inference",
 };
 const BUSY = {
   retryLocal: "Retrying…",
-  retryHydration: "Retrying…",
+  reloadSession: "Retrying…",
   configureInference: "Opening…",
 };
 
@@ -22,7 +22,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
   const status = useView((view) => view.loadingStatus);
   const {
     stores,
-    actions: { refreshSession, refreshSnapshot, retrySessionHydration },
+    actions: { refreshSession, refreshSnapshot, reloadSession },
   } = useApp();
   const nodeDid = useSelectedNodeDid();
   const selectedSessionId = stores.selection.use.sessionId();
@@ -39,7 +39,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
     }
     setBusy(true);
     try {
-      if (action === "retryHydration") await retrySessionHydration(selectedSessionId);
+      if (action === "reloadSession") await reloadSession(selectedSessionId);
       else await Promise.all([refreshSnapshot(), refreshSession(selectedSessionId)]);
     } catch (e) {
       toastFailure("load the session", e);

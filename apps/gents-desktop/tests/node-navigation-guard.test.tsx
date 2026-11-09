@@ -66,7 +66,7 @@ it("does not apply a confirmation after the selection intent changes", () => {
   act(() => f.app.actions.selectAgent("ops"));
   fireEvent.click(screen.getByRole("button", { name: "Switch node" }));
   expect(f.app.stores.selection.getState().nodeDid).toBe(deployment.nodeDid);
-  expect(f.app.stores.selection.getState().agentId).toBe("ops");
+  expect(f.app.stores.selection.getState().agentDid).toBe("ops");
 });
 
 it("does not ask about navigation within the active node", () => {

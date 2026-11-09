@@ -33,6 +33,7 @@ pub(crate) fn preset_account_backend(
     };
     let spec = crate::inference::backends::setup::connection_spec(provider_id, auth, "")?;
     Ok(crate::InferenceBackend {
+        physical_doc_id: None,
         node_did: node_did.to_owned(),
         backend_id: match account_ref {
             Some(account_ref) => format!("{provider}-{account_ref}"),
@@ -59,7 +60,7 @@ async fn write_account_backend(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     backend: &crate::InferenceBackend,
 ) -> Result<()> {
-    crate::store::config_client::write_inference_backend_in_txn(txn, backend)
+    crate::documents::write_inference_backend_in_txn(txn, backend)
         .await
         .context(
             "the account's backend could not be stored, so the sign-in was not saved; \

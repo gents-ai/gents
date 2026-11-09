@@ -1,0 +1,4 @@
+---- MODULE MCWindowIndependenceNoCancelOnSwitch ----
+EXTENDS WindowIndependence
+
+====

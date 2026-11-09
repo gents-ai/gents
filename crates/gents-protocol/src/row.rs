@@ -11,6 +11,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::request_lifecycle::RequestLifecycleState;
 
+mod agent_request;
+pub use agent_request::{
+    normalize_optional_string, validate_agent_request, AgentRequest, AgentRequestRowError,
+    AGENT_REQUEST_FIELDS,
+};
+
 pub use crate::node_readiness::{
     decode_node_readiness_snapshot, effective_agent_readiness_admission,
     is_behavior_unavailable_rejection, project_node_readiness, project_node_readiness_source,
@@ -111,9 +117,13 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub runtime_source_kind: Option<String>,
     #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub session_doc_id: Option<String>,
+    #[serde(default)]
+    pub agent_doc_id: Option<String>,
     #[serde(default)]
     pub retry_parent_request: Option<String>,
     #[serde(default)]
@@ -236,6 +246,8 @@ impl AgentRequestRow {
     }
 }
 
+pub const MAILBOX_COLLECTION: &str = "MailboxItem";
+
 /// Replicated envelope for human attention. Clients render this row without
 /// hydrating the referenced transcript or domain document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -262,7 +274,7 @@ pub struct MailboxItemRow {
     #[serde(default)]
     pub cause_doc_id: Option<String>,
     pub target_node_did: String,
-    pub target_agent_id: String,
+    pub target_agent_did: String,
     #[serde(default)]
     pub expected_collection: Option<String>,
     #[serde(default)]
@@ -497,6 +509,8 @@ pub struct ToolServiceEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolServiceRegistryRow {
     pub service_id: String,
+    #[serde(default)]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]

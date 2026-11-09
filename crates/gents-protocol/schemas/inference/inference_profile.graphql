@@ -1,4 +1,4 @@
-type InferenceProfile @branchable @index(fields: ["node_did", "profile_id"], unique: true) {
+type InferenceProfile @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "configuration") @index(fields: ["node_did", "profile_id"], unique: true) {
     profile_id: String
     node_did: String @index
     display_name: String

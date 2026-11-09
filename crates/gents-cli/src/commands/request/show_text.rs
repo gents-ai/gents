@@ -11,7 +11,7 @@ pub(super) fn render_request_show_text(
     lines.push(format!("Request {}", request.request_id));
     lines.push(format!("state: {}", request.lifecycle_state));
     lines.push(format!("node_did: {}", request.node_did));
-    lines.push(format!("agent_id: {}", request.agent_id));
+    lines.push(format!("agent_did: {}", request.agent_did));
     lines.push(format!("session_id: {}", request.session_id));
     push_option_line(&mut lines, "backend_id", request.backend_id.as_deref());
     push_option_line(
@@ -189,8 +189,8 @@ pub(super) fn render_request_show_text(
     } else {
         for child in &snapshot.child_requests {
             lines.push(format!(
-                "  - {} state={} agent_id={} node_did={} session_id={}",
-                child.request_id, child.state, child.agent_id, child.node_did, child.session_id
+                "  - {} state={} agent_did={} node_did={} session_id={}",
+                child.request_id, child.state, child.agent_did, child.node_did, child.session_id
             ));
             push_option_line(
                 &mut lines,

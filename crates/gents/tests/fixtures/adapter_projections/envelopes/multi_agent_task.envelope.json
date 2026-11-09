@@ -6,7 +6,7 @@
       "delegations": [
         {
           "node_did": "did:test:researcher",
-          "agent_id": "researcher",
+          "agent_did": "researcher",
           "child_request_id": "req-team-research-1",
           "parent_request_id": "req-team-1",
           "parent_tool_call_id": "call-delegate-research",
@@ -30,12 +30,12 @@
       "participants": [
         {
           "node_did": "did:test:coordinator",
-          "agent_id": "coordinator",
+          "agent_did": "coordinator",
           "role": "owner"
         },
         {
           "node_did": "did:test:researcher",
-          "agent_id": "researcher",
+          "agent_did": "researcher",
           "role": "delegate"
         }
       ],
@@ -64,7 +64,7 @@
   },
   "redaction_mode": "full",
   "source_node_did": "did:test:coordinator",
-  "source_agent_id": "coordinator",
+  "source_agent_did": "coordinator",
   "source_request_id": "req-team-1",
   "source_session_id": "session-team-1"
 }

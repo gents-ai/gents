@@ -17,7 +17,7 @@ describeLive("Tauri app live bridge runner agent config", () => {
         deployment.agents[0];
       expect(agent).toBeDefined();
       const suffix = Date.now().toString();
-      const agentId = agent!.agentId;
+      const agentDid = agent!.agentDid;
       const contextId = agent!.contextId;
       const systemPrompt = `You are Amy, a repository analysis agent. When asked for the live config marker, include exactly CONFIG-${suffix}.`;
 
@@ -34,7 +34,7 @@ describeLive("Tauri app live bridge runner agent config", () => {
       );
       await driver.openConfig();
       await driver.openConfigSection("agents");
-      await driver.openConfigItem(agentId);
+      await driver.openConfigItem(agentDid);
       await waitFor(() => {
         expect(driver.contextSystemPrompt()).toBeInTheDocument();
       });
@@ -44,16 +44,16 @@ describeLive("Tauri app live bridge runner agent config", () => {
 
       await waitForAgentConfig(
         runner,
-        agentId,
+        agentDid,
         agent!.displayName,
         systemPrompt,
         previousGeneration,
       );
-      logTurn(`context config saved agentId=${agentId} contextId=${contextId}`);
+      logTurn(`context config saved agentDid=${agentDid} contextId=${contextId}`);
 
       await driver.openConfigSection("agent");
       await driver.openConfigSection("agents");
-      await driver.openConfigItem(agentId);
+      await driver.openConfigItem(agentDid);
       await waitFor(() => {
         expect(driver.contextSystemPrompt()).toHaveValue(systemPrompt);
       });
@@ -63,7 +63,7 @@ describeLive("Tauri app live bridge runner agent config", () => {
       await driver.pressEnter();
       await waitFor(() => expect(runner.sendResults).toHaveLength(1));
       const submitted = expectLatestSendResult(runner, "config marker turn");
-      expect(submitted.agentId).toBe(agentId);
+      expect(submitted.agentDid).toBe(agentDid);
       const session = await runner.waitForRequestCompletion(submitted);
       expectCompletedSession("config marker turn", session);
       const assistantText = session.timelineItems
