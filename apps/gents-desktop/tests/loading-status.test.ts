@@ -17,6 +17,7 @@ const loaded: SessionLoadState = {
   nodeDid: "did:test:agent",
   found: true,
   error: null,
+  reread: false,
 };
 
 function deployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
@@ -149,6 +150,7 @@ describe("session loading projection", () => {
         nodeDid: "did:test:other",
         found: null,
         error: null,
+        reread: true,
       },
     });
     expect(status).toMatchObject({ layer: "localDatabase", phase: "loading" });
@@ -273,7 +275,7 @@ describe("background projection refresh", () => {
     ).toBeNull();
   });
 
-  it("keeps initial projection loading visible", () => {
+  it("keeps initial projection loading visible while a re-read follows", () => {
     expect(
       project({
         session: null,
@@ -282,8 +284,24 @@ describe("background projection refresh", () => {
           phase: "pending",
           found: null,
           error: "refresh is pending",
+          reread: true,
         },
       }),
     ).toMatchObject({ title: "Waiting for session update", action: null });
+  });
+
+  it("offers a retry once no re-read follows a pending projection", () => {
+    expect(
+      project({
+        session: null,
+        sessionLoad: {
+          ...loaded,
+          phase: "pending",
+          found: null,
+          error: "refresh is pending",
+          reread: false,
+        },
+      }),
+    ).toMatchObject({ title: "Waiting for session update", action: "retryLocal" });
   });
 });

@@ -14,6 +14,7 @@ function controller(
     currentSessionId: () => "session-1",
     refreshSnapshot: vi.fn(async () => {}),
     refreshSession: vi.fn(async () => null),
+    rereadSession: vi.fn(async () => null),
     readSessionUpdate: vi.fn(async (): Promise<number | null> => null),
     ...overrides,
   });
@@ -220,6 +221,32 @@ describe("createProjectionController", () => {
 
     expect(refreshSession).toHaveBeenCalledTimes(1);
     expect(refreshSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("continues a waiting streak only for a re-read no other request joins", async () => {
+    const pass = deferred();
+    const refreshSession = vi.fn(async () => null);
+    const rereadSession = vi.fn(async () => null);
+    const readSessionUpdate = vi.fn(async () => {
+      await pass.promise;
+      return null;
+    });
+    const projection = controller({
+      refreshSession,
+      rereadSession,
+      readSessionUpdate,
+    });
+    void projection.request("sessionDelta");
+    await vi.waitFor(() => expect(readSessionUpdate).toHaveBeenCalledTimes(1));
+    void projection.request("reread");
+    const done = projection.request("session");
+    pass.resolve();
+    await done;
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(rereadSession).not.toHaveBeenCalled();
+    await projection.request("reread");
+    expect(rereadSession).toHaveBeenCalledTimes(1);
+    expect(refreshSession).toHaveBeenCalledTimes(1);
   });
 
   it("drops queued trailing work when disposed", async () => {

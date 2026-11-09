@@ -1,0 +1,4 @@
+---- MODULE MCDesktopUpdateListenerRegistrationGap ----
+EXTENDS DesktopUpdateListener
+
+====

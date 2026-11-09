@@ -1,0 +1,4 @@
+---- MODULE MCDesktopUpdateListenerListenFailure ----
+EXTENDS DesktopUpdateListener
+
+====

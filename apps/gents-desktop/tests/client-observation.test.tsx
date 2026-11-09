@@ -7,7 +7,10 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import { useClientRuntime } from "../src/hooks/useClientRuntime";
-import { startClientObservation } from "../src/hooks/clientObservation";
+import {
+  UNREGISTERED_READ_MS,
+  startClientObservation,
+} from "../src/hooks/clientObservation";
 import * as shellPlatform from "../src/lib/shellPlatform";
 import { node, testApp } from "./app-fixture";
 import { liveAssistant, sessionSnapshot } from "./timeline-fixture";
@@ -265,6 +268,86 @@ describe("following the client while it runs", () => {
     } finally {
       stop?.();
       mac.mockRestore();
+    }
+  });
+});
+
+describe("registering for client updates", () => {
+  it("reads the selection by a deadline while the listener is not registered, then in full once it is", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      const app = testApp({ api, snapshot: running });
+      app.stores.selection.setState({ nodeDid: NODE_DID, sessionId: "s-1" });
+      let register!: () => void;
+      const registered = new Promise<void>((resolve) => {
+        register = resolve;
+      });
+      stop = startClientObservation(
+        app,
+        vi.fn(async () => {
+          await registered;
+          return () => {};
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(UNREGISTERED_READ_MS - 1);
+      expect(api.fetchSessionSnapshot).not.toHaveBeenCalled();
+      /* a registration that never settles must not leave the selection
+         unread */
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      /* that read may have missed a change Tauri dropped before
+         registration, so the registration reads in full again */
+      const snapshotsBefore = api.fetchDesktopSnapshot.mock.calls.length;
+      register();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+      expect(api.fetchDesktopSnapshot.mock.calls.length).toBe(snapshotsBefore + 1);
+    } finally {
+      stop?.();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads the selection when registration rejects, re-listens, then reads in full", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      const app = testApp({ api, snapshot: running });
+      app.stores.selection.setState({ nodeDid: NODE_DID, sessionId: "s-1" });
+      let attempts = 0;
+      let update: ((event: { reason?: string }) => Promise<void>) | undefined;
+      stop = startClientObservation(
+        app,
+        vi.fn(async (listener) => {
+          attempts += 1;
+          if (attempts <= 2) throw new Error("listen refused");
+          update = listener as typeof update;
+          return () => {};
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toBe(1);
+      expect(app.stores.client.getState().error).toBe("listen refused");
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(attempts).toBe(2);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(attempts).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toBe(3);
+      expect(app.stores.client.getState().error).toBeNull();
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+      void update?.({ reason: "store" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
+    } finally {
+      stop?.();
+      vi.useRealTimers();
     }
   });
 });

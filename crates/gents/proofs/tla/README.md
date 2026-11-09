@@ -131,6 +131,27 @@ See `../README.md` for how this fits the broader formal-verification model.
   keeps the code before the fix without renewals as a regression guard for
   arm-then-snapshot. `NodeScopeOnly`, `NoPublicationFence`, `NoEventQueue`,
   `SnapshotBeforeArm` and `RefreshFallback` each break one remaining guard.
+- `DesktopUpdateListener` — the last leg of the desktop's event path: the
+  bridge emitter (`spawn_client_update_task`: coalesced watch wakes, one
+  `desktop://client-updated` event each), Tauri delivery (an event with no
+  registered handler is dropped, never replayed), the frontend's asynchronous
+  listener registration, the projection drain loop and the selected session's
+  load phases. A read sees the versions committed before it starts. A
+  selected request that has not reached its owner answers `pending`, and the
+  runtime may catch up with no store notice at all, since the desktop holds no
+  replica of a remote runtime's session. A waiting phase is `pending` or one
+  of the three delivery phases. `ViewConverges` and `NoStuckPending` hold
+  with five guards: a read without the listener once a registration rejects
+  or a deadline passes, a full read once the listener resolves, re-listening after a rejected registration,
+  bounded re-reads of a waiting phase followed by the retry action (Lean
+  `ClientSessionLoad.phase_has_exit`), and a visible failure for a reply for
+  another session. `MovedReadQueued` checks that a read whose selection moved
+  needs no guard of its own. `NoRegistration` drops registration fairness and
+  still settles the selection; `NoInitialRead` shows what the startup read
+  prevents there. `RegistrationGap` is the observed defect (a commit between
+  the read without a listener and registration is dropped and the view stays a version
+  behind); `ListenFailure`, `PendingNoEvent` and `SupersededMismatch` each
+  drop one remaining guard.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -285,6 +306,26 @@ violate `EventualPublication` and `Convergence`; `NoPublicationFence`,
 ./scripts/run-tlc.sh MCObserverResyncRefreshFallback
 ```
 
+For DesktopUpdateListener — the green model (every guard on, one rejected
+registration, one bridge mismatch, one selection change, silent and noticed
+arrival) checks clean, including both liveness properties, and so does
+`NoRegistration`, where registration may never resolve:
+```bash
+./scripts/run-tlc.sh MCDesktopUpdateListener
+./scripts/run-tlc.sh MCDesktopUpdateListenerNoRegistration
+```
+
+Its five diagnostics are EXPECTED to report violations. `RegistrationGap`
+and `ListenFailure` violate `ViewConverges`; `NoInitialRead`,
+`PendingNoEvent` and `SupersededMismatch` violate `NoStuckPending`:
+```bash
+./scripts/run-tlc.sh MCDesktopUpdateListenerNoInitialRead
+./scripts/run-tlc.sh MCDesktopUpdateListenerRegistrationGap
+./scripts/run-tlc.sh MCDesktopUpdateListenerListenFailure
+./scripts/run-tlc.sh MCDesktopUpdateListenerPendingNoEvent
+./scripts/run-tlc.sh MCDesktopUpdateListenerSupersededMismatch
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -392,6 +433,13 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCObserverResyncNoEventQueue.cfg` | 1 node, a delivered event does not queue its node | `NoLostWrite` intentionally VIOLATED: a write after the snapshot read is delivered and never loaded | 21 distinct states before counterexample; 25 generated | 7 | <1s |
 | `MCObserverResyncSnapshotBeforeArm.cfg` | 1 node, the snapshot is queued before the streams arm | `NoLostWrite` intentionally VIOLATED: a write between the read and the arm has no event and no later load | 65 distinct states before counterexample; 102 generated | 7 | <1s |
 | `MCObserverResyncRefreshFallback.cfg` | 1 node, a rejected refresh reads again | `NoReadWithoutReason` intentionally VIOLATED: the observer's publication rejects the refresh, which reads its node a second time | 114 distinct states before counterexample; 176 generated | 9 | <1s |
+| `MCDesktopUpdateListener.cfg` | `MaxVersion = 2`, `ListenFailures = 1`, `Mismatches = 1`, `Selections = 1`, `RereadBudget = 2`, every guard on | Passes `TypeOK`, `MovedReadQueued`, `ViewConverges`, `NoStuckPending` | 10,819 distinct states; 46,787 generated | 18 | <1s |
+| `MCDesktopUpdateListenerNoRegistration.cfg` | as green, `SpecListenerUnfair` (registration may never resolve) | Passes `TypeOK`, `MovedReadQueued`, `NoStuckPending`: the read without a listener settles the selection with no event at all | 10,819 distinct states; 46,787 generated | 18 | <1s |
+| `MCDesktopUpdateListenerNoInitialRead.cfg` | as NoRegistration, `InitialRead = FALSE` | `NoStuckPending` intentionally VIOLATED: ListenRejects, Relistens, then the listener never resolves; 'Opening session' stays with no read and no action | 5,856 distinct states; 22,536 generated | 18 | <1s |
+| `MCDesktopUpdateListenerRegistrationGap.cfg` | as green, `FullAfterListen = FALSE` | `ViewConverges` intentionally VIOLATED: the read without a listener takes version 1, a commit before registration is dropped, the listener resolves and nothing reads version 2 | 12,735 distinct states; 54,745 generated | 19 | <1s |
+| `MCDesktopUpdateListenerListenFailure.cfg` | as green, `Relisten = FALSE` | `ViewConverges` intentionally VIOLATED: the read without a listener settles the session, registration rejects and is never retried, and the next commit is never read | 6,073 distinct states; 25,790 generated | 16 | <1s |
+| `MCDesktopUpdateListenerPendingNoEvent.cfg` | as green, `PendingReread = FALSE` | `NoStuckPending` intentionally VIOLATED: a read answers a waiting phase (`accepted` in the trace), then a silent arrival; the waiting status stays with no action | 5,093 distinct states; 18,904 generated | 15 | <1s |
+| `MCDesktopUpdateListenerSupersededMismatch.cfg` | as green, `MismatchExit = FALSE` | `NoStuckPending` intentionally VIOLATED: a reply for another session (FinishMismatch) is dropped and the load stays `loading` with no read behind it | 10,903 distinct states; 46,605 generated | 17 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
@@ -410,6 +458,10 @@ green rows checked their temporal properties over the complete state space.
 The fourteen ObserverResync rows used TLC2 `2026.11.06.222357` (rev `d8fb231`)
 with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the liveness
 rows checked their temporal properties over the complete state space.
+
+The seven DesktopUpdateListener rows used TLC2 `2026.11.06.222357` (rev
+`d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
+green runs checked their temporal properties over the complete state space.
 
 ## PairingTransport derived requirements
 

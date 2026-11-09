@@ -637,6 +637,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Callback.lean` | Callback invocation lifecycle, action-journal prefix, and claim uniqueness |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
+| `Proofs/ClientShell/SessionLoad.lean` | Selected-session load presentation (`projectSessionLoadingStatus`) and its follow-up machine: while the observer runs, every status without an action has a read running or queued, a bounded re-read scheduled, or is the runtime-connection blocker (`phase_has_exit`); a moved read leaves the moved selection's read queued; waiting phases offer retry once re-reads are spent; a reply for another session fails visibly; stopping the client leaves the held load an action (`stop_leaves_action`). Conformance: `Proofs/Conformance/ClientSessionLoad.lean` emits projection rows and follow-up traces (`apply_reachable`), replayed through the production observer, drain loop and session reads by the desktop `tests/lean-conformance/session-loading-status.test.ts`. TLA companion: `tla/DesktopUpdateListener.tla`. |
 | `Proofs/ClientShell/ObservationScope.lean` | Shared client observation focus while external frontend attachments are present; the last detachment restores current shell intent. |
 | `Proofs/ClientShell/ObservationOrdering.lean` | Client publication fences and the observer load loop: snapshot reloads check publication epochs only, patches also check request-event epochs; request events of any footprint never supersede a reload, a node's observer event rejects only that node's patches, a tool-call change rejects every patch but no reload, a reload's footprint is computed from the rows it publishes and widens once per unowned row it takes over while checking only known owners, a superseded load requeues without back-off, a load starts only on an armed source, and every connecting or disconnected node owns a queued or running load or an arming source (`ObserverResync`; TLA `ObserverResync`). |
 | `Proofs/ClientShell/Voice.lean` | Explicit dictation and live conversation epochs; stop, disconnection, view disposal and scope changes reject late completions. |
@@ -716,7 +717,7 @@ Semantic submodules:
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |
 | `Proofs.StorageFailure` | typed storage-full classification, retained signed submissions and retry suppression |
-| `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
+| `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `SessionLoad`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed`, `Ownership` |

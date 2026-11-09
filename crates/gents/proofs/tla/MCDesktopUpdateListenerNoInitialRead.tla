@@ -1,0 +1,4 @@
+---- MODULE MCDesktopUpdateListenerNoInitialRead ----
+EXTENDS DesktopUpdateListener
+
+====

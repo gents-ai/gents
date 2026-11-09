@@ -45,6 +45,7 @@ const lookedAndFoundNothing = (app: ReturnType<typeof testApp>, sessionId = "s-g
       nodeDid: NODE,
       found: false,
       error: null,
+      reread: false,
     }),
   );
 
