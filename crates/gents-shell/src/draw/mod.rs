@@ -321,6 +321,14 @@ mod tests {
     }
 
     #[test]
+    fn a_view_with_no_selectable_row_highlights_none() {
+        let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
+        app.view = View::Agents;
+        let (y, x) = find(&screen(&app), "3 background").expect("the count header");
+        assert_ne!(buffer(&app)[(x, y)].bg, theme::SEL_BG);
+    }
+
+    #[test]
     fn selected_rows_fill_their_width() {
         let buf = buffer(&with_right_pane(with_sample_session(App::new(
             Vim, 132, 36,

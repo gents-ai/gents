@@ -580,29 +580,26 @@ mod tests {
             calls,
             as_of: String::new(),
         });
-        let shown = |app: &App| -> Vec<String> {
-            let rows = app.view_rows(View::Agents);
-            rows.iter().map(|row| row.text.to_string()).collect()
-        };
+        let shown = |app: &App| texts(&app.view_rows(View::Agents));
+        let row = |text: &str, tone| (text.to_string(), tone, false);
 
         let s1 = [
-            " 1 background   1 done",
-            "",
-            " ● bash",
-            "     pending",
-            " ✓ lint",
-            "     pending",
+            row(" 1 background   1 done", Tone::Label),
+            row("", Tone::Plain),
+            row(" ● bash", Tone::Plain),
+            row("     pending", Tone::Label),
+            row(" ✓ lint", Tone::Accent),
+            row("     pending", Tone::Label),
         ];
         assert_eq!(shown(&app), s1);
-        assert!(!app
-            .view_rows(View::Agents)
-            .iter()
-            .any(SidebarRow::selectable));
         press(&mut app, "esc g t");
-        assert_eq!(
-            shown(&app),
-            [" 1 background", "", " ● grep", "     pending"]
-        );
+        let s2 = [
+            row(" 1 background", Tone::Label),
+            row("", Tone::Plain),
+            row(" ● grep", Tone::Plain),
+            row("     pending", Tone::Label),
+        ];
+        assert_eq!(shown(&app), s2);
         assert!(intended.try_iter().all(|intent| intent != Intent::Refresh));
     }
 

@@ -141,7 +141,7 @@ mod tests {
     use chrono::{DateTime, Local};
 
     use super::*;
-    use crate::commands::shell::testing::{agent, options, sent, shown_values};
+    use crate::commands::shell::testing::{agent, keys_of, options, sent, shown_values};
 
     #[test]
     fn node_form_mirrors_the_desktop() {
@@ -184,6 +184,9 @@ mod tests {
                 ("created_at", created.as_str()),
             ]
         );
+        let fixed = ["node_did", "created_at"];
+        assert_eq!(keys_of(&shown, &FieldKind::Fixed), fixed);
+        assert!(keys_of(&shown, &FieldKind::Lines).is_empty());
         let agents = [
             ("engineer", "Engineer"),
             ("scout", "Scout · disabled, enabled when saved as default"),

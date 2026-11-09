@@ -5,7 +5,7 @@ use super::{draw_rows, pane_box, theme};
 use crate::app::changes::rail_rows;
 use crate::app::{App, Pane};
 use crate::layout::sidebar_rows_area;
-use crate::sample::{Scope, View};
+use crate::sample::{Scope, SidebarRow, View};
 
 const SCOPES: [(Scope, &str); 2] = [(Scope::Session, "session"), (Scope::Tree, "working tree")];
 
@@ -56,8 +56,10 @@ pub fn draw(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
     if let Some(file) = app.diff {
         draw_diff(app, app.visible_rows(Pane::Sidebar, rows), file, buf);
     } else {
-        let selected = app.view_sel[app.view as usize];
-        draw_rows(buf, rows, &app.view_rows(app.view), Some(selected));
+        let shown = app.view_rows(app.view);
+        let selected = Some(app.view_sel[app.view as usize])
+            .filter(|&index| shown.get(index).is_some_and(SidebarRow::selectable));
+        draw_rows(buf, rows, &shown, selected);
     }
 }
 

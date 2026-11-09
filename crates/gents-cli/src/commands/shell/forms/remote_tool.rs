@@ -142,7 +142,7 @@ mod tests {
     use gents_shell::source::FormRef;
 
     use super::*;
-    use crate::commands::shell::testing::{sent, shown_values};
+    use crate::commands::shell::testing::{keys_of, sent, shown_values};
 
     #[test]
     fn remote_tool_form_mirrors_the_desktop() {
@@ -187,6 +187,8 @@ mod tests {
                 ("tags", "local"),
             ]
         );
+        assert_eq!(keys_of(&edit, &FieldKind::Fixed), ["service_id"]);
+        assert_eq!(keys_of(&edit, &FieldKind::Lines), ["description"]);
         let test = FormAction {
             label: "Test connection".to_string(),
             act: FormAct::TestConnection,

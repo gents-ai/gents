@@ -448,7 +448,9 @@ mod tests {
 
     use super::*;
     use crate::commands::shell::sections::{self, Sources};
-    use crate::commands::shell::testing::{agent, conditions, options, sent, shown_values};
+    use crate::commands::shell::testing::{
+        agent, conditions, keys_of, options, sent, shown_values,
+    };
 
     fn sources() -> Sources {
         Sources {
@@ -515,6 +517,8 @@ mod tests {
                 ("enable", "off"),
             ]
         );
+        assert!(keys_of(&new, &FieldKind::Fixed).is_empty());
+        assert_eq!(keys_of(&new, &FieldKind::Lines), ["prompt"]);
         let schedules = [
             ("daily", "Daily"),
             ("night", "Every day at 02:00"),
@@ -749,6 +753,16 @@ mod tests {
                 ("tags", "ops"),
             ]
         );
+        let fixed = [
+            "trigger_id",
+            "fired",
+            "last_attempt",
+            "last_status",
+            "last_error",
+            "next_run",
+        ];
+        assert_eq!(keys_of(&edit, &FieldKind::Fixed), fixed);
+        assert_eq!(keys_of(&edit, &FieldKind::Lines), ["description"]);
         let tasks = [("triage", "Triage"), ("sweep", "sweep")];
         assert_eq!(options(&edit, "task_id"), tasks);
         let schedules = [("daily", "Daily"), ("night", "Every day at 02:00")];

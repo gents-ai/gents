@@ -136,7 +136,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::commands::shell::testing::{sent, shown_values};
+    use crate::commands::shell::testing::{keys_of, sent, shown_values};
 
     #[test]
     fn event_source_form_mirrors_the_desktop() {
@@ -188,6 +188,9 @@ mod tests {
                 ("tags", "sales"),
             ]
         );
+        let fixed = ["event_source_id", "event_kind"];
+        assert_eq!(keys_of(&edit, &FieldKind::Fixed), fixed);
+        assert!(keys_of(&edit, &FieldKind::Lines).is_empty());
         let delete = FormAct::Delete {
             label: "Leads".to_string(),
             name: "Leads".to_string(),

@@ -275,7 +275,7 @@ fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, boo
 
 const DISCOVERY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Why a model discovery stopped before the provider answered.
+/// Why a model discovery has no answer to show.
 #[derive(Debug, thiserror::Error)]
 pub enum ModelDiscoveryError {
     #[error(transparent)]
@@ -285,6 +285,7 @@ pub enum ModelDiscoveryError {
     /// A sign-in needs the node's configuration, which the caller could not reach.
     #[error("node configuration is not reachable")]
     NoAccess,
+    /// Reading the node's provider accounts failed.
     #[error(transparent)]
     Accounts(anyhow::Error),
     #[error("the selected provider account is not connected")]

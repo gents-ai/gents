@@ -17,6 +17,12 @@ pub(super) fn shown_values(form: &Form) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// The keys of `form`'s fields of `kind`.
+pub(super) fn keys_of<'a>(form: &'a Form, kind: &FieldKind) -> Vec<&'a str> {
+    let fields = form.fields.iter().filter(|field| field.kind == *kind);
+    fields.map(|field| field.key.as_str()).collect()
+}
+
 /// The `(value, label)` pairs `form`'s field `key` chooses among, none for a field that is no
 /// choice.
 pub(super) fn options<'a>(form: &'a Form, key: &str) -> Vec<(&'a str, &'a str)> {

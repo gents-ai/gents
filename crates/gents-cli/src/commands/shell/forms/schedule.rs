@@ -117,7 +117,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::commands::shell::testing::{conditions, sent, shown_values};
+    use crate::commands::shell::testing::{conditions, keys_of, sent, shown_values};
 
     #[test]
     fn schedule_form_mirrors_the_desktop() {
@@ -155,6 +155,8 @@ mod tests {
                 ("manual_run", ""),
             ]
         );
+        assert_eq!(keys_of(&edit, &FieldKind::Fixed), ["schedule_id"]);
+        assert!(keys_of(&edit, &FieldKind::Lines).is_empty());
         assert_eq!(
             conditions(&edit),
             [

@@ -160,7 +160,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::commands::shell::testing::{sent, shown_values};
+    use crate::commands::shell::testing::{keys_of, sent, shown_values};
 
     #[test]
     fn skill_form_mirrors_the_desktop() {
@@ -203,6 +203,9 @@ mod tests {
                 ("enabled", "on"),
             ]
         );
+        assert_eq!(keys_of(&edit, &FieldKind::Fixed), ["skill_id"]);
+        let lines = ["description", "instructions", "interface_json"];
+        assert_eq!(keys_of(&edit, &FieldKind::Lines), lines);
         let delete = FormAct::Delete {
             label: "commit".to_string(),
             name: "commit".to_string(),
