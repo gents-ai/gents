@@ -36,6 +36,8 @@ pub(crate) enum UxCommand {
     Module(UxModuleArgs),
     /// Run the static lint on a plugin.js file, as `gents pack check` does.
     Lint(UxLintArgs),
+    /// Render a plugin's page in the real sandbox on its node, at light and dark, and report what it shows.
+    Preview(UxPreviewArgs),
 }
 
 #[derive(clap::Args)]
@@ -50,6 +52,25 @@ pub(crate) struct UxModuleArgs {
     pub(crate) id: String,
     #[arg(long, help = "Home to read from; defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct UxPreviewArgs {
+    #[arg(help = "A listing id, a plugin's name, or a plugin.js path")]
+    pub(crate) target: String,
+    #[arg(long, help = "Directory for the PNGs and report.json")]
+    pub(crate) out: PathBuf,
+    #[arg(
+        long,
+        help = "Home the plugin and its node live in; defaults to ~/.gents"
+    )]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value = "1280x800",
+        help = "Size of the pane the page draws in"
+    )]
+    pub(crate) viewport: gents::plugin::ux::preview::Viewport,
 }
 
 #[derive(clap::Args)]

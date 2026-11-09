@@ -20,6 +20,7 @@ mod patch;
 mod policy;
 mod reads;
 mod skill;
+mod ux_preview;
 mod validate;
 
 use args::{
@@ -67,6 +68,10 @@ const HELP_INDEX: &[(&str, &str)] = &[
     (
         "plugin",
         "installed plugin inspection and explicit Tools selection",
+    ),
+    (
+        "ux",
+        "render a pack's UI page in the real sandbox: ux preview",
     ),
     ("discovery", "external configuration scan"),
     ("cleanup", "atomic multi-document deletion"),
@@ -336,7 +341,7 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
             previewing = argv.iter().any(|word| word == "preview");
             deleting = argv.first().is_some_and(|word| word == "cleanup")
                 || argv.iter().take(3).any(|word| word == "delete");
-            help = config_help_resource(&argv).is_some();
+            help = config_help_resource(&argv).is_some() || ux_preview::is_ux_preview(&argv);
             call.dispatch(&argv).await
         }
         .await;
@@ -373,6 +378,9 @@ impl ConfigCommandTool {
     }
 
     async fn dispatch(&self, argv: &[String]) -> Result<String> {
+        if ux_preview::is_ux_preview(argv) {
+            return self.ux_preview(argv).await;
+        }
         if let Some(resource) = config_help_resource(argv) {
             return self.help(resource, help_verb(argv));
         }

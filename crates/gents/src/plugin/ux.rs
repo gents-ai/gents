@@ -35,6 +35,7 @@ use crate::pack::{
 };
 
 pub mod lint;
+pub mod preview;
 pub mod reference;
 
 /// The entry file a dev plugin folder must hold.

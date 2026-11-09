@@ -59,7 +59,7 @@ export function sandboxHostOf(id: string): SandboxHost | undefined {
 /* a module whose id is not named up front (a bare loader call) is
    evaluated once under a probe frame to learn it; every door that lists a
    plugin names the id before a frame is built */
-async function probeId(module: RuntimeModule, origin: string): Promise<string> {
+export async function probeId(module: RuntimeModule, origin: string): Promise<string> {
   const probe = new SandboxHost(module.source, {
     key: `${origin}#probe`,
     pluginId: "",

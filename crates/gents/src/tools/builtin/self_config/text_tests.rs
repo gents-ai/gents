@@ -2100,3 +2100,70 @@ async fn receipts_summarize_long_text_by_length_and_sha256() {
         short["changed"][0]["from"]["sha256"]
     );
 }
+
+async fn ux_preview_tools(label: &str, home: &std::path::Path) -> Tools {
+    let node = build_agent_node().await;
+    let identity = node_identity(label);
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &owner, "setup").await;
+    let mut grants = config(&["tools"]);
+    grants.agent_id = "setup".into();
+    build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &grants,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+            home.to_owned(),
+        ))),
+    )
+}
+
+#[tokio::test]
+async fn ux_preview_explains_itself_and_names_a_missing_plugin() {
+    let home = tempfile::tempdir().unwrap();
+    let tools = ux_preview_tools("ux-preview", home.path()).await;
+    let help = ok(&tools, json!({"argv":["ux","preview","--help"]})).await;
+    assert!(help.as_str().unwrap().starts_with("ux preview: "), "{help}");
+    let missing = refused(&tools, json!({"argv":["ux","preview","nope"]})).await;
+    assert!(missing.contains("no ux plugin"), "{missing}");
+    let unknown = refused(
+        &tools,
+        json!({"argv":["ux","preview","nope"],"options":{"theme":"dark"}}),
+    )
+    .await;
+    assert!(unknown.contains("options.viewport only"), "{unknown}");
+}
+
+#[tokio::test]
+#[ignore = "needs a system browser and GENTS_UX_PREVIEW_ASSETS at a built preview page"]
+async fn ux_preview_reports_text_first_through_the_config_tool() {
+    let home = tempfile::tempdir().unwrap();
+    let dev = home
+        .path()
+        .join(crate::store::local::home::UX_PLUGINS_DIR_NAME)
+        .join("probe");
+    std::fs::create_dir_all(&dev).unwrap();
+    std::fs::write(
+        dev.join(crate::plugin::ux::DEV_ENTRY),
+        "import { PLUGIN_PAGE_AREA } from '@gents/ux-sdk'\n\
+         import { jsx } from 'react/jsx-runtime'\n\
+         export default { id: 'probe', register(ctx) { ctx.register({ id: 'page', area: PLUGIN_PAGE_AREA, \
+         render: () => jsx('h1', { children: 'hello from the probe' }) }) } }\n",
+    )
+    .unwrap();
+    let tools = ux_preview_tools("ux-preview-live", home.path()).await;
+    let report = ok(&tools, json!({"argv":["ux","preview","probe"]})).await;
+    let report = report.as_str().unwrap();
+    assert!(
+        report.starts_with("probe at 1280x800: rendered 2 of 2 themes"),
+        "{report}"
+    );
+    let visible = report.find("hello from the probe").expect(report);
+    let next = report.find("\nNext: ").expect(report);
+    let metadata = report.find("\nMetadata:").expect(report);
+    assert!(visible < next && next < metadata, "{report}");
+    assert!(home.path().join("ux-preview/probe/light.png").is_file());
+    assert!(home.path().join("ux-preview/probe/report.json").is_file());
+}

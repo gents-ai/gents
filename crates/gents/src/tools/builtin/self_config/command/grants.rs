@@ -36,6 +36,7 @@ pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<
     }
     if pack || categories.contains("tools") {
         resources.push("plugin");
+        resources.push("ux");
     }
     if !categories.is_empty() {
         resources.push("cleanup");
