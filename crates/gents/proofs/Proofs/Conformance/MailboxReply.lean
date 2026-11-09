@@ -1,4 +1,5 @@
 import Proofs.Mailbox.Reply
+import Proofs.Mailbox.Executable
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.MailboxReplyContracts
@@ -112,8 +113,46 @@ private def answerCacheCases : List
   , ("mismatched-authored-source", { savedAnswer with sourceItem := "other" }, some closedQuestion, "client", true)
   ]
 
-def answerCacheCasesJson : String := jsonArray <| answerCacheCases.map fun
-    (name, binding, observed, current, ack) =>
+/-- Every status the native owner can report reaches the retirement decision
+with the otherwise-retiring binding, and exactly the terminal ones retire it, so
+dropping a status row (such as `expired`) fails this build. -/
+theorem answerCacheCases_cover_statuses :
+    allStatuses.all (fun status => answerCacheCases.any fun (_, binding, observed, current, ack) =>
+      binding == savedAnswer && current == "client" && ack &&
+        observed.map (·.status) == some status &&
+        mayRetireAnswerCache binding observed current ack == status.terminal) = true := by
+  decide
+
+private abbrev AnswerCacheCase :=
+  String × AnswerCacheBinding × Option AnswerCacheObservation × String × Bool
+
+/-- Some case breaks `broken` and keeps the answer. -/
+private def keepsWhen (broken : AnswerCacheCase → Bool) : Bool :=
+  answerCacheCases.any fun row =>
+    let (_, b, o, c, ack) := row
+    broken row && !mayRetireAnswerCache b o c ack
+
+/-- Every conjunct of `mayRetireAnswerCache` has a case that breaks it and keeps
+the answer, so dropping a guard row fails this build. -/
+theorem answerCacheCases_cover_guards :
+    [ keepsWhen fun (_, b, _, _, _) => !b.confirmed
+    , keepsWhen fun (_, _, _, _, ack) => !ack
+    , keepsWhen fun (_, b, _, c, _) => c != b.client
+    , keepsWhen fun (_, b, _, _, _) => b.sourceItem != b.item
+    , keepsWhen fun (_, b, _, _, _) => b.item == ""
+    , keepsWhen fun (_, _, o, _, _) => o.isNone
+    , keepsWhen fun (_, b, o, _, _) => o.any (·.node != b.node)
+    , keepsWhen fun (_, b, o, _, _) => o.any (·.agent != b.agent)
+    , keepsWhen fun (_, b, o, _, _) => o.any (·.session != b.session)
+    , keepsWhen fun (_, b, o, _, _) => o.any (·.item != b.item)
+    , keepsWhen fun (_, _, o, _, _) => o.any (·.kind != .ask)
+    , keepsWhen fun (_, _, o, _, _) => o.any (·.handling != .startRequest)
+    ].all id = true := by
+  decide
+
+private def answerCacheCaseJson
+    (name : String) (binding : AnswerCacheBinding)
+    (observed : Option AnswerCacheObservation) (current : String) (ack : Bool) : String :=
   let observation := observed.map fun value =>
     "{\"item\":{\"itemId\":" ++ jsonString value.item ++
     ",\"requesterDid\":" ++ jsonString value.requester ++
@@ -136,5 +175,16 @@ def answerCacheCasesJson : String := jsonArray <| answerCacheCases.map fun
   ",\"currentClient\":" ++ jsonString current ++
   ",\"acknowledged\":" ++ boolJson ack ++
   ",\"retire\":" ++ boolJson (mayRetireAnswerCache binding observed current ack) ++ "}"
+
+/-- The cases, plus the full status vocabulary with each status's terminality,
+so a consumer checks status coverage against the enumeration rather than
+against the case list itself. -/
+def answerCacheCasesJson : String :=
+  "{\"statuses\":" ++ jsonArray (allStatuses.map fun status =>
+      "{\"status\":" ++ jsonString status.toDefraDB ++
+      ",\"terminal\":" ++ boolJson status.terminal ++ "}") ++
+  ",\"cases\":" ++ jsonArray (answerCacheCases.map fun
+    (name, binding, observed, current, ack) =>
+      answerCacheCaseJson name binding observed current ack) ++ "}"
 
 end Conformance.MailboxReplyContracts

@@ -5,10 +5,11 @@ import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { mayRetireMailboxAnswer } from "../../src/hooks/mailboxAnswerRetirement";
 
+type Observation = NonNullable<Parameters<typeof mayRetireMailboxAnswer>[1]>;
 type Case = {
   name: string;
   binding: Parameters<typeof mayRetireMailboxAnswer>[0];
-  observation: Parameters<typeof mayRetireMailboxAnswer>[1];
+  observation: (Observation & { item: Observation["item"] & { status: string } }) | null;
   currentClient: string;
   acknowledged: boolean;
   retire: boolean;
@@ -28,9 +29,18 @@ it("derives answer-cache retirement from the executed Mailbox owner", async () =
     ["env", "lean", "--run", "MailboxAnswerCacheConformance.lean"],
     { cwd, timeout: 240_000 },
   );
-  const cases = JSON.parse(stdout) as Case[];
-  expect(cases.some((row) => row.retire)).toBe(true);
-  expect(cases.some((row) => !row.retire)).toBe(true);
+  const { statuses, cases } = JSON.parse(stdout) as {
+    statuses: { status: string; terminal: boolean }[];
+    cases: Case[];
+  };
+  // The status vocabulary is the model's enumeration, not the case list, so a
+  // lost status row (such as `expired`) fails here as well as in the Lean build.
+  expect(statuses.length).toBeGreaterThan(0);
+  for (const { status, terminal } of statuses)
+    expect(
+      cases.some((row) => row.observation?.item.status === status && row.retire === terminal),
+      status,
+    ).toBe(true);
   for (const row of cases)
     expect(
       mayRetireMailboxAnswer(
