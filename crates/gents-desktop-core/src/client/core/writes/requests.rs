@@ -115,21 +115,31 @@ impl ClientCore {
         node_did: Option<&str>,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        let stale = request_in_scope(&snapshot.requests, stale_request_id, node_did)?;
-        let node_did = stale
-            .node_did
-            .as_deref()
-            .context("stale request has no node_did")?;
+        // The store need not hold the stale request; with a node scope the
+        // resend reads it from that runtime by id.
+        let held = find_request_in_scope(&snapshot.requests, stale_request_id, node_did)?;
+        let node_did = match held.as_ref() {
+            Some(stale) => stale
+                .node_did
+                .as_deref()
+                .context("stale request has no node_did")?,
+            None => node_did.with_context(|| format!("request {stale_request_id} not found"))?,
+        };
         let peer_record = self
             .peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let (signer, admission, _) = self
             .request_authority(node_did, peer_record.as_ref())
             .await?;
-        let requester_did = stale
-            .requester_did
-            .as_deref()
-            .context("stale request has no session requester provenance")?;
+        let requester_did = held
+            .as_ref()
+            .map(|stale| {
+                stale
+                    .requester_did
+                    .as_deref()
+                    .context("stale request has no session requester provenance")
+            })
+            .transpose()?;
         let result = mutations::resend_request(
             snapshot.as_ref(),
             &self.session_queue_access(node_did)?,

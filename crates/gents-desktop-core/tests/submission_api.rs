@@ -162,6 +162,13 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
         .await
         .context("forcing stale state")?;
     core.refresh_store().await?;
+    // The store holds live requests and each session's latest terminal one;
+    // resend reads a stale request it does not hold from the runtime by id.
+    assert!(
+        core.request_in_scope(&original.request_id, Some(&original.node_did))
+            .is_err(),
+        "the refreshed store no longer holds the stale request"
+    );
 
     let resent = core
         .resend_request_in_scope(&original.request_id, Some(&original.node_did))
