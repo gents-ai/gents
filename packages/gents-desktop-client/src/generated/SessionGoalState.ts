@@ -4,9 +4,14 @@ import type { SessionGoalUnknownCause } from "./SessionGoalUnknownCause.js";
 import type { SessionGoalView } from "./SessionGoalView.js";
 
 /**
- * One session's Goal state as the desktop reads it from its runtime (Lean
- * `SessionObservation.State`), with the next action that view offers
- * (`SessionObservation.next`). Only `observed` carries a verified Goal or a
- * verified absence; the other states name their cause.
+ * One session's Goal state as the desktop reads it from its runtime. The
+ * state, its next action and an unknown state's reason come from the
+ * `gents::goal` owner (Lean `SessionObservation.State`, `next`, `refusal`);
+ * this DTO only carries them. Only `observed` carries a verified Goal or a
+ * verified absence.
  */
-export type SessionGoalState = { "kind": "observed", observation: SessionGoalView, next: SessionGoalNextAction, } | { "kind": "no_readable_session", next: SessionGoalNextAction, } | { "kind": "unknown", cause: SessionGoalUnknownCause, next: SessionGoalNextAction, };
+export type SessionGoalState = { "kind": "observed", observation: SessionGoalView, next: SessionGoalNextAction, } | { "kind": "no_readable_session", next: SessionGoalNextAction, } | { "kind": "unknown", cause: SessionGoalUnknownCause, next: SessionGoalNextAction,
+/**
+ * The refusal a send or Goal change from this state returns.
+ */
+reason: string, };

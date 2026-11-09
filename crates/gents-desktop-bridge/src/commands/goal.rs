@@ -4,8 +4,8 @@ use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{
-    GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView,
-    SessionGoalNextAction, SessionGoalState, SessionGoalView,
+    GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, SessionGoalState,
+    SessionGoalView,
 };
 use gents::goal::SessionGoalObservationState;
 use gents_protocol::goal_control::SessionGoalObservation;
@@ -17,61 +17,61 @@ pub async fn session_goal(
 ) -> Result<SessionGoalState> {
     let state = core.session_goal_observation(node_did, session_id).await?;
     Ok(session_goal_state(state, |observation| {
-        observation_view(core, node_did, session_id, observation)
+        let waiting = waiting_question_ids(core, node_did, session_id, &observation);
+        goal_view(observation, waiting)
     }))
 }
 
-/// Lean `SessionObservation.view` and `next` over the native state.
+/// Carries the owner's state and `next` to the desktop DTO.
 fn session_goal_state(
     state: SessionGoalObservationState,
     view: impl FnOnce(SessionGoalObservation) -> SessionGoalView,
 ) -> SessionGoalState {
+    let next = state.next();
     match state {
-        SessionGoalObservationState::NoReadableSession => SessionGoalState::NoReadableSession {
-            next: SessionGoalNextAction::Send,
-        },
+        SessionGoalObservationState::NoReadableSession => {
+            SessionGoalState::NoReadableSession { next }
+        }
         SessionGoalObservationState::Unknown(cause) => SessionGoalState::Unknown {
             cause,
-            next: SessionGoalNextAction::Refresh,
+            next,
+            reason: gents::goal::GoalInputRefused::from(cause).to_string(),
         },
-        SessionGoalObservationState::Observed(observation) => {
-            let next = if observation.goal.is_some() {
-                SessionGoalNextAction::ControlGoal
-            } else {
-                SessionGoalNextAction::StartGoal
-            };
-            SessionGoalState::Observed {
-                observation: view(*observation),
-                next,
-            }
-        }
+        SessionGoalObservationState::Observed(observation) => SessionGoalState::Observed {
+            observation: view(*observation),
+            next,
+        },
     }
 }
 
-fn observation_view(
+fn waiting_question_ids(
     core: &ClientCore,
     node_did: &str,
     session_id: &str,
-    observation: SessionGoalObservation,
-) -> SessionGoalView {
+    observation: &SessionGoalObservation,
+) -> Option<Vec<String>> {
     let snapshot = core.store().snapshot();
     let mut sessions = snapshot.sessions.iter().filter(|session| {
         session.node_did == node_did
             && session.session_id == session_id
             && session.requester_did == observation.requester_did
     });
-    let source = sessions.next().filter(|_| sessions.next().is_none());
-    let waiting_question_ids = source.and_then(|session| {
-        let latest = session.observation.as_ref()?.latest_request.as_ref()?;
-        let ids = gents::goal::awaiting_goal_question_ids(
-            &observation,
-            latest,
-            &snapshot.requests,
-            &snapshot.mailbox_items,
-            chrono::Utc::now(),
-        );
-        (!ids.is_empty()).then_some(ids)
-    });
+    let source = sessions.next().filter(|_| sessions.next().is_none())?;
+    let latest = source.observation.as_ref()?.latest_request.as_ref()?;
+    let ids = gents::goal::awaiting_goal_question_ids(
+        observation,
+        latest,
+        &snapshot.requests,
+        &snapshot.mailbox_items,
+        chrono::Utc::now(),
+    );
+    (!ids.is_empty()).then_some(ids)
+}
+
+fn goal_view(
+    observation: SessionGoalObservation,
+    waiting_question_ids: Option<Vec<String>>,
+) -> SessionGoalView {
     SessionGoalView {
         waiting_question_ids,
         node_did: observation.node_did,
@@ -317,8 +317,8 @@ mod tests {
         }
     }
 
-    /// Replays Lean `SessionObservation.view` and `next` through the native
-    /// classifier and the DTO the desktop receives.
+    /// Replays Lean `SessionObservation.view`, `next` and `refusal` through
+    /// the owner's classifier and the DTO projection the desktop receives.
     #[test]
     fn generated_session_goal_views_name_their_cause() {
         #[derive(serde::Deserialize)]
@@ -326,7 +326,7 @@ mod tests {
             goal_session_observation_cases: Vec<Value>,
         }
         let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert_eq!(contracts.goal_session_observation_cases.len(), 30);
+        assert_eq!(contracts.goal_session_observation_cases.len(), 20);
         let row = gents_protocol::session::decode_session_row(&json!({
             "_docID": "session-document", "session_id": "chat", "node_did": "did:key:node",
             "requester_did": "did:key:user", "agent_did": "did:key:agent",
@@ -337,7 +337,6 @@ mod tests {
             let session = match case["session"].as_str().unwrap() {
                 "absent" => AgentSessionRowRead::Absent,
                 "present" => AgentSessionRowRead::Present(Box::new(row.clone())),
-                "omitted" => AgentSessionRowRead::Omitted,
                 other => panic!("unmodeled session read {other}"),
             };
             let projection = match case["projection"]["kind"].as_str().unwrap() {
@@ -350,26 +349,7 @@ mod tests {
             };
             let state = gents::goal::observe_session_goal(&session, projection);
             let dto = serde_json::to_value(session_goal_state(state, |observation| {
-                SessionGoalView {
-                    node_did: observation.node_did,
-                    session_id: observation.session_id,
-                    session_doc_id: observation.session_doc_id,
-                    observed_at: observation.observed_at,
-                    goal: observation.goal.map(|goal| GoalControlView {
-                        goal_id: goal.snapshot.goal_id,
-                        revision: goal.revision,
-                        objective: goal.snapshot.objective,
-                        status: goal.snapshot.status,
-                        token_budget: None,
-                        tokens_used: "0".into(),
-                        active_time_seconds: "0".into(),
-                        continuation_sequence: "0".into(),
-                        last_blocked_reason: None,
-                        last_failure: None,
-                        completion_evidence: None,
-                    }),
-                    waiting_question_ids: None,
-                }
+                goal_view(observation, None)
             }))
             .unwrap();
             let view = &case["expected_view"];
@@ -392,6 +372,13 @@ mod tests {
                 "unavailable" => {
                     assert_eq!(dto["kind"], "unknown", "{case}");
                     assert_eq!(dto["cause"], view["cause"], "{case}");
+                    let refused: gents::goal::SessionGoalUnknownCause =
+                        serde_json::from_value(view["cause"].clone()).unwrap();
+                    assert_eq!(
+                        dto["reason"],
+                        gents::goal::GoalInputRefused::from(refused).to_string(),
+                        "the view's reason is the refusal a send returns: {case}"
+                    );
                 }
                 other => panic!("unmodeled view {other}"),
             }

@@ -320,7 +320,13 @@ it.each(["unknown", "unreadable", "different chat"])(
     const f = fixture("session");
     f.goal.mockResolvedValueOnce(
       kind === "unknown"
-        ? { kind: "unknown", cause: "projection_missing", next: "refresh" }
+        ? {
+            kind: "unknown",
+            cause: "projection_missing",
+            next: "await_publication",
+            reason:
+              "This chat's Goal state is unknown: its Agent has not published it yet.",
+          }
         : kind === "unreadable"
           ? { kind: "no_readable_session", next: "send" }
           : observed({
@@ -333,8 +339,30 @@ it.each(["unknown", "unreadable", "different chat"])(
     await f.actions().setGoal("Original goal");
     expect(f.control).not.toHaveBeenCalled();
     expect(loadGoalDrafts().goalDrafts).toHaveLength(0);
+    expect(JSON.stringify(f.report.mock.calls)).toContain(
+      {
+        unknown: "its Agent has not published it yet",
+        unreadable: "Send a message to open it",
+        "different chat": "belongs to another chat",
+      }[kind],
+    );
   },
 );
+
+it("changes a Goal only from a state whose next action controls it", async () => {
+  const f = fixture("session");
+  f.goal.mockResolvedValueOnce(
+    observed({
+      nodeDid: "node",
+      sessionId: "session",
+      sessionDocId: "session-doc",
+      goal: null,
+    } as SessionGoalView),
+  );
+  await expect(f.actions().controlGoal("session", { kind: "pause" })).rejects.toThrow();
+  expect(f.control).not.toHaveBeenCalled();
+  expect(JSON.stringify(f.report.mock.calls)).toContain("Start one first");
+});
 
 it("persists confirmation before acknowledgement and recovers a lost acknowledgement without resubmission", async () => {
   const f = fixture();

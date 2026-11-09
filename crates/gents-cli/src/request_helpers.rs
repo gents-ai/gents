@@ -397,14 +397,7 @@ pub(crate) async fn prepare_cli_goal_input(
         .context("Goal input requires an authenticated client identity")?;
     let verifier =
         gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
-    gents::goal::prepare_client_goal_input(
-        access,
-        &verifier,
-        node_did,
-        session_id,
-        &actor_did,
-        input,
-    )
+    gents::goal::prepare_client_goal_input(access, &verifier, node_did, session_id, input)
     .await
 }
 

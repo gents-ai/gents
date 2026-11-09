@@ -30,7 +30,6 @@ impl ClientCore {
             &self.node_identity,
             node_did,
             session_id,
-            self.node_identity.did(),
             input,
         )
         .await
@@ -48,7 +47,6 @@ impl ClientCore {
             &self.node_identity,
             node_did,
             session_id,
-            self.node_identity.did(),
         )
         .await
     }
@@ -303,8 +301,9 @@ mod tests {
             };
             let actual = bind_goal_input(input, state);
             if case["expected"]["kind"] == "pending" {
-                assert!(
-                    actual.unwrap_err().to_string().contains("still syncing"),
+                assert_eq!(
+                    actual.unwrap_err(),
+                    gents::goal::GoalInputRefused::ProjectionUnverified,
                     "{case}"
                 );
             } else {
@@ -372,15 +371,22 @@ mod tests {
             )
         };
         let send = || core.prepare_user_message_input(&node_did, "chat", RequestInput::default());
-        let still_syncing = |result: Result<RequestInput>, mode: &str| {
-            let error = result.expect_err(mode);
-            assert!(
-                error.to_string().contains("still syncing"),
-                "{mode}: {error:#}"
+        let refused = |result: Result<RequestInput>, expected: gents::goal::GoalInputRefused| {
+            let error = result.expect_err("an unknown Goal state refuses the send");
+            assert_eq!(
+                gents_protocol::error_chain::find_source::<gents::goal::GoalInputRefused>(
+                    error.as_ref()
+                )
+                .copied(),
+                Some(expected),
+                "{error:#}"
             );
         };
 
-        still_syncing(send().await, "missing projection");
+        refused(
+            send().await,
+            gents::goal::GoalInputRefused::ProjectionMissing,
+        );
 
         project().await?;
         let input = send().await?;
@@ -439,7 +445,10 @@ mod tests {
                 ),
             )
             .await?;
-        still_syncing(send().await, "tampered projection");
+        refused(
+            send().await,
+            gents::goal::GoalInputRefused::ProjectionUnverified,
+        );
 
         let opening = RequestInput {
             goal_assignment: Some(GoalAssignmentInput {
@@ -460,8 +469,9 @@ mod tests {
     }
 
     /// The desktop reads its runtime as the User, so the runtime key's lock
-    /// state never gates or unlocks the read. A response that omits the
-    /// session row list is Unknown, never "no Goal"; a refusal stays an error.
+    /// state never gates or unlocks the read, and every read is signed. A
+    /// session row ACP filters out reads as no readable session (DefraDB
+    /// returns an empty list), never "no Goal"; a refusal stays an error.
     #[tokio::test]
     async fn cold_operator_goal_observation_stays_unknown_without_unlocking() -> Result<()> {
         use crate::client::{ClientCoreOptions, DesktopPaths};
@@ -524,7 +534,10 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/api/v0/graphql"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":{}})))
+            .and(body_string_contains("cold-goal-session"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data":{"AgentSession":[]}})),
+            )
             .mount(&server)
             .await;
         let core = ClientCore::start_with_paths_and_options(
@@ -549,7 +562,7 @@ mod tests {
             .await;
         let remained_cold = !gents::store::identity::can_mint_defradb_bearer(&did);
         let cold_send = core
-            .prepare_user_message_input(&did, "cold-goal-session", RequestInput::default())
+            .prepare_goal_input(&did, "cold-goal-session", RequestInput::default())
             .await;
         let source_key = key.clone();
         let _unlocked = tokio::task::spawn_blocking(move || {
@@ -572,28 +585,22 @@ mod tests {
             "runtime key must remain unchanged"
         );
         assert!(
-            matches!(
-                cold,
-                Ok(SessionGoalObservationState::Unknown(
-                    gents::goal::SessionGoalUnknownCause::ReadIncomplete
-                ))
-            ),
-            "an incomplete read must remain Unknown: {cold:?}"
+            matches!(cold, Ok(SessionGoalObservationState::NoReadableSession)),
+            "a filtered session row is no readable session: {cold:?}"
         );
-        assert!(
-            cold_send
-                .unwrap_err()
-                .to_string()
-                .contains("still syncing"),
-            "an unknown Goal state must refuse the send"
+        assert_eq!(
+            cold_send?,
+            RequestInput::default(),
+            "a send to an unreadable session captures no inherited assignment"
         );
-        assert!(
-            requests
-                .iter()
-                .filter(|request| String::from_utf8_lossy(&request.body).contains("goal-session"))
-                .count()
-                >= 2,
-            "both observations must read the runtime"
+        let cold_reads = requests
+            .iter()
+            .filter(|request| String::from_utf8_lossy(&request.body).contains("cold-goal-session"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cold_reads.len(),
+            2,
+            "each cold read issues exactly its one session query"
         );
         assert!(
             requests

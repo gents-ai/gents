@@ -4,4 +4,4 @@
  * Why a readable session's Goal state is not known (Lean
  * `SessionObservation.UnknownCause`).
  */
-export type SessionGoalUnknownCause = "read_incomplete" | "projection_missing" | "projection_unverified";
+export type SessionGoalUnknownCause = "projection_missing" | "projection_unverified";

@@ -14,6 +14,7 @@ import {
   type DesktopSessionSnapshot,
   type GoalControlAction,
   type GoalControlResult,
+  type SessionGoalNextAction,
   type SessionGoalState,
   type SessionGoalView,
 } from "@source-inc/gents-desktop-client";
@@ -95,28 +96,35 @@ function queueEditFailure(
   return actionFailure(doing, error);
 }
 
-const GOAL_UNKNOWN_CAUSE = {
-  read_incomplete: "its runtime returned an incomplete read",
-  projection_missing: "its Agent has not published it yet",
-  projection_unverified: "its published state did not verify",
-} as const;
+/** What to do instead when a state's next action is not the one requested.
+ * An unknown state carries its own reason from the runtime owner. */
+const GOAL_NEXT_STEP: Record<
+  Exclude<SessionGoalNextAction, "await_publication">,
+  string
+> = {
+  send: "This chat is not open on its runtime yet. Send a message to open it, then change its Goal.",
+  start_goal: "This chat has no Goal to change. Start one first.",
+  control_goal: "This chat already has a Goal. Change it instead.",
+};
 
-/** Only an observed state establishes a Goal or its absence; every other
- * state names its cause and the next step (Lean `SessionObservation`). */
+/** Only an observed state establishes a Goal or its absence (Lean
+ * `SessionObservation`). The runtime owner supplies each state's next action
+ * and an unknown state's reason; this boundary acts only on those. */
 function observedGoal(
   state: SessionGoalState | null,
   nodeDid: string,
   sessionId: string,
+  accepts: readonly SessionGoalNextAction[],
 ): SessionGoalView {
   if (!state) throw new Error("Connect this client before changing a Goal.");
-  if (state.kind === "no_readable_session")
+  if (!accepts.includes(state.next))
     throw new Error(
-      "This chat is not readable on its runtime yet. Send a message to open it, then change its Goal.",
+      state.kind === "unknown"
+        ? state.reason
+        : GOAL_NEXT_STEP[state.next as keyof typeof GOAL_NEXT_STEP],
     );
-  if (state.kind === "unknown")
-    throw new Error(
-      `The Goal state for this chat is unknown because ${GOAL_UNKNOWN_CAUSE[state.cause]}. Refresh this chat before changing the Goal.`,
-    );
+  if (state.kind !== "observed")
+    throw new Error("The Goal state for this chat is not observed.");
   const observation = state.observation;
   if (observation.nodeDid !== nodeDid || observation.sessionId !== sessionId)
     throw new Error("The Goal observation belongs to another chat.");
@@ -468,6 +476,7 @@ export function createChatActions({
             await api.fetchSessionGoal(node.nodeDid, selectedSessionId),
             node.nodeDid,
             selectedSessionId,
+            ["start_goal", "control_goal"],
           )
         : null;
       const result = await goalDelivery.submit(
@@ -517,6 +526,7 @@ export function createChatActions({
         await api.fetchSessionGoal(nodeDid, sessionId),
         nodeDid,
         sessionId,
+        ["control_goal"],
       );
       if (!current.goal) throw new Error("this session has no goal");
       await goalDelivery.submit(
