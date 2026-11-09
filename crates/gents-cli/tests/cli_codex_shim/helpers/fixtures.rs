@@ -109,11 +109,11 @@ async fn seed_canonical_tool_transcript(
     result: Option<&str>,
     created_at: &str,
 ) -> Result<()> {
-    use gents::session::canonical_rows::{
+    use gents::store::config_client::ConfigAccess;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use gents::store::config_client::ConfigAccess;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
@@ -121,7 +121,7 @@ async fn seed_canonical_tool_transcript(
     };
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
-    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let access = ConfigAccess::Graphql(crate::support::graphql::node_principal_endpoint(graphql));
     let generation = format!("codex-fixture:{request_doc_id}:{sequence}");
     let argument_segment = OutputSegment {
         node_did: node_did.into(),
@@ -392,11 +392,11 @@ pub(super) async fn seed_blank_materialized_completion(
     node_did: &str,
     session_id: &str,
 ) -> Result<()> {
-    use gents::session::canonical_rows::{
+    use gents::store::config_client::ConfigAccess;
+    use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    use gents::store::config_client::ConfigAccess;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
@@ -410,7 +410,7 @@ pub(super) async fn seed_blank_materialized_completion(
     anyhow::ensure!(request_node_did == node_did);
     anyhow::ensure!(requester_did.as_deref() == Some(node_did));
     let generation = format!("codex-blank-{request_id}");
-    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let access = ConfigAccess::Graphql(crate::support::graphql::node_principal_endpoint(graphql));
     let segment = OutputSegment {
         node_did: node_did.to_owned(),
         requester_did: Some(node_did.to_owned()),
@@ -557,7 +557,7 @@ pub(super) async fn seed_running_background_tool(
 pub(super) async fn seed_background_completion_wake(
     graphql: &str,
     identity: &dyn gents::NodeIdentity,
-    agent_id: &str,
+    agent_did: &str,
     session_id: &str,
 ) -> Result<String> {
     let node_did = identity.did();
@@ -581,7 +581,7 @@ pub(super) async fn seed_background_completion_wake(
         &source_request_id,
         node_did,
         node_did,
-        agent_id,
+        agent_did,
         session_id,
         "completed source for background continuation",
         "interactive",
@@ -629,7 +629,7 @@ pub(super) async fn seed_background_completion_wake(
         &request_id,
         node_did,
         node_did,
-        agent_id,
+        agent_did,
         session_id,
         gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         "scheduled",

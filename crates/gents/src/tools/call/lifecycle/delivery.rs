@@ -12,7 +12,7 @@ mod terminal_effects;
 mod terminal_transaction;
 mod terminalize;
 
-pub(crate) use background_receipt::publish_background_receipt_in_txn;
+pub(crate) use background_receipt::{publish_background_receipt_in_txn, BackgroundReceiptBinding};
 pub(crate) use dispatch::{start_running_in_txn, DispatchStart};
 pub(crate) use output_append::ToolOutputBinding;
 #[cfg(test)]
@@ -36,6 +36,7 @@ pub(crate) enum ToolDispatchRejection {
 /// terminal of the tool call that returned them.
 #[derive(Clone)]
 pub(crate) struct PluginToolWrites {
+    pub(crate) actor: identity::Did,
     pub(crate) grant: crate::plugin::data::PluginData,
     pub(crate) writes: Vec<gents_protocol::job::DataWrite>,
 }

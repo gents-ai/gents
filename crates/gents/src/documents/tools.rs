@@ -13,6 +13,10 @@ use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
 use crate::tools::surface::{BashMode, FileToolMode};
 pub use gents_protocol::row::RetiredKey;
 
+mod persistence;
+
+pub use persistence::write_tools_document;
+
 /// Tool capabilities, execution policies, and dependencies referenced by a context.
 /// Groups are embedded in this document and share its ownership. Missing groups
 /// expose no capabilities. External service, surface, and target refs remain explicit.
@@ -400,9 +404,6 @@ pub struct BuiltInTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_goal_creation: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub enable_memory: Option<bool>,
     /// The `sessions` read tool. Unset is enabled: compaction stubs name its
     /// `output` read as the way to recover a trimmed tool result.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -424,16 +425,6 @@ pub struct BuiltInTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_p2p_mutations: Option<bool>,
-    /// Exact collection names allowed for application pairing overlays and sync.
-    /// Missing or empty grants no collections; the policy ceiling can only narrow.
-    #[serde(
-        default,
-        skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
-    )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
-    #[schemars(schema_with = "crate::documents::string_list_schema")]
-    pub p2p_collections: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_context_budget: Option<bool>,
@@ -708,15 +699,6 @@ impl Tools {
             }
         }
         let mut errors = Vec::new();
-        if let Some(built_ins) = &self.built_ins {
-            for collection in &built_ins.p2p_collections {
-                if let Err(error) =
-                    crate::store::graphql::validate_collection_identifier(collection)
-                {
-                    errors.push(format!("built_ins.p2p_collections: {error}"));
-                }
-            }
-        }
         if let Some(host) = &self.host {
             if let Some(files) = &host.files {
                 at_most(
@@ -1005,9 +987,9 @@ impl Tools {
 pub async fn load_agent_tools_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> anyhow::Result<Option<Tools>> {
-    Ok(load_agent_context_and_tools_in_txn(txn, owner, agent_id)
+    Ok(load_agent_context_and_tools_in_txn(txn, owner, agent_did)
         .await?
         .1)
 }
@@ -1018,15 +1000,15 @@ pub async fn load_agent_tools_in_txn(
 pub async fn load_agent_context_and_tools_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
     use crate::store::collection::Collection;
     use crate::store::config_client::read_desired_state_document_in_txn as read;
     use anyhow::Context as _;
     let agent: super::Agent = serde_json::from_value(
-        read(txn, Collection::Agent, owner, agent_id)
+        read(txn, Collection::Agent, owner, agent_did)
             .await?
-            .with_context(|| format!("Agent {agent_id} not found for {owner}"))?,
+            .with_context(|| format!("Agent {agent_did} not found for {owner}"))?,
     )?;
     let Some(context_id) = agent.context_id else {
         return Ok((None, None));
@@ -1106,10 +1088,7 @@ fn merge_job_blocks(
 /// the defaults over `targets_from`; a merge never widens an existing block),
 /// the targets, trusted packs and skills. Each `targets_from` entry is
 /// (pack coordinate, the AgentTarget ids that pack ships, its provenance).
-/// When the Tools enable the p2p tool, the collections the plugin's data
-/// declaration uses from its pack's own SDL join `built_ins.p2p_collections`,
-/// so its agent can pair them with enrolled peers; enrollment and ACP still
-/// gate every pairing. `agents.enabled` is never written.
+/// `agents.enabled` is never written.
 pub fn wire_plugin(
     tools: &Tools,
     context: &super::AgentContext,
@@ -1233,23 +1212,6 @@ pub fn wire_plugin(
         context.skill_ids.extend(skills);
     }
 
-    if let Some(built_ins) = tools
-        .built_ins
-        .as_mut()
-        .filter(|built_ins| built_ins.enable_p2p_tool == Some(true))
-    {
-        let granted: Vec<String> = plugin
-            .data_collection_fields
-            .keys()
-            .filter(|collection| !built_ins.p2p_collections.contains(collection))
-            .cloned()
-            .collect();
-        if !granted.is_empty() {
-            changed.push(format!("granted P2P pairing of {}", granted.join(", ")));
-            built_ins.p2p_collections.extend(granted);
-        }
-    }
-
     let next_call = (plugin.declaration.job.0 && job.is_none())
         .then(|| format!("gents pack wire {coordinate} --agent <agent> --targets-from <pack>"));
     Ok((
@@ -1269,9 +1231,7 @@ pub fn wire_plugin(
 /// plugin entry still needs it (skills are not recorded per plugin, so any
 /// remaining plugin keeps them). With `targets_from`, keeps the plugin and
 /// removes only those packs' targets and trust entries; a block left without
-/// targets is dropped. `agents.enabled`, `policy.dynamic` and
-/// `built_ins.p2p_collections` are never written: a P2P grant may back a live
-/// pairing or another plugin, so narrowing it stays an explicit Tools edit.
+/// targets is dropped. `agents.enabled` and `policy.dynamic` are never written.
 pub fn unwire_plugin(
     tools: &Tools,
     context: &super::AgentContext,

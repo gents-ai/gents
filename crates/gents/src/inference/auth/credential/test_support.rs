@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub(crate) static TOKEN_URL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -26,20 +26,21 @@ pub(crate) fn bound_bearer(
         .lock()
         .expect("bearer registry mutex poisoned")
         .get(credential_id)
-        .cloned()
+        .and_then(std::sync::Weak::upgrade)
 }
 
 pub(crate) async fn seed_credential(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
     expires_at: DateTime<Utc>,
 ) {
-    seed_credential_with_refresh_token(node, node_did, provider, expires_at, "refresh-TEST").await;
+    seed_credential_with_refresh_token(access, node_did, provider, expires_at, "refresh-TEST")
+        .await;
 }
 
 pub(crate) async fn seed_credential_with_refresh_token(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
     expires_at: DateTime<Utc>,
@@ -64,7 +65,7 @@ pub(crate) async fn seed_credential_with_refresh_token(
         provider_account_key: None,
         label: None,
     };
-    crate::inference::auth::credential::upsert_oauth_credential(node, &credential)
+    crate::inference::auth::credential::upsert_oauth_credential_on(access, &credential)
         .await
         .expect("seed credential");
 }
@@ -136,4 +137,17 @@ pub(crate) async fn gated_token_server(
         request
     });
     (url, handle)
+}
+
+/// Reads a credential row as the node's runtime identity, the actor the
+/// credential owner writes it under.
+pub(crate) async fn lookup_oauth_credential_by_id(
+    node: &Arc<EmbeddedNode>,
+    credential_id: &str,
+) -> anyhow::Result<Option<super::OAuthCredential>> {
+    let node_did = node
+        .node_identity_did()
+        .expect("credential lookup requires a runtime identity");
+    let access = super::runtime_credential_access(node, node_did)?;
+    super::lookup_oauth_credential_by_id_on(&access, credential_id).await
 }

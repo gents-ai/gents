@@ -96,6 +96,65 @@ def caseJson (c : Case) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
+structure ShutdownCase where
+  name : String
+  events : List ShutdownEvent
+
+def shutdownCases : List ShutdownCase :=
+  [ ⟨"close_before_admission", [.beginClosing, .admitTransaction, .admitDetached,
+      .startShutdown, .finishShutdown]⟩
+  , ⟨"open_transaction_before_close", [.admitTransaction, .beginClosing,
+      .startShutdown, .commitTransaction, .startShutdown, .finishShutdown]⟩
+  , ⟨"concurrent_transactions_drain", [.admitTransaction, .admitOtherTransaction,
+      .beginClosing, .commitTransaction, .startShutdown, .commitOtherTransaction,
+      .startShutdown, .finishShutdown]⟩
+  , ⟨"cancelled_transaction_waits_for_native_cleanup", [.admitTransaction,
+      .startStatement, .beginClosing, .cancelTransaction, .finishCleanup,
+      .startShutdown, .returnStatement, .finishCleanup, .startShutdown, .finishShutdown]⟩
+  , ⟨"cancelled_shutdown_waiter_preserves_detached_read", [.admitDetached,
+      .beginClosing, .cancelShutdownWaiter, .startShutdown, .returnDetached,
+      .startShutdown, .finishShutdown]⟩ ]
+
+def shutdownEventName : ShutdownEvent → String
+  | .admitTransaction => "admit_transaction"
+  | .admitOtherTransaction => "admit_other_transaction"
+  | .commitOtherTransaction => "commit_other_transaction"
+  | .admitDetached => "admit_detached"
+  | .beginClosing => "begin_closing"
+  | .startStatement => "start_statement"
+  | .returnStatement => "return_statement"
+  | .cancelTransaction => "cancel_transaction"
+  | .finishCleanup => "finish_cleanup"
+  | .commitTransaction => "commit_transaction"
+  | .returnDetached => "return_detached"
+  | .cancelShutdownWaiter => "cancel_shutdown_waiter"
+  | .startShutdown => "start_shutdown"
+  | .finishShutdown => "finish_shutdown"
+
+def shutdownObservationJson (state : ShutdownState) : String :=
+  "{\"accepting\":" ++ boolJson state.accepting ++
+  ",\"transaction_alive\":" ++ boolJson state.transactionAlive ++
+  ",\"other_transactions\":" ++ toString state.otherTransactions ++
+  ",\"transaction_native\":" ++ toString state.transactionNative ++
+  ",\"cleanup_pending\":" ++ boolJson state.cleanupPending ++
+  ",\"detached_native\":" ++ toString state.detachedNative ++
+  ",\"rejected\":" ++ toString state.rejected ++
+  ",\"waiter_cancelled\":" ++ boolJson state.waiterCancelled ++
+  ",\"shutdown_started\":" ++ boolJson state.shutdownStarted ++
+  ",\"shutdown_returned\":" ++ boolJson state.shutdownReturned ++ "}"
+
+def shutdownCaseJson (c : ShutdownCase) : String :=
+  let initial : ShutdownState := {}
+  let observations := (c.events.scanl shutdownStep initial).drop 1
+  "{\"name\":" ++ jsonString c.name ++
+  ",\"initial\":" ++ shutdownObservationJson initial ++
+  ",\"events\":" ++ jsonStringArray (c.events.map shutdownEventName) ++
+  ",\"observations\":" ++ jsonArray (observations.map shutdownObservationJson) ++ "}"
+
+/-- Derived cases are exported separately so the existing claim-lifetime
+fixture keeps its wire format until the local shutdown owner consumes them. -/
+def shutdownCasesJson : String := jsonArray (shutdownCases.map shutdownCaseJson)
+
 end Conformance.NativeClaimLifetime
 
 def main : IO Unit := IO.println Conformance.NativeClaimLifetime.casesJson

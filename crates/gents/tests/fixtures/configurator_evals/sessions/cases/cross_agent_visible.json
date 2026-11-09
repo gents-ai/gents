@@ -8,9 +8,9 @@
         "collection": "AgentSession",
         "document": {
           "node_did": "$trial",
-          "requester_did": "$trial",
+          "requester_did": "$evaluator",
           "session_id": "launch-review",
-          "agent_id": "engineer",
+          "agent_did": "gents:agent-slot:engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
@@ -26,9 +26,9 @@
         "collection": "AgentSession",
         "document": {
           "node_did": "$trial",
-          "requester_did": "$trial",
+          "requester_did": "$evaluator",
           "session_id": "support-review",
-          "agent_id": "engineer",
+          "agent_did": "gents:agent-slot:engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": null,
           "title": {
@@ -44,9 +44,9 @@
         "collection": "AgentSession",
         "document": {
           "node_did": "$trial",
-          "requester_did": "$trial",
+          "requester_did": "$evaluator",
           "session_id": "launch-followup",
-          "agent_id": "engineer",
+          "agent_did": "gents:agent-slot:engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
@@ -60,11 +60,13 @@
       },
       {
         "collection": "AgentSession",
+        "session_readers": ["engineer"],
+        "session_agent_owned": true,
         "document": {
-          "node_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
-          "requester_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "node_did": "$trial",
+          "requester_did": null,
           "session_id": "partner-review",
-          "agent_id": "engineer",
+          "agent_did": "gents:agent-slot:partner",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
@@ -78,11 +80,13 @@
       },
       {
         "collection": "AgentSession",
+        "session_readers": ["engineer"],
+        "session_agent_owned": true,
         "document": {
-          "node_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
-          "requester_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "node_did": "$trial",
+          "requester_did": null,
           "session_id": "partner-archive",
-          "agent_id": "engineer",
+          "agent_did": "gents:agent-slot:partner",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
@@ -160,7 +164,7 @@
           "collection": "AgentSession",
           "filter": {
             "node_did": {
-              "_eq": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"
+              "_eq": "$trial"
             },
             "session_id": {
               "_eq": "partner-archive"

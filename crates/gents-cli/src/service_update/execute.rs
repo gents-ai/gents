@@ -92,7 +92,8 @@ pub(super) async fn apply(
         .await??;
         let url = endpoint(&plan.endpoint, &plan.prior_network)?;
         let identity = verified_operator.clone();
-        let authorization = GraphqlEndpoint::as_principal(url.to_string(), identity.did());
+        let authorization = GraphqlEndpoint::as_principal(url.to_string(), identity.did())
+            .with_client_signing_capability(identity.client_signing_capability()?)?;
         let deadline = deadline(&directory, "drain", plan.intent.drain_timeout_secs).await?;
         let peers_path = directory.join("expected-peers.json");
         if !tokio::fs::try_exists(&peers_path).await? {
@@ -285,7 +286,8 @@ pub(super) async fn apply(
         reqwest::Url::parse(&format!("http://{addr}/api/v0/graphql"))?
     };
     let operator = verified_operator;
-    let authorization = GraphqlEndpoint::as_principal(target_endpoint.to_string(), operator.did());
+    let authorization = GraphqlEndpoint::as_principal(target_endpoint.to_string(), operator.did())
+        .with_client_signing_capability(operator.client_signing_capability()?)?;
     let expected_peers: Vec<String> =
         files::read_json_async(&directory.join("expected-peers.json")).await?;
     let mut peers_pending = false;
@@ -405,7 +407,8 @@ pub(super) async fn validate_live(plan: &Plan) -> Result<()> {
     let identity = operator(plan).await?;
     // Verify operator access without requesting retirement while the caller is
     // still staging. This is the existing authenticated runtime status route.
-    let authorization = GraphqlEndpoint::as_principal(url.to_string(), identity.did());
+    let authorization = GraphqlEndpoint::as_principal(url.to_string(), identity.did())
+        .with_client_signing_capability(identity.client_signing_capability()?)?;
     let mut status = url;
     status.set_path("/self");
     let response = authorization.authorize(client.get(status))?.send().await?;

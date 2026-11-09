@@ -15,7 +15,7 @@ inductive Action where
   /-- Mandatory agent is decoded from the authenticated request before this
   Nat identifier abstraction. -/
   | acceptRequest (process : ProcessState) (sessionId : SessionId) (requestId : RequestId)
-      (requested : AgentId)
+      (requested : AgentDid)
   | finishRequest (requestId : RequestId)
   | retireGeneration (generation : Generation)
   deriving DecidableEq, Repr
@@ -275,11 +275,11 @@ theorem publish_step_resolved_wellFormed
 theorem publish_step_runnable_dependencies_satisfied
     {pre post : RuntimeState}
     {resolved : ResolvedSnapshot}
-    {agentId : AgentId}
+    {agentDid : AgentDid}
     (h_coherent : pre.coherent)
     (h_step : step? pre (.publish resolved) = some post)
-    (h_runnable : agentId ∈ post.active.runnable) :
-    agentId ∈ post.active.dependenciesSatisfied := by
+    (h_runnable : agentDid ∈ post.active.runnable) :
+    agentDid ∈ post.active.dependenciesSatisfied := by
   have h_wellFormed := publish_step_resolved_wellFormed h_coherent h_step
   simp [step?] at h_step
   rcases h_step with ⟨_, h_post⟩
@@ -291,7 +291,7 @@ theorem accept_step_router_observed_ready_live
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : AgentId}
+    {requested : AgentDid}
     (h_coherent : pre.coherent)
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     pre.routerObservedGeneration = pre.active.generation ∧
@@ -308,7 +308,7 @@ theorem accept_step_binding_coherent
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : AgentId}
+    {requested : AgentDid}
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     requestId ∈ post.accepted ∧
       requestId ∈ post.inFlight ∧
@@ -337,7 +337,7 @@ theorem accept_step_projects_session_atomically
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : AgentId}
+    {requested : AgentDid}
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     requestId ∈ post.accepted ∧
       post.requestSession requestId = sessionId ∧
@@ -350,7 +350,7 @@ theorem accept_step_replay_rejected
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : AgentId}
+    {requested : AgentDid}
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     step? post (.acceptRequest process sessionId requestId requested) = none := by
   simp [step?] at h_step

@@ -1,11 +1,15 @@
 import type {
+  BridgeErrorPayload,
   ChatSendRequest,
   ChatSendResult,
-  ChatSubmissionReceipt,
 } from "@source-inc/gents-desktop-client";
 import type { ChatStore } from "./chatStore";
 
 const PREFIX = "gents.chat.sendDraft.v1:";
+/** The base client's list of sends with an unknown outcome and no kept
+ * payload. Nothing reads it: those sends are visible in their sessions if
+ * they landed, and no payload remains to resend. */
+const ABANDONED_UNRESOLVED = "gents.chat.unresolvedSubmissions.v1";
 
 export type ChatDraft = {
   clientDid: string;
@@ -14,9 +18,21 @@ export type ChatDraft = {
   sessionId: string;
   selectedSessionId: string | null;
   queued: boolean;
-  mailbox?: { itemId: string; summary: string };
+  mailbox?: { nodeDid: string; itemId: string; summary: string };
+  /** The authored payload, kept until the runtime confirms it (Lean
+   * `ClientOptimisticSend.payload_retained`); a retry resends it as is. */
   requestJson: string;
-  result?: ChatSendResult;
+  /** The runtime holds this request. Only a mailbox answer stays saved once
+   * confirmed, until its question is observed closed. A draft saved by the
+   * base client with its receipt (`result`) was confirmed too. */
+  confirmed?: true;
+  /** The deadline (epoch ms) of the send in flight (Lean `timeout`,
+   * `CHAT_SEND_DEADLINE_MS`). It is saved with the payload, so every window
+   * derives the same status: pending until it passes, failed after. */
+  pendingUntil?: number;
+  /** Why the last send failed, shown with Retry: the cause and, when the
+   * bridge classified it, its typed error (storage full names a recovery). */
+  failure?: { message: string; error: BridgeErrorPayload | null };
 };
 
 const identifier = (value: unknown): value is string =>
@@ -56,17 +72,29 @@ function decode(value: unknown): ChatDraft {
     if (
       !object(value.mailbox) ||
       !identifier(value.mailbox.itemId) ||
+      !identifier(value.mailbox.nodeDid) ||
       typeof value.mailbox.summary !== "string"
     )
       throw new Error("The saved answer's question could not be read.");
-    draft.mailbox = { itemId: value.mailbox.itemId, summary: value.mailbox.summary };
+    draft.mailbox = {
+      nodeDid: value.mailbox.nodeDid,
+      itemId: value.mailbox.itemId,
+      summary: value.mailbox.summary,
+    };
   }
-  if (value.result !== undefined) {
-    if (!object(value.result))
-      throw new Error("The saved message receipt could not be read.");
-    validateChatResult(draft, value.result as ChatSendResult);
-    draft.result = value.result as ChatSendResult;
-  }
+  if (value.confirmed === true || object(value.result)) draft.confirmed = true;
+  else if (
+    typeof value.pendingUntil === "number" &&
+    Number.isFinite(value.pendingUntil)
+  )
+    draft.pendingUntil = value.pendingUntil;
+  if (object(value.failure) && typeof value.failure.message === "string")
+    draft.failure = {
+      message: value.failure.message,
+      error: object(value.failure.error)
+        ? (value.failure.error as BridgeErrorPayload)
+        : null,
+    };
   return draft;
 }
 
@@ -75,15 +103,21 @@ export function loadChatDrafts(): {
   chatDraftError: string | null;
 } {
   try {
+    localStorage.removeItem(ABANDONED_UNRESOLVED);
     const chatDrafts: ChatDraft[] = [];
+    const released: string[] = [];
     for (let index = 0; index < localStorage.length; index++) {
       const key = localStorage.key(index);
       if (!key?.startsWith(PREFIX)) continue;
       const draft = decode(JSON.parse(localStorage.getItem(key) ?? "null"));
       if (chatDraftKey(draft) !== key)
         throw new Error("The saved message identity is inconsistent.");
-      chatDrafts.push(draft);
+      // A confirmed chat message keeps no payload (Lean `onReply`); only a
+      // confirmed answer waits for its question to close.
+      if (draft.confirmed && !draft.mailbox) released.push(key);
+      else chatDrafts.push(draft);
     }
+    for (const key of released) localStorage.removeItem(key);
     return { chatDrafts, chatDraftError: null };
   } catch (error) {
     return {
@@ -118,18 +152,15 @@ export function chatDraftRequest(draft: ChatDraft): ChatSendRequest {
     request.requestId !== draft.requestId ||
     request.sessionId !== draft.sessionId ||
     typeof request.content !== "string" ||
-    request.resolveRequestId != null ||
     (draft.mailbox !== undefined &&
       request.causedBySourceDocId !== draft.mailbox.itemId)
   )
-    throw new Error(
-      "The saved message input is unreadable or has changed identity. Check its delivery.",
-    );
+    throw new Error("The saved message input is unreadable or has changed identity.");
   return request as ChatSendRequest;
 }
 
-/** Each form has its own key, so another window cannot overwrite this operation.
- * The native journal retains the signed preparation; storage refusal prevents dispatch. */
+/** Each message has its own key, so another window cannot overwrite it. The
+ * payload is kept before dispatch: a storage refusal prevents the send. */
 export function saveChatDraft(store: ChatStore, draft: ChatDraft) {
   const key = chatDraftKey(draft);
   const previous = localStorage.getItem(key);
@@ -151,6 +182,15 @@ export function removeChatDraft(store: ChatStore, draft: ChatDraft) {
   store.setState(loadChatDrafts());
 }
 
+/** The saved form of `draft` as every window sees it now, or null once it is
+ * discarded or released. */
+export function savedChatDraft(draft: ChatDraft): ChatDraft | null {
+  const value = localStorage.getItem(chatDraftKey(draft));
+  if (value === null) return null;
+  const saved = decode(JSON.parse(value));
+  return saved.confirmed && !saved.mailbox ? null : saved;
+}
+
 export function chatDraftsFor(
   drafts: readonly ChatDraft[],
   clientDid: string | null,
@@ -168,41 +208,18 @@ export function chatDraftsFor(
   );
 }
 
+/** A reply belongs to its message: the runtime holds the identity it was sent under. */
 export function validateChatResult(draft: ChatDraft, result: ChatSendResult) {
-  const receipt = result.submissionReceipt;
   if (
     result.nodeDid !== draft.nodeDid ||
     result.requestId !== draft.requestId ||
-    result.sessionId !== draft.sessionId ||
-    !receipt ||
-    receipt.nodeDid !== draft.nodeDid ||
-    receipt.requestId !== draft.requestId ||
-    receipt.sessionId !== draft.sessionId ||
-    receipt.agentId !== result.agentId ||
-    !identifier(receipt.envelopeHash) ||
-    !identifier(receipt.signedPayloadHash) ||
-    !(
-      result.outcome == null ||
-      result.outcome === "notDelivered" ||
-      result.outcome === "deliveryUnknown"
-    )
+    result.sessionId !== draft.sessionId
   )
-    throw new Error(
-      "The reply does not match the saved message. Its delivery is still unconfirmed.",
-    );
+    throw new Error("The reply does not match the saved message.");
   let request: ChatSendRequest | null = null;
   try {
     request = chatDraftRequest(draft);
   } catch {}
-  if (request?.agentId && request.agentId !== result.agentId)
+  if (request?.agentDid && request.agentDid !== result.agentDid)
     throw new Error("The message reply changed its original Agent.");
-  const prior: ChatSubmissionReceipt | null | undefined =
-    draft.result?.submissionReceipt;
-  if (
-    prior &&
-    (prior.envelopeHash !== receipt.envelopeHash ||
-      prior.signedPayloadHash !== receipt.signedPayloadHash ||
-      prior.agentId !== receipt.agentId)
-  )
-    throw new Error("The message receipt changed its original signed preparation.");
 }

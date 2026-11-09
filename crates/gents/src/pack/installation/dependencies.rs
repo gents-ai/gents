@@ -19,12 +19,13 @@ async fn update_required_by(
         json!(required_by.iter().collect::<Vec<_>>())
     };
     let response = txn
-        .execute_with_variables(
+        .execute_client_signed_update(
             &format!(
                 r#"mutation($input: {RECORD}MutationInputArg!) {{ update_{RECORD}(docID: "{}", input: $input) {{ _docID }} }}"#,
                 escape_graphql_string(doc_id)
             ),
             &json!({ "input": { "required_by": value } }),
+            gents_protocol::schemas::PACK_INSTALLATION,
         )
         .await?;
     anyhow::ensure!(
@@ -86,7 +87,15 @@ pub(super) async fn claim_in_txn(
             .unwrap_or(true);
         if required_by.is_empty() && !explicit {
             let record = read_record(txn, owner, &coordinate).await?;
-            remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?;
+            let removed = remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?;
+            let (namespace, _) = crate::pack::registry::split_pack_coordinate(&coordinate);
+            let plugins = removed
+                .documents
+                .plugins
+                .iter()
+                .map(|plugin| format!("{namespace}/{}", plugin.name))
+                .collect();
+            super::ensure_plugins_unreferenced(txn, owner, &plugins).await?;
         } else {
             let doc_id = row["_docID"].as_str().context("record missing _docID")?;
             update_required_by(txn, doc_id, &required_by).await?;

@@ -19,7 +19,7 @@ impl DefraSessionHook {
                 WAIT_PROCESS_TOOL_NAME,
                 args,
                 parent_deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;
@@ -138,7 +138,7 @@ impl DefraSessionHook {
                 LIST_PROCESSES_TOOL_NAME,
                 args,
                 deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;
@@ -162,8 +162,8 @@ impl DefraSessionHook {
             node_did: self.node_did.clone(),
             requester_did: self.active_requester_did().await,
         };
-        let response = handle_list_background_tools(
-            &self.node,
+        let response = crate::tools::background::status::handle_list_background_tools_with_access(
+            &self.actor_access()?,
             &caller,
             &self.node_did,
             &self.background_live_outputs.registry,
@@ -195,7 +195,7 @@ impl DefraSessionHook {
                 READ_PROCESS_TOOL_NAME,
                 args,
                 deadline_at,
-                crate::tools::call::lifecycle::AwaitMode::Foreground,
+                gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
         lifecycle.start_running().await?;
@@ -231,8 +231,8 @@ impl DefraSessionHook {
             node_did: self.node_did.clone(),
             requester_did: self.active_requester_did().await,
         };
-        let result = match handle_read_tool_output(
-            &self.node,
+        let result = match crate::tools::background::status::handle_read_tool_output_with_access(
+            &self.actor_access()?,
             &caller,
             &self.background_live_outputs.registry,
             parsed,

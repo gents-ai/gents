@@ -55,13 +55,13 @@ export function knownNodeIds(
   return ids.filter((id) => known.has(id));
 }
 
-const agentPasses = (scope: Scope, agentId: string | null | undefined) =>
-  scope.agents.length === 0 || (agentId != null && scope.agents.includes(agentId));
+const agentPasses = (scope: Scope, agentDid: string | null | undefined) =>
+  scope.agents.length === 0 || (agentDid != null && scope.agents.includes(agentDid));
 
 export function sessionsInScope(scope: Scope, ctx: ScopeContext): SessionSummary[] {
   return nodesInScope(scope, ctx).flatMap((n) =>
     (ctx.fleet.sessionsOf[nodeDidOf(n)] ?? []).filter((s) =>
-      agentPasses(scope, s.agentId),
+      agentPasses(scope, s.agentDid),
     ),
   );
 }
@@ -69,7 +69,7 @@ export function sessionsInScope(scope: Scope, ctx: ScopeContext): SessionSummary
 export function mailboxInScope(scope: Scope, ctx: ScopeContext): MailboxItemView[] {
   return nodesInScope(scope, ctx).flatMap((n) =>
     (ctx.fleet.mailboxOf[nodeDidOf(n)] ?? []).filter(
-      (m) => m.status === "open" && agentPasses(scope, m.targetAgentId),
+      (m) => m.status === "open" && agentPasses(scope, m.targetAgentDid),
     ),
   );
 }

@@ -1,7 +1,6 @@
 use crate::inference::llm::message::{AssistantContent, Message};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
 use gents_protocol::transcript::{present_message, PersistedMessagePresentation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -92,7 +91,7 @@ pub struct AmyToolCallTraceRecord {
     pub case_id: Option<String>,
     pub prompt: Option<String>,
     pub node_did: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub session_id: String,
     pub request_id: Option<String>,
     pub request_status: Option<String>,
@@ -189,7 +188,7 @@ pub fn raw_message_json(message: &Message) -> Result<Value> {
 /// which is owned by the request itself.
 #[allow(clippy::too_many_arguments)]
 pub async fn load_trace_transcript(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -197,8 +196,8 @@ pub async fn load_trace_transcript(
     after_sequence: Option<u32>,
     exclude_request_doc_id: Option<&str>,
 ) -> Result<Vec<PresentedTraceMessage>> {
-    let rows = crate::session::load_sequenced_history_projection(
-        node,
+    let rows = crate::session::load_sequenced_history_projection_on(
+        access,
         session_id,
         node_did,
         requester_did,

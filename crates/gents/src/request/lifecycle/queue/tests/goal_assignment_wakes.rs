@@ -1,5 +1,4 @@
 use super::*;
-use crate::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -21,13 +20,13 @@ async fn parent(
         RequestPurpose::Normal,
         format!("scope-parent-{id}"),
         db.node_did(),
-        db.node_did(),
-        TEST_AGENT_ID,
+        db.agent_did(),
+        db.agent_did(),
         session,
         "work",
         "interactive",
         "2026-10-21T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(db.node_did()),
+        AgentRequestAdmissionRecord::local_self(db.agent_did()),
     );
     create.input.goal_assignment = model["reference"].as_object().map(|_| GoalAssignmentInput {
         goal_id: format!("goal-{}", model["reference"]["goal"]),
@@ -35,20 +34,42 @@ async fn parent(
             .as_u64()
             .map(|root| documents[&root].doc_id.clone()),
     });
-    crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+    crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut create)
         .await
         .unwrap();
-    ConfigAccess::write_local(
-        &db.node,
-        "test.signed_scope_parent",
-        &create.graphql_mutation().unwrap(),
+    let mutation = create.graphql_mutation().unwrap();
+    let node_did = db.node_did().to_owned();
+    let agent_did = db.agent_did().to_owned();
+    let now = chrono::Utc::now().to_rfc3339();
+    // The parent's session and request are both Agent-owned rows, written as the Agent.
+    db.agent_access
+        .transact_write("test.signed_scope_parent", |txn| {
+            let mutation = &mutation;
+            let (node_did, agent_did, now) = (node_did.as_str(), agent_did.as_str(), now.as_str());
+            Box::pin(async move {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    session,
+                    node_did,
+                    agent_did,
+                    Some(agent_did),
+                    None,
+                    None,
+                    now,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(txn.execute(mutation).await?)
+            })
+        })
+        .await
+        .unwrap();
+    let request = crate::request::binding::load_agent_request_with_access(
+        &db.agent_access,
+        &create.request_id,
     )
     .await
+    .unwrap()
     .unwrap();
-    let request = crate::request::binding::load_agent_request(&db.node, &create.request_id)
-        .await
-        .unwrap()
-        .unwrap();
     documents.insert(id, request.clone());
     request
 }
@@ -87,15 +108,21 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                 "created_at":"2026-10-21T00:00:00Z", "updated_at":"2026-10-21T00:00:00Z"
             });
             let doc = goals.get(&goal_id).cloned();
-            let result = ConfigAccess::transact_local_write(&db.node, None, "test.retained_wake_assignment", |txn| {
-                let doc=doc.clone();let value=value.clone();
+            // The runtime root owns the observed assignment, so it can retire it;
+            // the working Agent is granted read, as wake scoping reads it as the Agent.
+            let agent = ::identity::Did::new(db.agent_did()).unwrap();
+            let root = ::identity::Did::new(db.node_did()).unwrap();
+            let result = crate::store::config_client::ConfigAccess::transact_local_write(&db.node, Some(root), "test.retained_wake_assignment", |txn| {
+                let doc=doc.clone();let value=value.clone();let agent=agent.clone();
                 Box::pin(async move {
                     if let Some(doc) = doc {
                         txn.execute_with_variables("mutation($doc: ID!, $input: GoalMutationInputArg!) {update_Goal(docID: $doc, input: $input) {_docID}}", &json!({"doc":doc,"input":value})).await?;
-                        Ok(doc)
+                        Ok::<_, anyhow::Error>(doc)
                     } else {
                         let result = txn.execute_with_variables("mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}", &json!({"input":value})).await?;
-                        crate::store::graphql::created_doc_id(&result,"Goal")
+                        let doc = crate::store::graphql::created_doc_id(&result,"Goal")?;
+                        txn.add_actor_relationship("Goal", &doc, "reader", &agent).await?;
+                        Ok(doc)
                     }
                 })
             }).await.unwrap();
@@ -103,8 +130,11 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
             goals.insert(goal_id, result);
         }
         if case["retire_first"] == true {
-            ConfigAccess::write_local(
-                &db.node,
+            crate::store::config_client::ConfigAccess::local_as(
+                db.node.clone(),
+                ::identity::Did::new(db.node_did()).unwrap(),
+            )
+            .write(
                 "test.retire_wake_assignment",
                 &format!(
                     "mutation {{delete_Goal(docID: \"{}\") {{_docID}}}}",
@@ -118,8 +148,10 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
         let second_notice = "background-completion-notification:scope-second:tool";
         let publish = |parent: AgentRequest, key: u64, notice: &'static str| {
             let node = db.node.clone();
+            let access = db.agent_access.clone();
             async move {
-                persist_background_completion_with_message(
+                persist_background_completion_with_message_waking_with_access(
+                    &access,
                     &node,
                     &parent,
                     notice,
@@ -127,6 +159,7 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                     "review notifications",
                     queue(&parent, key),
                     None,
+                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
                 )
                 .await
             }
@@ -158,10 +191,13 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
             "{name}: assignment coalescing"
         );
         for (wake, field) in [(&first_wake, "first_scope"), (&second_wake, "second_scope")] {
-            let row = crate::request::binding::load_agent_request(&db.node, &wake.request_id)
-                .await
-                .unwrap()
-                .unwrap();
+            let row = crate::request::binding::load_agent_request_with_access(
+                &db.agent_access,
+                &wake.request_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
             let scope = &case[field];
             let reference = (scope["kind"] == "referenced").then(|| GoalAssignmentInput {
                 goal_id: format!("goal-{}", scope["goal"]),
@@ -184,13 +220,11 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
             "{name}: immutable replay binding"
         );
         let response = db
-            .node
+            .agent_access
             .execute("{AgentMessage {message_key request_doc_id}}")
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let messages = response.data.as_ref().unwrap()["AgentMessage"]
-            .as_array()
+            .await
             .unwrap();
+        let messages = response["data"]["AgentMessage"].as_array().unwrap();
         assert_eq!(
             messages.len(),
             2,

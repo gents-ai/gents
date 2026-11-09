@@ -27,11 +27,15 @@ pub struct NetworkRecord {
 }
 
 /// Canonical signing form of a transport endpoint observation.
+/// The operator supplies the routable GraphQL URL explicitly. Its inclusion in
+/// these signed bytes binds HTTP discovery to the node DID; it grants no access.
+/// Consumers verify the signature and authenticate with their own caller key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointRecord {
     pub did: String,
     pub node_id: String,
     pub address: String,
+    pub graphql_url: Option<String>,
     pub updated_at: String,
     pub sig: Vec<u8>,
 }

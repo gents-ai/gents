@@ -27,6 +27,12 @@ pub async fn refuse_busy(binary: &Path, home: &Path) -> Result<()> {
     let output = tokio::time::timeout(
         Duration::from_secs(30),
         Command::new(binary)
+            .envs(
+                super::support::homes::ProcessHomes::under(
+                    home.parent().context("runtime home parent")?,
+                )
+                .env(),
+            )
             .args(["prepare-runtime", "--home"])
             .arg(home)
             .kill_on_drop(true)
@@ -67,7 +73,7 @@ pub struct Fixture<'a> {
     pub home: &'a Path,
     pub binary: &'a Path,
     pub node_did: &'a str,
-    pub agent_id: &'a str,
+    pub agent_did: &'a str,
     pub session: &'a str,
     pub client_did: &'a str,
     pub original_doc_id: &'a str,
@@ -99,7 +105,7 @@ impl Fixture<'_> {
             self.access.execute(&provider_query).await?,
             "InferenceBackend",
         )?;
-        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_id created_at }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session));
+        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_did created_at }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session));
         let sessions = rows(self.access.execute(&session_query).await?, "AgentSession")?;
         let (mut replacement, ready) = self.start_replacement(original).await?;
         let RuntimePreparationResult::Ready {
@@ -158,7 +164,7 @@ impl Fixture<'_> {
                 *id,
                 "desktop_chat_send",
                 json!({"request": {
-                    "nodeDid":self.node_did, "sessionId":self.session, "agentId":self.agent_id,
+                    "nodeDid":self.node_did, "sessionId":self.session, "agentDid":self.agent_did,
                     "content":AFTER_UPDATE,"delivery":"queue",
                 }}),
             )
@@ -230,6 +236,7 @@ impl Fixture<'_> {
                 == p2p_secret
         );
         let reused = Command::new(self.binary)
+            .envs(super::support::homes::ProcessHomes::under(self.root).env())
             .args(["prepare-runtime", "--home"])
             .arg(self.home)
             .kill_on_drop(true)
@@ -279,6 +286,7 @@ impl Fixture<'_> {
                     "original runtime exited before authenticated replacement"
                 );
                 let mut child = Command::new(self.binary)
+                    .envs(super::support::homes::ProcessHomes::under(self.root).env())
                     .args(["prepare-runtime", "--home"])
                     .arg(self.home)
                     .stdin(Stdio::null())
@@ -317,7 +325,15 @@ impl Fixture<'_> {
     }
 
     async fn retire_replacement(&self, graphql: &str, build: &str) -> Result<()> {
-        let endpoint = GraphqlEndpoint::as_principal(graphql, self.node_did);
+        // Runtime control is authorized by a bearer token signed with the Node's held key.
+        let config: Value =
+            serde_json::from_slice(&tokio::fs::read(self.home.join("init.json")).await?)?;
+        let identity = gents::KeyIdentity::load_or_create(
+            config["key_path"].as_str().context("runtime key path")?,
+            None,
+        )?;
+        let endpoint = GraphqlEndpoint::as_principal(graphql, self.node_did)
+            .with_client_signing_capability(identity.client_signing_capability()?)?;
         let mut url = reqwest::Url::parse(graphql)?;
         url.set_path(RUNTIME_CONTROL_PATH);
         let client = reqwest::Client::builder()

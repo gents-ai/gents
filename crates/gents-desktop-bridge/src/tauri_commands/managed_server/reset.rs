@@ -1,7 +1,7 @@
 use super::authority::HomeIdentity;
 use super::native::{native_service, run_native};
 use super::pairing::drain_managed_runtime_pairing;
-use super::port::matching_external_server;
+use super::port::{matching_external_server, user_status_signer};
 use super::preference::{load_preference, read_home_identity};
 use super::status::{emit_status, CrashLoopWatch};
 use crate::config::ManagedServerPolicy;
@@ -10,7 +10,6 @@ use crate::state::DesktopAppState;
 use crate::tauri_commands::service_executable::resolve_service_executable;
 use crate::types::{HomeResetDisposition, ManagedServerResetResult};
 use gents_desktop_core::home_reset::*;
-use gents_desktop_core::local_runtime::OperatorIdentityInteraction;
 use gents_desktop_core::preference::ReviewedHome;
 use std::path::Path;
 use std::time::Duration;
@@ -191,7 +190,7 @@ where
             let native =
                 run_native(native_service(app, state)?, |service| service.status()).await?;
             ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
-            ensure_home_not_served(home).await?;
+            ensure_home_not_served(home, user_status_signer(state).await.as_ref()).await?;
             Some(lock_home_for_retirement(home)?)
         }
         None => None,
@@ -319,13 +318,13 @@ pub(super) fn launch_reset_helper_with_timeout(
     launch().map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
 }
 
-async fn ensure_home_not_served(home: &Path) -> Result<(), BridgeError> {
+async fn ensure_home_not_served(
+    home: &Path,
+    user: Option<&gents::store::config_client::ClientSigningCapability>,
+) -> Result<(), BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(home.to_path_buf());
     let managed_address = std::net::SocketAddr::new(config.http_addr, config.http_port);
-    if matching_external_server(home, OperatorIdentityInteraction::Prevent)
-        .await?
-        .is_some()
-    {
+    if matching_external_server(home, user).await?.is_some() {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             "A managed server is still listening. Stop it before resetting its store.",

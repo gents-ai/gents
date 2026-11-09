@@ -168,32 +168,37 @@ impl PackPlugin {
         if let Some(limits) = &self.limits {
             if let Some(memory_mib) = limits.memory_mib {
                 anyhow::ensure!(
-                    (1..=crate::plugin::MAX_DECLARED_MEMORY_MIB).contains(&memory_mib),
+                    (1..=gents_protocol::plugin::MAX_DECLARED_MEMORY_MIB).contains(&memory_mib),
                     "plugin {:?} declares memory_mib {memory_mib}, but it {}",
                     self.name,
-                    limit_range_reason(memory_mib, crate::plugin::MAX_DECLARED_MEMORY_MIB, "MiB")
+                    limit_range_reason(
+                        memory_mib,
+                        gents_protocol::plugin::MAX_DECLARED_MEMORY_MIB,
+                        "MiB"
+                    )
                 );
             }
             if let Some(wall_clock_secs) = limits.wall_clock_secs {
                 anyhow::ensure!(
-                    (1..=crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS).contains(&wall_clock_secs),
+                    (1..=gents_protocol::plugin::MAX_DECLARED_WALL_CLOCK_SECS)
+                        .contains(&wall_clock_secs),
                     "plugin {:?} declares wall_clock_secs {wall_clock_secs}, but it {}",
                     self.name,
                     limit_range_reason(
                         wall_clock_secs,
-                        crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS,
+                        gents_protocol::plugin::MAX_DECLARED_WALL_CLOCK_SECS,
                         "s"
                     )
                 );
             }
             if let Some(max_output_mib) = limits.max_output_mib {
                 anyhow::ensure!(
-                    (1..=crate::plugin::MAX_DECLARED_OUTPUT_MIB).contains(&max_output_mib),
+                    (1..=gents_protocol::plugin::MAX_DECLARED_OUTPUT_MIB).contains(&max_output_mib),
                     "plugin {:?} declares max_output_mib {max_output_mib}, but it {}",
                     self.name,
                     limit_range_reason(
                         max_output_mib,
-                        crate::plugin::MAX_DECLARED_OUTPUT_MIB,
+                        gents_protocol::plugin::MAX_DECLARED_OUTPUT_MIB,
                         "MiB"
                     )
                 );
@@ -233,7 +238,7 @@ impl PackPlugin {
                     )
                 })?;
                 anyhow::ensure!(
-                    !crate::tools::native::is_secret_env_name(field),
+                    !crate::documents::callback::is_secret_env_name(field),
                     "plugin {name:?} data.stamped field {field:?} looks like a secret name; \
                      rename the field"
                 );

@@ -1,7 +1,8 @@
 use super::*;
-use crate::tests::support::{boot_core, create_session, create_tool_call, seed_job_row, OPERATOR};
+use crate::tests::support::{
+    seed_served_job_row, seed_served_tool_call, served_desktop, ServedDesktop,
+};
 use crate::types::RenderedToolCallView;
-use gents::store::config_client::ConfigAccess;
 use gents_protocol::job::{
     JobBudget, JobOrigin, JobOutcome, JobPauseReason, JobProgress, JobState,
 };
@@ -28,35 +29,38 @@ fn progress(state: JobState, pause_reason: Option<JobPauseReason>) -> JobProgres
 }
 
 async fn snapshot_of(
-    core: &std::sync::Arc<ClientCore>,
+    served: &ServedDesktop,
     session_id: &str,
     request_ids: &[&str],
 ) -> DesktopSessionSnapshot {
+    let node = served.node_did();
+    let user = served.core.node_identity().did().to_owned();
     for request_id in request_ids {
-        core.refresh_local_request(OPERATOR, session_id, Some(request_id), None, &[])
+        served
+            .core
+            .refresh_local_request(node, session_id, Some(request_id), None, &[])
             .await
             .expect("refresh request");
     }
-    let access = ConfigAccess::local(core.node_arc());
+    let access = served.runtime.user_access();
     let page = gents_desktop_core::client::load_session_transcript_page_on(
         &access,
         session_id,
-        Some(OPERATOR),
-        Some(OPERATOR),
+        Some(node),
+        Some(&user),
         None,
         None,
     )
     .await
     .expect("transcript page");
     build_session_snapshot_for_node_with_transcript(
-        core.as_ref(),
+        served.core.as_ref(),
         &access,
-        Some(OPERATOR),
+        Some(node),
         session_id,
         None,
         Some(&page.store),
         Some(&page.canonical_dependencies),
-        None,
         None,
         None,
         false,
@@ -64,6 +68,7 @@ async fn snapshot_of(
         None,
     )
     .await
+    .expect("session snapshot read")
     .expect("session snapshot")
 }
 
@@ -90,11 +95,10 @@ fn flat<'a>(snapshot: &'a DesktopSessionSnapshot, call: &str) -> &'a ToolCallVie
 
 #[tokio::test]
 async fn job_row_projects_progress_handle_state_and_outcome() {
-    let (core, _tmp) = boot_core().await;
-    create_session(&core, OPERATOR, "sess-job", None).await;
+    let served = served_desktop().await;
     let failed = progress(JobState::Failed, None);
-    seed_job_row(
-        &core,
+    seed_served_job_row(
+        &served,
         "sess-job",
         "call-failed",
         "failed",
@@ -102,8 +106,8 @@ async fn job_row_projects_progress_handle_state_and_outcome() {
         Some(("engine_boom", "boom")),
     )
     .await;
-    seed_job_row(
-        &core,
+    seed_served_job_row(
+        &served,
         "sess-job",
         "call-cancelled",
         "cancelled",
@@ -113,7 +117,7 @@ async fn job_row_projects_progress_handle_state_and_outcome() {
     .await;
 
     let snapshot = snapshot_of(
-        &core,
+        &served,
         "sess-job",
         &["req-call-failed", "req-call-cancelled"],
     )
@@ -156,15 +160,15 @@ async fn job_row_projects_progress_handle_state_and_outcome() {
         Some(JobState::Cancelled)
     );
     assert_eq!(flat(&snapshot, "call-cancelled").job_outcome, None);
+    served.shutdown().await;
 }
 
 #[tokio::test]
 async fn paused_job_row_has_state_paused_and_no_outcome() {
-    let (core, _tmp) = boot_core().await;
-    create_session(&core, OPERATOR, "sess-pause", None).await;
+    let served = served_desktop().await;
     let paused = progress(JobState::Paused, Some(JobPauseReason::BudgetExceeded));
-    seed_job_row(
-        &core,
+    seed_served_job_row(
+        &served,
         "sess-pause",
         "call-paused",
         "completed",
@@ -173,7 +177,7 @@ async fn paused_job_row_has_state_paused_and_no_outcome() {
     )
     .await;
 
-    let snapshot = snapshot_of(&core, "sess-pause", &["req-call-paused"]).await;
+    let snapshot = snapshot_of(&served, "sess-pause", &["req-call-paused"]).await;
 
     let next = gents_server::jobs::next_calls(JobState::Paused, "sess-pause:call-paused");
     let wire = rendered(&snapshot, "call-paused");
@@ -185,14 +189,14 @@ async fn paused_job_row_has_state_paused_and_no_outcome() {
     assert_eq!(flat_row.job_state, Some(JobState::Paused));
     assert_eq!(flat_row.job_outcome, None);
     assert_eq!(flat_row.job_next_calls, next);
+    served.shutdown().await;
 }
 
 #[tokio::test]
 async fn non_job_row_has_no_job_fields() {
-    let (core, _tmp) = boot_core().await;
-    create_session(&core, OPERATOR, "sess_parent", None).await;
-    seed_job_row(
-        &core,
+    let served = served_desktop().await;
+    seed_served_job_row(
+        &served,
         "sess_parent",
         "call-job",
         "completed",
@@ -200,9 +204,16 @@ async fn non_job_row_has_no_job_fields() {
         None,
     )
     .await;
-    create_tool_call(&core, "call-plain", "read_file").await;
+    seed_served_tool_call(
+        &served,
+        "sess_parent",
+        "req-call-job",
+        "call-plain",
+        "read_file",
+    )
+    .await;
 
-    let snapshot = snapshot_of(&core, "sess_parent", &["req-call-job"]).await;
+    let snapshot = snapshot_of(&served, "sess_parent", &["req-call-job"]).await;
 
     let wire = rendered(&snapshot, "call-plain");
     assert_eq!(wire.job_progress, None);
@@ -225,14 +236,14 @@ async fn non_job_row_has_no_job_fields() {
     ] {
         assert!(value.get(key).is_none(), "{key} on a non-job row: {value}");
     }
+    served.shutdown().await;
 }
 
 #[tokio::test]
 async fn job_step_state_is_not_projected() {
-    let (core, _tmp) = boot_core().await;
-    create_session(&core, OPERATOR, "sess-step", None).await;
-    seed_job_row(
-        &core,
+    let served = served_desktop().await;
+    seed_served_job_row(
+        &served,
         "sess-step",
         "call-step",
         "completed",
@@ -241,9 +252,10 @@ async fn job_step_state_is_not_projected() {
     )
     .await;
 
-    let snapshot = snapshot_of(&core, "sess-step", &["req-call-step"]).await;
+    let snapshot = snapshot_of(&served, "sess-step", &["req-call-step"]).await;
 
     let value = serde_json::to_value(rendered(&snapshot, "call-step")).expect("serialize");
     assert!(value.get("jobStepState").is_none(), "{value}");
     assert!(value.get("jobState").is_some(), "{value}");
+    served.shutdown().await;
 }

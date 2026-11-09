@@ -1,13 +1,14 @@
 use crate::support::{self, *};
 
 use anyhow::{Context, Result};
-use serde_json::Value;
 
 /// A documents pack that ships a plugin: install stores the plugin and
-/// records it, and remove takes back exactly what the install created. Every
-/// pack here is scaffolded on the fly, so this needs no fixture at all.
+/// records it. Retiring that plugin needs a complete reference inventory,
+/// which no document reader proves under ACP, so removal refuses and leaves
+/// the plugin, its record and the pack's documents in place. Every pack here
+/// is scaffolded on the fly, so this needs no fixture at all.
 #[test]
-fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()> {
+fn a_document_pack_with_a_plugin_installs_and_its_removal_refuses_intact() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("node");
     let home_arg = home.to_str().context("path")?;
@@ -74,20 +75,17 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     )?;
     anyhow::ensure!(echoed == serde_json::json!({"a": 1}), "{echoed}");
 
-    let removed = run_cli_json(
+    let refused = run_cli_failure_stderr(
         temp.path(),
         &["pack", "remove", "demo_tools", "--home", home_arg],
     )?;
-    let sorted = |value: &Value| -> Result<Vec<String>> {
-        let mut names: Vec<String> = serde_json::from_value(value.clone())?;
-        names.sort();
-        Ok(names)
-    };
     anyhow::ensure!(
-        sorted(&removed["removed"]["removed"])? == sorted(&install["apply"]["created"])?,
-        "{removed}"
+        refused.contains(
+            "plugin retirement requires a complete native configuration reference inventory"
+        ),
+        "{refused}"
     );
-    let gone = run_cli_failure_stderr(
+    let retained = run_cli_json(
         temp.path(),
         &[
             "plugin",
@@ -96,15 +94,18 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
             "--home",
             home_arg,
             "--input",
-            "{}",
+            r#"{"b":2}"#,
         ],
     )?;
-    anyhow::ensure!(gone.contains("not installed"), "{gone}");
+    anyhow::ensure!(retained == serde_json::json!({"b": 2}), "{retained}");
     let again = run_cli_failure_stderr(
         temp.path(),
         &["pack", "remove", "demo_tools", "--home", home_arg],
     )?;
-    anyhow::ensure!(again.contains("is not installed"), "{again}");
+    anyhow::ensure!(
+        again.contains("complete native configuration reference inventory"),
+        "the refused removal left the pack installed: {again}"
+    );
     Ok(())
 }
 
@@ -138,7 +139,7 @@ impl DependentHome {
             tempdir.path(),
             &["--node-name", node_name, "--home", home_arg],
         )?;
-        let owner_did = node_did_from_init(&initialized)?;
+        node_did_from_init(&initialized)?;
         run_cli_json(
             tempdir.path(),
             &[
@@ -159,7 +160,7 @@ impl DependentHome {
             "--registry",
             UNROUTABLE_REGISTRY,
             "--inference-slot",
-            &format!("worker={owner_did}:default-profile"),
+            &format!("worker={}", inference_profile_id_from_init(&initialized)?),
         ]
         .map(str::to_owned)
         .to_vec();
@@ -336,7 +337,7 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
         scratch.path(),
         &["--node-name", "unresolved-plugin", "--home", home_arg],
     )?;
-    let owner_did = node_did_from_init(&initialized)?;
+    node_did_from_init(&initialized)?;
     let refusal = run_cli_failure_stderr(
         scratch.path(),
         &[
@@ -348,7 +349,7 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
             "--registry",
             UNROUTABLE_REGISTRY,
             "--inference-slot",
-            &format!("worker={owner_did}:default-profile"),
+            &format!("worker={}", inference_profile_id_from_init(&initialized)?),
         ],
     )?;
     anyhow::ensure!(
@@ -377,9 +378,11 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
 }
 
 /// A documents dependency that ships a plugin installs that plugin under the
-/// dependency's own coordinate, and removing the dependent releases it.
+/// dependency's own coordinate. Removing the dependent would retire that
+/// plugin, which needs a complete reference inventory no ACP reader proves, so
+/// the removal refuses and the dependency's plugin stays owned by it.
 #[test]
-fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> {
+fn a_documents_dependency_plugin_is_retained_when_its_dependent_removal_refuses() -> Result<()> {
     let scratch = tempfile::tempdir().context("creating dependee tempdir")?;
     let dependee = scratch.path().join("dependee_fixture");
     copy_dir_all(&fixture_pack_dir("dependee_fixture"), &dependee)?;
@@ -404,7 +407,7 @@ fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> 
         "the dependency's plugin is not owned by the dependency: {record:?}"
     );
 
-    run_cli_json(
+    let refused = run_cli_failure_stderr(
         setup.tempdir.path(),
         &[
             "pack",
@@ -415,8 +418,15 @@ fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> 
         ],
     )?;
     anyhow::ensure!(
-        gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool").is_err(),
-        "the dependency's plugin outlived its dependent"
+        refused.contains(
+            "plugin retirement requires a complete native configuration reference inventory"
+        ),
+        "{refused}"
+    );
+    let retained = gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;
+    anyhow::ensure!(
+        retained.owner_pack_coordinate.as_deref() == Some("fixture/dependee_fixture"),
+        "the refused removal changed the dependency's plugin: {retained:?}"
     );
     Ok(())
 }
@@ -435,7 +445,7 @@ fn wire_target(id: &str) -> serde_json::Value {
     serde_json::json!({
         "target_id": id,
         "target_node_did": FOREIGN_NODE,
-        "agent_id": id,
+        "agent_did": id,
         "name": id,
     })
 }
@@ -464,10 +474,10 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
     let mut init_args = vec!["--node-name", "pack-wire", "--home", home_arg];
     init_args.extend_from_slice(init_extra);
     let initialized = run_init_json(scratch, &init_args)?;
-    let owner_did = node_did_from_init(&initialized)?;
-    let agent = initialized["default_agent_id"]
+    node_did_from_init(&initialized)?;
+    let agent = initialized["default_agent_did"]
         .as_str()
-        .context("init output missing default_agent_id")?
+        .context("init output missing default_agent_did")?
         .to_owned();
 
     let job_pack = scratch.join("job_plugin_fixture");
@@ -502,7 +512,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
             &content_pack,
             vec![
                 "--inference-slot".to_owned(),
-                format!("worker={owner_did}:default-profile"),
+                format!("worker={}", inference_profile_id_from_init(&initialized)?),
             ],
         ),
     ] {
@@ -684,8 +694,14 @@ fn diagnose_status_degrades_on_a_plugin_jobs_failure() -> Result<()> {
         after["checks"]["plugin_jobs"]["ok"] == false && after["status"] == "degraded",
         "a plugin_jobs failure did not degrade status: {after}"
     );
+    let wired = after["checks"]["plugin_jobs"]["agents"]
+        .as_array()
+        .context("plugin_jobs lists no agents")?
+        .iter()
+        .find(|row| row["agent_did"] == fixture.agent.as_str())
+        .with_context(|| format!("plugin_jobs omits the wired agent: {after}"))?;
     anyhow::ensure!(
-        after["checks"]["plugin_jobs"]["agents"][0]["checks"][0]["check"] == "job_block_missing",
+        wired["checks"][0]["check"] == "job_block_missing",
         "unexpected plugin_jobs row: {after}"
     );
     Ok(())
@@ -794,9 +810,9 @@ fn uninstalled_job_pack() -> Result<WireFixture> {
         scratch,
         &["--node-name", "pack-digest", "--home", dir_arg(&home)],
     )?;
-    let agent = initialized["default_agent_id"]
+    let agent = initialized["default_agent_did"]
         .as_str()
-        .context("init output missing default_agent_id")?
+        .context("init output missing default_agent_did")?
         .to_owned();
     let job_pack = scratch.join("job_plugin_fixture");
     copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &job_pack)?;
@@ -1250,10 +1266,40 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
+/// `wire_sources` resolves the CLI client key from the process environment,
+/// so it runs in a child of this test binary whose `HOME` is the fixture's.
+#[test]
+fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
     let fixture = wire_fixture(true)?;
-    let sources = gents_server::packs::wire_sources(fixture.home.clone()).await?;
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "cli_pack::wire_sources_in_fixture_home",
+            "--exact",
+            "--include-ignored",
+            "--nocapture",
+        ])
+        .env("HOME", fixture.tempdir.path())
+        .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
+        .env(WIRE_SOURCES_HOME_ENV, &fixture.home)
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "wire_sources child failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+const WIRE_SOURCES_HOME_ENV: &str = "GENTS_TEST_WIRE_SOURCES_HOME";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "run by wire_sources_lists_job_plugins_and_target_packs in the fixture's HOME"]
+async fn wire_sources_in_fixture_home() -> Result<()> {
+    let home = std::path::PathBuf::from(
+        std::env::var_os(WIRE_SOURCES_HOME_ENV).context("fixture home is not set")?,
+    );
+    let sources = gents_server::packs::wire_sources(home).await?;
     let plugins = sources["plugins"]
         .as_array()
         .context("wire_sources printed no plugins")?;

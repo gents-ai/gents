@@ -228,7 +228,7 @@ impl Check for SchemaMatches {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defra_node::EmbeddedNode;
+    use crate::defra_node::Node as EmbeddedNode;
     use crate::eval::runner::ScriptedExecutor;
     use crate::eval::OutcomeKind;
     use crate::store::config_client::ConfigAccess;

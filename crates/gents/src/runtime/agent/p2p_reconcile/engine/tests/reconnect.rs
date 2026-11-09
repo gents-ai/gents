@@ -6,14 +6,12 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     };
     let store = MockStore {
         desired: Mutex::new(Err("transient desired read".into())),
         applied: Mutex::new(PairingApplied {
             replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
             replicator_filter: filter.clone(),
-            ..Default::default()
         }),
         ..Default::default()
     };
@@ -82,14 +80,12 @@ async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     };
     let store = MockStore {
         desired: Mutex::new(Err("transient desired read".into())),
         applied: Mutex::new(PairingApplied {
             replicator_addresses: set(&["addr1"]),
             replicator_filter: filter.clone(),
-            ..Default::default()
         }),
         ..Default::default()
     };
@@ -143,12 +139,10 @@ async fn failed_reconnect_ensure_preserves_route_and_retries_next_tick() {
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let admin = MockAdmin {
         active: Mutex::new(vec!["peer-a".into()]),
@@ -203,12 +197,10 @@ async fn reconnect_ensures_converged_agent_target_replicator_without_teardown() 
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let admin = MockAdmin::default();
     admin.replicators.lock().unwrap().insert(
@@ -245,12 +237,10 @@ async fn inbound_reconnect_ensures_without_owner_redial() {
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let admin = MockAdmin::default();
     admin
@@ -288,12 +278,10 @@ async fn reconnect_ensure_never_deletes_native_replicator() {
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let admin = MockAdmin::default();
     admin.replicators.lock().unwrap().insert(
@@ -330,13 +318,11 @@ async fn reconnect_delegates_native_replay_decision_without_document_scan() {
         replicator_collections: set(&["AgentRequest", "AgentSession"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     };
     let store = MockStore::with_desired(Some(desired));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let admin = MockAdmin::default();
     admin.replicators.lock().unwrap().insert(

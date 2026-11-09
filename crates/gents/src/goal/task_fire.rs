@@ -14,7 +14,7 @@ pub struct TaskGoalRequestBinding {
     #[serde(default)]
     pub node_did: String,
     #[serde(default)]
-    pub agent_id: String,
+    pub agent_did: String,
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]
@@ -133,7 +133,7 @@ pub fn validate_task_goal_declaration(
 
 pub(crate) async fn apply_claimed_task_goal_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
-    request: &crate::request::watcher::AgentRequest,
+    request: &gents_protocol::row::AgentRequest,
     now: &str,
 ) -> Result<()> {
     let owner = escape_graphql_string(&request.node_did);

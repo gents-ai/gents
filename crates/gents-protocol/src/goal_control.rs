@@ -37,6 +37,8 @@ pub enum GoalControlError {
     EmptySessionDocument,
     #[error("goal control lacks its session document")]
     MissingSessionDocument,
+    #[error("goal control lacks its agent document")]
+    MissingAgentDocument,
     #[error("goal control lacks its observed revision")]
     MissingObservedRevision,
     #[error("empty goal control revision")]
@@ -85,7 +87,7 @@ pub struct ObservedGoal {
     pub snapshot: GoalSnapshot,
 }
 
-/// A runtime-signed read projection. The Goal document remains authoritative;
+/// An agent-signed read projection. The Goal document remains authoritative;
 /// session writers cannot forge goal state by changing this observation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -93,6 +95,7 @@ pub struct ObservedGoal {
 pub struct SessionGoalObservation {
     pub version: u8,
     pub node_did: String,
+    pub agent_did: String,
     pub session_id: String,
     pub session_doc_id: String,
     pub requester_did: Option<String>,
@@ -111,6 +114,7 @@ impl SessionGoalObservation {
     pub fn validate_scope(
         &self,
         node_did: &str,
+        agent_did: &str,
         session_id: &str,
         session_doc_id: &str,
         requester_did: Option<&str>,
@@ -119,6 +123,7 @@ impl SessionGoalObservation {
             return Err(GoalControlError::ObservationUnsupportedVersion);
         }
         if !(self.node_did == node_did
+            && self.agent_did == agent_did
             && self.session_id == session_id
             && self.session_doc_id == session_doc_id
             && self.requester_did.as_deref() == requester_did)
@@ -161,12 +166,21 @@ pub enum GoalOperation {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct GoalNativeEvidence {
+    pub request: serde_json::Value,
+    pub replacement_delete: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionGoalControl {
     pub version: u8,
     pub command_id: String,
     pub requester_did: String,
     pub requester_peer_id: Option<String>,
     pub node_did: String,
+    pub agent_did: String,
+    pub agent_doc_id: String,
     pub session_id: String,
     pub session_doc_id: Option<String>,
     pub issued_at: String,
@@ -176,6 +190,8 @@ pub struct SessionGoalControl {
     /// Creation carries the author's signed first request. The existing goal
     /// submission owner commits it with the Goal and creation claim.
     pub initial_request: Option<Box<AgentRequestCreate>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_evidence: Option<GoalNativeEvidence>,
     pub signature: Vec<u8>,
 }
 
@@ -199,6 +215,7 @@ impl SessionGoalControl {
             &self.command_id,
             &self.requester_did,
             &self.node_did,
+            &self.agent_did,
             &self.session_id,
         ] {
             if value.trim().is_empty() {
@@ -231,10 +248,13 @@ impl SessionGoalControl {
         {
             return Err(GoalControlError::EmptySessionDocument);
         }
+        if self.session_doc_id.is_none() {
+            return Err(GoalControlError::MissingSessionDocument);
+        }
+        if self.agent_doc_id.trim().is_empty() {
+            return Err(GoalControlError::MissingAgentDocument);
+        }
         if !matches!(self.operation, GoalOperation::Create { .. }) || self.expected.is_some() {
-            if self.session_doc_id.is_none() {
-                return Err(GoalControlError::MissingSessionDocument);
-            }
             let revision = self
                 .expected
                 .as_ref()
@@ -270,6 +290,7 @@ pub struct SessionGoalControlReceipt {
     pub command_digest: String,
     pub requester_did: String,
     pub node_did: String,
+    pub agent_did: String,
     pub session_id: String,
     pub outcome: GoalControlOutcome,
     pub processed_at: String,
@@ -291,6 +312,7 @@ impl SessionGoalControlReceipt {
             && self.command_digest == command.computed_digest()?
             && self.requester_did == command.requester_did
             && self.node_did == command.node_did
+            && self.agent_did == command.agent_did
             && self.session_id == command.session_id)
         {
             return Err(GoalControlError::ReceiptDiffers);
@@ -345,6 +367,8 @@ mod tests {
             requester_did: "requester".into(),
             requester_peer_id: Some("peer".into()),
             node_did: "node".into(),
+            agent_did: "agent".into(),
+            agent_doc_id: "agent-document".into(),
             session_id: "session".into(),
             session_doc_id: Some("session-document".into()),
             issued_at: "2026-10-17T00:00:00Z".into(),
@@ -355,6 +379,7 @@ mod tests {
             }),
             operation: GoalOperation::Pause {},
             initial_request: None,
+            native_evidence: None,
             signature: vec![0; 64],
         }
     }
@@ -370,6 +395,8 @@ mod tests {
             "requester_did",
             "requester_peer_id",
             "node_did",
+            "agent_did",
+            "agent_doc_id",
             "session_id",
             "session_doc_id",
             "issued_at",
@@ -399,6 +426,28 @@ mod tests {
     }
 
     #[test]
+    fn native_goal_graphs_are_part_of_the_retained_signed_command() {
+        let mut original = command();
+        original.native_evidence = Some(GoalNativeEvidence {
+            request: json!({"public_key_hex": "user", "doc_id": "request", "signature": [1]}),
+            replacement_delete: Some(json!({"doc_id": "goal", "signature": [2]})),
+        });
+        let payload = original.signing_payload().unwrap();
+        let digest = original.computed_digest().unwrap();
+        let encoded = serde_json::to_string(&original).unwrap();
+        let restored: SessionGoalControl = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored, original);
+        assert_eq!(restored.computed_digest().unwrap(), digest);
+        for path in ["request", "replacement_delete"] {
+            let mut changed = serde_json::to_value(&original).unwrap();
+            changed["native_evidence"][path]["signature"] = json!([3]);
+            let changed: SessionGoalControl = serde_json::from_value(changed).unwrap();
+            assert_ne!(changed.signing_payload().unwrap(), payload, "{path}");
+            assert_ne!(changed.computed_digest().unwrap(), digest, "{path}");
+        }
+    }
+
+    #[test]
     fn unknown_fields_cannot_extend_signed_commands() {
         let original = serde_json::to_value(command()).unwrap();
         let mut changed = original.clone();
@@ -414,6 +463,7 @@ mod tests {
         let observation = SessionGoalObservation {
             version: SESSION_GOAL_CONTROL_VERSION,
             node_did: "node".into(),
+            agent_did: "agent".into(),
             session_id: "session".into(),
             session_doc_id: "session-document".into(),
             requester_did: Some("requester".into()),
@@ -422,10 +472,22 @@ mod tests {
             signature: vec![0; 64],
         };
         observation
-            .validate_scope("node", "session", "session-document", Some("requester"))
+            .validate_scope(
+                "node",
+                "agent",
+                "session",
+                "session-document",
+                Some("requester"),
+            )
             .unwrap();
         assert!(observation
-            .validate_scope("node", "session", "recreated-session", Some("requester"))
+            .validate_scope(
+                "node",
+                "agent",
+                "session",
+                "recreated-session",
+                Some("requester")
+            )
             .is_err());
         for (node, session, requester) in [
             ("foreign-node", "session", Some("requester")),
@@ -434,7 +496,7 @@ mod tests {
             ("node", "session", None),
         ] {
             assert!(observation
-                .validate_scope(node, session, "session-document", requester)
+                .validate_scope(node, "agent", session, "session-document", requester)
                 .is_err());
         }
         assert_ne!(

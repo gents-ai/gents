@@ -462,16 +462,14 @@ or drop those collections from the client-to-runtime direction.
 | `gents-schemas/src/lib.rs`, `gents-protocol/src/schemas.rs`, runtime schema exports | Register segment only; remove separate seal, response and spill collections | Verify fresh schema registration and strict JSON/SDL decoding |
 | `gents-migration/src/registry.rs` | Remove obsolete response/spill baselines; update client-authored catalog | Add the fresh segment root pin and regenerate changed request/message/tool pins with DefraDB; catalog coverage/parity remains required. No fabricated pins or relaxed checks |
 | `agent/p2p_reconcile/{templates,profiles,policy}.rs` | Replace response/spill routes with segment, preserving requester/agent filters and route directions | Conformance for conversation, client (both directions), machine and operator routes; collection presence is not ACP authorization |
-| `agent/p2p_reconcile/session_hydration.rs` | New collection inventory | Replace session-only selection with authorized reference closure; preserve membership, route admission and bounded exact push |
-| `session_hydration_reconcile.rs` | Inventory only; old queries intentionally remain | Resolve closure references, enumerate twins and include origin dependencies in the signed exact manifest |
-| `gents-protocol/src/session_hydration.rs` | Closed collection enum; receipt format unchanged | Server validates closure; desktop verifies signature, exact document delivery and header reconstruction before completion |
+| `file_inventory/{closure,selection}.rs` | Closed collection enum; authorized reference closure of one session | Resolve closure references, enumerate twins and include origin dependencies; P2P does not replicate or hydrate sessions |
 | Desktop `client/core/writes.rs`, `query/{session_transcript,document_patches}.rs`, `store/*`, observers | Inventory only; deleted row types break old readers | Follow origin references without subscribing to an entire parent session; project reordered header/segment arrival |
 | `session/fork.rs` and session retention owners | Typed publication provenance and retained-reference contract | Preserve parent dependencies after parent close/removal, detach live membership, check ACP without copying payloads |
 
 ## Cross-layer validation surfaces
 
 `Transcript`, `CompletionRetry`, `RequestExecutionLease`, `SessionFork`,
-`SessionHydration`, `Client`, tool/background delivery and provider-input narrowing
+`FileInventory`, `Client`, tool/background delivery and provider-input narrowing
 define the coverage required across Lean, generated conformance and implementation.
 The Lean proof map records the modeled contracts and remaining native premises.
 Preserve coverage for: retraction without replacement bytes; stale/replayed writes; at most one

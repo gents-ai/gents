@@ -4,4 +4,4 @@
  * Why a job row could not be read. Transient errors are retried by a cursor;
  * permanent ones are surfaced.
  */
-export type JobReadError = "NotAJob" | "NotAuthorized" | "NotYetObservable" | { "Unavailable": { message: string, } } | { "Malformed": { message: string, } };
+export type JobReadError = "NotAJob" | "NotAuthorized" | "PermissionDenied" | "NotYetObservable" | { "Unavailable": { message: string, } } | { "Malformed": { message: string, } };

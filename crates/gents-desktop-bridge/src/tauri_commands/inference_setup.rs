@@ -444,6 +444,7 @@ mod provider_account_tests {
     use std::sync::Arc;
 
     use super::*;
+    use gents_desktop_core::test_fixtures::ServedRuntimeHome;
 
     #[test]
     fn provider_account_view_never_serializes_tokens() {
@@ -506,17 +507,11 @@ mod provider_account_tests {
         gents::ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"))
     }
 
-    async fn serving_node() -> std::sync::Arc<gents::defra_node::EmbeddedNode> {
-        let node = crate::tests::support::node_builder()
-            .build()
-            .await
-            .expect("embedded node");
-        gents::ensure_runtime_schemas(&node).await.expect("schemas");
-        std::sync::Arc::new(node)
-    }
-
-    async fn serving_operator() -> gents::ConfigAccess {
-        gents::ConfigAccess::local(serving_node().await)
+    /// A runtime whose User saves sign-ins through the client-signed
+    /// endpoint `ClientCore::operator_access` builds; credentials are scoped
+    /// to its published Node.
+    async fn served() -> ServedRuntimeHome {
+        ServedRuntimeHome::start().await
     }
 
     fn assert_user_facing(error: &BridgeError) {
@@ -556,9 +551,10 @@ mod provider_account_tests {
         assert_eq!(missing_endpoint.code, BridgeErrorCode::EndpointUnreachable);
         assert_user_facing(&missing_endpoint);
 
+        let runtime = served().await;
         require_reachable_configuration(
-            Ok(serving_operator().await),
-            "did:key:zAgent",
+            Ok(runtime.user_access()),
+            runtime.node_did(),
             gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
         .await
@@ -582,9 +578,9 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn a_desktop_sign_in_writes_its_own_key() {
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let node_did = runtime.node_did();
         let provider = gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
-        let node = serving_node().await;
         let keyed = OAuthCredential {
             credential_id: format!("{provider}:{node_did}"),
             provider: provider.to_string(),
@@ -594,7 +590,7 @@ mod provider_account_tests {
             ..issued_credential(node_did)
         };
         gents::inference::auth::credential::upsert_oauth_credential_on(
-            &gents::ConfigAccess::local(node.clone()),
+            &runtime.user_access(),
             &keyed,
         )
         .await
@@ -612,15 +608,11 @@ mod provider_account_tests {
             chrono::Utc::now(),
         );
         let pending = PendingOAuthCredentials::default();
-        save_issued_credential(
-            &pending,
-            Ok(gents::ConfigAccess::local(node.clone())),
-            pending.issue(keyless),
-        )
-        .await
-        .expect("save the sign-in");
+        save_issued_credential(&pending, Ok(runtime.user_access()), pending.issue(keyless))
+            .await
+            .expect("save the sign-in");
 
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node), node_did)
+        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
             .await
             .expect("list stored credentials");
         assert_eq!(stored.len(), 1);
@@ -631,7 +623,8 @@ mod provider_account_tests {
     #[tokio::test]
     async fn failed_save_holds_the_issued_credential_and_retry_saves_it_without_login() {
         let pending = PendingOAuthCredentials::default();
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let node_did = runtime.node_did();
         let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 
         let error = save_issued_credential(
@@ -662,18 +655,13 @@ mod provider_account_tests {
         assert_user_facing(&still_down);
         assert_eq!(held_tokens(&pending, node_did), ["issued-access"]);
 
-        let node = serving_node().await;
-        let saved = retry_pending_credential(
-            &pending,
-            Ok(gents::ConfigAccess::local(node.clone())),
-            node_did,
-            provider,
-        )
-        .await
-        .expect("retry stores the held credential");
+        let saved =
+            retry_pending_credential(&pending, Ok(runtime.user_access()), node_did, provider)
+                .await
+                .expect("retry stores the held credential");
         assert_eq!(saved.access_token, "issued-access");
         assert!(held_tokens(&pending, node_did).is_empty());
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node), node_did)
+        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
             .await
             .expect("list stored credentials");
         assert_eq!(stored.len(), 1);
@@ -685,7 +673,8 @@ mod provider_account_tests {
     #[tokio::test]
     async fn account_observation_reports_held_sign_ins_without_tokens() {
         let pending = PendingOAuthCredentials::default();
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let node_did = runtime.node_did();
         let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 
         let unobserved = observe_provider_accounts(&pending, Ok(unreachable_operator()), node_did)
@@ -714,29 +703,18 @@ mod provider_account_tests {
                 .is_err()
         );
 
-        let node = serving_node().await;
-        let with_store = observe_provider_accounts(
-            &pending,
-            Ok(gents::ConfigAccess::local(node.clone())),
-            node_did,
-        )
-        .await
-        .expect("serving store");
+        let with_store = observe_provider_accounts(&pending, Ok(runtime.user_access()), node_did)
+            .await
+            .expect("serving store");
         assert_eq!(with_store.len(), 1);
         assert!(with_store[0].pending_save);
 
-        retry_pending_credential(
-            &pending,
-            Ok(gents::ConfigAccess::local(node.clone())),
-            node_did,
-            provider,
-        )
-        .await
-        .expect("retry stores the held credential");
-        let saved =
-            observe_provider_accounts(&pending, Ok(gents::ConfigAccess::local(node)), node_did)
-                .await
-                .expect("serving store");
+        retry_pending_credential(&pending, Ok(runtime.user_access()), node_did, provider)
+            .await
+            .expect("retry stores the held credential");
+        let saved = observe_provider_accounts(&pending, Ok(runtime.user_access()), node_did)
+            .await
+            .expect("serving store");
         assert_eq!(saved.len(), 1);
         assert!(!saved[0].pending_save);
         assert_eq!(saved[0].provider, provider);
@@ -745,6 +723,7 @@ mod provider_account_tests {
     #[tokio::test]
     async fn retry_save_only_uses_a_credential_held_for_that_node_and_provider() {
         let pending = PendingOAuthCredentials::default();
+        let runtime = served().await;
         let _ = save_issued_credential(
             &pending,
             Ok(unreachable_operator()),
@@ -762,14 +741,10 @@ mod provider_account_tests {
                 gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             ),
         ] {
-            let error = retry_pending_credential(
-                &pending,
-                Ok(serving_operator().await),
-                node_did,
-                provider,
-            )
-            .await
-            .expect_err("no credential is held for this key");
+            let error =
+                retry_pending_credential(&pending, Ok(runtime.user_access()), node_did, provider)
+                    .await
+                    .expect_err("no credential is held for this key");
             assert_eq!(error.code, BridgeErrorCode::NotFound);
         }
         assert_eq!(held_tokens(&pending, "did:key:zAgent"), ["issued-access"]);
@@ -1035,21 +1010,21 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn a_second_accounts_desktop_sign_in_is_added_beside_the_first() {
-        let node = serving_node().await;
-        let access = || Ok(gents::ConfigAccess::local(node.clone()));
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let access = || Ok(runtime.user_access());
+        let node_did = runtime.node_did();
         let pending = PendingOAuthCredentials::default();
         let (a, b) = two_accounts(node_did, true);
         save_issued_credential(&pending, access(), pending.issue(a))
             .await
             .expect("save the first account");
-        let first = list_oauth_credentials_on(&gents::ConfigAccess::local(node.clone()), node_did)
+        let first = list_oauth_credentials_on(&runtime.user_access(), node_did)
             .await
             .unwrap();
         let signed = save_issued_credential(&pending, access(), pending.issue(b))
             .await
             .expect("save the second account");
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node.clone()), node_did)
+        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
             .await
             .unwrap();
         assert_eq!(stored.len(), 2);
@@ -1081,42 +1056,17 @@ mod provider_account_tests {
         use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
 
         let temp = tempfile::TempDir::new().expect("tmpdir");
-        let address = std::net::TcpListener::bind("127.0.0.1:0")
-            .and_then(|listener| listener.local_addr())
-            .expect("free port");
-        let runtime = crate::tests::support::node_builder()
-            .with_http(gents::defra_node::HttpConfig::with_addr(address))
-            .build()
-            .await
-            .expect("runtime node");
-        gents::ensure_runtime_schemas(&runtime)
-            .await
-            .expect("schemas");
-        let graphql = format!("http://{address}/api/v0/graphql");
-        let options = || gents_protocol::graphql::GraphqlRequestOptions {
-            timeout: Duration::from_secs(1),
-            max_attempts: 1,
-            retry_backoff: Duration::ZERO,
-        };
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while !gents_protocol::graphql::graphql_endpoint_available(&graphql, options()).await {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("runtime GraphQL listener");
-
-        let node_did = "did:key:zAgent";
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(temp.path().join("client")),
-            ClientCoreOptions::local_only(),
+            ClientCoreOptions::local_simulated_route(),
         )
         .await
         .expect("client core");
-        let home = temp.path().join("node");
-        core.add_managed_enrollment_peer_for_test(node_did, &graphql, &home.to_string_lossy(), 1)
-            .await
-            .expect("runtime record");
+        let runtime =
+            ServedRuntimeHome::start_unpublished_for(Arc::new(core.node_identity().clone())).await;
+        runtime.publish_node(serde_json::json!({})).await;
+        runtime.connect(&core).await;
+        let node_did = runtime.node_did();
         core.set_selected_node_did(Some(node_did.to_string()));
         assert!(matches!(
             core.operator_access(node_did),
@@ -1153,13 +1103,14 @@ mod provider_account_tests {
             "the added account's backend is in the client snapshot: {backends:?}"
         );
         Arc::new(core).shutdown().await.expect("shutdown");
+        runtime.shutdown().await;
     }
 
     #[tokio::test]
     async fn accounts_list_in_resolver_order() {
-        let node = serving_node().await;
-        let access = gents::ConfigAccess::local(node.clone());
-        let node_did = "did:key:zOrder";
+        let runtime = served().await;
+        let access = runtime.user_access();
+        let node_did = runtime.node_did();
         let at = |secs| chrono::DateTime::from_timestamp(secs, 0);
         for (id, connected_at, enabled) in [
             ("a", at(2_000), true),
@@ -1180,7 +1131,7 @@ mod provider_account_tests {
 
         let accounts = observe_provider_accounts(
             &PendingOAuthCredentials::default(),
-            Ok(gents::ConfigAccess::local(node)),
+            Ok(runtime.user_access()),
             node_did,
         )
         .await
@@ -1212,8 +1163,9 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn the_account_view_carries_the_label_never_a_token_or_key() {
-        let access = serving_operator().await;
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let access = runtime.user_access();
+        let node_did = runtime.node_did();
         gents::inference::auth::credential::store_sign_in(
             &access,
             claude_sign_in(node_did, None, "acct-a", "SECRET-a"),
@@ -1245,9 +1197,9 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn a_labelled_sign_in_reports_its_result_and_keeps_its_label_on_retry() {
-        let node = serving_node().await;
-        let access = || Ok(gents::ConfigAccess::local(node.clone()));
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let access = || Ok(runtime.user_access());
+        let node_did = runtime.node_did();
         let pending = PendingOAuthCredentials::default();
         let labelled = |label: &str, account: &str, token: &str| OAuthCredential {
             label: Some(label.to_string()),
@@ -1317,7 +1269,7 @@ mod provider_account_tests {
         )
         .await
         .expect("retry stores the held sign-in");
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node.clone()), node_did)
+        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
             .await
             .unwrap();
         let spare = stored
@@ -1332,9 +1284,9 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn a_label_names_only_an_added_account_never_a_refreshed_one() {
-        let node = serving_node().await;
-        let access = || Ok(gents::ConfigAccess::local(node.clone()));
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let access = || Ok(runtime.user_access());
+        let node_did = runtime.node_did();
         let pending = PendingOAuthCredentials::default();
         let labelled = |label: Option<&str>, account: &str, token: &str| OAuthCredential {
             label: label.map(str::to_string),
@@ -1363,7 +1315,7 @@ mod provider_account_tests {
             assert_eq!(refreshed.result, "refreshed");
             assert_eq!(refreshed.label, kept);
         }
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node.clone()), node_did)
+        let stored = list_oauth_credentials_on(&runtime.user_access(), node_did)
             .await
             .unwrap();
         let labels: Vec<String> = stored
@@ -1375,9 +1327,9 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn an_added_account_whose_label_is_taken_is_saved_under_its_default_label() {
-        let node = serving_node().await;
-        let access = || Ok(gents::ConfigAccess::local(node.clone()));
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let access = || Ok(runtime.user_access());
+        let node_did = runtime.node_did();
         let pending = PendingOAuthCredentials::default();
         let labelled = |label: Option<&str>, account: &str| OAuthCredential {
             label: label.map(str::to_string),
@@ -1438,9 +1390,10 @@ mod provider_account_tests {
         };
 
         let cache = gents::inference::usage_observation::UsageCache::default();
-        let node = serving_node().await;
-        let access = gents::ConfigAccess::local(node.clone());
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let node = runtime.node().clone();
+        let access = runtime.user_access();
+        let node_did = runtime.node_did();
         let now = chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
         let minutes = chrono::Duration::minutes;
         let window = |label: &str, used_pct, source, observed_at, resets_at| UsageWindow {
@@ -1510,10 +1463,28 @@ mod provider_account_tests {
                 }),
             ),
         ] {
-            gents::store::config_client::write_inference_backend_document(&access, &backend)
+            gents::documents::write_inference_backend_document(&access, &backend)
                 .await
                 .expect("store backend");
         }
+        // The runtime reads the stored connection, whose key the save moved
+        // into a node credential.
+        let openrouter: gents::InferenceBackend = access
+            .transact_readonly("test.read_openrouter", |txn| {
+                Box::pin(async move {
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::InferenceBackend,
+                        node_did,
+                        "openrouter",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .map(|(_, stored)| serde_json::from_value(stored).unwrap())
+            .expect("stored OpenRouter backend");
 
         record_usage(
             &cache,
@@ -1597,11 +1568,25 @@ mod provider_account_tests {
         .unwrap()
         .credential;
         let unbound_backend = format!("{}-{}", unbound.provider, unbound.account_ref.unwrap());
-        access.write("test.remove_unbound_backend", &format!(
-            "mutation {{ delete_InferenceBackend(filter: {{ node_did: {{ _eq: \"{}\" }}, backend_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-            gents::store::graphql::escape_graphql_string(node_did),
-            gents::store::graphql::escape_graphql_string(&unbound_backend),
-        )).await.unwrap();
+        let removal = gents::store::config_client::DesiredStateApplyPlan::new(Vec::new())
+            .unwrap()
+            .with_removals(vec![(
+                gents::Collection::InferenceBackend,
+                node_did.to_owned(),
+                unbound_backend,
+            )])
+            .unwrap();
+        access
+            .transact_write("test.remove_unbound_backend", |txn| {
+                let removal = &removal;
+                Box::pin(async move {
+                    gents::documents::apply_desired_state_plan(txn, removal)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .await
+            .unwrap();
         let mut live = read_node_usage(
             &cache,
             node.clone(),
@@ -1692,8 +1677,9 @@ mod provider_account_tests {
     async fn discovery_reads_the_account_its_backend_names() {
         use gents::documents::BackendAuth;
 
-        let access = serving_operator().await;
-        let node_did = "did:key:zAgent";
+        let runtime = served().await;
+        let access = runtime.user_access();
+        let node_did = runtime.node_did();
         let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
         let a = gents::inference::auth::credential::store_sign_in(
             &access,

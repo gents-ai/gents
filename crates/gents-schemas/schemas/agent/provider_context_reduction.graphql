@@ -1,11 +1,8 @@
 # Immutable request-local provider-context reduction fact, deliberately
 # separate from CompactionEntry: a sticky provider projection inside one
 # AgentRequest, never part of cumulative session-prefix dropping. Payload
-# fields contain prompt material and have RenderedRequest's local audit-only
-# placement: no @policy or encryption claim — the pinned EmbeddedNode cannot
-# install document ACP and Defra field encryption does not encrypt the local
-# datastore. Runtime catalogs exclude this collection from bulk-sync routes.
-type ProviderContextReduction @branchable {
+# fields contain prompt material and share the session's access boundary.
+type ProviderContextReduction @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "children") {
     # SHA-256 of [node_did, session_id, request_doc_id, turn_index,
     # reduction_index]. Ordinary indexed, not unique: the runtime
     # create-and-compare owner fails closed if more than one fact binds this key.
@@ -13,6 +10,8 @@ type ProviderContextReduction @branchable {
     node_did: String @index @immutable
     requester_did: String @index @immutable
     session_id: String @index @immutable
+    session_doc_id: String @index @immutable
+    agent_did: String @immutable
     request_id: String @index @immutable
     request_doc_id: String @index @immutable
     request_commit_cid: String @immutable

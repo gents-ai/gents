@@ -3,7 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use futures::StreamExt;
 use reqwest::StatusCode;
 use rig::client::CompletionClient;

@@ -1,10 +1,12 @@
 # Local trust-on-first-use binding for authenticated status enrollment;
 # deliberately NOT branchable — a pin must never be learned from the network
 # it authorizes.
-type NetworkAdminPin {
+type NetworkAdminPin @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "operations") {
     pin_key: String @index(unique: true) @immutable
     network_id: String @index @immutable
     admin_did: String @index @immutable
     offer_id: String @immutable
     confirmed_at: DateTime @immutable
+    node_doc_id: String
+    parent_linked: Boolean
 }

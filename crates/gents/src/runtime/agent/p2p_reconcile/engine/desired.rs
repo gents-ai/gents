@@ -1,94 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 
-#[cfg(test)]
-use super::super::templates::Delivery;
 use super::super::templates::{
-    admit_app_collections, equality_filter, resolve_template, DidSource, PairingFilters, Scope,
-    APP_COLLECTIONS_TEMPLATE,
+    equality_filter, resolve_template, DidSource, PairingFilters, Scope,
 };
 use super::super::{policy, templates, PairingDesired};
 use super::rows::PairingStateRow;
 use super::EnrollmentEndpointEntry;
-
-#[cfg(test)]
-pub(super) fn desired_from_pairing_row(
-    row: PairingStateRow,
-    local_did: &str,
-) -> Result<Option<PairingDesired>> {
-    let replicator_addresses = row
-        .replicator_addresses
-        .unwrap_or_default()
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<BTreeSet<_>>();
-
-    let template_id = row
-        .template
-        .as_deref()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .context("pairing row is missing its scope template")?;
-    let template = resolve_template(template_id)
-        .with_context(|| format!("unknown pairing scope template {template_id:?}"))?;
-
-    if template.id == APP_COLLECTIONS_TEMPLATE {
-        tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
-            "PeerPairingDesired names the app-collections template, which is \
-             data-plane-only and supplies no collections here; skipping (no wiring)"
-        );
-        return Ok(None);
-    }
-
-    let peer_did = row.node_did.as_deref().map(str::trim).unwrap_or_default();
-    if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
-        anyhow::bail!(
-            "pairing row for peer-DID-dependent template {template_id:?} has a blank \
-             node_did; refusing to install an unscoped replicator (skipping peer)"
-        );
-    }
-    let (requester_did, owner_node_did, direction) = if template.scope == Scope::ClientRoute {
-        let route_id = row
-            .peer_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .context("client pairing row is missing its durable route key")?;
-        let direction = policy::client_route_direction(route_id)?;
-        (local_did, peer_did, direction)
-    } else {
-        (
-            peer_did,
-            local_did,
-            policy::PairingDirection::RuntimeToClient,
-        )
-    };
-    let replicator_collections = if template.scope == Scope::ClientRoute {
-        policy::client_route_collections(direction)
-    } else {
-        template.collections
-    }
-    .iter()
-    .map(|&collection| collection.to_string())
-    .collect::<BTreeSet<_>>();
-    let replicator_filter =
-        policy::resolve_template_filters(template, direction, requester_did, owner_node_did);
-
-    let subscription_collections = match template.delivery {
-        Delivery::Push => BTreeSet::new(),
-        Delivery::Replicate => replicator_collections.clone(),
-    };
-
-    Ok(Some(PairingDesired {
-        collections: subscription_collections,
-        replicator_addresses,
-        replicator_collections,
-        replicator_filter,
-        template_ids: BTreeSet::from([template.id.to_string()]),
-    }))
-}
 
 pub(super) fn data_plane_desired_from_pairing_row(
     mut row: PairingStateRow,
@@ -113,7 +32,7 @@ pub(super) fn data_plane_desired_from_pairing_row(
             peer_id = %signed_endpoint.peer_id,
             signed_address = %signed_endpoint.address,
             row_addresses = ?row_addresses,
-            "DataPlanePairingDesired address did not match signed PeerEndpoint; using signed endpoint address"
+            "DataPlanePairingDesired address did not match signed PeerRegistry; using signed endpoint address"
         );
     }
 
@@ -165,7 +84,7 @@ pub(super) fn data_plane_desired_from_pairing_row(
     if data_plane_scope_requires_signed_peer_did(&template.scope) && peer_did.is_empty() {
         anyhow::bail!(
             "DataPlanePairingDesired for peer {} uses template {template_id:?} but the signed \
-             PeerEndpoint has a blank node_did",
+             PeerRegistry has a blank node_did",
             signed_endpoint.peer_id
         );
     }
@@ -179,52 +98,20 @@ pub(super) fn data_plane_desired_from_pairing_row(
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>();
 
-    let (replicator_collections, subscription_collections): (BTreeSet<String>, BTreeSet<String>) =
-        if template.id == APP_COLLECTIONS_TEMPLATE {
-            let requested = row
-                .collections
-                .unwrap_or_default()
-                .into_iter()
-                .map(|c| c.trim().to_string())
-                .filter(|c| !c.is_empty())
-                .collect::<BTreeSet<_>>();
-            let Some(row_cols) = admit_app_collections(requested.clone()) else {
-                tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
-                    peer_id = %signed_endpoint.peer_id,
-                    collections = ?requested,
-                    "app-collections DataPlanePairingDesired is empty or overlaps the protocol \
-                     catalog; skipping this data-plane layer (control pairing unaffected)"
-                );
-                return Ok(None);
-            };
-            (row_cols.clone(), row_cols)
-        } else {
-            let collections = if template.scope == Scope::ClientRoute {
-                policy::client_route_collections(client_route_direction)
-            } else {
-                template.collections
-            };
-            let cols = collections
-                .iter()
-                .map(|&c| c.to_string())
-                .collect::<BTreeSet<_>>();
-            (cols, BTreeSet::new())
-        };
-
-    let filter_collections = replicator_collections
+    let collections = if template.scope == Scope::ClientRoute {
+        policy::client_route_collections(client_route_direction)
+    } else {
+        template.collections
+    };
+    let replicator_collections = collections
         .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let replicator_filter = data_plane_scope_filter(
-        &template.scope,
-        &filter_collections,
-        peer_did,
-        self_did,
-        client_route_direction,
-    );
+        .map(|&c| c.to_string())
+        .collect::<BTreeSet<_>>();
+
+    let replicator_filter =
+        data_plane_scope_filter(&template.scope, peer_did, self_did, client_route_direction);
 
     Ok(Some(PairingDesired {
-        collections: subscription_collections,
         replicator_addresses,
         replicator_collections,
         replicator_filter,
@@ -232,48 +119,22 @@ pub(super) fn data_plane_desired_from_pairing_row(
     }))
 }
 
-#[cfg(test)]
-fn scope_requires_peer_did(scope: &Scope) -> bool {
-    match scope {
-        Scope::PeerDid { .. } => true,
-        Scope::Unscoped => false,
-        Scope::PerCollection(rules) => rules
-            .iter()
-            .any(|rule| matches!(rule.source, DidSource::PeerDid)),
-        Scope::ClientRoute => true,
-    }
-}
-
 fn data_plane_scope_requires_signed_peer_did(scope: &Scope) -> bool {
-    match scope {
-        Scope::PeerDid { .. } | Scope::Unscoped => false,
-        Scope::PerCollection(rules) => rules
-            .iter()
-            .any(|rule| matches!(rule.source, DidSource::PeerDid)),
-        Scope::ClientRoute => true,
-    }
+    matches!(scope, Scope::ClientRoute)
 }
 
 fn data_plane_scope_filter(
     scope: &Scope,
-    collections: &[&str],
     signed_peer_did: &str,
     local_did: &str,
     client_route_direction: policy::PairingDirection,
 ) -> PairingFilters {
     match scope {
-        Scope::PeerDid { field } => collections
-            .iter()
-            .map(|&col| (col.to_string(), equality_filter(*field, local_did)))
-            .collect(),
-        Scope::Unscoped => BTreeMap::new(),
         Scope::PerCollection(rules) => rules
             .iter()
             .map(|rule| {
                 let value = match rule.source {
-                    DidSource::LocalDid => local_did,
-                    DidSource::PeerDid => signed_peer_did,
-                    DidSource::HomeDid => local_did,
+                    DidSource::LocalDid | DidSource::HomeDid => local_did,
                 };
                 (
                     rule.collection.to_string(),
@@ -303,18 +164,11 @@ pub fn merge_layered_desired(
     data_plane: Option<PairingDesired>,
 ) -> Option<PairingDesired> {
     let base = if peer_did == local_did { None } else { base };
-    let data_plane = data_plane.map(|mut desired| {
-        if !desired.template_ids.contains(APP_COLLECTIONS_TEMPLATE) {
-            desired.collections.clear();
-        }
-        desired
-    });
     match (base, data_plane) {
         (None, None) => None,
         (Some(desired), None) | (None, Some(desired)) => Some(desired),
         (Some(mut left), Some(right)) => {
-            left.collections.extend(right.collections);
-            // The data-plane layer comes from the verified PeerEndpoint.
+            // The data-plane layer comes from the verified PeerRegistry.
             if !right.replicator_addresses.is_empty() {
                 left.replicator_addresses = right.replicator_addresses;
             }
