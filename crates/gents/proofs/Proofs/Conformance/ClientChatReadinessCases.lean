@@ -7,43 +7,105 @@ open _root_.ClientChatReadiness Conformance.Contracts
 
 private def boolJson (value : Bool) : String := if value then "true" else "false"
 
-private def sourceJson : Source → String
-  | .localStandard => "\"local-standard\""
-  | .enrollment => "\"enrollment\""
-  | .other => "null"
+/-- Native spellings of a source. `other` is both a source-less and a manual
+record. -/
+private def sourceSpellings : Source → List String
+  | .localStandard => ["\"local-standard\""]
+  | .enrollment => ["\"enrollment\""]
+  | .other => ["null", "\"manual\""]
+
+private def leaseJson : Lease → String
+  | .absent => "{\"kind\":\"absent\"}"
+  | .malformed => "{\"kind\":\"malformed\"}"
+  | .expiresAt instant => "{\"kind\":\"at\",\"offset\":" ++ toString instant ++ "}"
 
 private def readinessJson : Readiness → String
   | .ready => "null"
   | .notReady cause => jsonString (causeToken cause)
 
-private def routeJson : Option Route → String
-  | none => "null"
-  | some route =>
-    "{\"source\":" ++ sourceJson route.source ++
-    ",\"operator_endpoint\":" ++ boolJson route.operatorEndpoint ++
-    ",\"pairing_ready\":" ++ boolJson route.pairingReady ++
-    ",\"generation_complete\":" ++ boolJson route.generationComplete ++
-    ",\"lease_expires_at_offset\":" ++
-      (match route.leaseExpiresAt with | some offset => toString offset | none => "null") ++ "}"
+private def routeFieldsJson (spelling : String) (route : Route) : String :=
+  "{\"source\":" ++ spelling ++
+  ",\"operator_endpoint\":" ++ boolJson route.operatorEndpoint ++
+  ",\"managed\":" ++ boolJson route.managed ++
+  ",\"pairing_ready\":" ++ boolJson route.pairingReady ++
+  ",\"network_id\":" ++ boolJson route.networkId ++
+  ",\"request_digest\":" ++ boolJson route.requestDigest ++
+  ",\"sequence_positive\":" ++ boolJson route.sequencePositive ++
+  ",\"lease\":" ++ leaseJson route.lease ++ "}"
 
-/-- `refusal` is the cause token of the implemented contract
-(`enrollmentFenceRequired`), or null for ready. `endpoint_suffices_refusal`
-records the competing contract for the pending decision only. -/
-private def caseJson (route : Option Route) : String :=
-  "{\"route\":" ++ routeJson route ++
+/-- Each route with each native spelling of its source. -/
+private def spelledRoutes (route : Option Route) : List (String × Option Route) :=
+  match route with
+  | none => [("null", none)]
+  | some r => (sourceSpellings r.source).map fun spelling => (routeFieldsJson spelling r, some r)
+
+private def fenceCaseJson (encoded : String × Option Route) : String :=
+  let (routeJson, route) := encoded
+  "{\"route\":" ++ routeJson ++
   ",\"now_offset\":" ++ toString caseNow ++
-  ",\"refusal\":" ++ readinessJson (enrollmentFenceRequired route caseNow) ++
-  ",\"endpoint_suffices_refusal\":" ++
-    readinessJson (operatorEndpointSuffices route caseNow) ++ "}"
+  ",\"refusal\":" ++ readinessJson (chatReadiness route) ++
+  ",\"lease_fresh\":" ++
+    (match route with
+     | some r => boolJson (leaseFresh r.lease caseNow)
+     | none => "null") ++ "}"
+
+private def eventJson : Event → String
+  | .restart => "{\"kind\":\"restart\"}"
+  | .authorityFailure => "{\"kind\":\"authority_failure\"}"
+  | .transportRotation => "{\"kind\":\"transport_rotation\"}"
+  | .reconciled outcome => "{\"kind\":\"reconciled\",\"outcome\":" ++ jsonOptionalBool outcome ++ "}"
+  | .generationRotation => "{\"kind\":\"generation_rotation\"}"
+  | .endpointWritten operator => "{\"kind\":\"endpoint_written\",\"operator\":" ++ boolJson operator ++ "}"
+  | .addDeployment operator => "{\"kind\":\"add_deployment\",\"operator\":" ++ boolJson operator ++ "}"
+
+/-- The native enrollment writer applies a generation rotation only to an
+enrollment route; other sources would be a conflict, not this transition. -/
+private def transitionApplies : Event → Option Route → Bool
+  | .generationRotation, some route => route.source == .enrollment
+  | _, some _ => true
+  | _, none => false
+
+private def transitionCaseJson (event : Event) (encoded : String × Option Route) : String :=
+  let (routeJson, route) := encoded
+  let after := step event route
+  "{\"route\":" ++ routeJson ++
+  ",\"event\":" ++ eventJson event ++
+  ",\"after_pairing_ready\":" ++
+    (match after with | some r => boolJson r.pairingReady | none => "null") ++
+  ",\"after_operator_endpoint\":" ++
+    (match after with | some r => boolJson r.operatorEndpoint | none => "null") ++
+  ",\"refusal_before\":" ++ readinessJson (chatReadiness route) ++
+  ",\"refusal_after\":" ++ readinessJson (chatReadiness after) ++ "}"
+
+private def legToken : Leg → String
+  | .ready => "ready"
+  | .drifted => "drifted"
+  | .unavailable => "unavailable"
+
+private def legCaseJson (outbound inbound : Leg) : String :=
+  "{\"outbound\":" ++ jsonString (legToken outbound) ++
+  ",\"inbound\":" ++ jsonString (legToken inbound) ++
+  ",\"combined\":" ++ jsonOptionalBool (combinedLegs outbound inbound) ++ "}"
 
 private def causeJson (cause : Cause) : String :=
   "{\"cause\":" ++ jsonString (causeToken cause) ++
+  ",\"next_action\":" ++ jsonString (nextActionToken (nextAction cause)) ++
   ",\"recovery_cause\":" ++
-    (match recoveryAttempt (.notReady cause) with
-     | .unknown (some recovered) => jsonString (causeToken recovered)
-     | _ => "null") ++ "}"
+    (match recoveryAttempt true (.notReady cause) with
+     | .unknown recovered => jsonString (causeToken recovered)
+     | _ => "null") ++
+  ",\"settled_recovery_reads_fence\":" ++
+    boolJson (recoveryAttempt false (.notReady cause) != .recorded) ++ "}"
 
-def casesJson : String := jsonArray (caseRoutes.map caseJson)
+def casesJson : String := jsonArray ((fenceRoutes.flatMap spelledRoutes).map fenceCaseJson)
+
+def transitionsJson : String :=
+  jsonArray (transitionEvents.flatMap fun event =>
+    ((transitionRoutes.filter (transitionApplies event)).flatMap spelledRoutes).map
+      (transitionCaseJson event))
+
+def legsJson : String :=
+  jsonArray (allLegs.flatMap fun outbound => allLegs.map (legCaseJson outbound))
 
 def causesJson : String := jsonArray (allCauses.map causeJson)
 

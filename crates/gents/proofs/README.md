@@ -638,7 +638,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
 | `Proofs/ClientShell/ObservationScope.lean` | Shared client observation focus while external frontend attachments are present; the last detachment restores current shell intent. |
-| `Proofs/ClientShell/ChatReadiness.lean` | Desktop chat write fence over a saved route: operator endpoint, pairing readiness, enrollment generation and lease at send time; refusals name a cause and next action; restart and authority demotion close writes. Encodes the competing endpoint-only contract pending decision. Cases: `Proofs/Conformance/ClientChatReadinessCases.lean`. |
+| `Proofs/ClientShell/ChatReadiness.lean` | Desktop chat write fence over a saved route: the operator endpoint is the only gate; pairing, enrollment generation and lease are observations that never gate writes. Durable route writers, refusal causes with next actions that reopen writes, ambiguous-submission recovery and reconcile leg combination. Cases: `Proofs/Conformance/ClientChatReadinessCases.lean`. |
 | `Proofs/ClientShell/Voice.lean` | Explicit dictation and live conversation epochs; stop, disconnection, view disposal and scope changes reject late completions. |
 | `Proofs/ClientShell/Settings.lean` | Physical document and composite revision guards, canonical editable fields, and post-save editor baseline adoption. |
 | `Proofs/GoalAutomation/ClientControl.lean` | Goal revision checks and client edit, pause, and resume through the existing Goal owners. |
