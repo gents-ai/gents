@@ -104,39 +104,21 @@ impl Setup {
     }
 
     fn choose(&mut self, model: SetupModel) {
-        self.settings = model
-            .settings
-            .iter()
-            .map(|setting| Field::new(setting.key.label(), "", &setting.value))
-            .collect();
+        let field = |setting: &SetupSetting| {
+            let field = Field::new(setting.key.label(), "", &setting.value);
+            if setting.key != SettingKey::ReasoningEffort {
+                return field;
+            }
+            let choices = setting.choices.iter().map(|c| (c.clone(), c.clone()));
+            Field {
+                kind: Kind::Choice(choices.collect()),
+                ..field
+            }
+        };
+        self.settings = model.settings.iter().map(field).collect();
         self.setting = 0;
         self.chosen = Some(model);
         self.go(Step::Settings);
-    }
-
-    /// Reasoning effort is a choice ←/→ cycles; the other settings are text.
-    fn on_choice(&self) -> bool {
-        self.step == Step::Settings
-            && self
-                .chosen
-                .as_ref()
-                .and_then(|model| model.settings.get(self.setting))
-                .is_some_and(|setting| setting.key == SettingKey::ReasoningEffort)
-    }
-
-    fn cycle(&mut self, forward: bool) {
-        let (Some(chosen), Some(field)) = (&self.chosen, self.settings.get_mut(self.setting))
-        else {
-            return;
-        };
-        let Some(setting) = chosen.settings.get(self.setting) else {
-            return;
-        };
-        let now = setting.choices.iter().position(|c| c == field.input.text());
-        let next = fields::cycle(now, setting.choices.len(), forward);
-        if let Some(choice) = setting.choices.get(next) {
-            field.input.set(choice);
-        }
     }
 
     pub fn chosen_provider(&self) -> Option<&SetupProvider> {
@@ -249,7 +231,7 @@ impl Setup {
                 self.model = 0;
                 Some(&mut self.query)
             }
-            Step::Settings if !self.on_choice() => self.settings.get_mut(self.setting),
+            Step::Settings => self.settings.get_mut(self.setting),
             _ => None,
         }
     }
@@ -344,12 +326,9 @@ impl App {
             return false;
         };
         match action {
-            Action::CursorLeft | Action::CursorRight if setup.on_choice() => {
-                setup.cycle(action == Action::CursorRight);
-            }
             _ if action.edits_line() => {
                 if let Some(field) = setup.field_mut() {
-                    field.input.edit(action);
+                    field.edit(action);
                 }
             }
             Action::Complete => setup.next_field(),

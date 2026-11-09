@@ -4,7 +4,7 @@ use ratatui::layout::{Margin, Position, Rect};
 use super::layers::LayerKind;
 use super::{App, Pane};
 use crate::draw::agent::{chip_at, first_line, message_box_area, slash_area, slash_rows, ChipHit};
-use crate::draw::layers::list_start;
+use crate::draw::layers::{list_area, list_start};
 use crate::draw::sidebar::{first_diff_row, scope_at};
 use crate::keys::Action;
 use crate::layout::{running_area, sidebar_rows_area, Right};
@@ -65,12 +65,7 @@ impl App {
     }
 
     fn click_picker(&mut self, rect: Rect, at: Position) {
-        let area = rect.inner(Margin::new(1, 1));
-        let list = Rect {
-            y: area.y + 2,
-            height: area.height - 5,
-            ..area
-        };
+        let list = list_area(LayerKind::Picker, rect);
         let Some(top) = self.layers.last().filter(|_| list.contains(at)) else {
             return;
         };
@@ -85,11 +80,7 @@ impl App {
     }
 
     fn click_menu(&mut self, id: MenuId, rect: Rect, at: Position) {
-        let area = rect.inner(Margin::new(1, 1));
-        let list = Rect {
-            height: area.height - 3,
-            ..area
-        };
+        let list = list_area(LayerKind::Menu(id), rect);
         let rows = self.menu_rows(id).0;
         let Some(top) = self.layers.last_mut().filter(|_| list.contains(at)) else {
             return;
@@ -104,12 +95,7 @@ impl App {
 
     /// Follows `draw_jump`: a group's header takes a row of its own.
     fn click_jump(&mut self, rect: Rect, at: Position) {
-        let area = rect.inner(Margin::new(1, 1));
-        let list = Rect {
-            y: area.y + 2,
-            height: area.height - 4,
-            ..area
-        };
+        let list = list_area(LayerKind::Jump, rect);
         if !list.contains(at) {
             return;
         }

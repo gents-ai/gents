@@ -355,14 +355,16 @@ pub(super) fn trigger_readiness(
     Ok(next.map(|next| format!("Next {}", local_time(next))))
 }
 
-/// The RFC 3339 time `at` in the local zone, or as it is when it does not parse.
+/// The RFC 3339 time `at` in the local zone as `format`, or as it is when it does not parse.
+pub(super) fn local(at: &str, format: &str) -> String {
+    match DateTime::parse_from_rfc3339(at) {
+        Ok(at) => at.with_timezone(&Local).format(format).to_string(),
+        Err(_) => at.to_string(),
+    }
+}
+
 pub(super) fn local_time(at: &str) -> String {
-    let local = DateTime::parse_from_rfc3339(at).map(|at| {
-        at.with_timezone(&Local)
-            .format("%Y-%m-%d %H:%M")
-            .to_string()
-    });
-    local.unwrap_or_else(|_| at.to_string())
+    local(at, "%Y-%m-%d %H:%M")
 }
 
 /// A task's name as the desktop's views carry it, else its id (`snapshot/runtime.rs:458`).

@@ -133,32 +133,6 @@ impl FormState {
         )
     }
 
-    /// ← and → or Space cycle a choice, which takes no typing.
-    fn edit(&mut self, action: Action) {
-        let Some(field) = self.field_mut() else {
-            return;
-        };
-        match &mut field.kind {
-            Kind::Text => field.input.edit(action),
-            Kind::Lines(lines) => lines.edit(action),
-            Kind::Choice(choices) => {
-                let forward = match action {
-                    Action::CursorRight | Action::Insert(' ') => true,
-                    Action::CursorLeft => false,
-                    _ => return,
-                };
-                let now = choices
-                    .iter()
-                    .position(|(value, _)| value == field.input.text());
-                let next = fields::cycle(now, choices.len(), forward);
-                if let Some((value, _)) = choices.get(next) {
-                    field.input.set(value);
-                }
-            }
-            Kind::Fixed | Kind::Heading => {}
-        }
-    }
-
     /// A named field that is shown takes the error and the focus; any other error is the status.
     fn failed(&mut self, error: FormError) {
         let named = error.field.as_ref().and_then(|key| {
@@ -292,7 +266,11 @@ impl App {
                 (None, Some(lines)) => lines.break_line(),
                 (None, None) => self.submit_form(),
             },
-            _ if action.edits_line() => form.edit(action),
+            _ if action.edits_line() => {
+                if let Some(field) = form.field_mut() {
+                    field.edit(action);
+                }
+            }
             _ => return false,
         }
         true

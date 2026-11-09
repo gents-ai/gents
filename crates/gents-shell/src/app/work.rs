@@ -76,7 +76,7 @@ pub fn job_rows(
     rows
 }
 
-/// Background calls take no control yet, so their rows are not wired.
+/// Background calls take no control yet, so their rows are not selectable.
 pub fn background_rows(
     calls: &[BackgroundCall],
     session: Option<&str>,
@@ -97,11 +97,8 @@ pub fn background_rows(
             true => ('✓', Tone::Accent),
             false => ('●', Tone::Plain),
         };
-        rows.push(item(
-            format!(" {mark} {}", call.name),
-            tone,
-            RowAction::NotWired,
-        ));
+        let name = format!(" {mark} {}", call.name);
+        rows.push(item(name, tone, RowAction::None));
         rows.push(label(format!("     {}", call.status)));
     }
     rows
@@ -291,13 +288,13 @@ mod tests {
         let background = [
             row(" 3 background   1 done", Tone::Label, false),
             row("", Tone::Plain, false),
-            row(" ● Reviewer · cli ux", Tone::Plain, true),
+            row(" ● Reviewer · cli ux", Tone::Plain, false),
             row("     reading crates/gents-cli", Tone::Label, false),
-            row(" ● Researcher · flaky test", Tone::Plain, true),
+            row(" ● Researcher · flaky test", Tone::Plain, false),
             row("     running for 4m", Tone::Label, false),
-            row(" ● Engineer · pack sync", Tone::Plain, true),
+            row(" ● Engineer · pack sync", Tone::Plain, false),
             row("     running for 11m", Tone::Label, false),
-            row(" ✓ Triage · inbox", Tone::Accent, true),
+            row(" ✓ Triage · inbox", Tone::Accent, false),
             row("     finished 2m ago", Tone::Label, false),
         ];
         assert_eq!(texts(&app.view_rows(View::Agents)), background);

@@ -660,13 +660,12 @@ impl Source {
         F: Future<Output = Result<T, String>> + Send + 'static,
     {
         let (work, node) = (self.work.clone(), self.principal.clone());
-        let updates = self.updates.clone();
-        self.runtime.spawn(async move {
+        self.tell_off_loop(async move {
             let answered = match work {
                 Ok(work) => answer(work.access(), node).await,
                 Err(off) => Err(off),
             };
-            let _ = updates.send(Input::Runtime(update(answered)));
+            update(answered)
         });
     }
 
@@ -773,7 +772,7 @@ impl Source {
                 move |done| packs::removed(&pack, done),
             ),
             PackAct::ChooseSlot { plugin } => {
-                self.pack_read(packs::choose_slot(runtime, home, plugin));
+                self.tell_off_loop(packs::choose_slot(runtime, home, plugin));
             }
             PackAct::BindSlot { plugin, profile } => self.pack_change(
                 None,
@@ -784,7 +783,7 @@ impl Source {
                 self.pack_change(None, packs::sign_out(runtime, home), packs::quiet);
             }
             PackAct::Info { pack, installed } => {
-                self.pack_read(packs::page(runtime, home, pack, installed));
+                self.tell_off_loop(packs::page(runtime, home, pack, installed));
             }
         }
     }
@@ -821,8 +820,8 @@ impl Source {
         });
     }
 
-    /// A pack read off the chat loop, told as it lands.
-    fn pack_read<R>(&self, read: R)
+    /// An answer off the chat loop, told as it lands.
+    fn tell_off_loop<R>(&self, read: R)
     where
         R: Future<Output = Update> + Send + 'static,
     {
@@ -861,11 +860,11 @@ impl Source {
     /// refresh button says "Refreshing…" until they land.
     fn refresh_usage(&self) {
         self.tell(Update::Notice("Refreshing…".to_string()));
-        let (work, updates) = (self.work.clone(), self.updates.clone());
-        self.runtime.spawn(async move {
+        let work = self.work.clone();
+        self.tell_off_loop(async move {
             let rows = usage::read(&work, true).await;
             let menu = MenuId::Usage;
-            let _ = updates.send(Input::Runtime(Update::Menu { menu, rows }));
+            Update::Menu { menu, rows }
         });
     }
 
@@ -899,13 +898,10 @@ impl Source {
 
     fn read_profiles(&self, agent: String) {
         let (work, principal) = (self.work.clone(), self.principal.clone());
-        let updates = self.updates.clone();
-        self.runtime.spawn(async move {
+        self.tell_off_loop(async move {
             let rows = menus::read_profiles(&work, &principal, &agent).await;
-            let _ = updates.send(Input::Runtime(Update::Menu {
-                menu: MenuId::Profiles,
-                rows,
-            }));
+            let menu = MenuId::Profiles;
+            Update::Menu { menu, rows }
         });
     }
 

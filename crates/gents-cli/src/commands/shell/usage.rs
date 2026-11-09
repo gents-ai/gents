@@ -10,6 +10,7 @@ use gents_shell::source::{MenuAct, MenuRow};
 
 use super::menus::{blocking, row};
 use super::work::Work;
+use crate::commands::accounts::short_duration;
 
 /// A meter's cells.
 const BAR: usize = 10;
@@ -111,7 +112,7 @@ fn window_row(window: &WindowView, width: usize, now: DateTime<Utc>) -> MenuRow 
     let filled = (pct.min(100) * BAR + 50) / 100;
     let bar = "█".repeat(filled) + &"░".repeat(BAR - filled);
     let when = match window.resets_at {
-        Some(at) => format!("resets in {}", short_duration(at - now)),
+        Some(at) => format!("resets in {}", short_duration((at - now).num_seconds())),
         None if window.last_known => "last known".to_string(),
         None => String::new(),
     };
@@ -122,20 +123,6 @@ fn window_row(window: &WindowView, width: usize, now: DateTime<Utc>) -> MenuRow 
         false => Tone::Plain,
     };
     row(text.trim_end().to_string(), tone)
-}
-
-/// `shortDuration` (`ProviderUsage.tsx:15-25`).
-fn short_duration(left: chrono::TimeDelta) -> String {
-    let total = left.num_minutes().max(0);
-    let (days, hours, minutes) = (total / 1440, total % 1440 / 60, total % 60);
-    match (days, hours, minutes) {
-        (0, 0, 0) => "<1m".to_string(),
-        (0, 0, m) => format!("{m}m"),
-        (0, h, 0) => format!("{h}h"),
-        (0, h, m) => format!("{h}h{m}m"),
-        (d, 0, _) => format!("{d}d"),
-        (d, h, _) => format!("{d}d{h}h"),
-    }
 }
 
 /// `usageWindowGroup` (`ProviderUsage.tsx:239-245`).

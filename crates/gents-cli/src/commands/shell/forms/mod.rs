@@ -285,10 +285,24 @@ pub(super) fn shown_when(field: FormField, key: &str, value: &str) -> FormField 
 
 /// A switch, `on` or `off`, with the desktop's enabled switch's labels (`SkillsPanel.tsx:148`).
 pub(super) fn switch(key: &str, label: &str, on: bool) -> FormField {
-    let on_off = [("on", "Enabled"), ("off", "Disabled")];
-    let on_off = on_off.map(|(value, label)| (value.to_string(), label.to_string()));
+    let on_off = choice([("on", "Enabled"), ("off", "Disabled")]);
     let value = if on { "on" } else { "off" };
-    field(key, label, FieldKind::Choice(on_off.into()), value)
+    field(key, label, on_off, value)
+}
+
+/// A choice of `(value, label)` pairs.
+pub(super) fn choice<I, V, L>(pairs: I) -> FieldKind
+where
+    I: IntoIterator<Item = (V, L)>,
+    V: Into<String>,
+    L: Into<String>,
+{
+    let pairs = pairs.into_iter();
+    FieldKind::Choice(
+        pairs
+            .map(|(value, label)| (value.into(), label.into()))
+            .collect(),
+    )
 }
 
 /// The desktop's tags row (`editors.tsx:949-971`): the tags comma-separated, without the kept

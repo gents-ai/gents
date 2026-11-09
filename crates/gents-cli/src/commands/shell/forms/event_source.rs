@@ -3,8 +3,8 @@ use gents_shell::source::{Doc, FieldKind, Form, FormError, FormField};
 use serde_json::{json, Value};
 
 use super::{
-    delete, field, form_ref, merged, optional, problem, refused, shown, tags, tags_field, value,
-    whole,
+    choice, delete, field, form_ref, merged, optional, problem, refused, shown, tags, tags_field,
+    value, whole,
 };
 use crate::commands::shell::sections;
 
@@ -34,7 +34,6 @@ pub(super) fn form(current: Option<&Value>, id: &str) -> Form {
         ("readWrite", "Read / write"),
         ("integrate", "Integrate (inspect only)"),
     ];
-    let authorities = authorities.map(|(value, label)| (value.to_string(), label.to_string()));
     let authority = shown(&source["workspace_authority"]);
     let title = sections::title(Doc::EventSource, source);
     Form {
@@ -54,7 +53,7 @@ pub(super) fn form(current: Option<&Value>, id: &str) -> Form {
             field(
                 "workspace_authority",
                 "Workspace authority",
-                FieldKind::Choice(authorities.into()),
+                choice(authorities),
                 &authority,
             ),
             field("grouping", "Grouping", FieldKind::Heading, ""),
@@ -177,14 +176,13 @@ mod tests {
             ("readWrite", "Read / write"),
             ("integrate", "Integrate (inspect only)"),
         ];
-        let authorities = authorities.map(|(value, label)| (value.to_string(), label.to_string()));
         let correlation = field(
             "correlation_field",
             "Correlation field",
             FieldKind::Text,
             "batch_id",
         );
-        let authority = FieldKind::Choice(authorities.into());
+        let authority = choice(authorities);
         assert_eq!(
             edit.fields,
             [

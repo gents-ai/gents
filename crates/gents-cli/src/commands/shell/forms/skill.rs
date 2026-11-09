@@ -159,8 +159,8 @@ mod tests {
     use gents_shell::source::{FieldKind, FormAct, FormAction, FormRef};
     use serde_json::json;
 
-    use super::super::field;
     use super::super::testing::{sent, shown_values};
+    use super::super::{choice, field};
     use super::*;
 
     #[test]
@@ -187,8 +187,7 @@ mod tests {
         assert_eq!(edit.form, FormRef::Edit(Doc::Skill, "commit".to_string()));
         assert_eq!(edit.title, "Commit");
         assert_eq!(edit.note, ["Used by Engineer, Reviewer · From git"]);
-        let on_off = [("on", "Enabled"), ("off", "Disabled")];
-        let on_off = on_off.map(|(value, label)| (value.to_string(), label.to_string()));
+        let on_off = choice([("on", "Enabled"), ("off", "Disabled")]);
         let instructions = field(
             "instructions",
             "Instructions",
@@ -251,7 +250,7 @@ mod tests {
                     field("tags", "Tags", FieldKind::Text, "vcs, daily"),
                     "Add a tag"
                 ),
-                field("enabled", "Enabled", FieldKind::Choice(on_off.into()), "on"),
+                field("enabled", "Enabled", on_off, "on"),
             ]
         );
         let delete = FormAct::Delete {

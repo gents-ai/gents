@@ -686,14 +686,7 @@ impl App {
             RowAction::OpenSession(index) => selected.as_ref() == Some(&self.sessions[index].id),
             _ => false,
         });
-        self.sessions_sel = kept.unwrap_or_else(|| {
-            let clamped = self.sessions_sel.min(rows.len() - 1);
-            if rows[clamped].selectable() {
-                clamped
-            } else {
-                step_row(&rows, clamped, false)
-            }
-        });
+        self.sessions_sel = kept.unwrap_or_else(|| work::in_range(&rows, self.sessions_sel));
     }
 
     /// A first tab with no session and no picked agent is still the starter tab, even with a
@@ -1268,7 +1261,6 @@ impl App {
                 self.tabs[self.active].input.set("/goal ");
                 self.slash = Some(0);
             }
-            Effect::NotWired => self.not_wired(),
             Effect::DismissPrompt => self.dismiss(),
             Effect::SwitchKeys => self.switch_keys(),
             Effect::Quit => self.quit = true,
@@ -1793,7 +1785,6 @@ impl App {
                 self.search = None;
             }
             Some(RowAction::OpenJob(job)) => self.toggle_job(job),
-            Some(RowAction::NotWired) => self.not_wired(),
             _ => {}
         }
     }
@@ -1858,10 +1849,8 @@ mod tests {
         assert!(app.session_rows()[app.sessions_sel]
             .text
             .contains("cli ux redesign"));
-        for (view, selected) in [View::Diff, View::Workflows, View::Agents]
-            .into_iter()
-            .zip(app.view_sel)
-        {
+        // The Background view has no selectable row.
+        for (view, selected) in [View::Diff, View::Workflows].into_iter().zip(app.view_sel) {
             assert!(app.view_rows(view)[selected].selectable(), "{view:?}");
         }
     }
@@ -4764,7 +4753,7 @@ mod tests {
         let mut app = with_right_pane(with_sample_session(App::new(Vim, 132, 36)));
         app.view = View::Agents;
         press(&mut app, "esc ctrl-w l ctrl-w l enter");
-        assert_eq!(app.notice.as_deref(), Some("not wired yet"));
+        assert_eq!(app.notice, None, "a background call is not selectable");
     }
 
     fn commit_skill(agent: &str) -> Update {

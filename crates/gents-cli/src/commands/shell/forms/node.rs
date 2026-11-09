@@ -1,5 +1,4 @@
 use anyhow::Context;
-use chrono::{DateTime, Local};
 use gents::documents::Node;
 use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::{set_default_agent_on, upsert_node_on};
@@ -8,7 +7,8 @@ use gents_shell::source::{FieldKind, Form, FormError, FormRef};
 use serde_json::{json, Value};
 
 use super::{
-    field, helped, merged, optional, problem, refused, shown, switch, tags, tags_field, value,
+    choice, field, helped, merged, optional, problem, refused, shown, switch, tags, tags_field,
+    value,
 };
 use crate::commands::config::crud::{query_collection, NODE_SPEC};
 use crate::commands::shell::sections;
@@ -67,15 +67,11 @@ pub(super) fn form(node: &Value, agents: &[AgentView]) -> Form {
     let default = field(
         "default_agent_id",
         "Default agent",
-        FieldKind::Choice(agents.collect()),
+        choice(agents),
         &shown(&node["default_agent_id"]),
     );
-    let created = node["created_at"].as_str().map_or(String::new(), |at| {
-        let local = DateTime::parse_from_rfc3339(at);
-        local.map_or(at.to_string(), |at| {
-            at.with_timezone(&Local).format("%Y-%m-%d").to_string()
-        })
-    });
+    let created = node["created_at"].as_str();
+    let created = created.map_or(String::new(), |at| sections::local(at, "%Y-%m-%d"));
     Form {
         form: FormRef::Node,
         title: "Node".to_string(),
@@ -142,6 +138,7 @@ fn hop(typed: &str) -> Result<Option<u32>, FormError> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, Local};
 
     use super::super::hinted;
     use super::super::testing::sent;
@@ -190,11 +187,10 @@ mod tests {
             ("engineer", "Engineer"),
             ("scout", "Scout · disabled, enabled when saved as default"),
         ];
-        let agents = agents.map(|(value, label)| (value.to_string(), label.to_string()));
         let default = field(
             "default_agent_id",
             "Default agent",
-            FieldKind::Choice(agents.into()),
+            choice(agents),
             "engineer",
         );
         let hop = field(

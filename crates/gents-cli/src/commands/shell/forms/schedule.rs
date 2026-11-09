@@ -3,7 +3,7 @@ use gents_shell::source::{Doc, FieldKind, Form, FormAct, FormAction, FormError, 
 use serde_json::{json, Value};
 
 use super::{
-    delete, field, form_ref, merged, optional, problem, refused, shown, shown_when, tags,
+    choice, delete, field, form_ref, merged, optional, problem, refused, shown, shown_when, tags,
     tags_field, value, whole,
 };
 use crate::commands::shell::sections;
@@ -31,7 +31,6 @@ pub(super) fn form(current: Option<&Value>, id: &str) -> Form {
     };
     let on = |field, cadence| shown_when(field, "cadence", cadence);
     let cadences = [("interval", "Interval"), ("cron", "Cron")];
-    let cadences = cadences.map(|(value, label)| (value.to_string(), label.to_string()));
     let seconds = FormField {
         help: Some("Positive whole number.".to_string()),
         ..field("interval_secs", INTERVAL, FieldKind::Text, &interval)
@@ -46,12 +45,7 @@ pub(super) fn form(current: Option<&Value>, id: &str) -> Form {
             FieldKind::Text,
             &display_name,
         ),
-        field(
-            "cadence",
-            "Cadence",
-            FieldKind::Choice(cadences.into()),
-            kind,
-        ),
+        field("cadence", "Cadence", choice(cadences), kind),
         on(seconds, "interval"),
         on(
             field("expression", "Cron", FieldKind::Text, expression),
@@ -154,7 +148,6 @@ mod tests {
         assert_eq!(edit.title, "Daily");
         assert_eq!(edit.note, Vec::<String>::new());
         let cadences = [("interval", "Interval"), ("cron", "Cron")];
-        let cadences = cadences.map(|(value, label)| (value.to_string(), label.to_string()));
         let seconds = field("interval_secs", "Interval seconds", FieldKind::Text, "");
         let manual = field("manual_run", "Manual run", FieldKind::Heading, "");
         assert_eq!(
@@ -162,12 +155,7 @@ mod tests {
             [
                 field("schedule_id", "Schedule ID", FieldKind::Fixed, "daily"),
                 field("display_name", "Display name", FieldKind::Text, "Daily"),
-                field(
-                    "cadence",
-                    "Cadence",
-                    FieldKind::Choice(cadences.into()),
-                    "cron"
-                ),
+                field("cadence", "Cadence", choice(cadences), "cron"),
                 shown_on(
                     FormField {
                         help: Some("Positive whole number.".to_string()),

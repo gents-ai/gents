@@ -25,6 +25,22 @@ pub fn list_start(selected: usize, height: usize) -> usize {
     selected.saturating_sub(height.saturating_sub(1))
 }
 
+/// The rows of a menu, the picker or the jump bar: above the footer, and under the picker's and
+/// the jump bar's prompt.
+pub fn list_area(kind: LayerKind, rect: Rect) -> Rect {
+    let area = inner(rect);
+    let (top, bottom) = match kind {
+        LayerKind::Picker => (2, 3),
+        LayerKind::Jump => (2, 2),
+        _ => (0, 3),
+    };
+    Rect {
+        y: area.y + top,
+        height: area.height - top - bottom,
+        ..area
+    }
+}
+
 pub fn draw(app: &App, area: Rect, buf: &mut Buffer) {
     for (depth, layer) in app.layers.iter().enumerate() {
         let focused = depth + 1 == app.layers.len();
@@ -52,10 +68,7 @@ fn draw_menu(app: &App, layer: &Layer, id: MenuId, rect: Rect, focused: bool, bu
     pane_box(buf, rect, app.menu_title(id), focused);
     let (rows, footer) = app.menu_rows(id);
     let area = inner(rect);
-    let list = Rect {
-        height: area.height - 3,
-        ..area
-    };
+    let list = list_area(layer.kind, rect);
     let first = list_start(layer.selected, usize::from(list.height));
     draw_rows(buf, list, &rows[first..], Some(layer.selected - first));
     draw_footer(app, area, area.bottom() - 3, footer, buf);
@@ -85,11 +98,7 @@ fn draw_picker(app: &App, layer: &Layer, rect: Rect, focused: bool, buf: &mut Bu
     let area = inner(rect);
     draw_prompt(area, " > ", &layer.filter, Tone::Plain, buf);
 
-    let list = Rect {
-        y: area.y + 2,
-        height: area.height - 5,
-        ..area
-    };
+    let list = list_area(layer.kind, rect);
     let rows: Vec<SidebarRow> = app
         .picker_matches(layer.filter.text())
         .into_iter()
@@ -116,11 +125,7 @@ fn draw_jump(app: &App, layer: &Layer, rect: Rect, focused: bool, buf: &mut Buff
         draw_footer(app, area, area.bottom() - 2, JUMP_FOOTER, buf);
     }
 
-    let list = Rect {
-        y: area.y + 2,
-        height: area.height - 4,
-        ..area
-    };
+    let list = list_area(layer.kind, rect);
     let items = jump::items(app, layer.filter.text());
     if items.is_empty() {
         draw_no_matches(list, buf);

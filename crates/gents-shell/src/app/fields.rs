@@ -1,4 +1,5 @@
 use super::input::{LineInput, Lines};
+use crate::keys::Action;
 use crate::sample::Tone;
 use crate::source::Connection;
 
@@ -61,6 +62,29 @@ impl Field {
         match &self.kind {
             Kind::Lines(lines) => lines.shown().len(),
             _ => 1,
+        }
+    }
+
+    /// ← and → or Space cycle a choice, which takes no typing.
+    pub fn edit(&mut self, action: Action) {
+        match &mut self.kind {
+            Kind::Text => self.input.edit(action),
+            Kind::Lines(lines) => lines.edit(action),
+            Kind::Choice(choices) => {
+                let forward = match action {
+                    Action::CursorRight | Action::Insert(' ') => true,
+                    Action::CursorLeft => false,
+                    _ => return,
+                };
+                let now = choices
+                    .iter()
+                    .position(|(value, _)| value == self.input.text());
+                let next = cycle(now, choices.len(), forward);
+                if let Some((value, _)) = choices.get(next) {
+                    self.input.set(value);
+                }
+            }
+            Kind::Fixed | Kind::Heading => {}
         }
     }
 

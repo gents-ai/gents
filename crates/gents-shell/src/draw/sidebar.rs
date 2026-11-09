@@ -10,12 +10,12 @@ use crate::sample::{Scope, View};
 const SCOPES: [(Scope, &str); 2] = [(Scope::Session, "session"), (Scope::Tree, "working tree")];
 
 /// Each chip's left column, two in from the pane's edge, a gap apart when the row has room.
-fn chip_lefts<T>(area: Rect, chips: &[(T, &'static str)]) -> Vec<(u16, &'static str)> {
+fn chip_lefts(area: Rect) -> Vec<(u16, &'static str)> {
     let inner = area.inner(Margin::new(1, 1));
-    let width: u16 = chips.iter().map(|(_, name)| name.len() as u16 + 2).sum();
+    let width: u16 = SCOPES.iter().map(|(_, name)| name.len() as u16 + 2).sum();
     let gap = u16::from(inner.width > width + 2);
     let mut left = area.x + 2;
-    chips
+    SCOPES
         .iter()
         .map(|&(_, name)| {
             let at = left;
@@ -25,13 +25,10 @@ fn chip_lefts<T>(area: Rect, chips: &[(T, &'static str)]) -> Vec<(u16, &'static 
         .collect()
 }
 
-fn draw_chips<T>(buf: &mut Buffer, area: Rect, y: u16, chips: &[(T, &'static str)], shown: T)
-where
-    T: Copy + PartialEq,
-{
+fn draw_chips(buf: &mut Buffer, area: Rect, y: u16, shown: Scope) {
     let right = area.inner(Margin::new(1, 1)).right();
-    for (&(value, _), (x, name)) in chips.iter().zip(chip_lefts(area, chips)) {
-        let style = if value == shown {
+    for (&(scope, _), (x, name)) in SCOPES.iter().zip(chip_lefts(area)) {
+        let style = if scope == shown {
             theme::SELECTED
         } else {
             theme::TAB_OFF
@@ -39,19 +36,6 @@ where
         let room = right.saturating_sub(x) as usize;
         buf.set_stringn(x, y, format!(" {name} "), room, style);
     }
-}
-
-/// The chip covering column `x`, following the positions `draw_chips` uses.
-fn chip_at<T>(area: Rect, chips: &[(T, &'static str)], x: u16) -> Option<T>
-where
-    T: Copy,
-{
-    let lefts = chip_lefts(area, chips);
-    let hit = lefts.iter().position(|&(left, name)| {
-        let right = left + name.len() as u16 + 2;
-        (left..right).contains(&x)
-    });
-    hit.map(|index| chips[index].0)
 }
 
 pub fn draw(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
@@ -63,7 +47,7 @@ pub fn draw(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
     pane_box(buf, area, title, focused);
     if app.view == View::Diff {
         let inner = area.inner(Margin::new(1, 1));
-        draw_chips(buf, area, inner.y, &SCOPES, app.scope);
+        draw_chips(buf, area, inner.y, app.scope);
         let rule = "─".repeat(inner.width as usize);
         buf.set_string(inner.x, inner.y + 1, rule, theme::edge(false));
     }
@@ -77,9 +61,15 @@ pub fn draw(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
     }
 }
 
-/// The scope whose chip on the Diff view's scope line covers column `x`.
+/// The scope whose chip on the Diff view's scope line covers column `x`, where `draw_chips`
+/// draws it.
 pub fn scope_at(area: Rect, x: u16) -> Option<Scope> {
-    chip_at(area, &SCOPES, x)
+    let lefts = chip_lefts(area);
+    let hit = lefts.iter().position(|&(left, name)| {
+        let right = left + name.len() as u16 + 2;
+        (left..right).contains(&x)
+    });
+    hit.map(|index| SCOPES[index].0)
 }
 
 pub fn first_diff_row(scroll: usize, total: usize, height: u16) -> usize {

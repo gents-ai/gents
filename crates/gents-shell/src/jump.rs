@@ -684,9 +684,6 @@ mod tests {
         assert_eq!(kinds(&app), [ACCOUNTS, LayerKind::Keys]);
         app.run_effect(Effect::OpenPicker);
         assert_eq!(kinds(&app), [ACCOUNTS, LayerKind::Keys, LayerKind::Picker]);
-        app.run_effect(Effect::NotWired);
-        assert!(app.layers.is_empty());
-        assert_eq!(app.notice.as_deref(), Some("not wired yet"));
 
         let mut app = with_tabs(Vim, 132, 36);
         app.tabs[app.active].scroll = 3;

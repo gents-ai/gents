@@ -4,8 +4,8 @@ use gents_shell::source::{Doc, FieldKind, Form, FormError, FormRef};
 use serde_json::{json, Value};
 
 use super::{
-    delete, field, helped, hinted, merged, optional, refused, shown, shown_when, switch, tags,
-    tags_field, value,
+    choice, delete, field, helped, hinted, merged, optional, refused, shown, shown_when, switch,
+    tags, tags_field, value,
 };
 use crate::commands::shell::sections::{self, Sources};
 
@@ -439,20 +439,6 @@ fn choices(sources: &Sources) -> [Vec<(String, String)>; 3] {
     [tasks.collect(), schedules.collect(), events.collect()]
 }
 
-fn choice<I, V, L>(pairs: I) -> FieldKind
-where
-    I: IntoIterator<Item = (V, L)>,
-    V: Into<String>,
-    L: Into<String>,
-{
-    let pairs = pairs.into_iter();
-    FieldKind::Choice(
-        pairs
-            .map(|(value, label)| (value.into(), label.into()))
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use gents::documents::{ConcurrencyMode, Trigger, TriggerSource};
@@ -511,15 +497,6 @@ mod tests {
         }
     }
 
-    fn choice(pairs: &[(&str, &str)]) -> FieldKind {
-        let pairs = pairs.iter();
-        FieldKind::Choice(
-            pairs
-                .map(|(value, label)| (value.to_string(), label.to_string()))
-                .collect(),
-        )
-    }
-
     fn refused(message: &str) -> Result<(), FormError> {
         Err(FormError {
             field: None,
@@ -538,7 +515,7 @@ mod tests {
             ["When it runs, what it does, and which agent does it. Everything else can be tuned afterwards."]
         );
         let zone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
-        let presets = choice(&[
+        let presets = choice([
             ("daily", "Every day at 09:00"),
             ("weekdays", "Every weekday at 09:00"),
             ("weekly", "Every Monday at 09:00"),
@@ -546,25 +523,25 @@ mod tests {
             ("15min", "Every 15 minutes"),
             ("custom", "Custom cron…"),
         ]);
-        let kinds = choice(&[
+        let kinds = choice([
             ("schedule", "On a schedule"),
             ("event", "When something happens"),
         ]);
-        let schedules = choice(&[
+        let schedules = choice([
             ("daily", "Daily"),
             ("night", "Every day at 02:00"),
             ("new:", "New schedule…"),
         ]);
-        let events = choice(&[
+        let events = choice([
             ("asks", "When an AgentRequest is created"),
             ("new:", "New event source…"),
         ]);
-        let tasks = choice(&[
+        let tasks = choice([
             ("triage", "Triage"),
             ("sweep", "sweep"),
             ("new:", "New task…"),
         ]);
-        let agents = choice(&[("engineer", "Engineer (default)"), ("scout", "Scout · off")]);
+        let agents = choice([("engineer", "Engineer (default)"), ("scout", "Scout · off")]);
         let prompt = "Read the mailbox items from the last day and post a short digest.";
         assert_eq!(
             new.fields,
@@ -793,11 +770,11 @@ mod tests {
                 "Last run failed: agent busy"
             ]
         );
-        let tasks = choice(&[("triage", "Triage"), ("sweep", "sweep")]);
-        let sources_kinds = choice(&[("schedule", "Schedule"), ("event", "Event source")]);
-        let schedules = choice(&[("daily", "Daily"), ("night", "Every day at 02:00")]);
-        let events = choice(&[("asks", "When an AgentRequest is created")]);
-        let concurrency = choice(&[
+        let tasks = choice([("triage", "Triage"), ("sweep", "sweep")]);
+        let sources_kinds = choice([("schedule", "Schedule"), ("event", "Event source")]);
+        let schedules = choice([("daily", "Daily"), ("night", "Every day at 02:00")]);
+        let events = choice([("asks", "When an AgentRequest is created")]);
+        let concurrency = choice([
             ("", "Default (parallel)"),
             ("parallel", "Parallel"),
             ("serial", "Serial (skip when busy)"),

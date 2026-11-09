@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Local};
 use gents::pack::{PackChangeError, SlotBindingError};
 use gents::plugin::authority::GrantError;
 use gents::store::config_client::ConfigAccess;
@@ -17,6 +16,7 @@ use tokio::runtime::Handle;
 
 use super::forms::{field, hinted, items, refused};
 use super::menus::{blocking, row};
+use super::sections;
 use super::source::closed;
 use super::work::Work;
 use crate::commands::config::crud::{
@@ -763,10 +763,7 @@ fn bytes(count: u64) -> String {
 
 /// `RegistryPack.tsx:58-63` in the desktop's English: "Mar 5, 2026" on the local clock.
 fn day(at: &str) -> String {
-    match DateTime::parse_from_rfc3339(at) {
-        Ok(at) => at.with_timezone(&Local).format("%b %-d, %Y").to_string(),
-        Err(_) => at.to_string(),
-    }
+    sections::local(at, "%b %-d, %Y")
 }
 
 /// The links the desktop opens (`lib/externalLinks.ts:3-13`).

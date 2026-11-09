@@ -10,7 +10,6 @@ pub enum Effect {
     ShowSidebar(View),
     ShowDiff(Scope),
     Goal,
-    NotWired,
     SwitchKeys,
     DismissPrompt,
     Quit,
