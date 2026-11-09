@@ -20,9 +20,9 @@ mod patch;
 mod policy;
 mod reads;
 mod skill;
-mod ux_preview;
-mod ux;
 mod trigger_explain;
+mod ux;
+mod ux_preview;
 mod validate;
 
 use args::{
@@ -117,6 +117,13 @@ impl ConfigCommandParams {
                     && self.options.is_empty(),
                 "help accepts a command path only; remove target_id, set, clear and options"
             );
+        }
+        if let Some(next_call) = self.options_moved_out_of_argv() {
+            return Err(CommandGuidance {
+                message: "options go in the options object beside argv, not in argv as options.NAME tokens".into(),
+                next_call,
+            }
+            .into());
         }
         let mut argv = self.argv;
         normalize_verbs(&mut argv);
@@ -229,6 +236,48 @@ impl ConfigCommandParams {
             argv.extend(["--clear".into(), field]);
         }
         Ok(argv)
+    }
+}
+
+impl ConfigCommandParams {
+    /// The same call with every `options.NAME VALUE` (or `options.NAME=VALUE`)
+    /// argv token moved into `options`; `None` when argv holds none.
+    fn options_moved_out_of_argv(&self) -> Option<Value> {
+        let mut argv = Vec::with_capacity(self.argv.len());
+        let mut options = self.options.clone();
+        let mut words = self.argv.iter().peekable();
+        while let Some(word) = words.next() {
+            let Some(option) = word.strip_prefix("options.") else {
+                argv.push(word.clone());
+                continue;
+            };
+            let (name, value) = match option.split_once('=') {
+                Some((name, value)) => (name, value.to_owned()),
+                None => (
+                    option,
+                    words
+                        .next_if(|next| !next.starts_with("options."))
+                        .cloned()
+                        .unwrap_or_else(|| "<VALUE>".to_owned()),
+                ),
+            };
+            options.insert(name.to_owned(), Value::String(value));
+        }
+        (argv.len() != self.argv.len()).then(|| {
+            let mut call = serde_json::Map::new();
+            call.insert("argv".into(), json!(argv));
+            if let Some(id) = &self.target_id {
+                call.insert("target_id".into(), json!(id));
+            }
+            if !self.set.is_empty() {
+                call.insert("set".into(), json!(self.set));
+            }
+            if !self.clear.is_empty() {
+                call.insert("clear".into(), json!(self.clear));
+            }
+            call.insert("options".into(), json!(options));
+            Value::Object(call)
+        })
     }
 }
 
@@ -481,6 +530,9 @@ impl ConfigCommandTool {
             "policy" => self.policy(&argv[1..]).await,
             "ux" => self.ux(&argv[1..]).await,
             "task" => self.task_run(&argv[1..]).await,
+            "plugin" if argv.get(1).is_some_and(|verb| verb == "run") => {
+                self.plugin_run(&argv[2..]).await
+            }
             "plugin" => self.plugin(&argv[1..]),
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,
@@ -517,6 +569,3 @@ fn apply_refusal(resource: &str) -> Option<String> {
     };
     Some(format!("{resource} has no apply verb; use {form}"))
 }
-            "plugin" if argv.get(1).is_some_and(|verb| verb == "run") => {
-                self.plugin_run(&argv[2..]).await
-            }

@@ -1583,6 +1583,27 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
 }
 
 #[tokio::test]
+async fn options_written_into_argv_return_the_corrected_call() {
+    let (_fixture, tools) = authenticated_setup("options-in-argv", &["automation"]).await;
+    for (args, expected) in [
+        (
+            json!({"argv":["task","list","options.limit","1"]}),
+            json!({"argv":["task","list"],"options":{"limit":"1"}}),
+        ),
+        (
+            json!({"argv":["task","list","options.limit=1"],"options":{"cursor":"a"}}),
+            json!({"argv":["task","list"],"options":{"cursor":"a","limit":"1"}}),
+        ),
+    ] {
+        let failure = structured_failure(&tools, args).await;
+        assert!(failure.to_string().contains("options object"), "{failure}");
+        let recovery = &failure["recovery"]["next_call"];
+        assert_eq!(recovery, &expected);
+        ok(&tools, recovery.clone()).await;
+    }
+}
+
+#[tokio::test]
 async fn saved_config_audit_reports_broken_references_without_mutation_and_refuses_repair() {
     let (fixture, tools) = authenticated_setup("saved-audit", &["node", "tools", "agent"]).await;
     let context_id = format!("{}:context", fixture.agent_did());
