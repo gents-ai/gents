@@ -1,5 +1,7 @@
 use crate::interrupt::interrupt_request;
-use crate::tests::support::runtime_core;
+use crate::tests::support::{
+    reject_admission, served_desktop, served_desktop_pair, submit_request, try_submit_request,
+};
 use crate::types::DesktopInterruptRequest;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
@@ -31,119 +33,88 @@ async fn latch(core: &ClientCore, node: &str, request: &str) -> Option<String> {
 
 #[tokio::test]
 async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
-    let (core, runtime, _directory) = runtime_core().await;
-    let node = runtime.node_identity_did().unwrap();
-    let access = core.operator_access(node).unwrap();
-    seed(&access, node, "parent", "parent-session", "processing").await;
-    seed(&access, node, "child", "child-session", "processing").await;
-    seed(
-        &ConfigAccess::local(core.node_arc()),
-        node,
-        "parent",
-        "stale",
-        "completed",
-    )
-    .await;
-    let first = interrupt_request(&core, &user_cancel("parent", Some(node)))
+    let served = served_desktop().await;
+    let (core, node) = (&served.core, served.node_did());
+    submit_request(core, &served.runtime, &served.agent, "parent-session", "parent").await;
+    submit_request(core, &served.runtime, &served.agent, "child-session", "child").await;
+    let first = interrupt_request(core, &user_cancel("parent", Some(node)))
         .await
         .unwrap();
     assert!(first.accepted);
     assert!(!first.already_interrupted);
     assert_eq!(
         first.interrupt_requested_at,
-        latch(&core, node, "parent").await
+        latch(core, node, "parent").await
     );
     assert!(first.interrupt_requested_at.is_some());
-    assert!(latch(&core, node, "child").await.is_none());
-    let second = interrupt_request(&core, &user_cancel("parent", Some(node)))
+    assert!(latch(core, node, "child").await.is_none());
+    let second = interrupt_request(core, &user_cancel("parent", Some(node)))
         .await
         .unwrap();
     assert!(second.already_interrupted);
     assert_eq!(second.interrupt_requested_at, first.interrupt_requested_at);
-    core.shutdown().await.unwrap();
-    runtime.shutdown().await.unwrap();
+    served.shutdown().await;
 }
 
 #[tokio::test]
 async fn interrupt_refuses_ambiguous_terminal_and_non_user_causes() {
-    let (core, runtime, _directory) = runtime_core().await;
-    let node = runtime.node_identity_did().unwrap();
-    let access = core.operator_access(node).unwrap();
-    seed(&access, node, "twins", "one", "processing").await;
-    seed(&access, node, "twins", "two", "processing").await;
-    assert!(interrupt_request(&core, &user_cancel("twins", Some(node)))
+    let served = served_desktop().await;
+    let (core, node) = (&served.core, served.node_did());
+    // Client admission refuses a second request under an identity the User
+    // already holds, so the interrupt owner's ambiguity refusal can no longer
+    // be reached through a desktop submission; the twin is refused instead.
+    submit_request(core, &served.runtime, &served.agent, "one", "twins").await;
+    let twin = try_submit_request(core, &served.runtime, &served.agent, "two", "twins")
         .await
-        .unwrap_err()
-        .contains("ambiguous"));
-    seed(&access, node, "done", "done-session", "completed").await;
-    assert!(interrupt_request(&core, &user_cancel("done", Some(node)))
+        .unwrap_err();
+    assert!(format!("{twin:#}").contains("already held"), "{twin:#}");
+    assert!(interrupt_request(core, &user_cancel("twins", Some(node)))
+        .await
+        .unwrap()
+        .accepted);
+    let done = submit_request(core, &served.runtime, &served.agent, "done-session", "done").await;
+    reject_admission(&served.runtime, &served.agent, &done, "fixture rejection").await;
+    assert!(interrupt_request(core, &user_cancel("done", Some(node)))
         .await
         .unwrap_err()
         .contains("already terminal"));
-    assert!(latch(&core, node, "done").await.is_none());
+    assert!(latch(core, node, "done").await.is_none());
     let mut invalid = user_cancel("done", Some(node));
     invalid.cause = "deadline".into();
-    assert!(interrupt_request(&core, &invalid)
+    assert!(interrupt_request(core, &invalid)
         .await
         .unwrap_err()
         .contains("userCancelled"));
     assert!(
-        interrupt_request(&core, &user_cancel("done", None))
+        interrupt_request(core, &user_cancel("done", None))
             .await
             .unwrap_err()
             .contains("Select the hosting runtime"),
         "the owner never falls back to the core's shared selection"
     );
-    core.shutdown().await.unwrap();
-    runtime.shutdown().await.unwrap();
+    served.shutdown().await;
 }
 
 #[tokio::test]
 async fn interrupt_routes_same_logical_id_to_the_explicit_runtime() {
-    let (core, first, _one) = runtime_core().await;
-    let (other_core, second, _two) = runtime_core().await;
-    let first_did = first.node_identity_did().unwrap();
-    let second_did = second.node_identity_did().unwrap();
-    let endpoint = other_core.operator_graphql(second_did).unwrap();
-    core.add_local_standard_peer_route_for_test(
-        "Second",
-        "127.0.0.1:56002/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-        second_did,
-        endpoint.url(),
-        "/tmp/test-second-runtime",
-    )
-    .await
-    .unwrap();
-    seed(
-        &core.operator_access(first_did).unwrap(),
-        first_did,
-        "same-id",
-        "one",
-        "processing",
-    )
-    .await;
-    seed(
-        &core.operator_access(second_did).unwrap(),
-        second_did,
-        "same-id",
-        "two",
-        "processing",
-    )
-    .await;
-    interrupt_request(&core, &user_cancel("same-id", Some(second_did)))
+    let (served, second, second_agent) = served_desktop_pair().await;
+    let core = &served.core;
+    let (first_did, second_did) = (served.node_did(), second.node_did());
+    submit_request(core, &served.runtime, &served.agent, "one", "same-id").await;
+    submit_request(core, &second, &second_agent, "two", "same-id").await;
+    interrupt_request(core, &user_cancel("same-id", Some(second_did)))
         .await
         .unwrap();
-    assert!(latch(&core, first_did, "same-id").await.is_none());
-    assert!(latch(&core, second_did, "same-id").await.is_some());
-    core.shutdown().await.unwrap();
-    other_core.shutdown().await.unwrap();
-    first.shutdown().await.unwrap();
-    second.shutdown().await.unwrap();
+    assert!(latch(core, first_did, "same-id").await.is_none());
+    assert!(latch(core, second_did, "same-id").await.is_some());
+    second.shutdown().await;
+    served.shutdown().await;
 }
 
 #[tokio::test]
 async fn interrupt_refuses_a_missing_runtime_without_using_the_client_store() {
     let (core, _directory) = crate::tests::support::boot_core().await;
+    // A stray client-store row the owner must never consult.
     seed(
         &ConfigAccess::local(core.node_arc()),
         "did:test:missing",

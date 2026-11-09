@@ -22,6 +22,11 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
             .join(" ")
     );
     for field in INFERENCE_BACKEND_FIELDS.split_whitespace() {
+        // `_docID` is DefraDB's built-in document identity on every collection; SDL never
+        // declares it, and patch readers key backend documents by it.
+        if field == "_docID" {
+            continue;
+        }
         assert!(
             gents_protocol::schemas::INFERENCE_BACKEND_METADATA
                 .lines()

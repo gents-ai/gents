@@ -11,8 +11,7 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gents_desktop_core::client::{
-    load_peer_records, project_sync_health, ClientCore, ClientSyncStateSnapshot, DesktopPaths,
-    P2PHealth, SyncHealth,
+    load_peer_records, project_sync_health, ClientCore, DesktopPaths, P2PHealth, SyncHealth,
 };
 
 use super::config::ResolvedBridgePolicy;
@@ -26,7 +25,6 @@ fn to_health_view(health: &P2PHealth) -> P2PHealthView {
     P2PHealthView {
         status: health.status_label().to_string(),
         connected_peer_count: health.connected_peer_count,
-        replicator_count: health.replicator_count,
         consecutive_failures: health.consecutive_failures,
         last_error: health.last_error.clone(),
         last_ok_at: system_time_rfc3339(health.last_ok_at),
@@ -37,19 +35,26 @@ fn to_health_view(health: &P2PHealth) -> P2PHealthView {
 pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
     SyncHealthView {
         state: health.state.as_str().to_string(),
+        cause: health.cause.map(|cause| cause.as_str().to_string()),
+        next_action: health.next_action.map(|action| action.as_str().to_string()),
         last_error: health.last_error.clone(),
         connected_peer_count: health.connected_peer_count,
         activation_error_count: health.activation_error_count,
-        pending_dag_count: health.pending_dag_count,
-        persisted_pending_dag_count: health.persisted_pending_dag_count,
-        push_retry_marker_count: health.push_retry_marker_count,
-        exhausted_fetch_count: health.exhausted_fetch_count,
-        quarantined_dag_count: health.quarantined_dag_count,
     }
 }
 
-pub(crate) fn project_client_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealthView> {
-    project_sync_health(sync).map(|health| to_sync_health_view(&health))
+/// Sync health over the owner's snapshot and each configured runtime's
+/// connection, read from the runtime connection observer.
+pub(crate) fn project_client_sync_health(core: &ClientCore) -> SyncHealthView {
+    let sync = core.sync_state();
+    let store = core.store();
+    let health = project_sync_health(
+        &sync,
+        sync.directory
+            .iter()
+            .map(|record| store.runtime_connection(&record.node_did)),
+    );
+    to_sync_health_view(&health)
 }
 
 pub(crate) fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {

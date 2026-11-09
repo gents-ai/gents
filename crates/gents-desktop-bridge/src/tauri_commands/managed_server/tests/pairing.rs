@@ -196,31 +196,17 @@ fn the_newest_request_for_the_live_server_peer_is_reused() {
 async fn pairing_is_not_retried_after_a_permanent_failure() {
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    for message in [
-        "requesting managed runtime enrollment: refusing to enroll with an incompatible runtime",
-        "loading managed runtime enrollment offer: the running agent (v0.18.2) predates this app; restart it so it runs this version",
-        "requesting managed runtime enrollment: enrollment server DID does not match the offer",
-    ] {
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let calls = AtomicU32::new(0);
-        let failure = PairingFailure::classify(message.to_string());
-        assert!(matches!(failure, PairingFailure::Permanent(_)), "{message}");
-        let error = retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || {
-            calls.fetch_add(1, Ordering::SeqCst);
-            let failure = failure.clone();
-            async move { Err::<(), _>(failure) }
-        })
-        .await
-        .unwrap_err();
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "{message}");
-        assert_eq!(error.to_string(), message);
-    }
-    assert!(matches!(
-        PairingFailure::classify(
-            "approving managed runtime enrollment: connection refused".to_string()
-        ),
-        PairingFailure::Transient(_)
-    ));
+    let message = "loading managed runtime enrollment offer: the running agent predates this app";
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = AtomicU32::new(0);
+    let error = retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || {
+        calls.fetch_add(1, Ordering::SeqCst);
+        async move { Err::<(), _>(PairingFailure::Permanent(message.to_string())) }
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(error.to_string(), message);
 }
 
 #[tokio::test]

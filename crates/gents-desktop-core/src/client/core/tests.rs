@@ -900,113 +900,15 @@ async fn probe_p2p_health_reports_healthy_transport() {
     let recording = Arc::new(RecordingP2P::default());
     recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
     recording.set_connected_peers(vec!["127.0.0.1:56000/p2p/peer-alpha".to_string()]);
-    recording.set_replicators(vec![ReplicatorInfo {
-        id: Some("peer-alpha".to_string()),
-        collections: vec!["AgentRequest".to_string()],
-        address: Some("127.0.0.1:56000/p2p/peer-alpha".to_string()),
-        filters: BTreeMap::new(),
-        status: Some(0),
-        last_status_change: Some("0001-01-01T00:00:00Z".to_string()),
-    }]);
     let p2p: Arc<dyn P2POps> = recording;
 
-    let (health, database_sync, database_sync_error) =
-        probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
+    let health = probe_p2p_health(&p2p, &P2PHealth::default()).await;
 
     assert_eq!(health.status, P2PHealthStatus::Healthy);
     assert_eq!(health.connected_peer_count, 1);
-    assert_eq!(health.replicator_count, 1);
     assert_eq!(health.consecutive_failures, 0);
     assert_eq!(health.last_error, None);
     assert!(health.last_ok_at.is_some());
-    assert!(database_sync.is_none());
-    assert!(database_sync_error.is_none());
-}
-
-#[tokio::test]
-async fn probe_p2p_health_carries_database_sync_facts_without_rebuilding_them() {
-    let recording = Arc::new(RecordingP2P::default());
-    recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
-    recording.set_connected_peers(vec!["127.0.0.1:56000/p2p/peer-alpha".to_string()]);
-    recording.set_sync_status(
-        serde_json::to_value(P2pSyncStatusSnapshot {
-            pending_dags: 2,
-            persisted_pending_dags: 3,
-            pending_dag_fetch_exhausted: 7,
-            pending_dag_terminal_merged: 5,
-            pending_dag_terminal_quarantined: 1,
-            quarantined_pending_dags: 1,
-            push_backlog: gents::P2pPushBacklogSnapshot {
-                queued_items: 4,
-                active_jobs: 2,
-                ..Default::default()
-            },
-            push_retry_markers: gents::P2pPushRetryMarkerSnapshot {
-                document_markers: 6,
-                collection_markers: 1,
-                scheduled_peers: 2,
-                oldest_scheduled_retry_unix: Some(123),
-            },
-            ..P2pSyncStatusSnapshot::default()
-        })
-        .unwrap(),
-    );
-    let p2p: Arc<dyn P2POps> = recording;
-
-    let (_, database_sync, database_sync_error) =
-        probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
-    let database_sync = database_sync.expect("database sync status");
-    assert!(database_sync_error.is_none());
-
-    assert_eq!(database_sync.pending_dags, 2);
-    assert_eq!(database_sync.persisted_pending_dags, 3);
-    assert_eq!(database_sync.pending_dag_fetch_exhausted, 7);
-    assert_eq!(database_sync.quarantined_pending_dags, 1);
-    assert_eq!(database_sync.push_backlog.queued_items, 4);
-    assert_eq!(database_sync.push_retry_markers.document_markers, 6);
-}
-
-#[tokio::test]
-async fn probe_p2p_health_reports_an_incomplete_database_status_without_degrading_transport() {
-    let recording = Arc::new(RecordingP2P::default());
-    recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
-    recording.set_sync_status(serde_json::json!({ "pending_dags": 0 }));
-    let p2p: Arc<dyn P2POps> = recording;
-
-    let (health, database_sync, database_sync_error) =
-        probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
-
-    assert_eq!(health.status, P2PHealthStatus::Healthy);
-    assert_eq!(health.consecutive_failures, 0);
-    assert!(health.last_error.is_none());
-    assert!(database_sync_error
-        .as_deref()
-        .is_some_and(|error| error.contains("invalid database sync status")));
-    assert!(database_sync.is_none());
-}
-
-#[tokio::test]
-async fn probe_p2p_health_reports_database_status_read_failure_without_degrading_transport() {
-    let recording = Arc::new(RecordingP2P::default());
-    recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
-    recording.set_sync_status_error(Some("diagnostic unavailable"));
-    let p2p: Arc<dyn P2POps> = recording;
-
-    let previous = P2PHealth {
-        status: P2PHealthStatus::Healthy,
-        consecutive_failures: 0,
-        ..P2PHealth::default()
-    };
-    let (health, database_sync, database_sync_error) =
-        probe_p2p_health(&p2p, &previous, None, None).await;
-
-    assert_eq!(health.status, P2PHealthStatus::Healthy);
-    assert_eq!(health.consecutive_failures, 0);
-    assert!(health.last_error.is_none());
-    assert!(database_sync.is_none());
-    assert!(database_sync_error
-        .as_deref()
-        .is_some_and(|error| error.contains("failed to read database sync status")));
 }
 
 #[tokio::test]
@@ -1018,7 +920,7 @@ async fn probe_p2p_health_marks_repeated_failures_wedged() {
 
     let mut health = P2PHealth::default();
     for _ in 0..P2P_WEDGED_FAILURE_THRESHOLD {
-        (health, _, _) = probe_p2p_health(&p2p, &health, None, None).await;
+        health = probe_p2p_health(&p2p, &health).await;
     }
 
     assert_eq!(health.status, P2PHealthStatus::Wedged);
@@ -1036,7 +938,6 @@ fn p2p_health_materially_changed_ignores_probe_timestamps() {
         status: P2PHealthStatus::Healthy,
         consecutive_failures: 0,
         connected_peer_count: 1,
-        replicator_count: 1,
         last_error: None,
         last_ok_at: Some(SystemTime::UNIX_EPOCH),
         last_failure_at: None,
@@ -1168,7 +1069,6 @@ fn p2p_health_materially_changed_detects_live_topology_change() {
         status: P2PHealthStatus::Healthy,
         consecutive_failures: 0,
         connected_peer_count: 1,
-        replicator_count: 1,
         last_error: None,
         last_ok_at: Some(SystemTime::UNIX_EPOCH),
         last_failure_at: None,
@@ -1205,123 +1105,6 @@ async fn observer_metrics_returns_snapshot() {
         metrics.is_none(),
         "observer metrics should be None after shutdown"
     );
-}
-
-#[tokio::test]
-async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync() {
-    use crate::client::paths::DesktopPaths;
-    use crate::client::{project_sync_health, SyncHealthState};
-    use gents_protocol::enrollment::{encode_offer, EnrollmentOfferRecord};
-    use gents_protocol::peer_schema::{ReplicatedSchema, STATUS_REPLICATED_SCHEMA_FIELD};
-
-    let runtime_did = "did:key:runtime";
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core =
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
-            .await
-            .expect("core");
-    let local: ReplicatedSchema =
-        gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
-            .await
-            .expect("read local collection versions");
-    assert_eq!(
-        local.len(),
-        gents::runtime::agent::p2p_reconcile::CLIENT_COLLECTIONS.len(),
-        "the desktop node registers every client route collection"
-    );
-    // The client route carries only discovery: PeerRegistry is its one collection.
-    let route_collection = gents_protocol::schemas::PEER_REGISTRY_NAME;
-    let mut next_release = local.clone();
-    next_release
-        .get_mut(route_collection)
-        .expect("client route replicates PeerRegistry")
-        .version_id = "bafy-next-release".to_string();
-
-    let offer = encode_offer(&EnrollmentOfferRecord {
-        version: gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION,
-        offer_id: "offer-1".into(),
-        challenge: "challenge".into(),
-        network_id: "network".into(),
-        admin_did: runtime_did.into(),
-        server_peer: "peer".into(),
-        server_ticket: "ticket".into(),
-        owner_node_did: runtime_did.into(),
-        profile: "client".into(),
-        schema_fingerprint: gents_protocol::enrollment::enrollment_schema_fingerprint(),
-        issued_at: "2026-09-24T00:00:00Z".into(),
-        expires_at: "2026-09-24T00:05:00Z".into(),
-        admin_sig: vec![0; 64],
-    })
-    .expect("encode offer");
-    let mut missing_route = local.clone();
-    missing_route
-        .remove(route_collection)
-        .expect("client route replicates PeerRegistry");
-    let request_skew = serde_json::json!({
-        "node_did": runtime_did,
-        "enrollment": { "token": &offer },
-        STATUS_REPLICATED_SCHEMA_FIELD: missing_route,
-    });
-    let error = format!(
-        "{:#}",
-        core.request_status_enrollment(&request_skew)
-            .await
-            .unwrap_err()
-    );
-    assert!(
-        error.contains("refusing to enroll with an incompatible runtime")
-            && error.contains(route_collection),
-        "{error}"
-    );
-    let skewed = serde_json::json!({
-        "node_did": runtime_did,
-        "enrollment": { "token": offer },
-        STATUS_REPLICATED_SCHEMA_FIELD: next_release,
-    });
-    let error = format!(
-        "{:#}",
-        core.request_status_enrollment(&skewed).await.unwrap_err()
-    );
-    assert!(
-        error.contains("update the app and the runtime to the same version")
-            && error.contains(route_collection),
-        "{error}"
-    );
-    assert!(
-        core.sync_state().peer_schema_skew.is_empty(),
-        "an unconfigured runtime leaves sync health alone"
-    );
-
-    core.add_local_standard_peer_for_test(runtime_did)
-        .await
-        .expect("configured runtime peer");
-    let observation = core
-        .begin_runtime_schema_observation(runtime_did, "http://127.0.0.1:56001/graphql")
-        .expect("configured route");
-    core.finish_runtime_schema_observation(&observation, &skewed)
-        .await
-        .unwrap_err();
-    let health = project_sync_health(&core.sync_state()).expect("skew is visible");
-    assert_eq!(health.state, SyncHealthState::Incompatible);
-    assert!(health
-        .last_error
-        .as_deref()
-        .is_some_and(|error| error.contains(route_collection)));
-
-    let matching = serde_json::json!({
-        "node_did": runtime_did,
-        STATUS_REPLICATED_SCHEMA_FIELD: local,
-    });
-    let observation = core
-        .begin_runtime_schema_observation(runtime_did, "http://127.0.0.1:56001/graphql")
-        .expect("configured route");
-    core.finish_runtime_schema_observation(&observation, &matching)
-        .await
-        .expect("same collection versions are compatible");
-    assert!(core.sync_state().peer_schema_skew.is_empty());
-
-    Arc::new(core).shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -1763,10 +1546,13 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
     .await
     .unwrap();
 
+    // The runtime-key operator observation (a co-hosted runtime read with its own node key,
+    // and an anonymous cold read) is deleted: every desktop read is signed as the User, and
+    // the runtime's node key is never presented, whether or not it can be loaded.
     for (case, enrollment, authenticated) in [
         ("enrolled", true, false),
         ("local-cold", false, false),
-        ("local-operator", false, true),
+        ("local-runtime-key", false, true),
     ] {
         let home = temp.path().join(case);
         std::fs::create_dir_all(&home).unwrap();
@@ -1800,7 +1586,7 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         record.local_node_home = Some(home.to_string_lossy().into_owned());
         core.sync_state.upsert_for_test(record).await.unwrap();
         let operator = core.operator_observation_endpoint(&did).await.unwrap();
-        assert_eq!(operator.is_anonymous(), !authenticated, "{case}");
+        assert!(!operator.is_anonymous(), "{case}");
         let key = gents::observe::inference_observation::InferenceKey {
             node: did.clone(),
             session: case.into(),
@@ -1816,35 +1602,31 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
             .mount(&server)
             .await;
         let activity = core.read_inference_activity(&key).await.unwrap();
-        let requests = server.received_requests().await.unwrap();
-        if !enrollment && !authenticated {
-            assert!(
-                requests.is_empty(),
-                "cold local operator must not contact the server"
-            );
-            assert!(activity.is_none());
-        } else {
-            assert_eq!(
-                activity,
-                Some(crate::client::InferenceActivity::Working),
-                "{case}"
-            );
-            assert_eq!(requests.len(), 1, "{case}");
-            let authorization = requests[0]
-                .headers
-                .get("authorization")
-                .unwrap()
-                .to_str()
-                .unwrap();
-            let token = authorization.strip_prefix("Bearer ").unwrap();
-            let signer = identity::from_token(token.as_bytes()).unwrap();
-            let expected = if authenticated {
-                did.as_str()
-            } else {
-                core.node_identity().did()
-            };
-            assert_eq!(signer.did().unwrap().to_string(), expected, "{case}");
-        }
+        // The connected route's own GraphQL subscriptions reach the same server.
+        let requests: Vec<_> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.url.path() == "/inference/activity")
+            .collect();
+        assert_eq!(
+            activity,
+            Some(crate::client::InferenceActivity::Working),
+            "{case}"
+        );
+        assert_eq!(requests.len(), 1, "{case}");
+        let authorization = requests[0]
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let token = authorization.strip_prefix("Bearer ").unwrap();
+        let signer = identity::from_token(token.as_bytes()).unwrap();
+        let signer = signer.did().unwrap().to_string();
+        assert_eq!(signer, core.node_identity().did(), "{case}");
+        assert_ne!(signer, did, "{case}: the runtime key is never presented");
     }
     std::sync::Arc::new(core).shutdown().await.unwrap();
 }

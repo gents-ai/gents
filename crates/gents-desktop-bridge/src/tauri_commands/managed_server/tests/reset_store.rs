@@ -68,11 +68,10 @@ fn reset_file_store_keys_allow_fresh_setup_and_archives_remain_readable() {
                     &backup.join("home/data"),
                 )
                 .unwrap();
+            // A home reset retains the desktop User's key custody, so the
+            // archived client store opens with the live client key.
             record
-                .load(
-                    &backup.join("desktop/store.key"),
-                    &backup.join("desktop/node"),
-                )
+                .load(desktop.store_key_path(), &backup.join("desktop/node"))
                 .unwrap();
         } else {
             assert_eq!(
@@ -87,18 +86,21 @@ fn reset_file_store_keys_allow_fresh_setup_and_archives_remain_readable() {
         )
         .expect("fresh setup after retirement");
         write(&home.join("init.json"), r#"{"node_name":"fresh"}"#);
-        record_reset_store_key(&home, &desktop, &fresh);
-        for (key_file, data) in [
-            (key_file, home.join("data")),
-            (
-                desktop.store_key_path().to_path_buf(),
-                desktop.node_data_dir().to_path_buf(),
-            ),
-        ] {
-            fresh
-                .initialize(&key_file, &data)
-                .expect("fresh setup after retirement");
-        }
+        let mut init: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
+        init["store_encryption"] = serde_json::to_value(&fresh).unwrap();
+        write(&home.join("init.json"), &init.to_string());
+        fresh
+            .initialize(&key_file, &home.join("data"))
+            .expect("fresh setup after retirement");
+        assert_eq!(
+            std::fs::read_to_string(desktop.store_encryption_path()).unwrap(),
+            serde_json::to_string(&record).unwrap(),
+            "the desktop User keeps its recorded custody"
+        );
+        record
+            .initialize(desktop.store_key_path(), desktop.node_data_dir())
+            .expect("a fresh client store opens with the retained client key");
     }
 }
 
@@ -131,7 +133,11 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
             })
             .unwrap();
             assert!(backup.join("home/init.json").exists());
-            assert!(backup.join("desktop/store-encryption.json").exists());
+            assert!(!backup.join("desktop/store-encryption.json").exists());
+            assert!(
+                desktop.store_encryption_path().exists(),
+                "the desktop User's custody record stays live"
+            );
             continue;
         }
         assert!(plan
@@ -157,10 +163,12 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
                 Ok(())
             })
             .unwrap();
-        assert_eq!(deleted.len(), 2);
+        // Only the runtime home's key is retired; a home reset keeps the
+        // desktop User's key custody live.
+        assert_eq!(deleted.len(), 1);
         assert!(deleted.iter().all(|(deleted, _)| deleted == &record));
         assert!(!home.join("init.json").exists());
-        assert!(!desktop.store_encryption_path().exists());
+        assert!(desktop.store_encryption_path().exists());
     }
 }
 
@@ -224,15 +232,14 @@ fn reset_pending_upgrade_retires_its_artifacts_and_recorded_custody_together() {
                 },
             )
             .unwrap();
+            // The desktop's pending custody stays live across a home reset;
+            // only the runtime home's Keychain key is deleted.
             assert_eq!(
                 deleted_keys,
-                if choice == StoreKeyCustodyChoice::Keychain
-                    && disposition == HomeResetDisposition::Delete
-                {
-                    2
-                } else {
-                    0
-                }
+                usize::from(
+                    choice == StoreKeyCustodyChoice::Keychain
+                        && disposition == HomeResetDisposition::Delete
+                )
             );
             for (data, _) in &stores {
                 assert!(upgrade::pending_record(data).unwrap().is_none());
@@ -249,7 +256,7 @@ fn reset_pending_upgrade_retires_its_artifacts_and_recorded_custody_together() {
                         let key = if group == "home" {
                             backup.join("home/keys/store.aes256")
                         } else {
-                            backup.join("desktop/store.key")
+                            desktop.store_key_path().to_path_buf()
                         };
                         record.load(&key, &archived).unwrap();
                     }

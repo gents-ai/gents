@@ -174,8 +174,8 @@ impl ClientCore {
                 &mut || checkpoint("saved_peer"),
             )
             .await;
-            let (initial_health, initial_database_sync, initial_database_sync_error) =
-                super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
+            let initial_health =
+                super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
             checkpoint("bootstrap_and_health");
             for status in peer_statuses {
                 if let Some(expected) = records
@@ -185,11 +185,7 @@ impl ClientCore {
                     sync_state.replace_peer(expected, status);
                 }
             }
-            sync_state.replace_database_observation(
-                initial_health,
-                initial_database_sync,
-                initial_database_sync_error,
-            );
+            sync_state.replace_transport_observation(initial_health);
             let observer = spawn_observer(
                 Arc::clone(&store),
                 sync_state.clone(),
@@ -668,11 +664,12 @@ mod tests {
         first.with_secret(|left| reopened.with_secret(|right| assert!(left == right)));
     }
 
-    /// `Node` replicates runtime→client (#3389), and both sides must hold the same version of
-    /// every client-route collection or they refuse to sync. A desktop client store, opened the
-    /// way the app opens it, and a node store, migrated the way the runtime migrates it, must
-    /// advertise identical identities, on the canonical lineage (the rc0 root plus the same
-    /// patches), never a version a direct registration of the current SDL produces.
+    /// Both sides must hold the same version of every client-route collection or they refuse
+    /// to sync, and the client reads configuration such as `Node` over authenticated GraphQL
+    /// against the same canonical SDL. A desktop client store, opened the way the app opens it,
+    /// and a node store, migrated the way the runtime migrates it, must advertise identical
+    /// identities, on the canonical lineage (the rc0 root plus the same patches), never a
+    /// version a direct registration of the current SDL produces.
     #[tokio::test]
     async fn desktop_client_and_node_stores_advertise_the_same_canonical_schema() {
         use gents::runtime::agent::p2p_reconcile::templates::read_client_replicated_schema;
@@ -718,7 +715,12 @@ mod tests {
             "desktop and node advertise different client-route schemas"
         );
         let canonical = canonical_versions().unwrap();
-        assert!(client.contains_key(gents_protocol::schemas::NODE_NAME));
+        // `Node` no longer replicates runtime→client; P2P carries only discovery.
+        assert_eq!(
+            client.keys().map(String::as_str).collect::<Vec<_>>(),
+            gents::runtime::agent::p2p_reconcile::CLIENT_COLLECTIONS,
+            "the client route carries only discovery"
+        );
         for name in [
             gents_protocol::schemas::NODE_NAME,
             gents_protocol::schemas::INFERENCE_BACKEND_NAME,

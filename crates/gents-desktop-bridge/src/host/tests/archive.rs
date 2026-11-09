@@ -5,10 +5,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::{protocol, ClientHost};
 
-async fn archive(host: &ClientHost, archived: bool, revision: &str) -> Value {
+async fn archive(host: &ClientHost, node: &str, archived: bool, revision: &str) -> Value {
     let command: protocol::ClientCommand = serde_json::from_value(json!({
         "name": "desktop_session_archive", "args": {"request": {
-            "nodeDid": "runtime", "sessionId": "shared-archive", "archived": archived,
+            "nodeDid": node, "sessionId": "shared-archive", "archived": archived,
             "expectedRevision": revision
         }}
     }))
@@ -57,8 +57,26 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
             .await
             .unwrap()
             .unwrap();
-    let (core, home) = crate::tests::support::boot_core().await;
-    crate::tests::support::create_session(&core, "runtime", "shared-archive", None).await;
+    // The session lives on the served runtime; the desktop holds no replica,
+    // so a reopened client reads the archive state back from its runtime.
+    let home = tempfile::tempdir().unwrap();
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(home.path()),
+            ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap(),
+    );
+    core.stop_observer_for_test().await;
+    let (runtime, agent) = crate::tests::support::served_runtime_for(
+        &core,
+        crate::tests::support::ServedRoute::CoHosted,
+    )
+    .await;
+    let node = runtime.node_did().to_owned();
+    crate::tests::support::submit_request(&core, &runtime, &agent, "shared-archive", "opening")
+        .await;
     core.refresh_store().await.unwrap();
     let before = core
         .store()
@@ -72,7 +90,7 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     let second = ClientHost::new(Arc::clone(&core));
     check_receipt(
         &contract,
-        archive(&first, true, "0").await,
+        archive(&first, &node, true, "0").await,
         0,
         false,
         0,
@@ -80,7 +98,7 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     );
     check_receipt(
         &contract,
-        archive(&second, false, "0").await,
+        archive(&second, &node, false, "0").await,
         1,
         true,
         0,
@@ -88,7 +106,7 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     );
     check_receipt(
         &contract,
-        archive(&second, true, "0").await,
+        archive(&second, &node, true, "0").await,
         1,
         true,
         0,
@@ -96,7 +114,7 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     );
     let restored_revision = check_receipt(
         &contract,
-        archive(&second, false, "1").await,
+        archive(&second, &node, false, "1").await,
         1,
         true,
         1,
@@ -104,7 +122,7 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     );
     check_receipt(
         &contract,
-        archive(&first, true, "0").await,
+        archive(&first, &node, true, "0").await,
         restored_revision,
         false,
         0,
@@ -112,7 +130,7 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     );
     let invalid: protocol::ClientCommand = serde_json::from_value(json!({
         "name":"desktop_session_archive", "args":{"request":{
-            "nodeDid":"runtime", "sessionId":"shared-archive", "archived":true,
+            "nodeDid":node, "sessionId":"shared-archive", "archived":true,
             "expectedRevision":"02"
         }}
     }))
@@ -123,7 +141,7 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
         .is_err());
     let history: protocol::ClientCommand = serde_json::from_value(json!({
         "name":"desktop_session_history", "args":{"request":{
-            "nodeDid":"runtime", "visibility":"active", "query":null, "cursor":null, "limit":30
+            "nodeDid":node, "visibility":"active", "query":null, "cursor":null, "limit":30
         }}
     }))
     .unwrap();
@@ -148,6 +166,8 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     )
     .await
     .unwrap();
+    runtime.connect(&reopened).await;
+    reopened.refresh_store().await.unwrap();
     assert_eq!(
         reopened
             .store()
@@ -158,4 +178,5 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
         Some(&expected)
     );
     Arc::new(reopened).shutdown().await.unwrap();
+    runtime.shutdown().await;
 }

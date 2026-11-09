@@ -83,7 +83,8 @@ Do not duplicate changing versions in instructions.
   owners. Use the canonical protocol session type rather than another writable copy.
 - Discovery and enrollment use P2P; clients read runtime data through authenticated
   GraphQL and observe it through subscriptions. `ClientSyncStateOwner` combines
-  P2P status facts and `project_sync_health` derives product state. Keep runtime
+  the discovery and enrollment facts and `project_sync_health` derives product
+  state from them and the runtime connections. Keep runtime
   readiness separate and do not add UI-local sync heuristics.
 - Rig is a provider client behind `gents_loop::rig_compat` and
   `gents_loop::provider_input`, re-exported by the inference owner

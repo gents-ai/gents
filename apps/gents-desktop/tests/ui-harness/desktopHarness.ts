@@ -531,7 +531,6 @@ export type DesktopUiHarnessScenario =
   | "mobile-performance"
   | "sync-offline"
   | "storage-recovery"
-  | "sync-failed"
   | "days"
   | "automated-inputs"
   | "background"
@@ -1750,7 +1749,6 @@ export function createDesktopUiHarness(
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
-      replicatorCount: p2pStatus === "healthy" ? 1 : 0,
       consecutiveFailures: p2pStatus === "healthy" ? 0 : 3,
       lastOkAt: p2pStatus === "healthy" ? STARTED_AT : null,
       lastError: p2pStatus === "healthy" ? null : "fixture transport unavailable",
@@ -4594,28 +4592,12 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
 function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
   if (scenario === "sync-offline") {
     return {
-      state: "offline",
+      state: "blocked",
       lastError: "fixture transport unavailable",
       connectedPeerCount: 0,
       activationErrorCount: 0,
-      pendingDagCount: 0,
-      persistedPendingDagCount: 0,
-      pushRetryMarkerCount: 0,
-      exhaustedFetchCount: 0,
-      quarantinedDagCount: 0,
-    };
-  }
-  if (scenario === "sync-failed") {
-    return {
-      state: "failed",
-      lastError: "database DAG quarantined",
-      connectedPeerCount: 1,
-      activationErrorCount: 0,
-      pendingDagCount: 1,
-      persistedPendingDagCount: 1,
-      pushRetryMarkerCount: 0,
-      exhaustedFetchCount: 1,
-      quarantinedDagCount: 1,
+      cause: "discovery_offline",
+      nextAction: "check_network",
     };
   }
 
@@ -4624,11 +4606,8 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
     lastError: null,
     connectedPeerCount: 1,
     activationErrorCount: 0,
-    pendingDagCount: 0,
-    persistedPendingDagCount: 0,
-    pushRetryMarkerCount: 0,
-    exhaustedFetchCount: 0,
-    quarantinedDagCount: 0,
+    cause: null,
+    nextAction: null,
   };
 }
 
@@ -4655,7 +4634,6 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "sync-offline":
     case "storage-recovery":
     case "startup-port-in-use":
-    case "sync-failed":
     case "days":
     case "automated-inputs":
     case "background":

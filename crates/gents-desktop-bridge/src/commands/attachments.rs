@@ -83,57 +83,32 @@ mod tests {
     #[tokio::test]
     async fn attachment_read_uses_the_authenticated_runtime_and_exact_session() {
         use base64::{engine::general_purpose::STANDARD, Engine};
-        let (core, runtime, _home) = crate::tests::support::runtime_core().await;
-        let node_did = runtime.node_identity_did().unwrap().to_owned();
+        let home = tempfile::tempdir().unwrap();
+        let core = std::sync::Arc::new(
+            ClientCore::start_with_paths_and_options(
+                gents_desktop_core::client::DesktopPaths::from_root(home.path()),
+                gents_desktop_core::client::ClientCoreOptions::local_only(),
+            )
+            .await
+            .unwrap(),
+        );
+        let runtime =
+            gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+                std::sync::Arc::new(core.node_identity().clone()),
+            )
+            .await;
+        runtime.publish_node(serde_json::json!({})).await;
+        let agent = runtime.publish_chat_agent().await;
+        core.stop_observer_for_test().await;
+        runtime.connect(&core).await;
+        let node_did = runtime.node_did().to_owned();
         let requester = core.node_identity().did().to_owned();
-        let access =
-            gents::ConfigAccess::Graphql(core.operator_observation_graphql(&node_did).unwrap());
+        let access = runtime.user_access();
         let image = RequestAttachment {
             name: "../not-a-file-to-open.png".into(),
             media_type: "image/png".into(),
             data: STANDARD.encode(b"\x89PNG\r\nretained test bytes"),
         };
-        let runtime_identity =
-            gents::store::identity::RegisteredIdentity::from_registered_did(node_did.clone(), None)
-                .unwrap();
-        let agent = gents::store::identity::provision_agent_identity(&runtime_identity).unwrap();
-        let owner = gents::ConfigAccess::local_as(
-            runtime.clone(),
-            ::identity::Did::new(&requester).unwrap(),
-        );
-        let (node_doc, agent_doc) = owner
-            .transact_write("attachment_fixture.identities", |txn| {
-                Box::pin(async {
-                    let node = txn.execute_with_variables(
-                        "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {"node_did": node_did}}),
-                    ).await?;
-                    let agent_row = txn.execute_with_variables(
-                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {"node_did": node_did, "agent_did": agent.agent_did,
-                            "creation_nonce": agent.creation_nonce}}),
-                    ).await?;
-                    Ok::<_, anyhow::Error>((
-                        gents::store::graphql::created_doc_id(&node, "Node")?,
-                        gents::store::graphql::created_doc_id(&agent_row, "Agent")?,
-                    ))
-                })
-            })
-            .await
-            .unwrap();
-        owner
-            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
-            .await
-            .unwrap();
-        owner
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "executor",
-                &::identity::Did::new(&agent.agent_did).unwrap(),
-            )
-            .await
-            .unwrap();
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "image-request",
@@ -148,17 +123,18 @@ mod tests {
         );
         create.input.attachments = vec![image.clone()];
         create.session_doc_id = Some(
-            gents::request::lifecycle::reserve_goal_session(&owner, &create)
+            gents::request::lifecycle::reserve_goal_session(&access, &create)
                 .await
                 .unwrap(),
         );
-        create.agent_doc_id = Some(agent_doc);
+        create.agent_doc_id = Some(runtime.agent_doc_id(&agent).await);
         gents::sign_agent_request_create(core.node_identity(), &mut create)
             .await
             .unwrap();
         gents::request::lifecycle::submit_client_request(&access, &create)
             .await
             .unwrap();
+        core.refresh_store().await.unwrap();
         assert_eq!(
             request_attachments(
                 &core,
@@ -193,7 +169,7 @@ mod tests {
         .await
         .is_err());
         core.shutdown().await.unwrap();
-        runtime.shutdown().await.unwrap();
+        runtime.shutdown().await;
     }
 
     #[test]

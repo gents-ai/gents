@@ -26,8 +26,6 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::store::config_client::ConfigAccess;
-use gents::P2pSyncStatusSnapshot;
-use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -45,7 +43,6 @@ pub use enrollment::EnrollmentRequestResult;
 pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
 pub use observation_scope::ClientObservationAttachment;
-pub use sync_state::RuntimeSchemaObservation;
 pub use writes::{ChatRouteRefusal, LocalHomeAccessError, RefreshedRequestProjection};
 
 /// Peer bootstrap retries need a deadline so an unreachable peer does not hold
@@ -291,7 +288,6 @@ pub struct P2PHealth {
     pub status: P2PHealthStatus,
     pub consecutive_failures: u32,
     pub connected_peer_count: usize,
-    pub replicator_count: usize,
     pub last_error: Option<String>,
     pub last_ok_at: Option<SystemTime>,
     pub last_failure_at: Option<SystemTime>,
@@ -303,7 +299,6 @@ impl Default for P2PHealth {
             status: P2PHealthStatus::Healthy,
             consecutive_failures: 0,
             connected_peer_count: 0,
-            replicator_count: 0,
             last_error: None,
             last_ok_at: None,
             last_failure_at: None,
@@ -321,7 +316,6 @@ pub(super) fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHeal
     previous.status != next.status
         || previous.consecutive_failures != next.consecutive_failures
         || previous.connected_peer_count != next.connected_peer_count
-        || previous.replicator_count != next.replicator_count
         || previous.last_error != next.last_error
 }
 
@@ -356,12 +350,7 @@ impl EnrollmentActivationStage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSyncStateSnapshot {
     pub transport: P2PHealth,
-    pub database_sync: Option<P2pSyncStatusSnapshot>,
-    pub database_sync_error: Option<String>,
     pub enrollment_activation_errors: BTreeMap<String, EnrollmentActivationError>,
-    // DefraDB accepts the connection but never merges either side's writes;
-    // schema skew is the only visible signal.
-    pub peer_schema_skew: BTreeMap<String, ReplicatedSchemaSkew>,
     // Bridge projections consume this copy instead of racing a second
     // directory read after receiving a sync update.
     pub directory: Vec<PeerRecord>,
@@ -436,6 +425,17 @@ impl ClientCore {
 
     pub fn p2p(&self) -> &Arc<dyn P2POps> {
         &self.p2p
+    }
+
+    /// Stops the observer so only a test's direct reads publish into the
+    /// store; a subscription event landing mid-read would otherwise supersede
+    /// that read's publication.
+    #[cfg(feature = "test-fixtures")]
+    #[doc(hidden)]
+    pub async fn stop_observer_for_test(&self) {
+        if let Some(observer) = self.observer.lock().await.take() {
+            observer.shutdown().await;
+        }
     }
 
     #[doc(hidden)]

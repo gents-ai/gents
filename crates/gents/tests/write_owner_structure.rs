@@ -1783,7 +1783,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
-    ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
     ("crates/gents-desktop-core/src/error.rs", 1),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
@@ -1976,8 +1975,6 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/eval/watch.rs", 1),
     // launchctl print output
     ("crates/gents-cli/src/native_service.rs", 1),
-    // not yet typed: pairing closures flatten failures to strings
-    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
     // provider text through Rig's ProviderError(String) (ProviderReport)
     ("crates/gents-loop/src/error.rs", 21),
     // serde_json schema-mismatch message prefixes

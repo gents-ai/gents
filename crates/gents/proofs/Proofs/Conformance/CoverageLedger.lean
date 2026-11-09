@@ -737,6 +737,11 @@ def caseCoverage : List CoverageEntry :=
       "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean")
       "authenticated-enrollment" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_sync_health_cases"
+      "ClientSyncHealthCases"
+      "client::sync_projection::tests::generated_sync_health_cases_match_lean")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "pending_user_turn_cases"
       "PendingUserTurnCases"
       "conformance::live_overlay::pending_user_turn_cases_match_lean_table")

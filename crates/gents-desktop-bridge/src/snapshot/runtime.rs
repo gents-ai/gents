@@ -364,7 +364,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
     DesktopRuntimeSnapshot {
         client_did: core.node_identity().did().to_owned(),
         p2p_health: to_health_view(&sync_state.transport),
-        sync_health: super::project_client_sync_health(&sync_state),
+        sync_health: super::project_client_sync_health(core),
         enrollment_requests,
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),

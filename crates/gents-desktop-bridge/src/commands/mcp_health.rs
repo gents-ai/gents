@@ -241,24 +241,14 @@ mod probe_scope_tests {
 
     #[tokio::test]
     async fn registry_probe_resolves_the_node_and_service_compound_key() -> Result<()> {
-        let (core, runtime, _directory) = crate::tests::support::runtime_core().await;
-        let (other_core, other_runtime, _other_directory) =
-            crate::tests::support::runtime_core().await;
-        let first = runtime.node_identity_did().unwrap();
-        let second = other_runtime.node_identity_did().unwrap();
-        let endpoint = other_core.operator_graphql(second).unwrap();
-        core.add_local_standard_peer_route_for_test(
-            "Other runtime",
-            "127.0.0.1:56002/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-            second,
-            endpoint.url(),
-            "/tmp/mcp-test-other",
-        )
-        .await?;
+        let (served, other_runtime, _) = crate::tests::support::served_desktop_pair().await;
+        let core = &served.core;
+        let first = served.node_did();
+        let second = other_runtime.node_did();
         for (node, hostname) in [(first, "first"), (second, "second")] {
             use gents::documents::apply_desired_state_plan;
             use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-            let value = serde_json::json!({"node_did":node,"service_id":"shared","hostname":hostname,"enabled":true});
+            let value = serde_json::json!({"node_did":node,"service_id":"shared","hostname":hostname,"mcp_port":8080,"enabled":true});
             let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                 collection: gents::Collection::ToolServiceRegistry,
                 add: value.clone(),
@@ -270,17 +260,15 @@ mod probe_scope_tests {
                     Box::pin(async move { apply_desired_state_plan(txn, plan).await })
                 })
                 .await?;
-            let row = load_registry_entry(&core, node, "shared").await?;
+            let row = load_registry_entry(core, node, "shared").await?;
             assert_eq!(row.node_did, node);
             assert_eq!(row.hostname.as_deref(), Some(hostname));
         }
-        assert!(load_registry_entry(&core, "did:test:missing", "shared")
+        assert!(load_registry_entry(core, "did:test:missing", "shared")
             .await
             .is_err());
-        core.shutdown().await?;
-        other_core.shutdown().await?;
-        runtime.shutdown().await.unwrap();
-        other_runtime.shutdown().await.unwrap();
+        other_runtime.shutdown().await;
+        served.shutdown().await;
         Ok(())
     }
 }

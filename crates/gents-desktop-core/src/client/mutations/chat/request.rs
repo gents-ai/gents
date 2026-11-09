@@ -190,13 +190,19 @@ pub async fn submit_task_request(
 
 /// Only `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
 /// other state would risk bypassing legitimate terminal classifications.
+///
+/// The stale request is read from the runtime by id: the desktop store holds
+/// only live requests and each session's latest terminal one, so a stale
+/// request elsewhere in a transcript is not in it. `requester_did` narrows the
+/// read to a requester scope the caller already holds; without it the
+/// runtime's ACP alone decides which request the signed reader may see.
 #[allow(clippy::too_many_arguments)]
 pub async fn resend_request(
     store: &ClientStore,
     access: &ConfigAccess,
     stale_request_id: &str,
     node_did: &str,
-    requester_did: &str,
+    requester_did: Option<&str>,
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
@@ -257,18 +263,24 @@ async fn fetch_request_view(
     access: &ConfigAccess,
     request_id: &str,
     node_did: &str,
-    requester_did: &str,
+    requester_did: Option<&str>,
 ) -> Result<AgentRequestRow> {
     let escaped = escape_graphql_string(request_id);
     let node_did = escape_graphql_string(node_did);
-    let requester_did = escape_graphql_string(requester_did);
+    let requester_filter = requester_did
+        .map(|did| {
+            format!(
+                r#", requester_did: {{ _eq: "{}" }}"#,
+                escape_graphql_string(did)
+            )
+        })
+        .unwrap_or_default();
     let query = format!(
         r#"query {{
             AgentRequest(
                 filter: {{
                     request_id: {{ _eq: "{escaped}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
+                    node_did: {{ _eq: "{node_did}" }}{requester_filter}
                 }},
                 limit: 1
             ) {{
