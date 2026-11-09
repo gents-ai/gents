@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use super::{ObservedStore, ObserverMetrics, RuntimeConnectionEvent};
 use gents::store::config_client::SubscriptionEnd;
 use crate::client::query::OBSERVED_COLLECTIONS;
-use crate::client::PeerRecord;
+use crate::client::{PeerRecord, SnapshotReadError};
 
 /// One event of a source task (`RuntimeConnectionObservation.armedEvent` or
 /// `streamEndEvent`).
@@ -50,13 +50,12 @@ pub(super) enum SnapshotOutcome {
     Unreachable,
 }
 
-/// A failed read is `refused` exactly when the access owner classifies it
-/// so; an omitted root is not a failure (`load_node_snapshot_on`).
-pub(super) fn snapshot_outcome(error: &anyhow::Error) -> SnapshotOutcome {
-    if error.permission_denied() {
-        SnapshotOutcome::Refused
-    } else {
-        SnapshotOutcome::Unreachable
+/// The snapshot owner's classification of a failed read; an omitted root is
+/// not a failure (`load_node_snapshot_on`).
+pub(super) fn snapshot_outcome(error: &SnapshotReadError) -> SnapshotOutcome {
+    match error {
+        SnapshotReadError::Refused(_) => SnapshotOutcome::Refused,
+        SnapshotReadError::Failed(_) => SnapshotOutcome::Unreachable,
     }
 }
 
@@ -101,8 +100,11 @@ impl Drop for Source {
 #[derive(Default)]
 pub(super) struct Sources {
     pub entries: BTreeMap<String, Source>,
-    /// Consecutive reconnects per node (`RuntimeConnectionObservation.nextAttempts`).
+    /// Consecutive reconnects per node (`RuntimeConnectionObservation.reconnectAttempt`).
     attempts: BTreeMap<String, u32>,
+    /// When the node's current source first connected (a successful snapshot
+    /// of its armed subscriptions); cleared by its reconnect.
+    connected_at: BTreeMap<String, Instant>,
     /// Nodes whose due reconnect dropped their source; the next reconcile
     /// restarts them at this endpoint without resetting the shown status.
     reconnecting: BTreeMap<String, String>,
@@ -114,6 +116,17 @@ pub(super) struct Sources {
 const RECONNECT_BASE_MS: u64 = 250;
 const RECONNECT_FLAT_ATTEMPTS: u32 = 5;
 const RECONNECT_CAP_MS: u64 = 30_000;
+/// `RuntimeConnectionObservation.reconnectStableMs`.
+pub(super) const RECONNECT_STABLE: Duration = Duration::from_secs(30);
+
+/// `RuntimeConnectionObservation.Origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Origin {
+    /// A notice of the source task (its handshake or its stream).
+    Source,
+    /// The observer's own snapshot read.
+    Snapshot,
+}
 
 /// `RuntimeConnectionObservation.reconnectDelayMs`: the one delay of every
 /// reconnect, after a transport failure or a refusal.
@@ -130,34 +143,32 @@ pub(super) fn reconnect_delay(attempt: u32) -> Duration {
 }
 
 /// `RuntimeConnectionObservation.reconnects`.
-pub(super) fn reconnects(event: RuntimeConnectionEvent) -> bool {
+pub(super) fn reconnects(origin: Origin, event: RuntimeConnectionEvent) -> bool {
     matches!(
-        event,
-        RuntimeConnectionEvent::TransportFailed | RuntimeConnectionEvent::Refused
+        (origin, event),
+        (Origin::Source, RuntimeConnectionEvent::TransportFailed)
+            | (_, RuntimeConnectionEvent::Refused)
     )
 }
 
-/// `RuntimeConnectionObservation.nextAttempts`.
-pub(super) fn next_attempts(attempts: u32, event: RuntimeConnectionEvent) -> u32 {
-    match event {
-        RuntimeConnectionEvent::TransportFailed | RuntimeConnectionEvent::Refused => {
-            attempts.saturating_add(1)
-        }
-        RuntimeConnectionEvent::SnapshotSucceeded => 0,
-        RuntimeConnectionEvent::SourceStarted
-        | RuntimeConnectionEvent::SubscriptionsReady
-        | RuntimeConnectionEvent::Renewed
-        | RuntimeConnectionEvent::EndpointMissing => attempts,
+/// `RuntimeConnectionObservation.reconnectAttempt`: the count a reconnect is
+/// scheduled with, given how long the source had been connected.
+pub(super) fn reconnect_attempt(attempts: u32, connected_for: Option<Duration>) -> u32 {
+    match connected_for {
+        Some(connected) if connected >= RECONNECT_STABLE => 0,
+        _ => attempts,
     }
 }
 
 impl Sources {
     /// Publishes `event` for `node` and advances its reconnect schedule. An
     /// event that reconnects stops the source and schedules its restart at
-    /// the same endpoint after `reconnect_delay` of its consecutive count.
+    /// the same endpoint after `reconnect_delay` of its consecutive count; a
+    /// snapshot that failed for a transport reason leaves the source armed.
     pub(super) fn observe(
         &mut self,
         node: &str,
+        origin: Origin,
         event: RuntimeConnectionEvent,
         store: &ObservedStore,
         now: Instant,
@@ -173,16 +184,46 @@ impl Sources {
             _ => {}
         }
         store.observe_runtime_connection(node, event);
-        let attempts = self.attempts.get(node).copied().unwrap_or_default();
-        if reconnects(event) {
-            if let Some(source) = self.entries.get_mut(node) {
-                metrics.reconnects.fetch_add(1, Ordering::Relaxed);
-                source.reconnect_at = Some(now + reconnect_delay(attempts));
-                source.abort.abort();
-            }
+        if event == RuntimeConnectionEvent::SnapshotSucceeded {
+            self.connected_at.entry(node.to_owned()).or_insert(now);
+        }
+        if !reconnects(origin, event) {
+            return;
+        }
+        let connected_for = self
+            .connected_at
+            .remove(node)
+            .map(|since| now.saturating_duration_since(since));
+        let attempt = reconnect_attempt(
+            self.attempts.get(node).copied().unwrap_or_default(),
+            connected_for,
+        );
+        if let Some(source) = self.entries.get_mut(node) {
+            metrics.reconnects.fetch_add(1, Ordering::Relaxed);
+            source.reconnect_at = Some(now + reconnect_delay(attempt));
+            source.abort.abort();
         }
         self.attempts
-            .insert(node.to_owned(), next_attempts(attempts, event));
+            .insert(node.to_owned(), attempt.saturating_add(1));
+    }
+
+    /// A source for `node` whose task never sends, as `reconcile` would start
+    /// it; returns its generation.
+    #[cfg(test)]
+    pub(super) fn start_inert(&mut self, node: &str) -> u64 {
+        self.generation += 1;
+        self.connected_at.remove(node);
+        let task = tokio::spawn(std::future::pending::<()>());
+        self.entries.insert(
+            node.to_owned(),
+            Source {
+                endpoint: GraphqlEndpoint::anonymous("http://127.0.0.1:9/api/v0/graphql"),
+                generation: self.generation,
+                reconnect_at: None,
+                abort: task.abort_handle(),
+            },
+        );
+        self.generation
     }
 
     pub(super) fn next_reconnect(&self) -> Option<Instant> {
@@ -239,13 +280,17 @@ impl Sources {
             store.observe_runtime_connection(node, RuntimeConnectionEvent::EndpointMissing);
         }
         self.observed = observed;
+        // A source of an unchanged endpoint is kept even after its task
+        // finished: every task end sends its end notice (`EndNotice`), which
+        // schedules the reconnect on the backoff. Restarting it here would
+        // skip that delay (TLA `ReconnectsWaitTheBackoff`).
         self.entries.retain(|node, source| {
             endpoints
                 .get(node)
                 .is_some_and(|endpoint| endpoint.to_string() == source.endpoint.to_string())
-                && (source.ended() || !source.abort.is_finished())
         });
         self.attempts.retain(|node, _| endpoints.contains_key(node));
+        self.connected_at.retain(|node, _| self.entries.contains_key(node));
         let reconnecting = std::mem::take(&mut self.reconnecting);
         for (node, endpoint) in endpoints {
             if self.entries.contains_key(&node) {
@@ -256,6 +301,7 @@ impl Sources {
             if reconnecting.get(&node) != Some(&endpoint.to_string()) {
                 store.observe_runtime_connection(&node, RuntimeConnectionEvent::SourceStarted);
             }
+            self.connected_at.remove(&node);
             self.generation += 1;
             let current = self.generation;
             let task = tokio::spawn(observe(
@@ -336,6 +382,11 @@ async fn observe(
     store: Arc<ObservedStore>,
     metrics: Arc<ObserverMetrics>,
 ) {
+    let mut end = EndNotice {
+        notices: Some(notices.clone()),
+        node: node.clone(),
+        generation,
+    };
     let send = |event| {
         notices
             .send(Notice {
@@ -377,8 +428,37 @@ async fn observe(
         let Some(event) = stream_end_event(ended) else {
             continue;
         };
-        send(event);
+        end.send(event);
         return;
+    }
+}
+
+/// Sends the source task's end notice exactly once, however the task ends:
+/// with its `streamEndEvent`, or `transportFailed` if it ends without one (a
+/// panic). An aborted source is already replaced or ended, so its notice is
+/// stale and dropped by generation. The observer's reconcile keeps a finished
+/// source on this guarantee.
+struct EndNotice {
+    notices: Option<mpsc::UnboundedSender<Notice>>,
+    node: String,
+    generation: u64,
+}
+
+impl EndNotice {
+    fn send(&mut self, event: RuntimeConnectionEvent) {
+        if let Some(notices) = self.notices.take() {
+            let _ = notices.send(Notice {
+                node: std::mem::take(&mut self.node),
+                generation: self.generation,
+                event,
+            });
+        }
+    }
+}
+
+impl Drop for EndNotice {
+    fn drop(&mut self) {
+        self.send(RuntimeConnectionEvent::TransportFailed);
     }
 }
 

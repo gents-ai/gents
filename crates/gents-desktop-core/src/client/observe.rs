@@ -89,6 +89,44 @@ impl SourceNotice {
     }
 }
 
+/// The loop's handling of a notice from `node`'s current source at
+/// `generation`: the slot transition (`Queue::notice`) and the connection
+/// status and reconnect schedule (`Sources::observe`, origin `source`).
+/// Returns the notice so the caller aborts the node's load when it says so.
+fn apply_source_notice(
+    queue: &mut Queue,
+    sources: &mut remote::Sources,
+    store: &ObservedStore,
+    node: &str,
+    generation: u64,
+    event: RuntimeConnectionEvent,
+    now: Instant,
+    metrics: &ObserverMetrics,
+) -> Option<SourceNotice> {
+    let kind = SourceNotice::of(event)?;
+    queue.notice(store, node, generation, kind);
+    sources.observe(node, remote::Origin::Source, event, store, now, metrics);
+    Some(kind)
+}
+
+/// The loop's handling of a finished load of `node`: the connection status
+/// and reconnect schedule (`Sources::observe`, origin `snapshot`) and the
+/// slot transition (`Queue::settle`).
+fn apply_settlement(
+    queue: &mut Queue,
+    sources: &mut remote::Sources,
+    store: &ObservedStore,
+    node: &str,
+    settlement: Settlement,
+    now: Instant,
+    metrics: &ObserverMetrics,
+) {
+    if let Some(event) = settlement.connection_event() {
+        sources.observe(node, remote::Origin::Snapshot, event, store, now, metrics);
+    }
+    queue.settle(node, settlement, now);
+}
+
 impl Queue {
     /// Applies `notice` from `node`'s source at `generation`. A refusal also
     /// clears the node's rows, as a refused load does.
@@ -168,7 +206,7 @@ struct Load {
     node: String,
     id: u64,
     captured: projection_store::StoreReadFence,
-    result: anyhow::Result<ClientStore>,
+    result: Result<ClientStore, super::query::SnapshotReadError>,
 }
 
 struct InFlight {
@@ -314,12 +352,11 @@ pub fn spawn_observer(
                 notice = notice_rx.recv() => {
                     let Some(notice) = notice else { break; };
                     if let Some(generation) = sources.entries.get(&notice.node).filter(|source| source.generation == notice.generation && !source.ended()).map(|source| source.generation) {
-                        let Some(kind) = SourceNotice::of(notice.event) else { continue; };
-                        if kind.aborts_load() {
+                        let applied = apply_source_notice(&mut queue, &mut sources, &store,
+                            &notice.node, generation, notice.event, Instant::now(), &metrics_for_task);
+                        if applied.is_some_and(SourceNotice::aborts_load) {
                             loads.cancel(&notice.node);
                         }
-                        queue.notice(&store, &notice.node, generation, kind);
-                        sources.observe(&notice.node, notice.event, &store, Instant::now(), &metrics_for_task);
                     }
                 }
                 changed = resync_requests.changed() => {
@@ -366,10 +403,8 @@ pub fn spawn_observer(
                             }
                         }
                     };
-                    if let Some(event) = settlement.connection_event() {
-                        sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
-                    }
-                    queue.settle(&node, settlement, Instant::now());
+                    apply_settlement(&mut queue, &mut sources, &store, &node, settlement,
+                        Instant::now(), &metrics_for_task);
                 }
                 _ = async {
                     if let Some(deadline) = wake {

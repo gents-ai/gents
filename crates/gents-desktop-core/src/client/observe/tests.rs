@@ -59,32 +59,86 @@ enum ProxyMode {
     Offline,
     /// Answers every request with the runtime's HTTP refusal.
     Refusing,
+    /// Keeps every armed subscription streaming and drops every other
+    /// request: the runtime's reads fail for a transport reason.
+    FailingReads,
 }
 
 type ProxyCommands =
     tokio::sync::mpsc::UnboundedSender<(ProxyMode, tokio::sync::oneshot::Sender<()>)>;
 
-async fn read_request(client: &mut tokio::net::TcpStream) -> std::io::Result<()> {
+/// Reads the rest of a request whose head is `head`, so the refusal is sent
+/// after the client finished writing.
+async fn read_request_body(client: &mut tokio::net::TcpStream, head: &[u8]) -> std::io::Result<()> {
     use tokio::io::AsyncReadExt;
-    let mut request = Vec::new();
+    let mut request = head.to_vec();
+    let end = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or(request.len());
+    let length = String::from_utf8_lossy(&request[..end])
+        .to_ascii_lowercase()
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:").map(str::to_owned))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or_default();
     let mut buffer = [0_u8; 4096];
-    loop {
+    while request.len() < end + 4 + length {
         let read = client.read(&mut buffer).await?;
         if read == 0 {
             return Ok(());
         }
         request.extend_from_slice(&buffer[..read]);
-        let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
-            continue;
-        };
-        let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
-        let length = headers
-            .lines()
-            .find_map(|line| line.strip_prefix("content-length:"))
-            .and_then(|value| value.trim().parse::<usize>().ok())
-            .unwrap_or_default();
-        if request.len() >= end + 4 + length {
-            return Ok(());
+    }
+    Ok(())
+}
+
+async fn request_head(client: &mut tokio::net::TcpStream) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut head = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+        let read = client.read(&mut buffer).await.ok()?;
+        if read == 0 {
+            return None;
+        }
+        head.extend_from_slice(&buffer[..read]);
+    }
+    Some(head)
+}
+
+fn is_subscription(head: &[u8]) -> bool {
+    String::from_utf8_lossy(head)
+        .to_ascii_lowercase()
+        .contains("accept: text/event-stream")
+}
+
+/// Asks the runtime to close a read's connection after its response, so the
+/// client never reuses it for a subscription and every connection carries
+/// requests of one kind.
+fn single_request(head: Vec<u8>) -> Vec<u8> {
+    let Some(line_end) = head.windows(2).position(|window| window == b"\r\n") else {
+        return head;
+    };
+    let mut rewritten = head[..line_end + 2].to_vec();
+    rewritten.extend_from_slice(b"connection: close\r\n");
+    for line in head[line_end + 2..].split_inclusive(|byte| *byte == b'\n') {
+        if !String::from_utf8_lossy(line)
+            .to_ascii_lowercase()
+            .starts_with("connection:")
+        {
+            rewritten.extend_from_slice(line);
+        }
+    }
+    rewritten
+}
+
+/// Forwards a connection whose first bytes, `head`, were already read.
+async fn forward(mut client: tokio::net::TcpStream, head: Vec<u8>, upstream: std::net::SocketAddr) {
+    use tokio::io::AsyncWriteExt;
+    if let Ok(mut server) = tokio::net::TcpStream::connect(upstream).await {
+        if server.write_all(&head).await.is_ok() {
+            let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
         }
     }
 }
@@ -97,33 +151,54 @@ async fn interruptible_proxy(
     let (commands, mut command_rx) =
         tokio::sync::mpsc::unbounded_channel::<(ProxyMode, tokio::sync::oneshot::Sender<()>)>();
     let task = tokio::spawn(async move {
-        let mut mode = ProxyMode::Online;
-        let mut connections = tokio::task::JoinSet::new();
+        let mode = Arc::new(std::sync::Mutex::new(ProxyMode::Online));
+        // A connection is classified by its first request: subscriptions and
+        // reads are cut separately.
+        let mut subscriptions = tokio::task::JoinSet::new();
+        let mut reads = tokio::task::JoinSet::new();
+        let (classified_tx, mut classified) =
+            tokio::sync::mpsc::unbounded_channel::<(tokio::net::TcpStream, Vec<u8>)>();
         loop {
             tokio::select! {
                 command = command_rx.recv() => {
                     let Some((next, done)) = command else { break };
-                    mode = next;
-                    if mode != ProxyMode::Online {
-                        connections.abort_all();
-                        while connections.join_next().await.is_some() {}
+                    *mode.lock().unwrap() = next;
+                    if next != ProxyMode::Online {
+                        reads.abort_all();
+                        while reads.join_next().await.is_some() {}
+                    }
+                    if !matches!(next, ProxyMode::Online | ProxyMode::FailingReads) {
+                        subscriptions.abort_all();
+                        while subscriptions.join_next().await.is_some() {}
                     }
                     let _ = done.send(());
                 }
                 accepted = listener.accept() => {
                     let (mut client, _) = accepted.unwrap();
-                    match mode {
+                    let classified_tx = classified_tx.clone();
+                    reads.spawn(async move {
+                        if let Some(head) = request_head(&mut client).await {
+                            let _ = classified_tx.send((client, head));
+                        }
+                    });
+                }
+                Some((mut client, head)) = classified.recv() => {
+                    let current = *mode.lock().unwrap();
+                    let subscription = is_subscription(&head);
+                    match current {
+                        ProxyMode::Online if subscription => {
+                            subscriptions.spawn(forward(client, head, upstream));
+                        }
                         ProxyMode::Online => {
-                            connections.spawn(async move {
-                                if let Ok(mut server) = tokio::net::TcpStream::connect(upstream).await {
-                                    let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
-                                }
-                            });
+                            reads.spawn(forward(client, single_request(head), upstream));
+                        }
+                        ProxyMode::FailingReads if subscription => {
+                            subscriptions.spawn(forward(client, head, upstream));
                         }
                         ProxyMode::Refusing => {
-                            connections.spawn(async move {
+                            reads.spawn(async move {
                                 use tokio::io::AsyncWriteExt;
-                                if read_request(&mut client).await.is_ok() {
+                                if read_request_body(&mut client, &head).await.is_ok() {
                                     let _ = client
                                         .write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
                                         .await;
@@ -131,10 +206,11 @@ async fn interruptible_proxy(
                                 }
                             });
                         }
-                        ProxyMode::Offline => {}
+                        ProxyMode::FailingReads | ProxyMode::Offline => {}
                     }
                 }
-                _ = connections.join_next(), if !connections.is_empty() => {}
+                _ = subscriptions.join_next(), if !subscriptions.is_empty() => {}
+                _ = reads.join_next(), if !reads.is_empty() => {}
             }
         }
     });
@@ -402,7 +478,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
     })
     .await
     .expect("authorized session in authenticated snapshot");
-    store.invalidate_node_after_denied_read(runtime_identity.did());
+    store.clear_node_after_refused_read(runtime_identity.did());
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if store
@@ -642,8 +718,14 @@ fn snapshot_failures_classify_as_their_lean_outcome() {
     ))
     .context("runtime desktop snapshot");
     let unreachable = anyhow::anyhow!("connection refused");
-    assert_eq!(remote::snapshot_outcome(&refused), remote::SnapshotOutcome::Refused);
-    assert_eq!(remote::snapshot_outcome(&unreachable), remote::SnapshotOutcome::Unreachable);
+    assert_eq!(
+        remote::snapshot_outcome(&refused.into()),
+        remote::SnapshotOutcome::Refused
+    );
+    assert_eq!(
+        remote::snapshot_outcome(&unreachable.into()),
+        remote::SnapshotOutcome::Unreachable
+    );
 }
 
 fn lean_status(name: &str) -> RuntimeConnectionStatus {
@@ -651,6 +733,7 @@ fn lean_status(name: &str) -> RuntimeConnectionStatus {
         "connecting" => RuntimeConnectionStatus::Connecting,
         "connected" => RuntimeConnectionStatus::Connected,
         "disconnected" => RuntimeConnectionStatus::Disconnected,
+        "refused" => RuntimeConnectionStatus::Refused,
         "noEndpoint" => RuntimeConnectionStatus::NoEndpoint,
         other => panic!("unexpected status {other}"),
     }
@@ -669,10 +752,10 @@ fn lean_event(name: &str) -> RuntimeConnectionEvent {
     }
 }
 
-/// A runtime that refuses the client (HTTP 403 at every request) is a
-/// reconnect, not a denial: the rows are dropped, the status reads
-/// connecting, and the source reconnects on the backoff until the runtime
-/// accepts the client again at the same endpoint.
+/// A runtime that refuses the client (HTTP 403 at every request) is named:
+/// the rows are dropped, the status reads refused across every reconnect,
+/// and the source reconnects on the backoff until the runtime accepts the
+/// client again at the same endpoint.
 #[tokio::test]
 async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() {
     let fixture = ObservedRuntime::start().await;
@@ -697,11 +780,23 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
     wait_for_connection(
         &store,
         &fixture.runtime_did,
-        RuntimeConnectionStatus::Connecting,
+        RuntimeConnectionStatus::Refused,
     )
     .await;
     assert!(store.snapshot().nodes.is_empty());
-    assert!(handle.metrics_snapshot().reconnects >= 2, "a refusal reconnects");
+    let mut changes = store.subscribe_changes();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while handle.metrics_snapshot().reconnects < 3 {
+            assert_eq!(
+                store.runtime_connection(&fixture.runtime_did),
+                Some(RuntimeConnectionStatus::Refused),
+                "every reconnect of a refusing runtime keeps naming the refusal"
+            );
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("a refusal reconnects on the backoff");
     let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
     fixture
         .access
@@ -720,6 +815,50 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
         RuntimeConnectionStatus::Connected,
     )
     .await;
+    handle.shutdown().await;
+    fixture.stop().await;
+}
+
+/// Lean `reconnects .snapshot .transportFailed = false`: a snapshot read that
+/// fails for a transport reason while every subscription stays armed shows
+/// the outage and retries the read; it never ends the source, so the healthy
+/// streams are not torn down and no reconnect is scheduled.
+#[tokio::test]
+async fn failed_snapshot_read_keeps_the_streams_armed() {
+    let fixture = ObservedRuntime::start().await;
+    let configured =
+        ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let handle = spawn_observer(
+        store.clone(),
+        configured,
+        fixture.client.client_signing_capability().unwrap(),
+    );
+    wait_for_name(&store, Some("remote")).await;
+    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Connected).await;
+    let before = handle.metrics_snapshot();
+
+    set_proxy_mode(&fixture.proxy_commands, ProxyMode::FailingReads).await;
+    let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
+    fixture
+        .access
+        .write(
+            "test.observer.read_outage",
+            &format!("mutation {{ update_Node(docID: \"{physical}\", input: {{display_name: \"after read outage\"}}) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Disconnected)
+        .await;
+    let during = handle.metrics_snapshot();
+    assert!(during.fetch_failures > before.fetch_failures, "the read failed");
+    assert_eq!(during.reconnects, before.reconnects, "a failed read never reconnects");
+
+    set_proxy_mode(&fixture.proxy_commands, ProxyMode::Online).await;
+    wait_for_name(&store, Some("after read outage")).await;
+    wait_for_connection(&store, &fixture.runtime_did, RuntimeConnectionStatus::Connected).await;
+    let after = handle.metrics_snapshot();
+    assert_eq!(after.reconnects, before.reconnects, "the armed streams were kept");
     handle.shutdown().await;
     fixture.stop().await;
 }
@@ -800,34 +939,111 @@ fn generated_reconnect_backoff_drives_the_sources() {
         "Proofs/Conformance/RuntimeConnectionBackoff.lean",
     )
     .unwrap();
-    let cases: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let attempts = u32::try_from(case["attempts"].as_u64().unwrap()).unwrap();
-        let event = lean_event(case["event"].as_str().unwrap());
-        assert_eq!(remote::reconnects(event), case["reconnects"].as_bool().unwrap(), "{case}");
+    let contract: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let origin = |name: &str| match name {
+        "source" => remote::Origin::Source,
+        "snapshot" => remote::Origin::Snapshot,
+        other => panic!("unexpected origin {other}"),
+    };
+    let reconnects = contract["reconnects"].as_array().unwrap();
+    assert_eq!(reconnects.len(), 14);
+    for case in reconnects {
         assert_eq!(
-            u64::from(remote::next_attempts(attempts, event)),
-            case["nextAttempts"].as_u64().unwrap(),
+            remote::reconnects(
+                origin(case["origin"].as_str().unwrap()),
+                lean_event(case["event"].as_str().unwrap())
+            ),
+            case["reconnects"].as_bool().unwrap(),
             "{case}"
         );
+    }
+    let schedule = contract["schedule"].as_array().unwrap();
+    assert!(schedule.len() > 100);
+    for case in schedule {
+        let attempts = u32::try_from(case["attempts"].as_u64().unwrap()).unwrap();
+        let connected = case["connectedMs"].as_u64().map(Duration::from_millis);
+        let attempt = remote::reconnect_attempt(attempts, connected);
+        assert_eq!(u64::from(attempt), case["attempt"].as_u64().unwrap(), "{case}");
         assert_eq!(
-            u64::try_from(remote::reconnect_delay(attempts).as_millis()).unwrap(),
+            u64::try_from(remote::reconnect_delay(attempt).as_millis()).unwrap(),
             case["delayMs"].as_u64().unwrap(),
             "{case}"
         );
     }
+    assert_eq!(
+        u64::try_from(remote::RECONNECT_STABLE.as_millis()).unwrap(),
+        contract["stableMs"].as_u64().unwrap()
+    );
 }
 
-/// Every reconnect, after a transport failure or a refusal, is scheduled by
-/// the one delay owner and counted until the source connects again.
+/// Every reconnect, after a transport failure or a refusal of the source or
+/// a refused read, is scheduled by the one delay owner and counted until the
+/// source stays connected for the stable period. A snapshot that failed for
+/// a transport reason is not a reconnect: the source stays armed. A runtime
+/// that connects and then drops at once keeps backing off.
 #[tokio::test]
-async fn every_reconnect_path_uses_the_backoff_and_a_connection_resets_it() {
+async fn every_reconnect_path_uses_the_backoff_and_only_a_stable_connection_resets_it() {
     let (store, _) = ObservedStore::new(ClientStore::default());
     let metrics = ObserverMetrics::default();
     let mut sources = remote::Sources::default();
-    let (notices, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut peer = PeerRecord::new("runtime", "", "did:test:backoff");
+    let node = "did:test:backoff";
+    let base = Instant::now();
+    let mut waits = Vec::new();
+    let mut at = base;
+    for (origin, event) in [
+        (remote::Origin::Source, RuntimeConnectionEvent::TransportFailed),
+        (remote::Origin::Source, RuntimeConnectionEvent::Refused),
+        (remote::Origin::Snapshot, RuntimeConnectionEvent::Refused),
+        (remote::Origin::Source, RuntimeConnectionEvent::TransportFailed),
+        (remote::Origin::Source, RuntimeConnectionEvent::Refused),
+        (remote::Origin::Snapshot, RuntimeConnectionEvent::Refused),
+        (remote::Origin::Source, RuntimeConnectionEvent::TransportFailed),
+    ] {
+        sources.start_inert(node);
+        // Each cycle connects and drops before the stable period.
+        sources.observe(node, remote::Origin::Snapshot, RuntimeConnectionEvent::SnapshotSucceeded, &store, at, &metrics);
+        at += Duration::from_secs(1);
+        sources.observe(node, origin, event, &store, at, &metrics);
+        let due = sources.next_reconnect().unwrap();
+        waits.push(u64::try_from(due.duration_since(at).as_millis()).unwrap());
+        assert!(!sources.take_due_reconnects(due - Duration::from_millis(1)));
+        assert!(sources.take_due_reconnects(due));
+        at = due;
+    }
+    assert_eq!(waits, vec![250, 250, 250, 250, 250, 500, 1000]);
+    assert_eq!(metrics.snapshot().reconnects, 7);
+
+    let generation = sources.start_inert(node);
+    sources.observe(node, remote::Origin::Snapshot, RuntimeConnectionEvent::TransportFailed, &store, at, &metrics);
+    let source = &sources.entries[node];
+    assert_eq!(source.generation, generation);
+    assert!(!source.ended(), "a failed read keeps the streams armed");
+    assert_eq!(sources.next_reconnect(), None);
+    assert_eq!(metrics.snapshot().reconnects, 7);
+
+    sources.observe(node, remote::Origin::Snapshot, RuntimeConnectionEvent::SnapshotSucceeded, &store, at, &metrics);
+    let stable = at + remote::RECONNECT_STABLE;
+    sources.observe(node, remote::Origin::Source, RuntimeConnectionEvent::TransportFailed, &store, stable, &metrics);
+    assert_eq!(
+        sources.next_reconnect().unwrap().duration_since(stable),
+        remote::reconnect_delay(0),
+        "a connection that held for the stable period starts the count again"
+    );
+}
+
+/// TLA `ReconnectsWaitTheBackoff`: a reconcile between a source task's end
+/// and the loop applying its end notice keeps the source, so the notice
+/// schedules the reconnect on the backoff instead of the reconcile restarting
+/// the source at once.
+#[tokio::test]
+async fn reconcile_keeps_an_ended_source_until_its_notice_schedules_the_reconnect() {
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = Arc::new(store);
+    let metrics = Arc::new(ObserverMetrics::default());
+    let mut sources = remote::Sources::default();
+    let (notices, mut notice_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut peer = PeerRecord::new("runtime", "", "did:test:ended");
+    // Nothing listens on the discard port, so the first handshake fails.
     peer.graphql = Some("http://127.0.0.1:9/api/v0/graphql".into());
     let directory = tempfile::tempdir().unwrap();
     let client = tokio::task::spawn_blocking({
@@ -837,39 +1053,30 @@ async fn every_reconnect_path_uses_the_backoff_and_a_connection_resets_it() {
     .await
     .unwrap();
     let capability = client.client_signing_capability().unwrap();
-    let store = Arc::new(store);
-    let metrics = Arc::new(metrics);
-    let node = "did:test:backoff";
-    let base = Instant::now();
-    let mut waits = Vec::new();
-    for (step, event) in [
-        RuntimeConnectionEvent::TransportFailed,
-        RuntimeConnectionEvent::Refused,
-        RuntimeConnectionEvent::TransportFailed,
-        RuntimeConnectionEvent::Refused,
-        RuntimeConnectionEvent::TransportFailed,
-        RuntimeConnectionEvent::Refused,
-        RuntimeConnectionEvent::TransportFailed,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        sources.reconcile(std::slice::from_ref(&peer), &capability, &notices, &store, &metrics);
-        let now = base + Duration::from_secs(60 * step as u64);
-        sources.observe(node, event, &store, now, &metrics);
-        let due = sources.next_reconnect().unwrap();
-        waits.push(u64::try_from(due.duration_since(now).as_millis()).unwrap());
-        assert!(!sources.take_due_reconnects(due - Duration::from_millis(1)));
-        assert!(sources.take_due_reconnects(due));
-    }
-    assert_eq!(waits, vec![250, 250, 250, 250, 250, 500, 1000]);
-    assert_eq!(metrics.snapshot().reconnects, 7);
-    sources.reconcile(std::slice::from_ref(&peer), &capability, &notices, &store, &metrics);
-    sources.observe(node, RuntimeConnectionEvent::SnapshotSucceeded, &store, base, &metrics);
-    sources.observe(node, RuntimeConnectionEvent::TransportFailed, &store, base, &metrics);
+    let peers = std::slice::from_ref(&peer);
+    sources.reconcile(peers, &capability, &notices, &store, &metrics);
+    let generation = sources.entries["did:test:ended"].generation;
+    let notice = tokio::time::timeout(Duration::from_secs(15), notice_rx.recv())
+        .await
+        .expect("the failed handshake ends the task")
+        .unwrap();
+    assert_eq!(notice.event, RuntimeConnectionEvent::TransportFailed);
+    assert_eq!(notice.generation, generation);
+
+    sources.reconcile(peers, &capability, &notices, &store, &metrics);
     assert_eq!(
-        sources.next_reconnect().unwrap().duration_since(base),
+        sources.entries["did:test:ended"].generation, generation,
+        "the ended source is kept for its notice"
+    );
+    let now = Instant::now();
+    sources.observe(&notice.node, remote::Origin::Source, notice.event, &store, now, &metrics);
+    assert_eq!(
+        sources.next_reconnect().unwrap().duration_since(now),
         remote::reconnect_delay(0)
+    );
+    assert_eq!(
+        store.runtime_connection("did:test:ended"),
+        Some(RuntimeConnectionStatus::Disconnected)
     );
 }
 
@@ -1136,8 +1343,10 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
 }
 
 /// Replays observer traces through the delivery path, the store fences, the
-/// loop's `Queue` and its settlement, and checks every step against the
-/// executed Lean `ObserverResync` owner.
+/// loop's notice and settlement handling (`apply_source_notice`,
+/// `apply_settlement`, so the reconnect owner `Sources` runs as in the loop),
+/// and checks every step against the executed Lean `ObserverResync` owner. A
+/// slot is armed only while its source has not ended for a reconnect.
 #[tokio::test]
 async fn generated_observer_resync_traces_match_the_lean_owner() {
     use crate::client::store::ClientStoreRows;
@@ -1260,10 +1469,12 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
     for (trace, expected) in traces.iter().zip(&modeled) {
         let (store, _) = ObservedStore::new(ClientStore::default());
         let mut queue = Queue::default();
+        let mut sources = remote::Sources::default();
         let mut generation = [0_u64; NODES];
         let mut in_flight = BTreeMap::<String, projection_store::StoreReadFence>::new();
         let now = Instant::now();
-        for node in 0..NODES {
+        for (node, generation) in generation.iter_mut().enumerate() {
+            *generation = sources.start_inert(&did(node));
             store.observe_runtime_connection(&did(node), RuntimeConnectionEvent::SourceStarted);
         }
         let ops = trace["ops"].as_array().unwrap();
@@ -1273,25 +1484,33 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
             let node = usize::try_from(step["node"].as_u64().unwrap()).unwrap();
             let node_did = did(node);
             let result = step["result"].as_str().unwrap();
-            // What `observe/remote.rs` and the loop's notice arm do.
+            // What `observe/remote.rs` and the loop's notice arm do. A source
+            // that ended for a reconnect sends nothing more: its next notice
+            // comes from the source its due reconnect starts, which keeps the
+            // shown status.
             let notice = |queue: &mut Queue,
+                          sources: &mut remote::Sources,
                           in_flight: &mut BTreeMap<String, projection_store::StoreReadFence>,
-                          generation: u64,
+                          generation: &mut u64,
                           event: RuntimeConnectionEvent| {
-                let kind = SourceNotice::of(event).expect("a source task event");
-                if kind != SourceNotice::Armed {
+                if sources.entries[&node_did].ended() {
+                    *generation = sources.start_inert(&node_did);
+                }
+                if SourceNotice::of(event) != Some(SourceNotice::Armed) {
                     store.observe_request_event(None);
                 }
+                let kind = apply_source_notice(
+                    queue, sources, &store, &node_did, *generation, event, now, &metrics,
+                )
+                .expect("a source task event");
                 if kind.aborts_load() {
                     in_flight.remove(&node_did);
                 }
-                queue.notice(&store, &node_did, generation, kind);
-                store.observe_runtime_connection(&node_did, event);
             };
             let mut finished = serde_json::Value::Null;
             match step["op"].as_str().unwrap() {
                 "source_started" => {
-                    generation[node] += 1;
+                    generation[node] = sources.start_inert(&node_did);
                     in_flight.remove(&node_did);
                     store.observe_runtime_connection(
                         &node_did,
@@ -1300,20 +1519,23 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 }
                 "armed" => notice(
                     &mut queue,
+                    &mut sources,
                     &mut in_flight,
-                    generation[node],
+                    &mut generation[node],
                     RuntimeConnectionEvent::SubscriptionsReady,
                 ),
                 "stream_failed" => notice(
                     &mut queue,
+                    &mut sources,
                     &mut in_flight,
-                    generation[node],
+                    &mut generation[node],
                     RuntimeConnectionEvent::TransportFailed,
                 ),
                 "stream_refused" => notice(
                     &mut queue,
+                    &mut sources,
                     &mut in_flight,
-                    generation[node],
+                    &mut generation[node],
                     RuntimeConnectionEvent::Refused,
                 ),
                 "start" => {
@@ -1379,10 +1601,15 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                                 }
                             }
                         };
-                        if let Some(event) = settlement.connection_event() {
-                            store.observe_runtime_connection(&node_did, event);
-                        }
-                        queue.settle(&node_did, settlement, now);
+                        apply_settlement(
+                            &mut queue,
+                            &mut sources,
+                            &store,
+                            &node_did,
+                            settlement,
+                            now,
+                            &metrics,
+                        );
                         let name = match settlement {
                             Settlement::Published => "published",
                             Settlement::Superseded => "superseded",
@@ -1403,7 +1630,8 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 "pending": queue.pending.contains(&node_did),
                 "waiting": queue.retry_at.contains_key(&node_did),
                 "loading": in_flight.contains_key(&node_did),
-                "armed": queue.armed.get(&node_did) == Some(&generation[node]),
+                "armed": queue.armed.get(&node_did) == Some(&generation[node])
+                    && !sources.entries[&node_did].ended(),
                 "status": store.runtime_connection(&node_did).unwrap().as_str(),
                 "presentation": slot["presentation"],
             });

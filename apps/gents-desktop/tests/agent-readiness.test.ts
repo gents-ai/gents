@@ -225,6 +225,7 @@ describe("selectedNodeReadinessDecision", () => {
       { runtimeConnection: "disconnected" },
       "runtimeNotConnected",
     ],
+    ["runtime-refused", { runtimeConnection: "refused" }, "runtimeNotConnected"],
     ["ready", {}, null],
   ] as const)(
     "gates the empty-backend remote topology when readiness is %s",

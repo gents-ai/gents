@@ -218,6 +218,9 @@ pub enum RuntimeConnectionStatus {
     Connecting,
     Connected,
     Disconnected,
+    /// The runtime refused this client's credentials; its source keeps
+    /// reconnecting on the backoff.
+    Refused,
     /// The peer has no operator GraphQL endpoint to observe.
     NoEndpoint,
 }
@@ -228,7 +231,8 @@ pub(crate) enum RuntimeConnectionEvent {
     SubscriptionsReady,
     SnapshotSucceeded,
     TransportFailed,
-    /// The access owner refused the source's request; it reconnects.
+    /// The access owner refused the source's request or read; it reconnects
+    /// and the status names the refusal.
     Refused,
     Renewed,
     EndpointMissing,
@@ -238,9 +242,12 @@ impl RuntimeConnectionEvent {
     /// `RuntimeConnectionObservation.observe`.
     fn observe(self, status: Option<RuntimeConnectionStatus>) -> Option<RuntimeConnectionStatus> {
         Some(match self {
-            Self::SourceStarted | Self::SubscriptionsReady | Self::Refused => {
-                RuntimeConnectionStatus::Connecting
-            }
+            Self::SourceStarted => RuntimeConnectionStatus::Connecting,
+            Self::SubscriptionsReady => match status {
+                Some(RuntimeConnectionStatus::Refused) => RuntimeConnectionStatus::Refused,
+                _ => RuntimeConnectionStatus::Connecting,
+            },
+            Self::Refused => RuntimeConnectionStatus::Refused,
             Self::SnapshotSucceeded => RuntimeConnectionStatus::Connected,
             Self::TransportFailed => RuntimeConnectionStatus::Disconnected,
             Self::Renewed => return status,
@@ -255,6 +262,7 @@ impl RuntimeConnectionStatus {
             Self::Connecting => "connecting",
             Self::Connected => "connected",
             Self::Disconnected => "disconnected",
+            Self::Refused => "refused",
             Self::NoEndpoint => "noEndpoint",
         }
     }
@@ -385,9 +393,10 @@ impl ObservedStore {
         self.resync_tx.subscribe()
     }
 
-    /// A denied resource read invalidates cached facts without establishing a
-    /// runtime-wide denial. A fresh authenticated snapshot restores visible rows.
-    pub fn invalidate_node_after_denied_read(&self, node_did: &str) {
+    /// A refused read drops the node's cached rows, which this client may no
+    /// longer read, and asks the observer for its own authenticated read,
+    /// which owns the node's connection status.
+    pub fn clear_node_after_refused_read(&self, node_did: &str) {
         let _ = self.update_if(
             None,
             StoreMutation::replace_node(node_did, ClientStore::default()),
