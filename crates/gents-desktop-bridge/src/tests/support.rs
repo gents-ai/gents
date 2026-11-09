@@ -175,7 +175,6 @@ pub async fn try_submit_request(
     session_id: &str,
     request_id: &str,
 ) -> anyhow::Result<String> {
-    use gents::NodeIdentity as _;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
