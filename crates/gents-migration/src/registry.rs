@@ -224,12 +224,6 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         expected_version: None,
         expected_state: CollectionExpectation::dag_only(),
     },
-    BaselineCollection {
-        name: gents_protocol::schemas::BACKEND_CREDENTIAL_NAME,
-        sdl: gents_protocol::schemas::BACKEND_CREDENTIAL,
-        expected_version: None,
-        expected_state: CollectionExpectation::dag_only(),
-    },
     baseline_entry!(
         gents_protocol::schemas::NODE_NAME,
         gents_protocol::schemas::NODE
@@ -347,6 +341,10 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::OAUTH_CREDENTIAL
     ),
     baseline_entry!(
+        gents_protocol::schemas::BACKEND_CREDENTIAL_NAME,
+        gents_protocol::schemas::BACKEND_CREDENTIAL
+    ),
+    baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
         gents_protocol::schemas::INFERENCE_PROFILE
     ),
@@ -397,6 +395,14 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_TOOL_CONTROL_NAME,
+        gents_protocol::schemas::AGENT_TOOL_CONTROL
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_TOOL_CONTROL_CLAIM_NAME,
+        gents_protocol::schemas::AGENT_TOOL_CONTROL_CLAIM
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
@@ -541,14 +547,6 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_GOAL_RECEIPT_NAME,
         gents_protocol::schemas::AGENT_SESSION_GOAL_RECEIPT
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::AGENT_TOOL_CONTROL_NAME,
-        gents_protocol::schemas::AGENT_TOOL_CONTROL
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::AGENT_TOOL_CONTROL_CLAIM_NAME,
-        gents_protocol::schemas::AGENT_TOOL_CONTROL_CLAIM
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_OBSERVATION_NAME,

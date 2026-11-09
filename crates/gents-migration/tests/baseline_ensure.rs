@@ -1,7 +1,5 @@
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::schemas;
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use gents_migration::{
     ensure_migrations, ensure_migrations_dynamic, ensure_migrations_with_registry,
@@ -113,117 +111,6 @@ async fn fresh_node_runtime_baseline_is_diagnostics_only() {
     assert!(!field_names.contains("default_agent_id"));
     assert!(field_names.contains("reconcile_phase"));
     assert!(field_names.contains("updated_at"));
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn existing_agent_session_schema_upgrades_in_place_and_preserves_rows() {
-    let node = fresh_node().await;
-    let legacy_sdl = gents_protocol::schemas::AGENT_SESSION
-        .lines()
-        .filter(|line| {
-            ![
-                "stopped_at:",
-                "archived_at:",
-                "archive_revision:",
-                "started_by_node_did:",
-                "started_by_session_id:",
-            ]
-            .iter()
-            .any(|field| line.trim_start().starts_with(field))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    node.add_collection(&legacy_sdl)
-        .await
-        .expect("register pre-stop AgentSession schema");
-    let legacy = node
-        .get_collection(gents_protocol::schemas::AGENT_SESSION_NAME)
-        .expect("read legacy AgentSession schema")
-        .expect("legacy AgentSession exists");
-    assert_eq!(
-        legacy.version_id,
-        "bafyreietunsrqsijc3k6x3gf6y2nwkim74uf6j4lskv7p3pjrl44q4tthe"
-    );
-
-    let created = node
-        .execute(
-            r#"mutation {
-        add_AgentSession(input: {
-            session_id: "existing-session"
-            node_did: "node-before-stop"
-            agent_id: "agent-before-stop"
-            created_at: "2026-10-21T00:00:00Z"
-            title: "retained title"
-        }) {_docID}
-    }"#,
-        )
-        .await;
-    assert!(!created.has_errors(), "seed existing session: {created:?}");
-    let old_doc_id = created.data.unwrap()["add_AgentSession"][0]["_docID"]
-        .as_str()
-        .expect("created session document ID")
-        .to_owned();
-    let old_field_ids = legacy
-        .fields
-        .iter()
-        .map(|field| (field.name.clone(), field.id.clone()))
-        .collect::<rapidhash::RapidHashMap<_, _>>();
-
-    let first = ensure_migrations(node.as_ref())
-        .await
-        .expect("append stopped_at to existing AgentSession schema");
-    assert!(first.steps_applied > 0);
-    let migrated = node
-        .get_collection(gents_protocol::schemas::AGENT_SESSION_NAME)
-        .expect("read upgraded AgentSession schema")
-        .expect("upgraded AgentSession exists");
-    assert_ne!(migrated.version_id, legacy.version_id);
-    for (name, id) in old_field_ids {
-        let current = migrated
-            .fields
-            .iter()
-            .find(|field| field.name == name)
-            .unwrap_or_else(|| panic!("existing field disappeared: {name}"));
-        assert_eq!(current.id, id, "AgentSession.{name} field ID changed");
-    }
-    assert!(migrated
-        .indexes
-        .iter()
-        .any(|index| index.name == "AgentSession_stopped_at_ASC"));
-
-    let read = node
-        .execute(
-            r#"{ AgentSession(filter: {session_id: {_eq: "existing-session"}}) {
-                _docID session_id node_did agent_id created_at title stopped_at
-            } }"#,
-        )
-        .await;
-    assert!(
-        !read.has_errors(),
-        "read upgraded session: {:?}",
-        read.errors
-    );
-    let row = read.data.as_ref().unwrap()["AgentSession"]
-        .as_array()
-        .and_then(|rows| rows.first())
-        .expect("preserved session row");
-    assert_eq!(row["session_id"], "existing-session");
-    assert_eq!(row["_docID"], old_doc_id);
-    assert_eq!(row["node_did"], "node-before-stop");
-    assert_eq!(row["agent_id"], "agent-before-stop");
-    assert_eq!(row["title"], "retained title");
-    assert!(row["stopped_at"].is_null());
-
-    let second = ensure_migrations(node.as_ref())
-        .await
-        .expect("recheck upgraded AgentSession schema");
-    assert_eq!(second.steps_applied, 0);
-    let repeated = node
-        .get_collection(gents_protocol::schemas::AGENT_SESSION_NAME)
-        .expect("read repeated AgentSession schema")
-        .expect("repeated AgentSession exists");
-    assert_eq!(repeated.version_id, migrated.version_id);
     node.shutdown().await.expect("shut down test node");
 }
 
@@ -369,6 +256,7 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
                 creation_key: "goal-create:key"
                 goal_id: "keyed-1"
                 session_id: "session-1"
+                session_doc_id: "session-doc-1"
                 node_did: "did:key:existing"
                 objective: "objective"
                 token_budget: 100
@@ -383,6 +271,7 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
                 creation_key: "goal-create:key"
                 goal_id: "keyed-2"
                 session_id: "session-1"
+                session_doc_id: "session-doc-1"
                 node_did: "did:key:existing"
                 objective: "different"
                 token_budget: 200
@@ -392,7 +281,26 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
         .await;
     assert!(
         duplicate.has_errors(),
-        "duplicate creation_key must violate the unique index"
+        "duplicate creation_key in one session must violate the unique index"
+    );
+    let other_session = node
+        .execute(
+            r#"mutation { create_GoalCreationClaim(input: {
+                creation_key: "goal-create:key"
+                goal_id: "keyed-3"
+                session_id: "session-2"
+                session_doc_id: "session-doc-2"
+                node_did: "did:key:existing"
+                objective: "objective"
+                token_budget: 100
+                created_at: "2026-09-02T00:00:02Z"
+            }) { creation_key goal_id } }"#,
+        )
+        .await;
+    assert!(
+        !other_session.has_errors(),
+        "the claim key is scoped to its session: {:?}",
+        other_session.errors
     );
     node.shutdown().await.expect("shut down test node");
 }
@@ -465,7 +373,7 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
             session_id: "pre-upgrade-session"
             node_did: "did:key:agent"
             requester_did: "did:key:requester"
-            agent_id: "behavior-1"
+            agent_did: "did:key:agent"
             turn_index: 0
             attempt: 0
             capture_version: 1
@@ -908,116 +816,6 @@ async fn file_image_receipt_is_local_and_matches_its_pinned_root() {
 }
 
 #[tokio::test]
-async fn archive_columns_preserve_existing_sessions_and_field_identities() {
-    let home = tempfile::tempdir().unwrap();
-    let data = home.path().join("data");
-    let did = common::node_identity();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(&data)
-            .with_node_identity_did(&did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    let previous = schemas::AGENT_SESSION
-        .lines()
-        .filter(|line| {
-            ![
-                "archived_at:",
-                "archive_revision:",
-                "started_by_node_did:",
-                "started_by_session_id:",
-            ]
-            .iter()
-            .any(|field| line.trim_start().starts_with(field))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    node.add_collection(&previous).await.unwrap();
-    let before = node.get_collection("AgentSession").unwrap().unwrap();
-    let created = node
-        .execute(
-            r#"mutation {add_AgentSession(input: {
-        node_did: "runtime", session_id: "retained", agent_id: "engineer",
-        created_at: "2026-01-01T00:00:00Z", stopped_at: "2026-01-02T00:00:00Z",
-        title: {text: "Original title", source: "user"}, tags: ["keep"],
-        provenance: {task_id: "original-task"}
-    }) {_docID}}"#,
-        )
-        .await;
-    assert!(!created.has_errors(), "{created:?}");
-    let created = created.data.unwrap()["add_AgentSession"][0]["_docID"].clone();
-    ensure_migrations(node.as_ref()).await.unwrap();
-    let after = node.get_collection("AgentSession").unwrap().unwrap();
-    assert_eq!(after.collection_id, before.collection_id);
-    for field in before.fields {
-        assert_eq!(
-            after
-                .fields
-                .iter()
-                .find(|current| current.name == field.name)
-                .unwrap()
-                .id,
-            field.id,
-            "AgentSession.{} moved",
-            field.name
-        );
-    }
-    let query = "{AgentSession {_docID session_id created_at stopped_at title tags provenance archived_at archive_revision}}";
-    let read = node.execute(query).await;
-    assert!(!read.has_errors(), "{read:?}");
-    let rows = read.data.unwrap();
-    let retained = &rows["AgentSession"][0];
-    assert_eq!(retained["_docID"], created);
-    assert_eq!(retained["title"]["text"], "Original title");
-    assert_eq!(retained["stopped_at"], "2026-01-02T00:00:00Z");
-    assert_eq!(retained["tags"], serde_json::json!(["keep"]));
-    assert_eq!(retained["provenance"]["task_id"], "original-task");
-    assert!(retained["archived_at"].is_null());
-    assert!(retained["archive_revision"].is_null());
-    assert!(after
-        .indexes
-        .iter()
-        .any(|index| index.name == "AgentSession_archived_at_ASC"));
-    let versions = node.get_all_collection_versions().await.unwrap().len();
-    assert_eq!(
-        ensure_migrations(node.as_ref())
-            .await
-            .unwrap()
-            .steps_applied,
-        0
-    );
-    assert_eq!(
-        node.get_all_collection_versions().await.unwrap().len(),
-        versions
-    );
-    let repeated = node.execute(query).await;
-    assert!(!repeated.has_errors(), "{repeated:?}");
-    assert_eq!(repeated.data.unwrap(), rows);
-    node.shutdown().await.expect("shut down test node");
-    drop(node);
-    let node = EmbeddedNode::builder()
-        .data_path(&data)
-        .with_node_identity_did(&did)
-        .build()
-        .await
-        .unwrap();
-    assert_eq!(ensure_migrations(&node).await.unwrap().steps_applied, 0);
-    assert_eq!(
-        node.get_collection("AgentSession")
-            .unwrap()
-            .unwrap()
-            .version_id,
-        after.version_id
-    );
-    let reopened = node.execute(query).await;
-    assert!(!reopened.has_errors(), "{reopened:?}");
-    assert_eq!(reopened.data.unwrap(), rows);
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
 async fn removed_node_memory_is_not_registered_or_deleted() {
     let node = fresh_node().await;
     ensure_migrations(&node).await.unwrap();
@@ -1037,8 +835,12 @@ async fn removed_node_memory_is_not_registered_or_deleted() {
     node.shutdown().await.expect("shut down test node");
 }
 
+/// The `Node` lineage released builds carry (the rc0 root plus `avatar`) predates the native
+/// identity baseline and was branchable: a store holding it is refused before any write and
+/// keeps its version, and a fresh store
+/// registers the current SDL as the canonical version.
 #[tokio::test]
-async fn node_avatar_schema_pins_match() {
+async fn released_node_avatar_lineage_is_refused_without_conversion() {
     let fresh = fresh_node().await;
     fresh.add_collection(schemas::NODE).await.unwrap();
     let fresh_id = fresh.get_collection("Node").unwrap().unwrap().version_id;
@@ -1056,11 +858,21 @@ async fn node_avatar_schema_pins_match() {
     )
     .await;
     assert_eq!(
-        (fresh_id.as_str(), patched.version_id.as_str()),
-        (
-            "bafyreigbr2zy7awxue5szey4uic2cj4yjiak73equdlovg5hreneojbkae",
-            "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli"
-        )
+        patched.version_id,
+        "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli"
+    );
+    old.set_active_collection_version_as(&common::node_context(&old), &patched.version_id)
+        .await
+        .unwrap();
+    let before = old.get_all_collection_versions().await.unwrap();
+    let refused = ensure_migrations(old.as_ref()).await.unwrap_err();
+    assert!(
+        matches!(refused, Error::RuntimeLocalityMismatch { ref collection } if collection == "Node"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(old.get_all_collection_versions().await.unwrap()).unwrap()
     );
     assert!(!gents_migration::is_known_off_lineage("Node", &fresh_id));
     assert_eq!(
@@ -1071,96 +883,16 @@ async fn node_avatar_schema_pins_match() {
     old.shutdown().await.expect("shut down test node");
 }
 
-#[tokio::test]
-async fn starter_columns_preserve_each_supported_session_lineage() {
-    let old = schemas::AGENT_SESSION
-        .lines()
-        .filter(|line| !line.contains("started_by_"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for removed in [
-        vec![],
-        vec![
-            "archived_at:",
-            "archive_revision:",
-            "started_by_node_did:",
-            "started_by_session_id:",
-        ],
-        vec![
-            "stopped_at:",
-            "archived_at:",
-            "archive_revision:",
-            "started_by_node_did:",
-            "started_by_session_id:",
-        ],
-    ] {
-        let node = fresh_node().await;
-        let sdl = old
-            .lines()
-            .filter(|line| {
-                !removed
-                    .iter()
-                    .any(|field| line.trim_start().starts_with(field))
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        node.add_collection(&sdl).await.unwrap();
-        let before = node.get_collection("AgentSession").unwrap().unwrap();
-        let create = node
-            .execute(
-                r#"mutation {create_AgentSession(input: {
-            session_id: "retained", node_did: "owner", agent_id: "worker",
-            provenance: {parent_request_doc_id: "original-parent"}
-        }) {_docID}}"#,
-            )
-            .await;
-        assert!(!create.has_errors(), "{create:?}");
-        let query = "{AgentSession {_docID session_id node_did provenance}}";
-        let retained = node.execute(query).await;
-        ensure_migrations(&node).await.unwrap();
-        let after = node.get_collection("AgentSession").unwrap().unwrap();
-        assert_eq!(after.collection_id, before.collection_id);
-        for field in before.fields {
-            assert_eq!(
-                after
-                    .fields
-                    .iter()
-                    .find(|next| next.name == field.name)
-                    .unwrap()
-                    .id,
-                field.id
-            );
-        }
-        for field in ["started_by_node_did", "started_by_session_id"] {
-            assert!(after
-                .fields
-                .iter()
-                .any(|next| next.name == field && next.immutable));
-            assert!(after
-                .indexes
-                .iter()
-                .any(|index| index.name == format!("AgentSession_{field}_ASC")));
-        }
-        assert_eq!(node.execute(query).await.data, retained.data);
-        let source = node
-            .execute("{AgentSession {started_by_node_did started_by_session_id}}")
-            .await;
-        assert_eq!(
-            source.data.unwrap()["AgentSession"][0],
-            serde_json::json!({"started_by_node_did": null, "started_by_session_id": null})
-        );
-        assert_eq!(ensure_migrations(&node).await.unwrap().steps_applied, 0);
-        assert_eq!(node.execute(query).await.data, retained.data);
-        node.shutdown().await.expect("shut down test node");
-    }
-}
-
 /// Native workflow documents gain immutable handoff route columns and
 /// configuration gains declared reader policy; an existing store keeps its
 /// collection, field positions and rows, and its existing rows read nulls.
 #[tokio::test]
 async fn added_route_and_reader_columns_preserve_existing_rows() {
-    const ROUTE: &[(&str, bool)] = &[("handoff_id", true), ("reply_session_id", true), ("attempt", true)];
+    const ROUTE: &[(&str, bool)] = &[
+        ("handoff_id", true),
+        ("reply_session_id", true),
+        ("attempt", true),
+    ];
     for (name, sdl, create, added) in [
         (
             schemas::CALLBACK_RESULT_NAME,
@@ -1235,13 +967,21 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
             );
         }
         assert_eq!(node.execute(&query).await.data, retained.data, "{name}");
-        let selection = added.iter().map(|(field, _)| *field).collect::<Vec<_>>().join(" ");
+        let selection = added
+            .iter()
+            .map(|(field, _)| *field)
+            .collect::<Vec<_>>()
+            .join(" ");
         let values = node.execute(&format!("{{{name} {{{selection}}}}}")).await;
         let row = values.data.unwrap()[name][0].clone();
         for (field, _) in added {
             assert!(row[*field].is_null(), "{name}.{field}: {row}");
         }
-        assert_eq!(ensure_migrations(&node).await.unwrap().steps_applied, 0, "{name}");
+        assert_eq!(
+            ensure_migrations(&node).await.unwrap().steps_applied,
+            0,
+            "{name}"
+        );
         node.shutdown().await.expect("shut down test node");
     }
 }
@@ -1268,9 +1008,9 @@ async fn tool_file_content_schema_pin_matches() {
 /// rc0 store share the rc0 version, and an rc0 store's messages are left exactly as written
 /// (the provider request id now travels inside `publication`, not as a column).
 #[tokio::test]
-async fn agent_message_keeps_its_rc0_schema_and_rows() {
-    const RC0: &str = "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a";
+async fn agent_message_keeps_its_current_schema_and_rows() {
     assert!(!schemas::AGENT_MESSAGE.contains("native_request_id"));
+    let canonical = gents_migration::canonical_versions().unwrap()["AgentMessage"].clone();
     let fresh = fresh_node().await;
     ensure_migrations(fresh.as_ref()).await.unwrap();
     let fresh_id = fresh
@@ -1278,12 +1018,12 @@ async fn agent_message_keeps_its_rc0_schema_and_rows() {
         .unwrap()
         .unwrap()
         .version_id;
-    assert_eq!(fresh_id, RC0);
+    assert_eq!(fresh_id, canonical);
 
     let node = fresh_node().await;
     node.add_collection(schemas::AGENT_MESSAGE).await.unwrap();
     let legacy = node.get_collection("AgentMessage").unwrap().unwrap();
-    assert_eq!(legacy.version_id, RC0);
+    assert_eq!(legacy.version_id, canonical);
     let created = node
         .execute(
             r#"mutation {
@@ -1301,7 +1041,7 @@ async fn agent_message_keeps_its_rc0_schema_and_rows() {
     let first = ensure_migrations(node.as_ref()).await.unwrap();
     assert!(first.warnings.is_empty(), "{first:?}");
     let after = node.get_collection("AgentMessage").unwrap().unwrap();
-    assert_eq!(after.version_id, RC0);
+    assert_eq!(after.version_id, canonical);
     for field in &legacy.fields {
         let current = after.fields.iter().find(|f| f.name == field.name);
         assert_eq!(

@@ -6,7 +6,8 @@ use common::fresh_node;
 #[tokio::test]
 async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {
     let node = fresh_node().await;
-    let previous = schemas::INFERENCE_PROFILE.replace("    service_tier: String\n", "");
+    let previous = schemas::TASK.replace("    outcome_readers: JSON\n", "");
+    assert_ne!(previous, schemas::TASK);
     node.add_collection(&previous).await.unwrap();
     let before = node.get_all_collection_versions().await.unwrap();
     check_migration_compatibility(&before).unwrap();
@@ -22,9 +23,13 @@ async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {
 #[tokio::test]
 async fn preflight_and_startup_refuse_the_same_unknown_lineage() {
     let node = fresh_node().await;
-    node.add_collection("type InferenceProfile { alien: String }")
-        .await
-        .unwrap();
+    // Bound to its identity policy, so its lineage is the only refusal reason.
+    node.add_collection(&format!(
+        r#"type InferenceProfile @policy(id: "{}", resource: "configuration") {{ alien: String }}"#,
+        schemas::AGENT_OWNERSHIP_POLICY_ID
+    ))
+    .await
+    .unwrap();
     let before = node.get_all_collection_versions().await.unwrap();
     assert!(matches!(
         check_migration_compatibility(&before),
