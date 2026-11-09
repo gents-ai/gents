@@ -29,12 +29,16 @@ fn goal_delivery_wire_commands_preserve_native_receipt_lifetime() -> Result<()> 
 fn submission() -> Value {
     json!({"receipt": {"clientDid":"client", "nodeDid":"node", "sessionId":"session",
         "reference": {"commandId":"command", "commandDigest":"sha256:digest",
-        "initialRequestId":null,"requesterDid":"requester"}}})
+        "initialRequestId":null,"requesterDid":"requester","agentDid":"fixture-agent"}}})
 }
 
 fn original(client: &str, node: &str) -> Value {
+    original_for(client, node, "fixture-agent")
+}
+
+fn original_for(client: &str, node: &str, agent: &str) -> Value {
     json!({"clientDid":client,"commandId":"command","nodeDid":node,
-        "sessionId":"session","sessionDocId":null,"expected":null,"agentDid":"fixture-agent",
+        "sessionId":"session","sessionDocId":null,"expected":null,"agentDid":agent,
         "cwd":null,"capturedContext":[],"action":{"kind":"create","objective":"Retain this Goal","tokenBudget":null}})
 }
 
@@ -94,22 +98,28 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         )
         .await?,
     );
+    // The desktop's client key is the User of a served runtime it routes to.
+    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+        Arc::new(core.node_identity().clone()),
+    )
+    .await;
+    runtime.publish_node(json!({})).await;
+    let agent = runtime.publish_chat_agent().await;
+    let proxy =
+        crate::tests::support::ServingStatusProxy::start(runtime.graphql(), runtime.node_did())
+            .await;
+    core.add_local_standard_peer_route_for_test(
+        "Goal fixture",
+        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+        runtime.node_did(),
+        proxy.url(),
+        &runtime.home_path().display().to_string(),
+    )
+    .await?;
     let result = async {
         let did = core.node_identity().did().to_owned();
-        let status = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .and(wiremock::matchers::path("/graphql/status"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
-                "node_did":did, "lifecycle":"ready",
-                "request_input_contract_version":gents_protocol::request_input::REQUEST_INPUT_CONTRACT_VERSION,
-                "goal_stop_contract_version":gents_protocol::goal_control::GOAL_STOP_CONTRACT_VERSION,
-            })))
-            .mount(&status).await;
-        core.add_local_standard_peer_route_for_test(
-            "Goal fixture", "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-            &did, &format!("{}/graphql",status.uri()), "/tmp/test-agent-home",
-        ).await?;
-        let mut request = original(&did, &did);
+        let node = runtime.node_did().to_owned();
+        let mut request = original_for(&did, &node, &agent.agent_did);
         request["capturedContext"] = json!([{
             "kind":"file", "source":"editor", "capturedAt":"2026-10-27T00:00:00Z",
             "uri":"file:///workspace/retained.rs", "terminalName":null,
@@ -143,7 +153,7 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         assert_eq!(record["record"]["prepared"]["initial_request"]["input"]["attachments"], request["attachments"]);
         let mut receipt = submission()["receipt"].clone();
         receipt["clientDid"] = json!(did);
-        receipt["nodeDid"] = json!(did);
+        receipt["nodeDid"] = json!(node);
         receipt["reference"] = record["record"]["reference"].clone();
         let receipt: GoalSubmissionReceipt = serde_json::from_value(receipt)?;
         let mut changed = request.clone();
@@ -171,5 +181,6 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         Ok::<_, anyhow::Error>(())
     }.await;
     core.shutdown().await?;
+    runtime.shutdown().await;
     result
 }

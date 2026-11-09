@@ -34,7 +34,16 @@ pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
     (Arc::new(core), tempdir)
 }
 
-pub async fn runtime_core() -> (Arc<ClientCore>, Arc<gents::defra_node::Node>, TempDir) {
+/// A desktop client whose own key is the User of a served runtime it routes
+/// to, with a published chat Agent: the shape a desktop reaches its runtime in.
+pub struct ServedDesktop {
+    pub core: Arc<ClientCore>,
+    pub runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    pub agent: gents_protocol::agent_identity::AgentIdentityBinding,
+    _directory: TempDir,
+}
+
+pub async fn served_desktop() -> ServedDesktop {
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
@@ -44,29 +53,192 @@ pub async fn runtime_core() -> (Arc<ClientCore>, Arc<gents::defra_node::Node>, T
         .await
         .unwrap(),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-    let runtime = Arc::new(
-        node_builder()
-            .with_http(
-                gents::defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap(),
-            )
-            .build()
+    let (runtime, agent) = served_runtime_for(&core, ServedRoute::CoHosted).await;
+    core.set_selected_node_did(Some(runtime.node_did().to_owned()));
+    ServedDesktop {
+        core,
+        runtime,
+        agent,
+        _directory: directory,
+    }
+}
+
+/// How a served runtime is routed from the desktop.
+#[derive(Clone, Copy)]
+pub enum ServedRoute {
+    /// The co-hosted standard peer route `ServedRuntimeHome::connect` adds.
+    CoHosted,
+    /// A managed enrollment route.
+    Enrollment,
+    /// A further standard peer listening on this port.
+    Peer(u16),
+}
+
+/// A served runtime whose User is `core`'s key, with a published chat Agent,
+/// routed from `core` by `route`.
+pub async fn served_runtime_for(
+    core: &Arc<ClientCore>,
+    route: ServedRoute,
+) -> (
+    gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+        Arc::new(core.node_identity().clone()),
+    )
+    .await;
+    runtime.publish_node(serde_json::json!({})).await;
+    let agent = runtime.publish_chat_agent().await;
+    let home = runtime.home_path().display().to_string();
+    match route {
+        ServedRoute::CoHosted => runtime.connect(core).await,
+        ServedRoute::Enrollment => core
+            .add_managed_enrollment_peer_for_test(runtime.node_did(), runtime.graphql(), &home, 1)
             .await
             .unwrap(),
+        ServedRoute::Peer(port) => core
+            .add_local_standard_peer_route_for_test(
+                "Served peer",
+                &format!(
+                    "127.0.0.1:{port}/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb"
+                ),
+                runtime.node_did(),
+                runtime.graphql(),
+                &home,
+            )
+            .await
+            .unwrap(),
+    }
+    (runtime, agent)
+}
+
+/// A desktop client whose key is the User of two served runtimes: the first
+/// through a managed enrollment route, the second as a standard peer.
+pub async fn served_desktop_pair() -> (
+    ServedDesktop,
+    gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(directory.path()),
+            ClientCoreOptions::local_simulated_route(),
+        )
+        .await
+        .unwrap(),
     );
-    gents::ensure_runtime_schemas(&runtime).await.unwrap();
-    let did = runtime.node_identity_did().unwrap();
-    core.add_managed_enrollment_peer_for_test(
-        did,
-        &endpoint,
-        directory.path().to_str().unwrap(),
-        1,
+    let (runtime, agent) = served_runtime_for(&core, ServedRoute::Enrollment).await;
+    let (second, second_agent) = served_runtime_for(&core, ServedRoute::Peer(56002)).await;
+    (
+        ServedDesktop {
+            core,
+            runtime,
+            agent,
+            _directory: directory,
+        },
+        second,
+        second_agent,
     )
-    .await
-    .unwrap();
-    core.set_selected_node_did(Some(did.to_owned()));
-    (core, runtime, directory)
+}
+
+impl ServedDesktop {
+    pub fn node_did(&self) -> &str {
+        self.runtime.node_did()
+    }
+
+    pub async fn shutdown(self) {
+        self.core.shutdown().await.unwrap();
+        self.runtime.shutdown().await;
+    }
+}
+
+/// Submits `request_id` in `session_id` as `core`'s User through the client
+/// admission owner, reserving the session first. Returns its document.
+pub async fn submit_request(
+    core: &ClientCore,
+    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+    session_id: &str,
+    request_id: &str,
+) -> String {
+    try_submit_request(core, runtime, agent, session_id, request_id)
+        .await
+        .unwrap()
+}
+
+/// [`submit_request`], returning the owner's refusal.
+pub async fn try_submit_request(
+    core: &ClientCore,
+    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+    session_id: &str,
+    request_id: &str,
+) -> anyhow::Result<String> {
+    use gents::NodeIdentity as _;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let user = core.node_identity().did().to_owned();
+    let access = runtime.user_access();
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        request_id,
+        runtime.node_did(),
+        &user,
+        &agent.agent_did,
+        session_id,
+        format!("{request_id} text"),
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::client(&user),
+    );
+    create.session_doc_id = Some(gents::request::lifecycle::reserve_goal_session(&access, &create).await?);
+    create.agent_doc_id = Some(runtime.agent_doc_id(agent).await);
+    gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
+    gents::request::lifecycle::submit_client_request(&access, &create).await?;
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(request_id),
+            escape_graphql_string(session_id),
+        ))
+        .await?;
+    Ok(response["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("submitted request is not readable"))?
+        .to_owned())
+}
+
+/// Ends the pending request `doc_id` failed with `reason`, as its working
+/// Agent rejects its admission through the request lifecycle owner.
+pub async fn reject_admission(
+    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+    doc_id: &str,
+    reason: &str,
+) {
+    let access = runtime.agent_access(agent).await;
+    let response = access
+        .execute(&format!(
+            "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
+            escape_graphql_string(doc_id),
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let mut lifecycle = gents::request::lifecycle::RequestLifecycle::new_with_node_did(
+        runtime.node().clone(),
+        row.try_into().unwrap(),
+        300,
+    );
+    let identity =
+        gents::store::identity::resolve_agent_identity(runtime.runtime().as_ref(), agent).unwrap();
+    lifecycle.bind_managed_agent(identity.as_ref()).unwrap();
+    lifecycle.reject_admission(reason).await.unwrap();
 }
 
 /// The DIDs of [`fixture_signer`]`(7)` and `(9)`; the sessions they start
@@ -599,4 +771,76 @@ pub async fn seed_job_row_for_node(
             .expect("seed job output");
     }
     row_doc_id
+}
+
+/// A front for a served runtime that answers `GET /status` as a ready
+/// `gents serve` daemon of `node_did` does and forwards every other request
+/// to the runtime's authenticated DefraDB HTTP: an embedded test runtime has
+/// no daemon status route.
+pub struct ServingStatusProxy {
+    url: String,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ServingStatusProxy {
+    pub async fn start(upstream_graphql: &str, node_did: &str) -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let upstream = reqwest::Url::parse(upstream_graphql)
+            .unwrap()
+            .socket_addrs(|| None)
+            .unwrap()[0];
+        let status = serde_json::json!({
+            "node_did": node_did,
+            gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: "ready",
+            "request_input_contract_version":
+                gents_protocol::request_input::REQUEST_INPUT_CONTRACT_VERSION,
+            gents_protocol::goal_control::STATUS_GOAL_STOP_CONTRACT_FIELD:
+                gents_protocol::goal_control::GOAL_STOP_CONTRACT_VERSION,
+        })
+        .to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            while let Ok((mut client, _)) = listener.accept().await {
+                let status = status.clone();
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    let mut byte = [0_u8; 1];
+                    while !head.ends_with(b"\r\n") {
+                        match client.read(&mut byte).await {
+                            Ok(1) => head.push(byte[0]),
+                            _ => return,
+                        }
+                    }
+                    if head.starts_with(b"GET /status ") {
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{status}",
+                            status.len()
+                        );
+                        let _ = client.write_all(response.as_bytes()).await;
+                        return;
+                    }
+                    let Ok(mut server) = tokio::net::TcpStream::connect(upstream).await else {
+                        return;
+                    };
+                    if server.write_all(&head).await.is_err() {
+                        return;
+                    }
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+                });
+            }
+        });
+        Self { url, task }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+impl Drop for ServingStatusProxy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
