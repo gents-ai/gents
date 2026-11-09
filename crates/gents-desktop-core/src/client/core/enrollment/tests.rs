@@ -16,7 +16,9 @@ use crate::client::peer_directory::RemovalCause;
 use crate::client::DesktopPaths;
 use defra_p2p_adapter::P2pDocumentRequest;
 use defra_p2p_adapter::TransportPeerId;
-use gents::runtime::agent::p2p_reconcile::enrollment_candidate::enrollment_request_input;
+use gents::runtime::agent::p2p_reconcile::enrollment_candidate::{
+    enrollment_request_input, sign_enrollment_request,
+};
 use gents_protocol::enrollment::derive_enrollment_id;
 use gents_protocol::enrollment::{
     AuthorizationRevisionKind, AuthorizationRevisionRecord, EnrollmentDecisionRecord,
