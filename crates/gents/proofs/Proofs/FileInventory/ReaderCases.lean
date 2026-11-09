@@ -1,6 +1,6 @@
-import Proofs.SessionHydration.FileInventoryCases
+import Proofs.FileInventory.Cases
 
-namespace SessionHydration.ReaderExamples
+namespace FileInventory.ReaderExamples
 
 open FileInventory FileInventory.Examples
 
@@ -64,14 +64,6 @@ theorem canonical_requester_is_preserved :
     (snapshot shared.model admission).toOption.any (fun value =>
       value.entries.all (fun entry => entry.scope.requester == canonicalSource.requester) &&
         value.admission.requester == admission.requester) = true := by
-  native_decide
-
-theorem metadata_does_not_authorize_an_unbound_image :
-    FileImages.select ⟨admission, "request-document", "tool-document"⟩ shared.catalog.model
-      [⟨"tool-document", "request-document", ⟨canonicalSource.requester, admission.node,
-          admission.session⟩, true, true⟩]
-      [⟨"image-document", "tool-document", "request-document",
-          ⟨canonicalSource.requester, admission.node, admission.session⟩, []⟩] = .rejected := by
   native_decide
 
 def imagePage : PageEnvelope :=
@@ -155,9 +147,4 @@ def ImageCase.result (test : ImageCase) : FileImages.Selection :=
 theorem selected_image_regressions : imageCases.all (fun test => test.result == test.expected) = true := by
   native_decide
 
-theorem legacy_image_cannot_impersonate_a_shared_requester :
-    FileImages.select ⟨admission, "1001", "1"⟩ shared.catalog.model
-      [{selectedImageTool with scope := scope}] [{selectedImage with scope := scope}] = .rejected := by
-  native_decide
-
-end SessionHydration.ReaderExamples
+end FileInventory.ReaderExamples

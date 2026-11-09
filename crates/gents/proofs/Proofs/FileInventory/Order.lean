@@ -1,6 +1,6 @@
-import Proofs.SessionHydration.FileInventory
+import Proofs.FileInventory.Snapshot
 
-namespace SessionHydration.FileInventory.Order
+namespace FileInventory.Order
 
 open CanonicalOutput
 
@@ -22,4 +22,4 @@ theorem foreign_closure_cannot_order (snapshot : Snapshot) (input : ClosureInput
     comparison snapshot input node root path = none := by
   simp [comparison, h]
 
-end SessionHydration.FileInventory.Order
+end FileInventory.Order

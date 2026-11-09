@@ -1,6 +1,6 @@
-import Proofs.SessionHydration.FileInventoryOrder
+import Proofs.FileInventory.Order
 
-namespace SessionHydration.FileInventory.Order.Examples
+namespace FileInventory.Order.Examples
 
 open CanonicalOutput
 
@@ -357,4 +357,4 @@ theorem non_tool_stream_cannot_supply_a_terminal_window :
     window (snapshot headers) (wrongStreamInput headers) tool = none := by
   native_decide
 
-end SessionHydration.FileInventory.Order.Examples
+end FileInventory.Order.Examples

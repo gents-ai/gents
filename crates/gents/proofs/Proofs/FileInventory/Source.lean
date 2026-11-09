@@ -2,7 +2,7 @@ import Proofs.CanonicalOutput.Hydration
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
-namespace SessionHydration
+namespace FileInventory
 
 structure Request where
   key : String
@@ -86,46 +86,13 @@ structure Catalog where
   sessionReads : List SessionReadObservation := []
   deriving DecidableEq
 
-inductive Outcome where
-  | served
-  | rejected
-  deriving DecidableEq, Repr
-
-/-- `indeterminate` may follow partial transport side effects; it only says that
-delivery of the complete selected set was not confirmed. -/
-inductive DeliveryResult where
-  | confirmed
-  | indeterminate
-  deriving DecidableEq, Repr
-
-/-- Delivery and terminal persistence are separate effects in the Rust
-reconciler. -/
+/-- Whether the terminal write that publishes a tool's inventory projection
+committed. A losing or rolled-back terminal publishes nothing. -/
 inductive TerminalWriteResult where
   | committed
   | failed
   | notAttempted
   deriving DecidableEq, Repr
-
-structure Terminal where
-  key : String
-  outcome : Outcome
-  servedDocuments : Finset Document
-  deriving DecidableEq
-
-structure State where
-  attempted : Finset Document
-  confirmedDelivered : Finset Document
-  terminals : Finset Terminal
-  deriving DecidableEq
-
-def transcriptCollections : Finset CanonicalOutput.Hydration.Collection :=
-  [.agentRequest, .agentMessage, .agentToolCall,
-   .agentOutputSegment, .compactionEntry].toFinset
-
-theorem collection_is_transcript
-    (collection : CanonicalOutput.Hydration.Collection) :
-    collection ∈ transcriptCollections := by
-  cases collection <;> simp [transcriptCollections]
 
 def ownedSession (r : Request) : SessionOwner :=
   { session := r.session, nativeSession := r.nativeSession,
@@ -228,44 +195,13 @@ theorem selected_documents_have_exact_input (cat : Catalog) (r : Request)
                   exact ⟨input, parts.1, by simpa using parts.2, hb⟩
               | cons head tail => contradiction
 
-def terminalFor (st : State) (key : String) : Prop :=
-  ∃ terminal ∈ st.terminals, terminal.key = key
+/-- Closure failures caused by rows that are not yet readable leave the
+inventory unknown; every other failure rejects it. -/
+def closureErrorIsLoading : CanonicalOutput.Hydration.Error → Bool
+  | .headerUnavailable | .provenanceMissing _ => true
+  | .reference (.lookup .unavailable) => true
+  | .reference (.extent (.missingOrdinal _)) => true
+  | .terminal .missingHeader => true
+  | _ => false
 
-instance (st : State) (key : String) : Decidable (terminalFor st key) := by
-  unfold terminalFor
-  infer_instance
-
-def terminal (r : Request) (outcome : Outcome) (servedDocuments : Finset Document) : Terminal :=
-  { key := r.key, outcome, servedDocuments }
-
-def applyStep (cat : Catalog) (st : State) (r : Request)
-    (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult) : State :=
-  if terminalFor st r.key then st
-  else if admits cat r then
-    match selectedDocuments cat r with
-    | none =>
-      match terminalWrite with
-      | .committed => { st with terminals := insert (terminal r .rejected ∅) st.terminals }
-      | .failed | .notAttempted => st
-    | some docs =>
-      match delivery with
-      | .confirmed =>
-        match terminalWrite with
-        | .committed =>
-          { st with
-            attempted := st.attempted ∪ docs
-            confirmedDelivered := st.confirmedDelivered ∪ docs
-            terminals := insert (terminal r .served docs) st.terminals }
-        | .failed | .notAttempted =>
-          { st with
-            attempted := st.attempted ∪ docs
-            confirmedDelivered := st.confirmedDelivered ∪ docs }
-      | .indeterminate => { st with attempted := st.attempted ∪ docs }
-  else
-    match terminalWrite with
-    | .committed =>
-      { st with terminals := insert (terminal r .rejected ∅) st.terminals }
-    | .failed => st
-    | .notAttempted => st
-
-end SessionHydration
+end FileInventory

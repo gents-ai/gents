@@ -390,7 +390,7 @@ The proofs are strongest where the runtime is a state machine:
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
 - scheduler and fleet slot accounting from persisted call rows
 - session retry/reissue
-- tenant-safe, on-demand session hydration admission and document selection
+- file-inventory admission and canonical document selection
 - runtime reconcile generation publication
 - atomic configuration publication and field ownership
 - task, schedule, and event-trigger dispatch
@@ -620,7 +620,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another node and is authorized by the target's `PeerAdmissionAuthority` ACP. Admission enforces the target's causal-hop cap when configured. Title requests are runtime-internal local control with parent-only provenance |
 | `Proofs/Request/CausalHop.lean` | Causal-hop attribution between agents: `nextHop` (roots 0, tool-caused +1, continuations copy), and `admitHop` (no cap or within the configured cap). Finite caps imply `admitted_chain_sends_le_max`. A plugin job's completion wake is a continuation (`job_completion_wake_is_continuation`) |
 | `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
-| `Proofs/SessionHydration/` | Exact applied peer/requester/agent route admission plus selected-network verified membership; exact requester/agent/session document selection; bounded delivery outcomes separated from terminal-write success or failure; explicit attempted versus confirmed-complete delivery for ambiguous transport failures; idempotent crash re-drive; and resettable session-scoped receiver progress (#1142). Fence: `tests/conformance/session_hydration.rs`. The reconciler consumes the selected set through DefraDB's bounded peer-targeted document pusher. Pairing transition invariants remain owned by `Proofs/PairingReconcile.lean`. |
+| `Proofs/FileInventory/` | Native file inventory of one session: the source/admission facts (`Source`), the authorized canonical closure the snapshot enumerates, accepted-tool projection publication, fork copies, per-request coverage, bounded pages, resource ordering and selected-image reads. Direct reads use the authenticated reader and native reader-bound observations. P2P carries only discovery and enrollment; it does not replicate or hydrate sessions. Fences: `file_inventory::{closure,selection,snapshot,order,images}::tests`. |
 | `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
 | `Proofs/AccountRotation.lean` | Claude subscription account rotation: tiered selection (`select_live`, `select_best_tier`, `select_sticky`, `select_no_overage_unless_allowed`), limit observation, and the in-attempt rotation (`attempt_nodup`, `attempt_empty_exhausted`). Cases replay Claude Code's rate-limit simulator scenarios. Fences: `gents_claude::rotation::tests::generated_rotation_{select,attempt,observe}_cases_*`; the runtime pool that applies the policy lands with the transport. |
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
@@ -655,7 +655,7 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/GoalAutomation/DeliveryInput.lean` | Trigger and plugin-job delivery keep committed signed input; only new ordinary delivery to an existing session captures its assignment. |
 | `Proofs/GoalAutomation/WakeReceipt.lean` | Wake capture by assignment scope and cutoff; captured notifications stay owned by their physical attempt. |
 | `Proofs/GoalAutomation/ToolContext.lean` | Goal tool context from the calling request's assignment; unknown provenance never borrows one, and writes need the current Goal and opening request. |
-| `Proofs/SessionHydration/FileImages.lean` | File-image delivery selection and receipts; stored-image reads limited to the signed creator and the receipt's requester. |
+| `Proofs/FileInventory/FileImages.lean` | Retained file-image vocabulary and local reads: stored images readable only by the signed creator and a verified receipt's requester. |
 | `Proofs/Session/CommandAuthority.lean` | Shared session command signature, enrollment, route, and ownership requirements. |
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model. `ToolOperation.pluginJob` is a detached operation (`isDetached`) whose row never foregrounds (`plugin_job_row_never_foregrounds`) |

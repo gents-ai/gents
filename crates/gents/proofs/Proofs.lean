@@ -20,7 +20,7 @@ import Proofs.AgentSession
 import Proofs.Session.Archive
 import Proofs.SessionFork
 import Proofs.SessionRecovery
-import Proofs.SessionHydration
+import Proofs.FileInventory
 import Proofs.Session.Properties
 import Proofs.Session.Interrupt
 import Proofs.Session.InterruptCases

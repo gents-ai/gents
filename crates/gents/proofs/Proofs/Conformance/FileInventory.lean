@@ -1,13 +1,13 @@
-import Proofs.SessionHydration.FileInventoryCases
-import Proofs.SessionHydration.FileInventoryOrderCases
-import Proofs.SessionHydration.ReaderCases
-import Proofs.Conformance.Contracts.Json.SessionHydration
+import Proofs.FileInventory.Cases
+import Proofs.FileInventory.OrderCases
+import Proofs.FileInventory.ReaderCases
+import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.Contracts.Json.NativeExecution
 
 namespace Conformance.FileInventoryContracts
 
-open SessionHydration SessionHydration.FileInventory
-open SessionHydration.FileInventory.Examples
+open FileInventory
+open FileInventory.Examples
 open Conformance.Contracts
 open Conformance.ContractCases
 
@@ -219,7 +219,7 @@ private def sourceProjectionCaseJson (value : SelectionCase) : String :=
       | .ok _ => "null"),
     ("pages", jsonArray pages)]
 
-def readerCasesJson : String := jsonArray ((SessionHydration.ReaderExamples.cases.filter fun value =>
+def readerCasesJson : String := jsonArray ((FileInventory.ReaderExamples.cases.filter fun value =>
   ["shared_native_root_read", "shared_authorized_empty_root",
    "shared_root_physical_identity_changed", "shared_missing_capture_is_not_empty_complete",
    "shared_unreadable_projection_owner_is_not_trusted"].contains value.name).map fun value =>
@@ -266,7 +266,7 @@ private def demandJson (value : PageDemand) : String := object
   [("admission", hydrationRequestJson value.admission), ("attempt", jsonString value.attempt),
    ("cursor", optional pageCursorJson value.cursor)]
 
-def selectedImageCasesJson : String := jsonArray (SessionHydration.ReaderExamples.imageCases.map fun value =>
+def selectedImageCasesJson : String := jsonArray (FileInventory.ReaderExamples.imageCases.map fun value =>
   object [("name", jsonString value.name), ("catalog", catalogJson value.catalog),
     ("admission", hydrationRequestJson value.demand.image.admission),
     ("request_doc_id", jsonString value.demand.image.requestDocId),

@@ -149,8 +149,6 @@ structure EnrollmentTraceStep where
   currentApproval : Bool
   peerAdmitted : Bool
   ready : Bool
-  clientHydrationAdmits : Bool
-  serverHydrationAdmits : Bool
   deriving Repr
 
 structure EnrollmentCase where

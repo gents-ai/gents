@@ -150,9 +150,9 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal]
     , deferred := []
     }
-  , { feature := "session-hydration"
+  , { feature := "file-inventory"
     , required := [Surface.runtimeInternal]
-    , deferred := [(Surface.operatorUi, "client hydration/progress is #1143")]
+    , deferred := []
     }
   , { feature := "authenticated-enrollment"
     , required := [Surface.runtimeInternal]
@@ -700,42 +700,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::goals::generated_goal_continuation_materialization_cases_fence_restart_idempotency")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "session_hydration_cases"
-      "SessionHydrationDecisionCases"
-      "runtime::agent::p2p_reconcile::session_hydration_closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
-      "The native closure builder is exercised, but the adapter filters access observations itself and derives authorized_reference_closure from its result. Bind independent ACP observations through the production authorization owner before claiming end-to-end selection coverage.")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "session_hydration_closure_cases"
-      "SessionHydrationClosureCases"
-      "runtime::agent::p2p_reconcile::session_hydration_closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
-      "The native consumer checks closure construction and selection against modeled rows, but supplies access and denial observations as fixture input. It does not verify live ACP decisions or end-to-end peer hydration.")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "session_hydration_apply_cases"
-      "SessionHydrationApplyCases"
-      "conformance::session_hydration::generated_session_hydration_apply_cases_match_terminal_delivery_core")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "session_hydration_progress_cases"
-      "SessionHydrationProgressCases"
-      "The canonical-output observation cases are executable Lean witnesses; the native hydration observer has not migrated to the immutable records contract.")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "session_hydration_durable_cases"
-      "SessionHydrationDurableCases"
-      "The durable canonical manifest cases are executable Lean witnesses; the native storage projection has not migrated to this contract.")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "session_hydration_start_cases"
-      "SessionHydrationStartCases"
-      "conformance::session_hydration::generated_session_hydration_start_cases_match_receiver_start")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "session_hydration_admission_cases"
-      "SessionHydrationAdmissionCases"
-      "conformance::session_hydration::generated_session_hydration_admission_cases_match_receiver_owner")
-      "session-hydration" [Surface.runtimeInternal]
+      "file_inventory_closure_cases"
+      "FileInventoryClosureCases"
+      "file_inventory::closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
+      "The native consumer checks closure construction against modeled rows, but supplies access and denial observations as fixture input. It does not verify live ACP decisions.")
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "enrollment_cases"
       "EnrollmentCases"
@@ -953,8 +922,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "request_terminal_selection_cases"
       "RequestTerminalSelectionCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::selection::tests::generated_terminal_selections_preserve_superseded_session_hydration")
-      "session-hydration" [Surface.runtimeInternal]
+      "file_inventory::selection::tests::generated_terminal_selections_preserve_superseded_requests")
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "pack_identity_reference_cases"
       "PackIdentityReferenceCases"
@@ -1537,7 +1506,7 @@ def caseCoverage : List CoverageEntry :=
       "StoredFileImageAccessCases"
       "runtime::agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_refuses_runtime_local_collections"
       "Drives the native refusal to replicate or push runtime-local file-image collections between peers; P2P carries only discovery and enrollment.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_private_journal_policy"
       "PrivateJournalPolicy"
@@ -1700,29 +1669,17 @@ def caseCoverage : List CoverageEntry :=
       "file_image_read_grant_cases"
       "FileImageReadGrantCases"
       "tool_call_lifecycle::file_review_access::tests::file_image_read_grant_matches_signed_receipt_contract")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "file_image_hydration_completion_cases"
-      "FileImageHydrationCompletionCases"
-      "runtime::agent::p2p_reconcile::file_image_hydration::tests::generated_completion_cases_gate_delivery_and_receipts"
-      "Checks the native delivery target and durable terminal decision. Physical transport, live enrollment fences and receipt publication retain their existing owners and need integrated qualification.")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "file_image_attempt_cases"
-      "FileImageAttemptCases"
-      "runtime::agent::p2p_reconcile::file_image_hydration::tests::generated_attempt_cases_preserve_terminal_outcomes_and_prevent_redelivery"
-      "Drives recorded-outcome selection and replay delivery suppression. Source-signed immutable storage, transaction rollback and actual peer replay remain native refinement obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "file_review_subscription_cases"
       "FileReviewSubscriptionCases"
       "client::schema::tests::generated_file_review_rules_exclude_whole_collection_delivery")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "file_image_hydration_route_cases"
       "FileImageHydrationRouteCases"
-      "runtime::agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
-      "session-hydration" [Surface.runtimeInternal]
+      "runtime::agent::p2p_reconcile::templates::file_route_tests::generated_routes_follow_executable_scope_filters")
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "scope_node_route_cases"
       "ScopeNodeRouteCases"
@@ -1731,69 +1688,63 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "file_inventory_order_window_cases"
       "FileInventoryOrderWindowCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
+      "file_inventory::order::tests::generated_orders_use_canonical_publication_observations"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_resolution_cases"
       "FileInventoryOrderResolutionCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
+      "file_inventory::order::tests::generated_orders_use_canonical_publication_observations"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_comparison_cases"
       "FileInventoryOrderComparisonCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_request_coverage_uses_only_selected_physical_scope"
+      "file_inventory::snapshot::tests::generated_request_coverage_uses_only_selected_physical_scope"
       "Binds per-request source coverage to selected physical scopes. Verified no-change producer observations and installed per-turn totals remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_comparison_cases"
       "FileInventoryOrderComparisonCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
+      "file_inventory::order::tests::generated_orders_use_canonical_publication_observations"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_entry_cases"
       "FileInventoryOrderEntryCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::inventory_order::tests::generated_orders_use_canonical_publication_observations"
+      "file_inventory::order::tests::generated_orders_use_canonical_publication_observations"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_direct_reader_cases"
       "FileInventoryDirectReaderCases"
       "file_inventory::tests::generated_direct_inventory_uses_native_reader_and_agent_owner"
       "Drives actual operator reads and signed pages under the native source identity. HTTP extraction and installed consumption remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_fork_cases"
       "FileInventoryForkCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_fork_inventory_retains_only_selected_native_origins"
+      "file_inventory::snapshot::tests::generated_fork_inventory_retains_only_selected_native_origins"
       "Uses the native fork owner and source snapshot reader to preserve selected physical origins while excluding later parent work. Signed inventory transport and installed acceptance remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_reader_cases"
       "FileInventoryReaderCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::readers::shared_reader_metadata_preserves_canonical_authorship_and_image_privacy"
+      "file_inventory::snapshot::tests::readers::shared_reader_metadata_preserves_canonical_authorship_and_image_privacy"
       "Refines public-root visibility, exact physical binding, explicit projection read permission, revocation and reauthorization in one native source snapshot. Two enrolled identities, signed delivery and selected-image transport remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_selected_image_cases"
       "FileInventorySelectedImageCases"
-      "runtime::agent::p2p_reconcile::file_image_hydration::tests::inventory::generated_inventory_images_keep_reader_root_snapshot_and_source_distinct"
+      "file_inventory::images::tests::generated_inventory_images_keep_reader_root_snapshot_and_source_distinct"
       "Executes snapshot-bound selection over native page, root, canonical tool and independent metadata/image-read observations. Source cryptographic/ACP interleavings, two enrolled identities and installed delivery remain separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_source_projection_cases"
       "FileInventorySourceProjectionCases"
-      "runtime::agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_projection_cases_use_native_owners_and_scopes"
+      "file_inventory::snapshot::tests::generated_projection_cases_use_native_owners_and_scopes"
       "Refines source projection scope, terminal coverage, path coherence, authenticated native owners and unsigned bounded pages. Remaining canonical admission, fork, publication and signed page transport refinements stay separate obligations.")
-      "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "file_image_hydration_cases"
-      "FileImageHydrationCases"
-      "runtime::agent::p2p_reconcile::file_image_hydration::tests::generated_cases_drive_exact_tool_selection"
-      "Drives native selection with exact enrollment, session and physical tool/image observations. Delivery, signed receipts and client demand wiring remain transport refinement obligations.")
-      "session-hydration" [Surface.runtimeInternal]
+      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "schema_argument_repair_cases"
       "SchemaArgumentRepairCases"

@@ -1,10 +1,9 @@
 import Mathlib.Data.String.Basic
-import Proofs.SessionHydration.FileImages
-import Proofs.SessionHydration.Receiver
+import Proofs.FileInventory.FileImages
 import Proofs.ToolExecution.Executable
 import Proofs.CanonicalOutput.ToolDelivery
 
-namespace SessionHydration.FileInventory
+namespace FileInventory
 
 open CanonicalOutput (DocId)
 open ToolExecution
@@ -433,7 +432,7 @@ def selectedManifest (catalog : Catalog) (admission : Request) :
     input.messages input.segments input.access input.deniedHeaders input.deniedSegments
     input.dependencyDenials input.effects with
   | .ok documents => .ok documents
-  | .error error => .error (if hydrationErrorIsLoading error then .unknown else .rejected)
+  | .error error => .error (if closureErrorIsLoading error then .unknown else .rejected)
 
 theorem selected_manifest_uses_canonical_closure (catalog : Catalog) (admission : Request)
     (documents : List CanonicalOutput.Hydration.DocumentKey)
@@ -894,4 +893,4 @@ theorem invalid_source_is_rejected : Error.rejected.refusal = .rejected := rfl
 
 theorem unavailable_source_is_not_empty : Error.unknown.refusal = .unavailable := rfl
 
-end SessionHydration.FileInventory
+end FileInventory

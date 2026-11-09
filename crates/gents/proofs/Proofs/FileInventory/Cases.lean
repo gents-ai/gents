@@ -1,6 +1,6 @@
-import Proofs.SessionHydration.FileInventory
+import Proofs.FileInventory.Snapshot
 
-namespace SessionHydration.FileInventory.Examples
+namespace FileInventory.Examples
 
 open ToolExecution
 
@@ -359,4 +359,4 @@ theorem physical_input_reordering_preserves_snapshot :
       projections := [projection 2, projection 1] } : SourceInput).model admission).toOption =
       (snapshot (source 2).model admission).toOption := by native_decide
 
-end SessionHydration.FileInventory.Examples
+end FileInventory.Examples

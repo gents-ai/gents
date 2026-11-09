@@ -707,20 +707,6 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
     | some request => decide (challengeBoundElsewhere state request) | none => false
   let requestBindingConflict := match request? with
     | some request => decide (requestIdBoundElsewhere state request) | none => false
-  let clientHydrationAdmits := match request? with
-    | some request =>
-        let hydration := hydrationRequestFor request "session-1"
-        let sessions := {SessionHydration.ownedSession hydration}
-        decide (SessionHydration.admits
-          (projectedClientToServerHydrationCatalog state request.networkId sessions) hydration)
-    | none => false
-  let serverHydrationAdmits := match request? with
-    | some request =>
-        let hydration := reverseHydrationRequestFor request "session-1"
-        let sessions := {SessionHydration.ownedSession hydration}
-        decide (SessionHydration.admits
-          (projectedServerToClientHydrationCatalog state request.networkId sessions) hydration)
-    | none => false
   { action := actionName action, peerAdmissionDid, offerId, offerChallenge, offerNetworkId, offerAdminDid
   , offerServerPeer, offerOwnerNode, offerProfile, challenge, requestId, requestDigest
   , requestOfferId
@@ -756,7 +742,7 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
   , membershipPresent
   , clientRoutePresent, serverRoutePresent, adminPinPresent, adminPinConflict := pinConflict
   , challengeBindingConflict, requestBindingConflict
-  , currentApproval := current, peerAdmitted, ready, clientHydrationAdmits, serverHydrationAdmits
+  , currentApproval := current, peerAdmitted, ready
   }
 
 def runEnrollmentTrace : Enrollment.State → List EnrollmentAction → List EnrollmentTraceStep
@@ -850,7 +836,7 @@ def enrollmentCases : List EnrollmentCase :=
       [.accept enrollmentOffer enrollmentRequest, .observe enrollmentOffer,
        .accept enrollmentOffer enrollmentRequest, .confirmPin enrollmentOffer,
        .accept enrollmentOffer enrollmentRequest]
-  , enrollmentCase "pin_creation_then_bidirectional_hydration_ready" validEnrollmentActions
+  , enrollmentCase "pin_creation_then_bidirectional_routes_ready" validEnrollmentActions
   , enrollmentCase "same_network_different_admin_pin_conflict"
       [.observe enrollmentOffer, .confirmPin enrollmentOffer,
        .observe conflictingAdminOffer, .confirmPin conflictingAdminOffer,

@@ -110,9 +110,7 @@ def enrollmentTraceStepJson (step : EnrollmentTraceStep) : String :=
     ++ "\"request_binding_conflict\":" ++ boolJson step.requestBindingConflict ++ ","
     ++ "\"current_approval\":" ++ boolJson step.currentApproval ++ ","
     ++ "\"peer_admitted\":" ++ boolJson step.peerAdmitted ++ ","
-    ++ "\"ready\":" ++ boolJson step.ready ++ ","
-    ++ "\"client_hydration_admits\":" ++ boolJson step.clientHydrationAdmits ++ ","
-    ++ "\"server_hydration_admits\":" ++ boolJson step.serverHydrationAdmits
+    ++ "\"ready\":" ++ boolJson step.ready
     ++ "}"
 
 def enrollmentCaseJson (c : EnrollmentCase) : String :=

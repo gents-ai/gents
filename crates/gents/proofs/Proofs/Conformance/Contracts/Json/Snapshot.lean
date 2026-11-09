@@ -87,7 +87,7 @@ import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.SelfConfigAgent
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.GoalClaimedReadiness
-import Proofs.Conformance.Contracts.Json.SessionHydration
+import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
 import Proofs.Conformance.TitleUsage
@@ -527,20 +527,8 @@ def snapshotRequestCasesJson : String :=
 
 def snapshotSessionCasesJson : String :=
   ""
-    ++ "\"session_hydration_decision_cases\":"
-      ++ sessionHydrationDecisionCasesJson ++ ","
-    ++ "\"session_hydration_closure_cases\":"
-      ++ sessionHydrationClosureCasesJson ++ ","
-    ++ "\"session_hydration_apply_cases\":"
-      ++ sessionHydrationApplyCasesJson ++ ","
-    ++ "\"session_hydration_progress_cases\":"
-      ++ sessionHydrationProgressCasesJson ++ ","
-    ++ "\"session_hydration_durable_cases\":"
-      ++ sessionHydrationDurableCasesJson ++ ","
-    ++ "\"session_hydration_start_cases\":"
-      ++ sessionHydrationStartCasesJson ++ ","
-    ++ "\"session_hydration_admission_cases\":"
-      ++ sessionHydrationAdmissionCasesJson ++ ","
+    ++ "\"file_inventory_closure_cases\":"
+      ++ fileInventoryClosureCasesJson ++ ","
     ++ "\"enrollment_cases\":"
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
@@ -1045,19 +1033,13 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.FileInventoryContracts.orderingComparisonCasesJson ++ ","
     ++ "\"file_inventory_order_entry_cases\":"
       ++ Conformance.FileInventoryContracts.orderingEntryCasesJson ++ ","
-    ++ "\"file_image_hydration_cases\":"
-      ++ Conformance.FileImageHydrationContracts.casesJson ++ ","
     ++ "\"file_image_hydration_route_cases\":"
       ++ Conformance.FileImageHydrationContracts.routeCasesJson ++ ","
     ++ "\"file_review_subscription_cases\":"
       ++ Conformance.FileImageHydrationContracts.subscriptionCasesJson ++ ","
-    ++ "\"file_image_hydration_completion_cases\":"
-      ++ Conformance.FileImageHydrationContracts.completionCasesJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"file_image_attempt_cases\":"
-      ++ Conformance.FileImageHydrationContracts.attemptCasesJson ++ ","
     ++ "\"stored_file_image_access_cases\":"
       ++ Conformance.FileImageHydrationContracts.storageCasesJson ++ ","
     ++ "\"file_image_read_grant_cases\":"
