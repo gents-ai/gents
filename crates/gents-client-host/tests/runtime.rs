@@ -1042,8 +1042,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         console::ConsoleChild::spawn(host_command.as_std(), &root.join("client-host.log"))?;
     wait_listener(&mut host, &paths).await?;
     let mut client = Attachment::start_with_binary(&paths, &host_binary).await;
+    // Bearer authorization and client-signed writes need the Node's held key.
     let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did()),
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did())
+            .with_client_signing_capability(identity.client_signing_capability()?)?,
     );
     if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
         client

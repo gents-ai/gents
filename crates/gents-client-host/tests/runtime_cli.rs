@@ -169,6 +169,9 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         }
     }
     let changed_root = root.path().canonicalize().unwrap();
+    // Serve admits a configured host tool root only once a WorkspaceRoot published for the
+    // Node covers it, so the operator publishes the new folder before retargeting the runtime.
+    let operator = publish_workspace_root(&home, port, &changed_root).await;
     let mut changed = tokio::process::Command::new(executable)
         .args(["prepare-runtime", "--home"])
         .arg(&home)
@@ -209,11 +212,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         gents::KeyIdentity::load_or_create(before["key_path"].as_str().unwrap(), None).unwrap();
     use gents::NodeIdentity as _;
     assert_eq!(identity.did(), changed_did);
-    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
-        format!("http://127.0.0.1:{port}/api/v0/graphql"),
-        identity.did(),
-    );
-    let status: serde_json::Value = endpoint
+    // Bearer authorization requires a held signing key; the home's operator reads status.
+    let status: serde_json::Value = operator
         .authorize(reqwest::Client::new().get(format!("http://127.0.0.1:{port}/status")))
         .unwrap()
         .send()
@@ -284,6 +284,58 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         }
         child.wait().await.unwrap();
     }
+}
+
+/// Publishes `root` for the home's Node, read by its default Agent, as the CLI client
+/// principal that initialized the home, exactly as `gents config workspace-root set` does,
+/// and returns that principal's signed endpoint.
+async fn publish_workspace_root(
+    home: &std::path::Path,
+    port: u16,
+    root: &std::path::Path,
+) -> gents::store::config_client::GraphqlEndpoint {
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
+    let node_did = config["node_did"].as_str().unwrap();
+    let desktop = gents_desktop_core::client::DesktopPaths::discover().unwrap();
+    let cli = gents_desktop_core::client::DesktopPaths::from_root(desktop.root().join("cli"));
+    let user = gents_desktop_core::client::PrincipalIdentity::load_existing(&cli).unwrap();
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        user.private_key_bytes(),
+    )
+    .unwrap();
+    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://127.0.0.1:{port}/api/v0/graphql"),
+        user.did(),
+    )
+    .with_client_signing_capability(capability)
+    .unwrap()
+    .with_client_signed_agent_creates();
+    let access = gents::ConfigAccess::Graphql(endpoint.clone());
+    let nodes = access
+        .execute(&format!(
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_did }} }}"#,
+            gents::store::graphql::escape_graphql_string(node_did)
+        ))
+        .await
+        .unwrap();
+    let agent = nodes
+        .pointer("/Node/0/default_agent_did")
+        .or_else(|| nodes.pointer("/data/Node/0/default_agent_did"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("the Node names its default Agent: {nodes}"))
+        .to_owned();
+    gents::tools::surface::set_workspace_root_with_readers(
+        &access,
+        node_did,
+        root.to_str().unwrap(),
+        None,
+        true,
+        &[agent],
+    )
+    .await
+    .unwrap();
+    endpoint
 }
 
 async fn preparation_receipt(

@@ -317,7 +317,15 @@ impl Fixture<'_> {
     }
 
     async fn retire_replacement(&self, graphql: &str, build: &str) -> Result<()> {
-        let endpoint = GraphqlEndpoint::as_principal(graphql, self.node_did);
+        // Runtime control is authorized by a bearer token signed with the Node's held key.
+        let config: Value =
+            serde_json::from_slice(&tokio::fs::read(self.home.join("init.json")).await?)?;
+        let identity = gents::KeyIdentity::load_or_create(
+            config["key_path"].as_str().context("runtime key path")?,
+            None,
+        )?;
+        let endpoint = GraphqlEndpoint::as_principal(graphql, self.node_did)
+            .with_client_signing_capability(identity.client_signing_capability()?)?;
         let mut url = reqwest::Url::parse(graphql)?;
         url.set_path(RUNTIME_CONTROL_PATH);
         let client = reqwest::Client::builder()

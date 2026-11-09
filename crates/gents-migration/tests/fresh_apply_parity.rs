@@ -164,7 +164,12 @@ async fn identity_policy_catalog_matches_applied_schemas() {
             let policy = collection.policy.expect("native policy binding");
             assert_eq!(policy.id, AGENT_OWNERSHIP_POLICY_ID, "{name}");
             assert_eq!(policy.resource_name, *resource, "{name}");
-            assert!(!collection.is_branchable, "{name}");
+            // Identity-bound collections replicate only through the protocol allowlist.
+            assert_eq!(
+                collection.is_branchable,
+                gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&name),
+                "{name}"
+            );
         }
     }
     for (name, _) in IDENTITY_POLICY_BINDINGS {

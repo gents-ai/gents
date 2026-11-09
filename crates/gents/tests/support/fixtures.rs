@@ -460,9 +460,11 @@ pub async fn bind_selected_managed_agent_backend(
     use gents::Collection;
 
     let owner = db.node_identity.did();
+    // The runtime writes the Node concurrently; a confirmed conflict after the held User
+    // signed rebuilds the plan from fresh reads instead of failing the fixture.
     fixture
         .access
-        .transact_write("test.bind_managed_agent_backend", |txn| {
+        .transact_signed_conflict_rebuild("test.bind_managed_agent_backend", |txn| {
             Box::pin(async move {
                 let (_, mut node) =
                     read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
