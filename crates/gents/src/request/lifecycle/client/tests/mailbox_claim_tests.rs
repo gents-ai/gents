@@ -4,7 +4,8 @@ use crate::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
 use crate::session::mailbox::{
-    MailboxAction, MailboxCreateTool, MailboxKind, MailboxNotificationPolicy, MailboxWriteOutcome,
+    MailboxAction, MailboxCreateTool, MailboxKind, MailboxNotificationPolicy, MailboxStatus,
+    MailboxWriteOutcome,
 };
 use crate::store::config_client::{GraphqlEndpoint, NodePermission};
 use gents_loop::tool::{bind_request_tools, ToolDyn};
@@ -250,6 +251,71 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
             .await?,
         TerminalizeResult::Won
     );
+    let runtime_notice = |request_id: &str| crate::session::mailbox::RuntimeNotice {
+        source_id: format!("service-update:{request_id}"),
+        session_id: "mailbox-delegated-session".into(),
+        request_id: request_id.into(),
+        title: "Runtime update complete".into(),
+        summary: "Completed".into(),
+        failed: false,
+    };
+    let modeled_notice =
+        &crate::lean_vocab_test::lean_contract_snapshot().mailbox_runtime_notice_case;
+    // After the claimed request is terminal, as after a runtime restart, the
+    // notice reaches the verified signer rather than the session owner.
+    let notice = crate::session::mailbox::publish_runtime_notice(
+        &node,
+        runtime.did(),
+        std::slice::from_ref(&agent),
+        runtime_notice("mailbox-delegated-request"),
+    )
+    .await;
+    assert_eq!(
+        notice.is_ok(),
+        modeled_notice["claimed"]["document"].as_bool().unwrap()
+    );
+    let notice = notice?;
+    assert_eq!(notice.requester_did, user.did());
+    assert_eq!(notice.target_agent_did, agent.did());
+    let notice_query = format!(
+        "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+        crate::store::graphql::escape_graphql_string(&notice.doc_id)
+    );
+    for (access, visible) in [
+        (
+            &user_access,
+            modeled_notice["claimed"]["recipient"].as_bool().unwrap(),
+        ),
+        (
+            &owner_access,
+            policy["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["actor"] == "other" && case["permission"] == "read")
+                .unwrap()["expected"]
+                .as_bool()
+                .unwrap(),
+        ),
+    ] {
+        assert_eq!(
+            !access.execute(&notice_query).await?["data"]["MailboxItem"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            visible
+        );
+    }
+    crate::session::mailbox::dismiss_mailbox_item_on(&user_access, &notice.doc_id).await?;
+    let replayed = crate::session::mailbox::publish_runtime_notice(
+        &node,
+        runtime.did(),
+        std::slice::from_ref(&agent),
+        runtime_notice("mailbox-delegated-request"),
+    )
+    .await?;
+    assert_eq!(replayed.doc_id, notice.doc_id);
+    assert_eq!(replayed.parsed_status(), Some(MailboxStatus::Dismissed));
     owner_access
         .add_actor_relationship("Agent", &agent_doc, "session_writer", &user.did().parse()?)
         .await?;
@@ -270,6 +336,20 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     reply.caused_by_source_doc_id = Some(doc.to_owned());
     crate::sign_agent_request_create(&user, &mut reply).await?;
     submit_client_request(&user_access, &reply).await?;
+    // Admitted and visible, but its claim has not committed.
+    assert_eq!(
+        matches!(
+            crate::session::mailbox::publish_runtime_notice(
+                &node,
+                runtime.did(),
+                std::slice::from_ref(&agent),
+                runtime_notice("mailbox-delegated-reply"),
+            )
+            .await,
+            Err(crate::session::mailbox::RuntimeNoticeError::MissingClaimProvenance)
+        ),
+        modeled_notice["deferred"].as_bool().unwrap()
+    );
     let reply_row = agent_access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"mailbox-delegated-reply\"}}}}) {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
     let reply_row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(reply_row["data"]["AgentRequest"][0].clone())?;
