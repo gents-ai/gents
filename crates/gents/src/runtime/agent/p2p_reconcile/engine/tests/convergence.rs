@@ -90,7 +90,6 @@ async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
 async fn grown_replicator_collection_set_reinstalls_replicator() {
     let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
     let store = MockStore::with_desired(Some(PairingDesired {
-        collections: BTreeSet::new(),
         replicator_addresses: set(&["addr1"]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: conversation_filter.clone(),
@@ -110,7 +109,6 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
     );
 
     *store.desired.lock().unwrap() = Ok(Some(PairingDesired {
-        collections: set(&["Network"]),
         replicator_addresses: set(&["addr1"]),
         replicator_collections: set(&["Network", "AgentRequest"]),
         replicator_filter: conversation_filter,
@@ -123,7 +121,6 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
     assert_eq!(
         second.ops_applied,
         vec![
-            DiffOp::InstallCollection("Network".into()),
             DiffOp::TeardownReplicator("addr1".into()),
             DiffOp::InstallReplicator("addr1".into()),
         ]
@@ -150,7 +147,6 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
 #[tokio::test]
 async fn active_peer_read_failure_still_dials() {
     let store = MockStore::with_desired(Some(PairingDesired {
-        collections: set(&["c1"]),
         replicator_addresses: set(&["addr1"]),
         ..Default::default()
     }));
@@ -169,7 +165,6 @@ async fn active_peer_read_failure_still_dials() {
 #[tokio::test]
 async fn other_active_peer_does_not_suppress_dial() {
     let store = MockStore::with_desired(Some(PairingDesired {
-        collections: set(&["c1"]),
         replicator_addresses: set(&["addr1"]),
         ..Default::default()
     }));
@@ -188,8 +183,8 @@ async fn other_active_peer_does_not_suppress_dial() {
 #[tokio::test]
 async fn second_tick_converges_across_name_and_id_spaces() {
     let store = MockStore::with_desired(Some(PairingDesired {
-        collections: set(&["AgentRequest"]),
         replicator_addresses: set(&["addr1"]),
+        replicator_collections: set(&["AgentRequest"]),
         ..Default::default()
     }));
     let admin = MockAdmin::default();
@@ -197,19 +192,15 @@ async fn second_tick_converges_across_name_and_id_spaces() {
     let first = reconcile_peer_tick(&admin, &store, "peer-a")
         .await
         .expect("first tick");
-    assert!(
-        first
-            .ops_applied
-            .iter()
-            .any(|op| matches!(op, DiffOp::InstallCollection(_))),
-        "first tick installs the collection: {:?}",
-        first.ops_applied
-    );
-
     assert_eq!(
-        store.applied.lock().unwrap().collections,
-        set(&["AgentRequest"]),
-        "Applied persists the collection name"
+        first.ops_applied,
+        vec![DiffOp::InstallReplicator("addr1".into())],
+        "first tick installs the replicator by collection name"
+    );
+    assert_eq!(
+        admin.replicators.lock().unwrap()["addr1"].collections,
+        vec![mock_collection_id("AgentRequest")],
+        "the live replicator carries the collection id"
     );
 
     let second = reconcile_peer_tick(&admin, &store, "peer-a")
@@ -226,15 +217,10 @@ async fn second_tick_converges_across_name_and_id_spaces() {
 async fn teardown_is_restricted_to_applied_extras() {
     let store = MockStore::with_desired(Some(PairingDesired::default()));
     *store.applied.lock().unwrap() = PairingApplied {
-        collections: set(&["managed"]),
         replicator_addresses: set(&["managed-addr"]),
         ..Default::default()
     };
     let admin = MockAdmin::default();
-    *admin.collections.lock().unwrap() = set(&[
-        &mock_collection_id("managed"),
-        &mock_collection_id("manual"),
-    ]);
     admin.replicators.lock().unwrap().insert(
         "managed-addr".into(),
         RemoteReplicator {
@@ -260,14 +246,7 @@ async fn teardown_is_restricted_to_applied_extras() {
 
     assert_eq!(
         outcome.ops_applied,
-        vec![
-            DiffOp::TeardownCollection("managed".into()),
-            DiffOp::TeardownReplicator("managed-addr".into())
-        ]
-    );
-    assert_eq!(
-        *admin.collections.lock().unwrap(),
-        set(&[&mock_collection_id("manual")])
+        vec![DiffOp::TeardownReplicator("managed-addr".into())]
     );
     assert!(admin
         .replicators
@@ -280,12 +259,10 @@ async fn teardown_is_restricted_to_applied_extras() {
 async fn desired_absent_tears_down_managed_state_and_deletes_applied_row() {
     let store = MockStore::with_desired(None);
     *store.applied.lock().unwrap() = PairingApplied {
-        collections: set(&["c1"]),
         replicator_addresses: set(&["addr1"]),
         ..Default::default()
     };
     let admin = MockAdmin::default();
-    *admin.collections.lock().unwrap() = set(&[&mock_collection_id("c1")]);
     admin.replicators.lock().unwrap().insert(
         "addr1".into(),
         RemoteReplicator {
@@ -302,10 +279,7 @@ async fn desired_absent_tears_down_managed_state_and_deletes_applied_row() {
 
     assert_eq!(
         outcome.ops_applied,
-        vec![
-            DiffOp::TeardownCollection("c1".into()),
-            DiffOp::TeardownReplicator("addr1".into())
-        ]
+        vec![DiffOp::TeardownReplicator("addr1".into())]
     );
     assert_eq!(*store.deleted.lock().unwrap(), 1);
     assert!(store.applied.lock().unwrap().is_empty());

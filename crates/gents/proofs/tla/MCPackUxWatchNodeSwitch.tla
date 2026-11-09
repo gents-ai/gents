@@ -1,0 +1,4 @@
+---- MODULE MCPackUxWatchNodeSwitch ----
+EXTENDS PackUxWatch
+
+====

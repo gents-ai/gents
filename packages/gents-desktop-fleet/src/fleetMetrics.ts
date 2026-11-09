@@ -41,6 +41,7 @@ export function deploymentStatus(
     deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
   const title = [
     operational.transport.detail,
+    operational.connection.detail,
     operational.route.detail,
     operational.sync.detail,
     operational.agent.detail,

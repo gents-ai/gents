@@ -12,10 +12,14 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio_util::codec::LengthDelimitedCodec;
 
+#[path = "support/homes.rs"]
+mod homes;
+
 async fn script(extension: &Path, root: &Path, name: &str) -> Result<()> {
     let mut command = Command::new("node");
     command
         .arg(extension.join("tests/editorCachedStartup.mjs"))
+        .envs(homes::ProcessHomes::under(root).env())
         .env("GENTS_VSCODE_CACHE_PHASE", name)
         .env("GENTS_VSCODE_STARTUP_ROOT", root)
         .kill_on_drop(true);

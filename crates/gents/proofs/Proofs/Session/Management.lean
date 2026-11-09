@@ -49,7 +49,9 @@ theorem queued_delivery_can_be_promoted :
 
 /-- The active request and already-consumed input cannot be edited; selection is
 provisional until authored consumption (an edit invalidates it and restores the
-remaining order). -/
+remaining order). The caller is the authenticated acting principal. Queue rows
+retain canonical session requester provenance independently of that caller;
+native ACP decides whether the caller may edit them. -/
 def replacementAllowed (target : AgentSession.Scope) (pre : SessionQueueState)
     (caller : Option Nat) (expected : List RequestId) (offset count : Nat)
     (replacements : List QueueEntry) : Bool :=
@@ -59,7 +61,7 @@ def replacementAllowed (target : AgentSession.Scope) (pre : SessionQueueState)
   decide (pre.scope = target) && decide (pending.map (·.requestId) = expected) &&
       decide (count > 0) && decide (old.length = count) &&
       old.all (fun entry => decide (entry.source = .user ∧ entry.policy = .append ∧
-        entry.origin = .interactive ∧ entry.requester = caller ∧ entry.fresh = true)) &&
+        entry.origin = .interactive ∧ entry.requester = target.requester ∧ entry.fresh = true)) &&
       (match old.head? with
         | none => true
         | some first => old.all (fun entry => decide (entry.turnContext = first.turnContext))) &&
@@ -67,7 +69,7 @@ def replacementAllowed (target : AgentSession.Scope) (pre : SessionQueueState)
       replacements.all (fun entry => decide (RequestIdFresh pre entry)) &&
       (old.zip replacements).all (fun pair => decide (
         pair.2.source = .user ∧ pair.2.policy = .append ∧
-        pair.2.origin = .interactive ∧ pair.2.requester = caller ∧
+        pair.2.origin = .interactive ∧ pair.2.requester = target.requester ∧
         pair.2.executionDirectory.getD pair.2.turnContext =
           pair.1.executionDirectory.getD pair.1.turnContext ∧
         replacementDeliveryAllowed pair.1.delivery pair.2.delivery ∧

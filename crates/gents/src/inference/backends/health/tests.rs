@@ -4,7 +4,6 @@ mod oauth;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::{routing::get, Json, Router};
-use defra_node::EmbeddedNode;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -302,6 +301,7 @@ impl Drop for ModelsListener {
 
 fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {
     InferenceBackend {
+        physical_doc_id: None,
         node_did: "did:key:backend-owner".to_string(),
         backend_id: backend_id.to_string(),
         name: backend_id.to_string(),
@@ -319,70 +319,12 @@ fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {
     }
 }
 
-async fn upsert_backend_configuration(
-    node: &std::sync::Arc<EmbeddedNode>,
-    backend: &InferenceBackend,
-) {
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    let value = serde_json::to_value(backend).unwrap();
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: crate::Collection::InferenceBackend,
-        add: value.clone(),
-        update: value,
-    }])
-    .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.backend.seed", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
-}
-
-async fn seed_backend_observation(
-    node: &Arc<EmbeddedNode>,
-    backend: &InferenceBackend,
-    status: &str,
-) {
-    upsert_backend_configuration(node, backend).await;
-    crate::inference::backends::registry::set_backend_probe_status(
-        node,
-        &backend.node_did,
-        &backend.backend_id,
-        status,
-    )
-    .await
-    .unwrap();
-}
-
 fn probe_options() -> BackendProberOptions {
     BackendProberOptions {
         probe_interval: Duration::from_millis(50),
         probe_timeout: Duration::from_secs(2),
         failure_threshold_k: 3,
     }
-}
-
-async fn scheduled_cycle(
-    node: &Arc<EmbeddedNode>,
-    health: &BackendHealthMap,
-    schedule: &mut ProbeSchedule,
-    periodic: bool,
-) -> ProbeCycleOutcome {
-    run_scheduled_backend_probe_cycle(
-        node.clone(),
-        &reqwest::Client::new(),
-        health,
-        &probe_options(),
-        "did:key:backend-owner",
-        Some((schedule, periodic)),
-        None,
-    )
-    .await
 }
 
 fn assert_modeled_probe(
@@ -419,27 +361,4 @@ fn assert_modeled_probe(
         .expect("the model emits this probe transition");
     assert_eq!(current.state.as_str(), modeled.next_state);
     assert_eq!(current.failure_count as usize, modeled.next_count);
-}
-
-async fn wait_for_promotion(node: &Arc<EmbeddedNode>, backend: &InferenceBackend) {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let observation = crate::inference::backends::registry::lookup_backend_observation(
-                node,
-                &backend.node_did,
-                &backend.backend_id,
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            if observation.probe_status.as_deref() == Some("healthy")
-                && observation.last_probe.is_some()
-            {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the backend was not probed before the periodic interval");
 }

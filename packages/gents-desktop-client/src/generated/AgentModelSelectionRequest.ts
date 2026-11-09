@@ -2,4 +2,4 @@
 import type { ReasoningEffort } from "./ReasoningEffort.js";
 import type { ServiceTier } from "./ServiceTier.js";
 
-export type AgentModelSelectionRequest = { nodeDid: string, agentId: string, backendId: string, modelName: string, reasoningEffort: ReasoningEffort | null, serviceTier: ServiceTier | null, };
+export type AgentModelSelectionRequest = { nodeDid: string, agentDid: string, backendId: string, modelName: string, reasoningEffort: ReasoningEffort | null, serviceTier: ServiceTier | null, };

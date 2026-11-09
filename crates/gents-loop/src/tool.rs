@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +64,26 @@ pub enum ToolFootprint {
     Barrier,
 }
 
+/// Provenance passed explicitly to tools for the currently claimed request.
+#[derive(Debug, Clone)]
+pub struct ToolRequestContext {
+    pub request_id: String,
+    pub request_doc_id: String,
+    pub node_did: String,
+    pub agent_did: String,
+    pub session_id: String,
+    pub caused_by_source_doc_id: Option<String>,
+    pub admitted_client: Option<AdmittedClientContext>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdmittedClientContext {
+    pub signer_did: String,
+    pub request_doc_id: String,
+    pub session_doc_id: String,
+    pub agent_doc_id: String,
+}
+
 pub trait Tool: Sized + Send + Sync {
     const NAME: &'static str;
     const EMITS_COMMAND_ENVELOPE: bool = false;
@@ -80,6 +101,14 @@ pub trait Tool: Sized + Send + Sync {
         &self,
         args: Self::Args,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
+
+    fn call_with_request(
+        &self,
+        args: Self::Args,
+        _request: &ToolRequestContext,
+    ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send {
+        self.call(args)
+    }
 
     /// Producer receipts travel through the existing dispatch and terminal
     /// owners. Returning them does not commit data or publish a tool terminal.
@@ -124,6 +153,14 @@ pub trait ToolDyn: Send + Sync {
                 deferred_writes: None,
             }
         })
+    }
+
+    fn call_with_request<'a>(
+        &'a self,
+        args: String,
+        _request: &'a ToolRequestContext,
+    ) -> BoxFuture<'a, ToolDispatchResult> {
+        self.call_with_receipt(args)
     }
 
     fn footprint(&self, _args: &str) -> ToolFootprint {
@@ -171,30 +208,15 @@ where
     }
 
     fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
-        Box::pin(async move {
-            let output = async {
-                let parsed = parse_tool_args::<<Self as Tool>::Args>(&args)?;
-                <Self as Tool>::call(self, parsed)
-                    .await
-                    .map_err(<Self as Tool>::into_dyn_error)
-            }
-            .await;
-            let (result, deferred_writes) = match output {
-                Ok(output) => {
-                    let writes = <Self as Tool>::deferred_writes(self, &output);
-                    (
-                        serialize_tool_output(output).map_err(ToolError::JsonError),
-                        writes,
-                    )
-                }
-                Err(error) => (Err(error), None),
-            };
-            ToolDispatchResult {
-                result,
-                plugin_receipt: None,
-                deferred_writes,
-            }
-        })
+        Box::pin(dispatch_typed(self, args, None))
+    }
+
+    fn call_with_request<'a>(
+        &'a self,
+        args: String,
+        request: &'a ToolRequestContext,
+    ) -> BoxFuture<'a, ToolDispatchResult> {
+        Box::pin(dispatch_typed(self, args, Some(request)))
     }
 
     fn footprint(&self, args: &str) -> ToolFootprint {
@@ -211,6 +233,88 @@ where
             Err(_) => Ok(()),
         }
     }
+}
+
+async fn dispatch_typed<T>(
+    tool: &T,
+    args: String,
+    request: Option<&ToolRequestContext>,
+) -> ToolDispatchResult
+where
+    T: Tool,
+{
+    let output = async {
+        let parsed = parse_tool_args::<T::Args>(&args)?;
+        match request {
+            Some(request) => <T as Tool>::call_with_request(tool, parsed, request).await,
+            None => <T as Tool>::call(tool, parsed).await,
+        }
+        .map_err(T::into_dyn_error)
+    }
+    .await;
+    let (result, deferred_writes) = match output {
+        Ok(output) => {
+            let writes = <T as Tool>::deferred_writes(tool, &output);
+            (
+                serialize_tool_output(output).map_err(ToolError::JsonError),
+                writes,
+            )
+        }
+        Err(error) => (Err(error), None),
+    };
+    ToolDispatchResult {
+        result,
+        plugin_receipt: None,
+        deferred_writes,
+    }
+}
+
+struct RequestBoundTool {
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    index: usize,
+    request: Arc<ToolRequestContext>,
+}
+
+impl ToolDyn for RequestBoundTool {
+    fn name(&self) -> String {
+        self.tools[self.index].name()
+    }
+    fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        self.tools[self.index].definition(prompt)
+    }
+    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { self.call_with_receipt(args).await.result })
+    }
+    fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
+        self.tools[self.index].call_with_request(args, &self.request)
+    }
+    fn footprint(&self, args: &str) -> ToolFootprint {
+        self.tools[self.index].footprint(args)
+    }
+    fn emits_command_envelope(&self) -> bool {
+        self.tools[self.index].emits_command_envelope()
+    }
+    fn admit(&self, args: &str) -> Result<(), ToolError> {
+        self.tools[self.index].admit(args)
+    }
+}
+
+pub fn bind_request_tools(
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    request: ToolRequestContext,
+) -> Arc<Vec<Box<dyn ToolDyn>>> {
+    let request = Arc::new(request);
+    Arc::new(
+        (0..tools.len())
+            .map(|index| {
+                Box::new(RequestBoundTool {
+                    tools: tools.clone(),
+                    index,
+                    request: request.clone(),
+                }) as Box<dyn ToolDyn>
+            })
+            .collect(),
+    )
 }
 
 pub fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
@@ -476,6 +580,75 @@ mod tests {
             "visible output"
         );
         assert_eq!(tool.0.load(Ordering::SeqCst), 3);
+    }
+
+    struct RequestProbe;
+
+    impl Tool for RequestProbe {
+        const NAME: &'static str = "request_probe";
+        type Args = bool;
+        type Output = String;
+        type Error = std::io::Error;
+
+        async fn definition(&self, _: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.into(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+            }
+        }
+
+        async fn call(&self, _: bool) -> Result<String, Self::Error> {
+            Err(std::io::Error::other("request required"))
+        }
+
+        async fn call_with_request(
+            &self,
+            _: bool,
+            request: &ToolRequestContext,
+        ) -> Result<String, Self::Error> {
+            Ok(format!(
+                "{}:{}",
+                request.request_doc_id,
+                request.admitted_client.as_ref().unwrap().signer_did
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn request_bound_dispatch_keeps_concurrent_contexts_separate() {
+        let shared: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![
+            Box::new(RequestProbe),
+            Box::new(ReceiptTool(std::sync::atomic::AtomicUsize::new(0))),
+        ]);
+        let context = |request: &str, signer: &str| ToolRequestContext {
+            request_id: request.into(),
+            request_doc_id: request.into(),
+            node_did: "node".into(),
+            agent_did: "agent".into(),
+            session_id: "session".into(),
+            caused_by_source_doc_id: None,
+            admitted_client: Some(AdmittedClientContext {
+                signer_did: signer.into(),
+                request_doc_id: request.into(),
+                session_doc_id: "session-doc".into(),
+                agent_doc_id: "agent-doc".into(),
+            }),
+        };
+        let first = bind_request_tools(shared.clone(), context("one", "alice"));
+        let second = bind_request_tools(shared, context("two", "bob"));
+        let (a, b) = tokio::join!(
+            first[0].call_with_receipt("true".into()),
+            second[0].call_with_receipt("true".into())
+        );
+        assert_eq!(a.result.unwrap(), "one:alice");
+        assert_eq!(b.result.unwrap(), "two:bob");
+        let receipt = first[1].call_with_receipt("true".into()).await;
+        assert_eq!(receipt.result.unwrap(), "visible output");
+        assert_eq!(
+            receipt.deferred_writes.unwrap().downcast_ref::<u64>(),
+            Some(&17)
+        );
     }
 
     #[derive(Debug, Deserialize, PartialEq)]

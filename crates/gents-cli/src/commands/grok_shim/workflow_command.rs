@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::control::control;
 use gents::tools::background::job::view::{list_jobs, JobFilter, StateFilter};

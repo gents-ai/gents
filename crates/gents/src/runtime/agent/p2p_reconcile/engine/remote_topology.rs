@@ -66,31 +66,6 @@ pub(super) async fn read_actual(
     admin: &dyn RemoteP2pAdmin,
     applied_addresses: &BTreeSet<String>,
 ) -> Result<ActualSnapshot> {
-    let mut collections = BTreeSet::new();
-    for id in admin
-        .list_p2p_collections()
-        .await
-        .context("list remote P2P collections")?
-    {
-        match admin
-            .resolve_collection_name(&id)
-            .await
-            .with_context(|| format!("resolve collection name for id {id}"))?
-        {
-            Some(name) => {
-                collections.insert(name);
-            }
-            None => {
-                tracing::warn!(
-                    target: "gents::runtime::agent::p2p_reconcile::engine",
-                    collection_id = %id,
-                    "remote P2P collection id has no local name; keeping the id in \
-                     the actual set"
-                );
-                collections.insert(id);
-            }
-        }
-    }
     let remote_replicators = admin
         .list_replicators()
         .await
@@ -181,7 +156,6 @@ pub(super) async fn read_actual(
 
     Ok(ActualSnapshot {
         state: PairingActual {
-            collections,
             replicator_addresses,
             replicator_collections,
             replicator_filters: replicator_filters_by_addr,
@@ -218,18 +192,10 @@ pub(super) async fn apply_op(
     actual: &ActualSnapshot,
 ) -> Result<()> {
     match op {
-        DiffOp::InstallCollection(collection) => admin
-            .add_p2p_collections(std::slice::from_ref(collection))
-            .await
-            .with_context(|| format!("install P2P collection {collection}")),
-        DiffOp::TeardownCollection(collection) => admin
-            .delete_p2p_collections(std::slice::from_ref(collection))
-            .await
-            .with_context(|| format!("teardown P2P collection {collection}")),
         DiffOp::InstallReplicator(address) => {
             let addresses = vec![address.clone()];
             let collections = desired
-                .effective_replicator_collections()
+                .replicator_collections
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
@@ -262,13 +228,7 @@ pub(super) async fn apply_op(
                 .get(address)
                 .cloned()
                 .filter(|collections| !collections.is_empty())
-                .unwrap_or_else(|| {
-                    desired
-                        .effective_replicator_collections()
-                        .iter()
-                        .cloned()
-                        .collect()
-                });
+                .unwrap_or_else(|| desired.replicator_collections.iter().cloned().collect());
             match admin.delete_replicator(id, &collections).await {
                 Ok(()) | Err(RemoteP2pAdminError::RemoteNotFound(_)) => Ok(()),
                 Err(error) => {
@@ -288,7 +248,7 @@ pub(super) async fn ensure_replicator_after_reconnect(
 ) -> Result<()> {
     let addresses = vec![address.to_string()];
     let collections = desired
-        .effective_replicator_collections()
+        .replicator_collections
         .iter()
         .cloned()
         .collect::<Vec<_>>();

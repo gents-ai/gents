@@ -1,6 +1,5 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
-import { newId } from "./draft";
 import { defaultAgentOf } from "@/lib/agents";
 
 export const DUPLICATE = "new:duplicate";
@@ -99,7 +98,8 @@ export const FIELD_ORDER: [keyof Draft, string][] = [
 
 export function newAgentView(deployment: NodeView): AgentView {
   return {
-    agentId: newId("agent"),
+    agentDid: "",
+    creationNonce: "",
     nodeDid: deployment.nodeDid,
     displayName: "",
     description: null,
@@ -116,7 +116,7 @@ export function newAgentView(deployment: NodeView): AgentView {
 }
 
 export type DraftMode = {
-  onSaved: (agentId: string) => void;
+  onSaved: (agentDid: string) => void;
   onCancel: () => void;
   enabled?: boolean;
 };

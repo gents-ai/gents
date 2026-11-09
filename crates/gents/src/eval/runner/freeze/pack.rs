@@ -15,6 +15,7 @@ use crate::tools::surface::BashMode;
 pub(crate) struct LoadedPack {
     pub(crate) digest: String,
     pub(crate) config: PackConfig,
+    pub(crate) authored: crate::pack::AuthoredPackConfig,
     pub(crate) manifest: PackManifest,
     pub(crate) files: BTreeMap<String, Vec<u8>>,
 }
@@ -36,7 +37,7 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
             .with_context(|| format!("pack has no asset {path:?}"))
     };
     let digest = digest_declared_assets(&manifest, |path| asset(path).map(Vec::as_slice))?;
-    let config = crate::pack::load_pack_config(
+    let config = crate::pack::load_pack_authoring_config(
         &manifest,
         &options,
         &|path| asset(path).cloned(),
@@ -51,7 +52,8 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
         .collect::<Result<BTreeMap<_, _>>>()?;
     Ok(LoadedPack {
         digest,
-        config,
+        config: config.documents.clone(),
+        authored: config,
         manifest,
         files,
     })
@@ -101,15 +103,10 @@ pub(super) async fn validate_cell(
     let pack = load_pack(&cell.source, &request.owner)
         .map_err(|error| refused(format!("cell {:?} pack: {error:#}", cell.cell_id)))?;
 
-    if !pack
-        .config
-        .agents
-        .iter()
-        .any(|behavior| behavior.agent_id == cell.agent_id)
-    {
+    if pack.authored.agent(&cell.agent_slot).is_none() {
         return Err(refused(format!(
             "cell {:?} pack has no agent {:?}",
-            cell.cell_id, cell.agent_id
+            cell.cell_id, cell.agent_slot
         )));
     }
 
@@ -130,7 +127,7 @@ pub(super) async fn validate_cell(
                 label: cell.label.clone(),
                 subject: SubjectRef {
                     pack_digest: pack.digest.clone(),
-                    agent_id: cell.agent_id.clone(),
+                    agent_slot: cell.agent_slot.clone(),
                 },
                 inference_profile_id: cell.inference_profile_id.clone(),
             },

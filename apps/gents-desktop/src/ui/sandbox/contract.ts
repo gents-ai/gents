@@ -66,7 +66,9 @@ export interface UxDataCallResult {
 }
 
 export type UxDataWatchEvent =
-  { kind: "snapshot"; value: UxDataCallResult } | { kind: "error"; message: string };
+  | { kind: "snapshot"; value: UxDataCallResult }
+  | { kind: "reconnecting"; delay_ms: number }
+  | { kind: "error"; message: string };
 
 /** one tool of a surface, as the node declares it */
 export interface UxDataToolDecl {

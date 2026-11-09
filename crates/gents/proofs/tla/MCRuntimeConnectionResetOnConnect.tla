@@ -1,0 +1,4 @@
+---- MODULE MCRuntimeConnectionResetOnConnect ----
+EXTENDS RuntimeConnectionTransport
+
+====

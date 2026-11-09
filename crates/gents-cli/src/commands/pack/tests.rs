@@ -1,4 +1,6 @@
-use super::install::{check_expected_digest, check_wire_target, install_documents_command};
+use super::install::{
+    check_expected_digest, check_wire_target, install_documents_command_with_local,
+};
 use super::scope::resolve_plugin_slot_owner;
 use super::source::names_a_directory;
 use super::*;
@@ -61,7 +63,7 @@ fn a_document_pack_materializes_a_valid_configuration() {
     let pack = test_support::fixture_pack_source("documents_fixture", home.path());
     let root = tempfile::tempdir().unwrap();
     gents::pack::materialize::materialize(pack.archive(), root.path()).unwrap();
-    let config = gents::pack::load_pack_config(
+    let config = gents::pack::load_pack_authoring_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
             node_did: "did:key:zPackCatalogValidationOwner".into(),
@@ -70,7 +72,9 @@ fn a_document_pack_materializes_a_valid_configuration() {
         &|_| None,
     )
     .unwrap();
-    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    assert!(config.agent("fixture-worker").is_some());
+    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config.documents)
+        .unwrap();
 }
 
 #[tokio::test]
@@ -212,7 +216,12 @@ async fn plugin_store_record_error_releases_the_owned_offline_store() {
     let records = reopened
         .execute("{ PackInstallation(limit: 1) { coordinate } }")
         .await;
-    reopened.local_node().unwrap().shutdown().await;
+    reopened
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
     assert_eq!(
         records.unwrap()["data"]["PackInstallation"],
         serde_json::json!([])
@@ -271,16 +280,21 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
         let pack = resolve_pack_source(&args.package, None, home.path())
             .await
             .unwrap();
-        let (access, _) = crate::resolve_config_access(Some(home.path()), None)
-            .await
-            .unwrap();
+        let (access, _, local_endpoint) =
+            crate::resolve_pack_config_access(Some(home.path()), None)
+                .await
+                .unwrap();
         let query = "{ Tools(limit: 1) { _docID } }";
         let before = access.execute(query).await.unwrap();
         assert!(before["data"]["Tools"].is_array(), "{before}");
         let retained_node = access.local_node().unwrap().clone();
-        let outcome =
-            crate::request_helpers::capture_report(install_documents_command(access, &pack, &args))
-                .await;
+        let outcome = crate::request_helpers::capture_report(install_documents_command_with_local(
+            access,
+            &pack,
+            &args,
+            local_endpoint,
+        ))
+        .await;
         assert_eq!(outcome.is_err(), invalid_binding, "{outcome:?}");
         if let Err(error) = outcome {
             assert!(
@@ -299,7 +313,12 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
         let (reopened, _) = crate::resolve_config_access(Some(home.path()), None)
             .await
             .expect("command shutdown and handle release must allow immediate store reopen");
-        reopened.local_node().unwrap().shutdown().await;
+        reopened
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(reopened);
     }
 }
@@ -355,14 +374,48 @@ async fn documents_install_rolls_back_its_record_on_failure() {
         let (access, _) = crate::resolve_config_access(Some(home.path()), None)
             .await
             .unwrap();
+        // The home's client edits the installed document as an operator
+        // would, through its signed desired-state apply.
+        let node_did = access
+            .local_node()
+            .unwrap()
+            .node_identity_did()
+            .unwrap()
+            .to_owned();
         access
-                .write(
-                    "test.edit_pack_document",
-                    r#"mutation { update_Tools(filter: {tools_id: {_eq: "demo-tools"}}, input: {display_name: "edited"}) { _docID } }"#,
-                )
-                .await
-                .unwrap();
-        access.local_node().unwrap().shutdown().await;
+            .transact_write("test.edit_pack_document", |txn| {
+                let node_did = &node_did;
+                Box::pin(async move {
+                    use gents::documents::apply_desired_state_plan;
+                    use gents::store::config_client::{
+                        read_desired_state_record_in_txn, DesiredStateApplyDocument,
+                        DesiredStateApplyPlan,
+                    };
+                    let (_, mut tools) = read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Tools,
+                        node_did,
+                        "demo-tools",
+                    )
+                    .await?
+                    .expect("installed pack tools");
+                    tools["display_name"] = "edited".into();
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: gents::Collection::Tools,
+                        add: tools.clone(),
+                        update: tools,
+                    }])?;
+                    apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                })
+            })
+            .await
+            .unwrap();
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
     }
 
     let second = documents_pack_dir("1.1.0");

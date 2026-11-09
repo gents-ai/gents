@@ -910,4 +910,4 @@ fn normalize_mcp_path(path: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

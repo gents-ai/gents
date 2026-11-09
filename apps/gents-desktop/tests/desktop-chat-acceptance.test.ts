@@ -101,20 +101,21 @@ describe("canonical chat submission acceptance", () => {
       nodeDid: "agent-b",
       source: "enrollment",
       dialSucceeded: true,
+      runtimeConnection: "connected",
       chatSafe: true,
       lastError: null,
       runtime: null,
-      node: { nodeDid: "agent-b", defaultAgentId: "coding" },
+      node: { nodeDid: "agent-b", defaultAgentDid: "coding" },
       nodeReadiness: {
         source: { state: "current" },
         activeGeneration: 1,
         routerGeneration: 1,
         updatedAt: "2026-09-15T00:00:00Z",
-        agents: [{ state: "ready", agentId: "coding" }],
+        agents: [{ state: "ready", agentDid: "coding" }],
       },
       agents: [
         {
-          agentId: "coding",
+          agentDid: "coding",
           displayName: "Coding",
           enabled: true,
           isDefault: true,
@@ -151,7 +152,7 @@ describe("canonical chat submission acceptance", () => {
       sessionId: "session",
       requestId: "request",
       nodeDid: "agent",
-      agentId: "coding",
+      agentDid: "coding",
     };
     const f = fixture(async () => accepted);
     await f.actions.sendMessage("review this");
@@ -192,7 +193,7 @@ describe("canonical chat submission acceptance", () => {
       sessionId: string;
       requestId: string;
       nodeDid: string;
-      agentId: string;
+      agentDid: string;
     }>();
     const f = fixture(() => pending.promise);
     const submitted = f.actions.sendMessage("review this");
@@ -203,7 +204,7 @@ describe("canonical chat submission acceptance", () => {
       sessionId: "origin-session",
       requestId: "request",
       nodeDid: "agent",
-      agentId: "coding",
+      agentDid: "coding",
     };
     pending.resolve(accepted);
 

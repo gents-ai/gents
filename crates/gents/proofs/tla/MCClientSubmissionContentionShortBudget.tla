@@ -1,0 +1,4 @@
+---- MODULE MCClientSubmissionContentionShortBudget ----
+EXTENDS ClientSubmissionContention
+
+====

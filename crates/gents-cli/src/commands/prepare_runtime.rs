@@ -223,7 +223,8 @@ async fn prepare_inner(
                 let identity = load_runtime_identity(&home, &config).await?;
                 credentials_checked = true;
                 let authorization =
-                    GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did());
+                    GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did())
+                        .with_client_signing_capability(identity.client_signing_capability()?)?;
                 if requested_root.is_some() {
                     let status = super::status::fetch_local_operator_status(&authorization, CONTROL_TIMEOUT)
                         .await
@@ -232,6 +233,9 @@ async fn prepare_inner(
                             format!("Could not confirm the running runtime's access settings: {error:#}"),
                         ))?;
                     validate_running_authority(&status, &config)?;
+                }
+                if let Some(root) = &requested_root {
+                    ensure_requested_root_published(&authorization, &config, root).await?;
                 }
                 let retired = control(&client, &endpoint, &config.node_did, RuntimeOperation::Retire { expected_build: observation.build }, Some(&authorization)).await?
                     .ok_or_else(|| refusal(RuntimePreparationRefusal::Unavailable, "The runtime closed before retirement could be confirmed. Retry to inspect its state."))?;
@@ -367,6 +371,29 @@ fn validate_requested_root(root: PathBuf) -> Result<PathBuf> {
     anyhow::ensure!(root.is_dir(), "The tool root must be an existing directory");
     anyhow::ensure!(root.to_str().is_some(), "The tool root is not valid UTF-8");
     Ok(root)
+}
+
+/// Serve admits a host tool root only when a WorkspaceRoot published for the
+/// Node covers it. Asking the running runtime through the same owner refuses an
+/// unpublished root before that runtime is retired; publishing stays with the
+/// operator, since preparation must not widen the Node's authority.
+async fn ensure_requested_root_published(
+    authorization: &GraphqlEndpoint,
+    config: &StoredInitConfig,
+    root: &Path,
+) -> Result<()> {
+    if matches!(config.tool_ceiling, crate::cli::ToolCeilingArg::MetaOnly) {
+        return Ok(());
+    }
+    let access = gents::ConfigAccess::Graphql(authorization.clone());
+    gents::tools::surface::ensure_root_published_for_node(&access, &config.node_did, root)
+        .await
+        .map_err(|error| {
+            refusal(
+                RuntimePreparationRefusal::Failed,
+                format!("The running runtime keeps its current workspace root: {error:#}"),
+            )
+        })
 }
 
 fn validate_running_authority(status: &serde_json::Value, config: &StoredInitConfig) -> Result<()> {

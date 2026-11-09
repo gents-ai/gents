@@ -188,6 +188,9 @@ fn runtime_state(graphql: &str, node_did: &str) -> crate::http::router::RuntimeH
     let (runtime, observation) = crate::http::router::empty_activation_state();
     crate::http::runtime_contract_router(
         format!("{graphql}/api/v0/graphql"),
+        gents::store::config_client::GraphqlEndpoint::anonymous(format!(
+            "{graphql}/api/v0/graphql"
+        )),
         "scrape-test".into(),
         node_did.into(),
         "readwrite".into(),

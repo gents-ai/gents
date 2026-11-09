@@ -68,6 +68,7 @@ export function createConfigActions({
 
   return {
     changeConfig,
+    provisionAgentIdentity: (nodeDid: string) => api.provisionAgentIdentity(nodeDid),
     testToolService: (
       request: ToolServiceTestRequest,
     ): Promise<ToolServiceTestResult> => api.testToolService(request),

@@ -55,7 +55,8 @@ where
 #[tauri::command]
 pub async fn desktop_schedule_run<R>(
     app: AppHandle<R>,
-    request: ScheduleRunRequest,
+    window: tauri::WebviewWindow<R>,
+    mut request: ScheduleRunRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<TaskRunResult, BridgeError>
 where
@@ -64,6 +65,7 @@ where
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
+    request.node_did = state.window_command_node(window.label(), request.node_did.as_deref());
 
     let result = run_schedule_config(core.as_ref(), request)
         .await
@@ -97,7 +99,8 @@ where
 #[tauri::command]
 pub async fn desktop_task_run<R>(
     app: AppHandle<R>,
-    request: TaskRunRequest,
+    window: tauri::WebviewWindow<R>,
+    mut request: TaskRunRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<TaskRunResult, BridgeError>
 where
@@ -106,6 +109,7 @@ where
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
+    request.node_did = state.window_command_node(window.label(), request.node_did.as_deref());
 
     let result = run_task_config(core.as_ref(), request)
         .await

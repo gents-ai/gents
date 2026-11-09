@@ -1,33 +1,23 @@
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde::{Deserialize, Serialize};
 
-use crate::enrollment::canonical_domain_payload;
 use crate::file_changes::{FileChangeImages, FileImage, ImageFailure};
-use crate::file_image_hydration::FileImageScope;
-use crate::session_hydration::HydrationRequest;
-
-#[derive(Debug, thiserror::Error)]
-pub enum FileInventoryError {
-    #[error(transparent)]
-    Serialize(#[from] serde_json::Error),
-    #[error("file inventory demand has an empty reference")]
-    EmptyReference,
-    #[error("file inventory demand has an invalid continuation")]
-    InvalidContinuation,
-    #[error("file inventory receipt does not match its demand")]
-    ReceiptDemandMismatch,
-    #[error("initial file inventory demand did not start at zero")]
-    InitialOffset,
-    #[error("file inventory receipt does not match its continuation")]
-    ReceiptContinuationMismatch,
-}
-
-type Result<T, E = FileInventoryError> = std::result::Result<T, E>;
 
 pub const FILE_INVENTORY_PAGE_LIMIT: usize = 64;
 pub const FILE_INVENTORY_OPERATOR_PATH: &str = "/file-inventory/operator/page";
-pub const FILE_INVENTORY_RECEIPT_VERSION: u8 = 2;
-const RECEIPT_DOMAIN: &str = "gents-file-inventory-page-v2";
+/// The direct inventory read contract a runtime advertises to its clients.
+pub const FILE_INVENTORY_CONTRACT_VERSION: u8 = 2;
+
+/// The origin session scope of a physical tool's capture. Retained images stay
+/// bound to it; native document ACP alone decides who may read them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct FileImageScope {
+    pub requester_did: String,
+    pub node_did: String,
+    pub session_id: String,
+}
 
 /// Metadata is a separate projection: observing it never transfers image bytes
 /// or grants a retained-image reader relation. Capture validation stays with
@@ -77,11 +67,21 @@ impl From<&FileChangeImages> for FileChangeMetadata {
     }
 }
 
+/// The authenticated reader and session an inventory read is bound to.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct FileInventoryRequest {
+    pub request_key: String,
+    pub requester_did: String,
+    pub node_did: String,
+    pub session_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileInventoryAdmission {
-    pub request: HydrationRequest,
+    pub request: FileInventoryRequest,
     pub session_doc_id: String,
 }
 
@@ -146,77 +146,6 @@ pub struct FileInventoryCursor {
     pub binding: FileInventoryBinding,
     #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub offset: u64,
-}
-
-/// Persist `attempt_id` before posting. Transport retries reuse this demand;
-/// an explicit fresh attempt changes its key without rewriting an old receipt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileInventoryPageDemand {
-    pub admission: FileInventoryAdmission,
-    pub attempt_id: String,
-    pub cursor: Option<FileInventoryCursor>,
-}
-
-impl FileInventoryPageDemand {
-    pub fn validate_reference(&self) -> Result<()> {
-        let request = &self.admission.request;
-        if [
-            self.attempt_id.as_str(),
-            &self.admission.session_doc_id,
-            &request.request_key,
-            &request.peer_id,
-            &request.requester_did,
-            &request.node_did,
-            &request.session_id,
-        ]
-        .iter()
-        .any(|value| value.is_empty())
-        {
-            return Err(FileInventoryError::EmptyReference);
-        }
-        if let Some(cursor) = &self.cursor {
-            if !(cursor.binding.admission == self.admission
-                && !cursor.binding.digest.is_empty()
-                && cursor.offset != 0
-                && cursor.offset % FILE_INVENTORY_PAGE_LIMIT as u64 == 0
-                && cursor.offset < cursor.binding.coverage.entries)
-            {
-                return Err(FileInventoryError::InvalidContinuation);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn derive_request_key(&self) -> Result<String> {
-        self.validate_reference()?;
-        let value = serde_json::to_string(self)?;
-        use sha2::{Digest, Sha256};
-        Ok(bs58::encode(Sha256::digest(canonical_domain_payload(
-            "gents-file-inventory-demand-v1",
-            [value.as_str()],
-        )))
-        .into_string())
-    }
-
-    pub fn validate_page_reference(&self, receipt: &FileInventoryPageReceipt) -> Result<()> {
-        if receipt.request_key != self.derive_request_key()?
-            || receipt.page.binding.admission != self.admission
-        {
-            return Err(FileInventoryError::ReceiptDemandMismatch);
-        }
-        match &self.cursor {
-            None if receipt.page.offset != 0 => return Err(FileInventoryError::InitialOffset),
-            Some(cursor)
-                if receipt.page.binding != cursor.binding
-                    || receipt.page.offset != cursor.offset =>
-            {
-                return Err(FileInventoryError::ReceiptContinuationMismatch)
-            }
-            _ => {}
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,27 +296,6 @@ pub fn coherent_inventory_entries(entries: &[FileInventoryEntry]) -> bool {
     true
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileInventoryPageReceipt {
-    pub version: u8,
-    pub request_key: String,
-    pub signer_did: String,
-    pub page: FileInventoryPage,
-    pub signature: Vec<u8>,
-}
-
-impl FileInventoryPageReceipt {
-    pub fn signing_payload(&self) -> Result<Vec<u8>> {
-        let version = self.version.to_string();
-        let page = serde_json::to_string(&self.page)?;
-        Ok(canonical_domain_payload(
-            RECEIPT_DOMAIN,
-            [version.as_str(), &self.request_key, &self.signer_did, &page],
-        ))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
@@ -395,93 +303,6 @@ pub enum FileInventoryRefusalReason {
     Rejected,
     Stale,
     Unavailable,
-}
-
-pub const FILE_INVENTORY_REFUSAL_VERSION: u8 = 1;
-
-/// Refusals attest only the client's own demand and a fixed reason. They
-/// contain no selected file membership and do not authorize delivery.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileInventoryRefusalReceipt {
-    pub version: u8,
-    pub request_key: String,
-    pub demand: FileInventoryPageDemand,
-    pub reason: FileInventoryRefusalReason,
-    pub signer_did: String,
-    pub signature: Vec<u8>,
-}
-
-impl FileInventoryRefusalReceipt {
-    pub fn signing_payload(&self) -> Result<Vec<u8>> {
-        let version = self.version.to_string();
-        let demand = serde_json::to_string(&self.demand)?;
-        let reason = serde_json::to_string(&self.reason)?;
-        Ok(canonical_domain_payload(
-            "gents-file-inventory-refusal-v1",
-            [
-                version.as_str(),
-                &self.request_key,
-                &demand,
-                &reason,
-                &self.signer_did,
-            ],
-        ))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    content = "receipt",
-    rename_all = "camelCase",
-    deny_unknown_fields
-)]
-pub enum FileInventoryReply {
-    Page(FileInventoryPageReceipt),
-    Refused(FileInventoryRefusalReceipt),
-}
-
-pub const FILE_INVENTORY_PAGE_GRANT_VERSION: u8 = 1;
-
-/// A control-plane receipt binds one metadata document. The metadata itself
-/// travels only through explicit document delivery, separate from this pointer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileInventoryPageGrant {
-    pub version: u8,
-    pub demand: FileInventoryPageDemand,
-    pub document_id: String,
-    pub signer_did: String,
-    pub signature: Vec<u8>,
-}
-
-impl FileInventoryPageGrant {
-    pub fn signing_payload(&self) -> Result<Vec<u8>> {
-        let version = self.version.to_string();
-        let demand = serde_json::to_string(&self.demand)?;
-        Ok(canonical_domain_payload(
-            "gents-file-inventory-page-grant-v1",
-            [
-                version.as_str(),
-                &demand,
-                &self.document_id,
-                &self.signer_did,
-            ],
-        ))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    content = "receipt",
-    rename_all = "camelCase",
-    deny_unknown_fields
-)]
-pub enum FileInventoryResponse {
-    Page(FileInventoryPageGrant),
-    Refused(FileInventoryRefusalReceipt),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -526,6 +347,14 @@ pub enum FileInventoryReadAction {
         #[serde(rename = "attemptId")]
         attempt_id: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectFileInventoryRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub action: FileInventoryReadAction,
 }
 
 impl Default for FileInventoryReadAction {
