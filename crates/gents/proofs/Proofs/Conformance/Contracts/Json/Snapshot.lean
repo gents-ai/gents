@@ -201,6 +201,15 @@ def scopeTemplateCasesJson : String :=
       ",\"filters\":" ++ jsonArray ((ScopeTemplates.directionalScopeFilters template direction
         "did:key:reader" "did:key:owner").map scopePredicateJson) ++ "}")
 
+def appCollectionAdmissionCasesJson : String :=
+  jsonArray (([false, true].flatMap fun managed => [false, true].map fun hasPolicy =>
+    (managed, hasPolicy)).map fun (managed, hasPolicy) =>
+      "{\"managed\":" ++ boolJson managed ++ ",\"has_policy\":" ++ boolJson hasPolicy ++
+      ",\"refusal\":" ++ (match ScopeTemplates.decideAppCollection { managed, hasPolicy } with
+        | some .managed => jsonString "managed"
+        | some .policyProtected => jsonString "policy_protected"
+        | none => "null") ++ "}")
+
 /-- The snapshot's concatenation chains are bounded to keep model execution
 within Lean's interpreter recursion limit. -/
 def snapshotPromptTailJson : String :=
@@ -1025,6 +1034,7 @@ def snapshotPluginCasesJson : String :=
       ++ "},"
     ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
     ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
+    ++ "\"scope_app_collection_cases\":" ++ appCollectionAdmissionCasesJson ++ ","
     ++ "\"causal_hop_contract\":"
       ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"

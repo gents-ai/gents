@@ -1674,6 +1674,11 @@ def caseCoverage : List CoverageEntry :=
       "ScopeNodeRouteCases"
       "conformance::scope_templates::node_replication_matches_executable_scope_model")
       "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "scope_app_collection_cases"
+      "ScopeAppCollectionCases"
+      "conformance::scope_templates::app_collection_admission_matches_executable_model")
+      "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_order_window_cases"
       "FileInventoryOrderWindowCases"

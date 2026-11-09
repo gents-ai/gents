@@ -18,6 +18,7 @@ use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
 use super::super::graphql_helpers::{
     first_row, graphql_nullable_string_literal, graphql_string_list_literal, rows,
 };
+use super::super::templates::{admit_app_collections, APP_COLLECTIONS_TEMPLATE};
 use super::super::PairingDesired;
 use super::desired::{data_plane_desired_from_pairing_row, merge_layered_desired};
 use super::enrollment::{
@@ -380,6 +381,25 @@ impl PairingStateStore for GraphqlPairingStateStore {
             })
             .transpose()?
             .flatten();
+        let data_plane = match data_plane {
+            Some(overlay) if overlay.template_ids.contains(APP_COLLECTIONS_TEMPLATE) => {
+                match admit_app_collections(self.node.clone(), &overlay.replicator_collections)
+                    .await
+                {
+                    Ok(_) => Some(overlay),
+                    Err(error) => {
+                        tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                            peer_id = %raw_peer_id,
+                            %error,
+                            "app-collections overlay refused; skipping the data-plane layer \
+                             (enrollment route unaffected)"
+                        );
+                        None
+                    }
+                }
+            }
+            other => other,
+        };
         Ok(LoadedPairingDesired {
             state: merge_layered_desired(
                 self.identity.did(),

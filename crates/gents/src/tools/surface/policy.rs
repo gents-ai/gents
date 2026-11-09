@@ -330,6 +330,9 @@ impl ToolPolicySurface {
                 );
             }
         }
+        if self.permits_p2p_mutation() {
+            emit("p2p-pairing", &[NodePermission::DocumentDelete]);
+        }
         sources
     }
 

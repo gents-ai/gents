@@ -1035,6 +1035,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.scope_node_route_cases,
         ),
         (
+            "scope_app_collection_cases",
+            "ScopeAppCollectionCases",
+            &snapshot.scope_app_collection_cases,
+        ),
+        (
             "file_review_subscription_cases",
             "FileReviewSubscriptionCases",
             &snapshot.file_review_subscription_cases,

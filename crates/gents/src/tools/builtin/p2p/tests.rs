@@ -25,16 +25,19 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     let server_tool = P2pTool::new(
         server.node.clone(),
         Some(server.node_identity.clone()),
+        None,
         true,
     );
     let candidate_tool = P2pTool::new(
         candidate.node.clone(),
         Some(candidate.node_identity.clone()),
+        None,
         true,
     );
     let server_readonly = P2pTool::new(
         server.node.clone(),
         Some(server.node_identity.clone()),
+        None,
         false,
     );
     assert!(Tool::call(
@@ -72,6 +75,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     let readonly = P2pTool::new(
         candidate.node.clone(),
         Some(candidate.node_identity.clone()),
+        None,
         false,
     );
     assert!(
@@ -141,22 +145,34 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
         chrono::DateTime::parse_from_rfc3339(entry["authorization_expires_at"].as_str().unwrap())
             .unwrap();
     assert_eq!((expires - decided).num_seconds(), 7_776_000);
-    // P2P carries no application pairing: the approved enrollment stands and
-    // the removed pairing action is unknown.
-    let refused = Tool::call(
+    // Enrollment alone starts no application sync: the peer is enrolled, and no
+    // pairing overlay exists until this node opts in.
+    let paired = call(
         &server_tool,
-        serde_json::from_value(json!({"action":"pairings_apply","peer_id":candidate_peer}))
-            .unwrap(),
+        json!({"action":"pairings_get","peer_id":candidate_peer}),
+    )
+    .await;
+    assert_eq!(paired["outcome"]["desired"], json!([]));
+    assert_eq!(
+        paired["observations"]["enrolled_peers"][0]["peer_id"],
+        candidate_peer
+    );
+    let unbound = Tool::call(
+        &server_tool,
+        serde_json::from_value(json!({"action":"pairings_preview","peer_id":candidate_peer,
+            "peer_did":candidate.node_identity.did(),"collections":["DeploymentNote"]}))
+        .unwrap(),
     )
     .await
-    .unwrap_err();
-    assert!(refused.to_string().contains("unknown action"), "{refused}");
+    .unwrap_err()
+    .to_string();
+    assert!(unbound.contains("not registered"), "{unbound}");
 }
 
 #[tokio::test]
 async fn p2p_rejects_a_foreign_actor_and_malformed_peers() {
     let db = crate::support::test_p2p_db("engineer-p2p-owned").await;
-    let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), true);
+    let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), None, true);
     let malformed = Tool::call(
         &tool,
         serde_json::from_value(
@@ -176,7 +192,7 @@ async fn p2p_rejects_a_foreign_actor_and_malformed_peers() {
         )
         .unwrap(),
     );
-    let tool = P2pTool::new(db.node.clone(), Some(foreign), true);
+    let tool = P2pTool::new(db.node.clone(), Some(foreign), None, true);
     assert!(Tool::call(
         &tool,
         serde_json::from_value(json!({"argv":["status"]})).unwrap()
@@ -188,25 +204,17 @@ async fn p2p_rejects_a_foreign_actor_and_malformed_peers() {
 }
 
 #[tokio::test]
-async fn help_and_scope_name_discovery_and_enrollment_as_the_only_capabilities() {
+async fn help_scopes_pairing_to_explicit_application_opt_in() {
     let db = crate::support::test_p2p_db("engineer-p2p-discovery").await;
-    let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), false);
-    for argv in [
-        json!(["help", "pairings"]),
-        json!(["help", "sync"]),
-        json!(["help", "documents"]),
-    ] {
+    let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), None, false);
+    for argv in [json!(["help", "sync"]), json!(["help", "documents"])] {
         let error = Tool::call(&tool, serde_json::from_value(json!({"argv":argv})).unwrap())
             .await
             .unwrap_err()
             .to_string();
         assert!(error.contains("\"topic\":\"scope\""), "{error}");
     }
-    for argv in [
-        json!(["replicators", "list"]),
-        json!(["pairings", "list"]),
-        json!(["sync", "documents"]),
-    ] {
+    for argv in [json!(["replicators", "list"]), json!(["sync", "documents"])] {
         let unknown = Tool::call(&tool, serde_json::from_value(json!({"argv":argv})).unwrap())
             .await
             .unwrap_err()
@@ -218,10 +226,14 @@ async fn help_and_scope_name_discovery_and_enrollment_as_the_only_capabilities()
     }
     let scope = call(&tool, json!({"action":"help","topic":"scope"})).await;
     assert_eq!(scope["outcome"]["grant"], json!({"mutations": false}));
-    assert!(scope["outcome"]["help"]
+    let scope_help = scope["outcome"]["help"].as_str().unwrap();
+    assert!(scope_help.contains("explicitly paired"), "{scope_help}");
+    assert!(scope_help.contains("never paired"), "{scope_help}");
+    let pairings = call(&tool, json!({"action":"help","topic":"pairings"})).await;
+    assert!(pairings["outcome"]["help"]
         .as_str()
         .unwrap()
-        .contains("discovery and enrollment only"));
+        .contains("Enrollment never starts it"));
     let status = call(&tool, json!({"action":"status"})).await;
     assert!(status["observations"]["sync"].get("pending_dags").is_some());
     assert!(status["observations"]["sync"]
@@ -236,7 +248,7 @@ async fn help_and_scope_name_discovery_and_enrollment_as_the_only_capabilities()
 #[tokio::test]
 async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
     let db = crate::support::test_p2p_db("engineer-p2p-typed").await;
-    let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), true);
+    let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), None, true);
     let schema = Tool::definition(&tool, String::new()).await.parameters;
     assert_eq!(schema["required"], json!(["action"]));
     assert_eq!(schema["additionalProperties"], false);
@@ -321,7 +333,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
     )
     .await;
     let tool = |db: &crate::support::TestDb| {
-        P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), true)
+        P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), None, true)
     };
     let server_tool = tool(&server);
     let pending = |count: usize| {

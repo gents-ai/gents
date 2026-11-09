@@ -1442,7 +1442,7 @@ def toolOperationCaseJson (name : String) (schema history goal create selfConfig
   Json.mkObj [("name", toJson name), ("schema", toJson schema), ("history", toJson history),
     ("goal", toJson goal), ("create", toJson create), ("self_config", toJson selfConfig),
     ("category", toJson category), ("pack", toJson pack),
-    ("query", toJson false), ("write", toJson false),
+    ("query", toJson false), ("write", toJson false), ("p2p_mutate", toJson false),
     ("sources", toJson ((Configuration.toolOperationSources surface pack).map fun (purpose, permission) =>
       Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
 
@@ -1456,7 +1456,21 @@ def datastoreOperationCaseJson (name : String) (query write : Bool) : Json :=
   Json.mkObj [("name", toJson name), ("schema", toJson false), ("history", toJson false),
     ("goal", toJson false), ("create", toJson false), ("self_config", toJson false),
     ("category", toJson "none"), ("pack", toJson false),
-    ("query", toJson query), ("write", toJson write),
+    ("query", toJson query), ("write", toJson write), ("p2p_mutate", toJson false),
+    ("sources", toJson ((Configuration.toolOperationSources surface false).map fun (purpose, permission) =>
+      Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
+
+def p2pOperationCaseJson (name : String) (read mutate : Bool) : Json :=
+  let surface : ToolPolicy.Surface :=
+    { ToolPolicy.ContractCases.secureMinimal with
+      p2pRead := read
+      p2pMutate := mutate
+      queryTools := .none
+      writeTools := .none }
+  Json.mkObj [("name", toJson name), ("schema", toJson false), ("history", toJson false),
+    ("goal", toJson false), ("create", toJson false), ("self_config", toJson false),
+    ("category", toJson "none"), ("pack", toJson false),
+    ("query", toJson false), ("write", toJson false), ("p2p_mutate", toJson (read && mutate)),
     ("sources", toJson ((Configuration.toolOperationSources surface false).map fun (purpose, permission) =>
       Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
 
@@ -1481,7 +1495,9 @@ def toolOperationCases : List Json :=
    toolOperationCaseJson "all" true true true true true true "all",
    datastoreOperationCaseJson "datastore-query" true false,
    datastoreOperationCaseJson "datastore-write" false true,
-   datastoreOperationCaseJson "datastore-overlap" true true]
+   datastoreOperationCaseJson "datastore-overlap" true true,
+   p2pOperationCaseJson "p2p-read-only" true false,
+   p2pOperationCaseJson "p2p-pairing" true true]
 
 theorem tools_writer_cannot_grant_itself_schema_authority :
     let initial : Configuration.ToolGrantProjection := { admins := [userDid] }

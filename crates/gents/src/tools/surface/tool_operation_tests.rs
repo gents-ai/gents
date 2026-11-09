@@ -26,6 +26,8 @@ fn covered_tool_operations_follow_executable_identity_model() {
         surface.goal_tools = flag("goal");
         surface.goal_create = flag("create");
         surface.self_config = flag("self_config");
+        surface.p2p_read = flag("p2p_mutate");
+        surface.p2p_mutate = flag("p2p_mutate");
         if flag("query") {
             surface.query_tools = EndpointScope::only_map(std::collections::BTreeMap::from([(
                 ("tool".to_owned(), "collection".to_owned()),

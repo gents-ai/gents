@@ -1351,6 +1351,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "node_replication_matches_executable_scope_model",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::scope_templates::app_collection_admission_matches_executable_model",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/scope_templates.rs",
+            module_path: "conformance::scope_templates",
+            function: "app_collection_admission_matches_executable_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "client::schema::tests::generated_file_review_rules_exclude_whole_collection_delivery",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/schema.rs",

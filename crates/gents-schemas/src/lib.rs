@@ -360,7 +360,9 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PACK_INSTALLATION_NAME,
 ];
 
-/// Only discovery and enrollment protocol documents may cross a runtime boundary.
+/// The discovery and enrollment documents Gents' own routes carry across a
+/// runtime boundary. Application data crosses only on a node's explicit pairing,
+/// never on these routes.
 pub const REPLICATED_PROTOCOL_COLLECTION_NAMES: &[&str] = &[
     PEER_REGISTRY_NAME,
     NODE_DIRECTORY_ENTRY_NAME,

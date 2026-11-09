@@ -90,6 +90,48 @@ fn protocol_routes_match_model_actions() {
     );
 }
 
+/// Refusal strings come from the model; the Rust owner only decides over facts
+/// the database reports.
+#[test]
+fn app_collection_admission_matches_executable_model() {
+    use gents_protocol::peer_schema::{
+        decide_app_collection, AppCollectionFacts, AppCollectionRefusal,
+    };
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    assert_eq!(snapshot.scope_app_collection_cases.len(), 4);
+    for case in &snapshot.scope_app_collection_cases {
+        let facts = AppCollectionFacts {
+            managed: case["managed"].as_bool().unwrap(),
+            has_policy: case["has_policy"].as_bool().unwrap(),
+        };
+        let refusal = decide_app_collection(facts)
+            .err()
+            .map(|refusal| match refusal {
+                AppCollectionRefusal::Managed => "managed",
+                AppCollectionRefusal::PolicyProtected => "policy_protected",
+            });
+        assert_eq!(refusal, case["refusal"].as_str(), "{case}");
+    }
+    let template = resolve_template("app-collections").expect("app-collections route");
+    assert!(template.collections.is_empty());
+}
+
+#[test]
+fn managed_catalogs_are_refused_as_application_collections() {
+    for name in gents_protocol::schemas::ALL_COLLECTION_NAMES
+        .iter()
+        .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES)
+    {
+        assert!(
+            gents_protocol::peer_schema::is_managed_collection(name),
+            "{name}"
+        );
+    }
+    assert!(!gents_protocol::peer_schema::is_managed_collection(
+        "DeploymentNote"
+    ));
+}
+
 #[test]
 fn runtime_data_has_no_replication_template_or_app_escape() {
     let contracts = crate::lean_vocab_test::lean_identity_contracts();

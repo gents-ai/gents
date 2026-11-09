@@ -428,6 +428,7 @@ impl ToolSurface {
             tools.push(Box::new(crate::tools::builtin::p2p::P2pTool::new(
                 runtime.node.clone(),
                 runtime.identity.clone(),
+                runtime.agent_identity.clone(),
                 self.enable_p2p_mutations,
             )));
         }

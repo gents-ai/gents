@@ -5,16 +5,17 @@ import Mathlib.Data.List.Basic
 
 import Proofs.Identity.State
 
-/-! P2P routes exchange discovery and enrollment protocol only. Runtime data is
-read and written through its authenticated database endpoint. Neither a route
-name nor transport enrollment grants document access. -/
+/-! P2P routes exchange discovery and enrollment protocol, plus application
+collections a node explicitly opts into for an enrolled peer. All other runtime
+data is read and written through its authenticated database endpoint. Neither a
+route name nor transport enrollment grants document access. -/
 
 namespace ScopeTemplates
 
 abbrev TemplateId := String
 abbrev Did := String
 
-/-- Every protocol route pushes; no surviving template subscribes or replicates. -/
+/-- Every route pushes through a replicator; no surviving template subscribes. -/
 inductive Delivery where
   | push
   deriving DecidableEq, Repr
@@ -95,8 +96,44 @@ def clientTemplate : Template :=
   { id := "client", collections := clientCollections,
     scope := .clientRoute, delivery := .push }
 
-/-- Application collection replication is not a supported route: the catalog
-holds only the discovery templates. -/
-def builtinCatalog : Catalog := [machineTemplate, clientTemplate]
+/-- Application data replicates only where a node opted in for that peer: its
+Agent-owned overlay supplies the collections, so the route itself carries none. -/
+def appCollectionsTemplate : Template :=
+  { id := "app-collections", collections := [], scope := .perCollection [],
+    delivery := .push }
+
+def builtinCatalog : Catalog := [machineTemplate, clientTemplate, appCollectionsTemplate]
+
+/-- What admitting one application collection to a pairing reads. -/
+structure AppCollectionFacts where
+  managed : Bool
+  hasPolicy : Bool
+  deriving DecidableEq, Repr
+
+inductive AppCollectionRefusal where
+  | managed
+  | policyProtected
+  deriving DecidableEq, Repr
+
+/-- Decision (maintainer, 2026-11-09): a node may replicate application data over
+P2P on its own initiative, through an explicit per-peer opt-in. The database can
+do it; the Engineer sets it up. Enrollment never starts it, and there is no
+Gents-managed replication of application data.
+
+Managed collections (protocol, runtime and credential documents) are refused
+always, whatever grants or document ACP say; they keep their own exact routes or
+stay local.
+
+External premise (pinned DefraDB merge path): the receiver registers a replicated
+document with its block signer as owner, and relationships do not replicate, so
+on the receiver only that signer can read a replica of a policy-bearing
+collection. Any local reader would need a receiving-side grant the policy never
+delegated, for a relation name a foreign policy need not define. Replicating it
+would deliver data nobody may read, and granting it would widen access, so a
+collection with a document policy is refused rather than replicated. -/
+def decideAppCollection (facts : AppCollectionFacts) : Option AppCollectionRefusal :=
+  if facts.managed then some .managed
+  else if facts.hasPolicy then some .policyProtected
+  else none
 
 end ScopeTemplates

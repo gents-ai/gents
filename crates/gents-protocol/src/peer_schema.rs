@@ -9,6 +9,45 @@ use serde_json::Value;
 /// the client route. `null` means the runtime could not read its own node yet.
 pub const STATUS_REPLICATED_SCHEMA_FIELD: &str = "replicated_schema";
 
+/// A Gents-owned collection: protocol, runtime or credential documents. These
+/// keep their own routes and never replicate as application data.
+pub fn is_managed_collection(name: &str) -> bool {
+    crate::schemas::ALL_COLLECTION_NAMES.contains(&name)
+        || crate::schemas::RUNTIME_COLLECTION_NAMES.contains(&name)
+}
+
+/// What admitting one application collection to a pairing reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppCollectionFacts {
+    pub managed: bool,
+    pub has_policy: bool,
+}
+
+/// Why an application collection is refused for replication. The decision is
+/// `ScopeTemplates.decideAppCollection`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AppCollectionRefusal {
+    #[error("protocol, runtime and credential collections never replicate as application data")]
+    Managed,
+    #[error(
+        "a collection with a document policy cannot replicate: its replicas are owned by \
+         their signer on the peer and grants do not replicate, so only that signer could read them"
+    )]
+    PolicyProtected,
+}
+
+/// Refused collections never reach the transport, so this is the one place
+/// that decides which application data may replicate.
+pub fn decide_app_collection(facts: AppCollectionFacts) -> Result<(), AppCollectionRefusal> {
+    if facts.managed {
+        Err(AppCollectionRefusal::Managed)
+    } else if facts.has_policy {
+        Err(AppCollectionRefusal::PolicyProtected)
+    } else {
+        Ok(())
+    }
+}
+
 /// What a merge depends on for one collection: DefraDB's content-addressed
 /// active version ID, plus the branchable and policy settings that version
 /// ID does not cover.

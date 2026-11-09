@@ -979,25 +979,10 @@ async fn selected_push_refuses_app_collections_before_transport() {
     }
     let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
     let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
-    let sender_addresses = wait_for_peer_info(&sender_admin).await;
     let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
     sender_admin.connect(&receiver_addresses).await.unwrap();
     wait_for_active_peer(&sender_admin).await;
     wait_for_active_peer(&receiver_admin).await;
-    let refused = receiver_admin
-        .add_replicator(
-            &sender_addresses,
-            &["PacedDeliveryProbe".into()],
-            &PairingFilters::default(),
-        )
-        .await;
-    assert!(
-        matches!(
-            refused,
-            Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == "PacedDeliveryProbe"
-        ),
-        "{refused:?}"
-    );
     let written = crate::store::config_client::ConfigAccess::write_local(
         sender,
         "test.paced_delivery.seed",

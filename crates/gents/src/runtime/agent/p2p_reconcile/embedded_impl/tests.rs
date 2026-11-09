@@ -120,7 +120,8 @@ async fn protocol_allowlist_rejects_local_data_before_transport() {
                 allowed,
                 "{name}"
             );
-            if allowed {
+            // Application collections pass the guard: the overlay owner admits them.
+            if allowed || !gents_protocol::peer_schema::is_managed_collection(name) {
                 continue;
             }
             let result = admin

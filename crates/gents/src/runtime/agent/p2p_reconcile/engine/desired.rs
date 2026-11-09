@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 
 use super::super::templates::{
-    equality_filter, resolve_template, DidSource, PairingFilters, Scope,
+    equality_filter, resolve_template, DidSource, PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
 };
 use super::super::{policy, templates, PairingDesired};
 use super::rows::PairingStateRow;
@@ -98,15 +98,42 @@ pub(super) fn data_plane_desired_from_pairing_row(
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>();
 
-    let collections = if template.scope == Scope::ClientRoute {
-        policy::client_route_collections(client_route_direction)
+    let replicator_collections = if template.id == APP_COLLECTIONS_TEMPLATE {
+        let requested = row
+            .collections
+            .take()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect::<BTreeSet<_>>();
+        // The sweep admits against local facts after this pure step; a blank or
+        // managed name is refused here so it never installs a route.
+        if requested.is_empty()
+            || requested
+                .iter()
+                .any(|name| gents_protocol::peer_schema::is_managed_collection(name))
+        {
+            tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                peer_id = %signed_endpoint.peer_id,
+                collections = ?requested,
+                "app-collections overlay is empty or names managed collections; skipping the \
+                 data-plane layer (enrollment route unaffected)"
+            );
+            return Ok(None);
+        }
+        requested
     } else {
-        template.collections
+        let collections = if template.scope == Scope::ClientRoute {
+            policy::client_route_collections(client_route_direction)
+        } else {
+            template.collections
+        };
+        collections
+            .iter()
+            .map(|&c| c.to_string())
+            .collect::<BTreeSet<_>>()
     };
-    let replicator_collections = collections
-        .iter()
-        .map(|&c| c.to_string())
-        .collect::<BTreeSet<_>>();
 
     let replicator_filter =
         data_plane_scope_filter(&template.scope, peer_did, self_did, client_route_direction);

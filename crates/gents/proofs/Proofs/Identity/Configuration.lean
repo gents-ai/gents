@@ -89,7 +89,10 @@ the Goals it created, for example once one completes. Node permissions are
 node-wide, so document ACP decides which documents that reaches: the native
 owner, which is the creating Agent, holds delete on its own Goal rows
 (`goal_creator_deletes_its_goal`), while another session Agent does not. The
-goal-create source is the only grant, so disabling goal creation withdraws it. -/
+goal-create source is the only grant, so disabling goal creation withdraws it.
+P2P pairing mutations likewise carry `delete-document`: revoking a pairing deletes
+the Agent-owned overlay, and document ACP limits that to the overlay's native
+owner, so another Agent's overlay is unreachable. -/
 def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : List (String × String) :=
   let emit (purpose : String) (enabled : Bool) (permissions : List String) : List (String × String) :=
     if enabled then permissions.map (fun permission => (purpose, permission)) else []
@@ -110,7 +113,8 @@ def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : L
       emit purpose (surface.selfConfig && selfConfigCategoryEnabled surface.selfConfigCategories category)
         ["delete-document"]) ++
   emit "pack-install" (surface.selfConfig && selfConfigScopeEnabled surface.selfConfigCategories && packInstall)
-    ["delete-dac-relation", "delete-document"]
+    ["delete-dac-relation", "delete-document"] ++
+  emit "p2p-pairing" (surface.p2pRead && surface.p2pMutate) ["delete-document"]
 
 /-- Plugin roots are installed only by the trusted host from its reviewed,
   digest-bound local plugin declaration, in the same transaction as the
