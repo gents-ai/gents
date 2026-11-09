@@ -14,6 +14,9 @@ import {
   type DesktopSessionSnapshot,
   type GoalControlAction,
   type GoalControlResult,
+  type SessionGoalNextAction,
+  type SessionGoalState,
+  type SessionGoalView,
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
@@ -91,6 +94,41 @@ function queueEditFailure(
   if (requestIds.every((id) => waiting.has(id)))
     return "The queue changed before it was saved";
   return actionFailure(doing, error);
+}
+
+/** What to do instead when a state's next action is not the one requested.
+ * An unknown state carries its own reason from the runtime owner. */
+const GOAL_NEXT_STEP: Record<
+  Exclude<SessionGoalNextAction, "await_publication">,
+  string
+> = {
+  send: "This chat is not open on its runtime yet. Send a message to open it, then change its Goal.",
+  start_goal: "This chat has no Goal to change. Start one first.",
+  control_goal: "This chat already has a Goal. Change it instead.",
+};
+
+/** Only an observed state establishes a Goal or its absence (Lean
+ * `SessionObservation`). The runtime owner supplies each state's next action
+ * and an unknown state's reason; this boundary acts only on those. */
+function observedGoal(
+  state: SessionGoalState | null,
+  nodeDid: string,
+  sessionId: string,
+  accepts: readonly SessionGoalNextAction[],
+): SessionGoalView {
+  if (!state) throw new Error("Connect this client before changing a Goal.");
+  if (!accepts.includes(state.next))
+    throw new Error(
+      state.kind === "unknown"
+        ? state.reason
+        : GOAL_NEXT_STEP[state.next as keyof typeof GOAL_NEXT_STEP],
+    );
+  if (state.kind !== "observed")
+    throw new Error("The Goal state for this chat is not observed.");
+  const observation = state.observation;
+  if (observation.nodeDid !== nodeDid || observation.sessionId !== sessionId)
+    throw new Error("The Goal observation belongs to another chat.");
+  return observation;
 }
 
 const GOAL_CONTROL_DOING = {
@@ -434,17 +472,13 @@ export function createChatActions({
       if (!goalClientDid)
         throw new Error("Connect this client before changing a Goal.");
       const current = selectedSessionId
-        ? await api.fetchSessionGoal(node.nodeDid, selectedSessionId)
+        ? observedGoal(
+            await api.fetchSessionGoal(node.nodeDid, selectedSessionId),
+            node.nodeDid,
+            selectedSessionId,
+            ["start_goal", "control_goal"],
+          )
         : null;
-      if (
-        selectedSessionId &&
-        (!current ||
-          current.nodeDid !== node.nodeDid ||
-          current.sessionId !== selectedSessionId)
-      )
-        throw new Error(
-          "The Goal state is unavailable for this chat. Refresh it before changing the Goal.",
-        );
       const result = await goalDelivery.submit(
         {
           clientDid: goalClientDid,
@@ -488,10 +522,13 @@ export function createChatActions({
       if (!nodeDid) throw new Error("no node holds this session");
       if (!goalClientDid)
         throw new Error("Connect this client before changing a Goal.");
-      const current = await api.fetchSessionGoal(nodeDid, sessionId);
-      if (current && (current.nodeDid !== nodeDid || current.sessionId !== sessionId))
-        throw new Error("The Goal observation belongs to another chat.");
-      if (!current?.goal) throw new Error("this session has no goal");
+      const current = observedGoal(
+        await api.fetchSessionGoal(nodeDid, sessionId),
+        nodeDid,
+        sessionId,
+        ["control_goal"],
+      );
+      if (!current.goal) throw new Error("this session has no goal");
       await goalDelivery.submit(
         {
           clientDid: goalClientDid,

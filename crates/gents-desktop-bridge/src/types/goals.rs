@@ -14,6 +14,31 @@ pub struct SessionGoalView {
     pub waiting_question_ids: Option<Vec<String>>,
 }
 
+pub use gents::goal::SessionGoalNextAction;
+
+/// One session's Goal state as the desktop reads it from its runtime. The
+/// state, its next action and an unknown state's reason come from the
+/// `gents::goal` owner (Lean `SessionObservation.State`, `next`, `refusal`);
+/// this DTO only carries them. Only `observed` carries a verified Goal or a
+/// verified absence.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionGoalState {
+    Observed {
+        observation: SessionGoalView,
+        next: SessionGoalNextAction,
+    },
+    NoReadableSession {
+        next: SessionGoalNextAction,
+    },
+    Unknown {
+        cause: gents::goal::SessionGoalUnknownCause,
+        next: SessionGoalNextAction,
+        /// The refusal a send or Goal change from this state returns.
+        reason: String,
+    },
+}
+
 /// Decimal strings preserve the runtime's signed 64-bit budgets and counters
 /// through JavaScript display and form editing.
 #[derive(Debug, Clone, Serialize, TS)]

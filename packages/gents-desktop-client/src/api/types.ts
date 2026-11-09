@@ -20,7 +20,7 @@ import type { GoalControlResult } from "../generated/GoalControlResult.js";
 import type { GoalSubmissionQuery } from "../generated/GoalSubmissionQuery.js";
 import type { GoalSubmissionReceipt } from "../generated/GoalSubmissionReceipt.js";
 import type { GoalSubmissionRecovery } from "../generated/GoalSubmissionRecovery.js";
-import type { SessionGoalView } from "../generated/SessionGoalView.js";
+import type { SessionGoalState } from "../generated/SessionGoalState.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
 import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
@@ -158,7 +158,7 @@ export type DesktopApiAdapter = {
   fetchSessionGoal: (
     nodeDid: string,
     sessionId: string,
-  ) => Promise<SessionGoalView | null>;
+  ) => Promise<SessionGoalState | null>;
   controlGoal: (request: GoalControlRequest) => Promise<GoalControlResult>;
   recoverGoalSubmission: (
     query: GoalSubmissionQuery,

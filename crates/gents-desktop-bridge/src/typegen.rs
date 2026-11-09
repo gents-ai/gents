@@ -236,6 +236,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PendingMessageSteerRequest,
         PendingQueueEditResult,
         SessionGoalView,
+        SessionGoalState,
+        SessionGoalNextAction,
         GoalControlView,
         GoalControlAction,
         GoalControlRequest,

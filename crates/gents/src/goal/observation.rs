@@ -8,6 +8,7 @@ use super::*;
 #[cfg(test)]
 mod contract_tests;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::config_client::agent_session::AgentSessionRowRead;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::session::SessionOwnerRow;
 
@@ -106,6 +107,15 @@ async fn rows_in_txn(
         escape_graphql_string(&session.session.node_did),
         escape_graphql_string(&session.session.session_id),
     )).await?;
+    decode_observation_rows(&response, session)
+}
+
+/// Decodes the projection query's response for `session`'s physical document.
+/// As for the session row, a response without the row list fails the read.
+fn decode_observation_rows(
+    response: &serde_json::Value,
+    session: &SessionOwnerRow,
+) -> Result<Vec<ObservationRow>> {
     let rows: Vec<ObservationRow> = serde_json::from_value(
         response
             .pointer("/data/GoalObservation")
@@ -121,6 +131,21 @@ async fn rows_in_txn(
         "goal observation has conflicting physical documents"
     );
     Ok(rows)
+}
+
+/// Lean `SessionObservation.ProjectionRead` for a present session's rows.
+async fn classify_projection(
+    verifier: &dyn NodeIdentity,
+    session: &SessionOwnerRow,
+    rows: &[ObservationRow],
+) -> Result<SessionGoalProjectionRead> {
+    Ok(match rows.first() {
+        Some(row) => match verified(verifier, session, row).await? {
+            Some(observation) => SessionGoalProjectionRead::Verified(Box::new(observation)),
+            None => SessionGoalProjectionRead::Unverified,
+        },
+        None => SessionGoalProjectionRead::Missing,
+    })
 }
 
 async fn verified(
@@ -168,8 +193,9 @@ async fn verified(
     Ok(Some(observation))
 }
 
-/// An absent or unverified projection is unknown. Only a verified envelope
-/// containing `goal: None` establishes that the runtime observed no Goal.
+/// Collapses [`SessionGoalObservationState`] to the verified envelope for
+/// `requester_did`, for callers that act only on one. Client views and sends
+/// use the three-state read: `None` here does not mean the session has no Goal.
 pub async fn load_session_goal_observation(
     access: &ConfigAccess,
     verifier: &dyn NodeIdentity,
@@ -178,43 +204,142 @@ pub async fn load_session_goal_observation(
     requester_did: Option<&str>,
 ) -> Result<Option<SessionGoalObservation>> {
     Ok(
-        match load_session_goal_observation_state(
-            access,
-            verifier,
-            node_did,
-            session_id,
-            requester_did,
-        )
-        .await?
+        match load_client_session_goal_observation_state(access, verifier, node_did, session_id)
+            .await?
         {
-            SessionGoalObservationState::Observed(observation) => Some(*observation),
-            SessionGoalObservationState::NoReadableSession
-            | SessionGoalObservationState::Unknown => None,
+            SessionGoalObservationState::Observed(observation)
+                if observation.requester_did.as_deref() == requester_did =>
+            {
+                Some(*observation)
+            }
+            SessionGoalObservationState::Observed(_)
+            | SessionGoalObservationState::NoReadableSession
+            | SessionGoalObservationState::Unknown(_) => None,
         },
     )
 }
 
-/// A missing projection for an existing readable session must not be treated
-/// as a verified absence when capturing signed request intent.
+/// Why a readable session's Goal state is not known (Lean
+/// `SessionObservation.UnknownCause`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGoalUnknownCause {
+    ProjectionMissing,
+    ProjectionUnverified,
+}
+
+/// The next step a Goal state offers (Lean `SessionObservation.NextAction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGoalNextAction {
+    ControlGoal,
+    StartGoal,
+    Send,
+    AwaitPublication,
+}
+
+/// One read transaction's Goal state (Lean `SessionObservation.State`). A
+/// missing projection for an existing readable session is never a verified
+/// absence when capturing signed request intent.
 #[derive(Debug)]
 pub enum SessionGoalObservationState {
     NoReadableSession,
-    Unknown,
+    Unknown(SessionGoalUnknownCause),
     Observed(Box<SessionGoalObservation>),
 }
 
+impl SessionGoalObservationState {
+    /// Lean `SessionObservation.next`.
+    pub fn next(&self) -> SessionGoalNextAction {
+        match self {
+            Self::Observed(observation) if observation.goal.is_some() => {
+                SessionGoalNextAction::ControlGoal
+            }
+            Self::Observed(_) => SessionGoalNextAction::StartGoal,
+            Self::NoReadableSession => SessionGoalNextAction::Send,
+            Self::Unknown(_) => SessionGoalNextAction::AwaitPublication,
+        }
+    }
+}
+
+/// A send or Goal change refused because its session's Goal state is unknown
+/// (Lean `SessionObservation.refusal`). It names the cause its view shows; the
+/// next action is to wait for the Agent's runtime to publish and act again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum GoalInputRefused {
+    #[error(
+        "This chat's Goal state is unknown: its Agent has not published it yet. \
+         The Agent's runtime publishes it while the Agent runs; try again then."
+    )]
+    ProjectionMissing,
+    #[error(
+        "This chat's Goal state is unknown: its published state does not verify for this \
+         session and Agent. The Agent's runtime republishes it while the Agent runs; try \
+         again then."
+    )]
+    ProjectionUnverified,
+}
+
+impl GoalInputRefused {
+    pub fn cause(self) -> SessionGoalUnknownCause {
+        match self {
+            Self::ProjectionMissing => SessionGoalUnknownCause::ProjectionMissing,
+            Self::ProjectionUnverified => SessionGoalUnknownCause::ProjectionUnverified,
+        }
+    }
+}
+
+impl From<SessionGoalUnknownCause> for GoalInputRefused {
+    fn from(cause: SessionGoalUnknownCause) -> Self {
+        match cause {
+            SessionGoalUnknownCause::ProjectionMissing => Self::ProjectionMissing,
+            SessionGoalUnknownCause::ProjectionUnverified => Self::ProjectionUnverified,
+        }
+    }
+}
+
+/// The projection row read with its session (Lean
+/// `SessionObservation.ProjectionRead`).
+#[derive(Debug)]
+pub enum SessionGoalProjectionRead {
+    Missing,
+    Unverified,
+    Verified(Box<SessionGoalObservation>),
+}
+
+/// Lean `SessionObservation.observe`. The projection is consulted only for a
+/// present session row.
+pub fn observe_session_goal(
+    session: &AgentSessionRowRead,
+    projection: SessionGoalProjectionRead,
+) -> SessionGoalObservationState {
+    match (session, projection) {
+        (AgentSessionRowRead::Absent, _) => SessionGoalObservationState::NoReadableSession,
+        (AgentSessionRowRead::Present(_), SessionGoalProjectionRead::Missing) => {
+            SessionGoalObservationState::Unknown(SessionGoalUnknownCause::ProjectionMissing)
+        }
+        (AgentSessionRowRead::Present(_), SessionGoalProjectionRead::Unverified) => {
+            SessionGoalObservationState::Unknown(SessionGoalUnknownCause::ProjectionUnverified)
+        }
+        (AgentSessionRowRead::Present(_), SessionGoalProjectionRead::Verified(observation)) => {
+            SessionGoalObservationState::Observed(observation)
+        }
+    }
+}
+
+/// Lean `SessionObservation.bind` and `refusal`.
 pub fn bind_goal_input(
     input: gents_protocol::request_input::RequestInput,
     state: SessionGoalObservationState,
-) -> Result<gents_protocol::request_input::RequestInput> {
+) -> std::result::Result<gents_protocol::request_input::RequestInput, GoalInputRefused> {
     if input.goal_assignment.is_some() {
         return Ok(input);
     }
     let reference = match state {
         SessionGoalObservationState::NoReadableSession => None,
-        SessionGoalObservationState::Unknown => {
-            anyhow::bail!("Goal state is still syncing. Refresh this chat before sending.")
-        }
+        SessionGoalObservationState::Unknown(cause) => return Err(cause.into()),
         SessionGoalObservationState::Observed(observation) => observation.goal.and_then(|goal| {
             goal.assignment_root_request_doc_id.map(|root| {
                 gents_protocol::request_input::GoalAssignmentInput {
@@ -237,21 +362,54 @@ fn bind_goal_reference(
     input
 }
 
-pub async fn prepare_goal_input(
+/// The client's send preparation: one read transaction, then the binding.
+pub async fn prepare_client_goal_input(
     access: &ConfigAccess,
     verifier: &dyn NodeIdentity,
     node_did: &str,
     session_id: &str,
-    requester_did: Option<&str>,
     input: gents_protocol::request_input::RequestInput,
 ) -> Result<gents_protocol::request_input::RequestInput> {
     if input.goal_assignment.is_some() {
         return Ok(input);
     }
     let state =
-        load_session_goal_observation_state(access, verifier, node_did, session_id, requester_did)
-            .await?;
-    bind_goal_input(input, state)
+        load_client_session_goal_observation_state(access, verifier, node_did, session_id).await?;
+    Ok(bind_goal_input(input, state)?)
+}
+
+/// The client's read of one session's Goal state in one transaction, as the
+/// actor `access` signs for. The session row is scoped by node and session id
+/// only; its projection is verified for that row's own requester provenance,
+/// which the client never substitutes. Whether that actor may then send into
+/// the session is admission's decision, not this read's.
+pub async fn load_client_session_goal_observation_state(
+    access: &ConfigAccess,
+    verifier: &dyn NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+) -> Result<SessionGoalObservationState> {
+    access
+        .transact_readonly("goal.read_client_observation", |txn| {
+            Box::pin(async move {
+                let session = crate::store::config_client::agent_session::read_agent_session_owner_in_txn(
+                    txn, node_did, session_id,
+                )
+                .await?;
+                let projection = match &session {
+                    AgentSessionRowRead::Present(row) => {
+                        anyhow::ensure!(
+                            row.session.requester_did.is_some(),
+                            "existing session has no requester provenance"
+                        );
+                        classify_projection(verifier, row, &rows_in_txn(txn, row).await?).await?
+                    }
+                    AgentSessionRowRead::Absent => SessionGoalProjectionRead::Missing,
+                };
+                Ok(observe_session_goal(&session, projection))
+            })
+        })
+        .await
 }
 
 /// Canonical reads require a locally owned destination. Remote destination
@@ -294,93 +452,10 @@ pub async fn prepare_goal_input_in_txn(
     Ok(bind_goal_reference(input, reference))
 }
 
-pub async fn load_session_goal_observation_state(
-    access: &ConfigAccess,
-    verifier: &dyn NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<SessionGoalObservationState> {
-    access
-        .transact_readonly("goal.read_observation", |txn| {
-            Box::pin(load_session_goal_observation_state_in_txn(
-                txn,
-                verifier,
-                node_did,
-                session_id,
-                requester_did,
-            ))
-        })
-        .await
-}
-
-pub async fn load_session_goal_observation_state_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    verifier: &dyn NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<SessionGoalObservationState> {
-    let Some(session) = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
-        txn,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await?
-    else {
-        return Ok(SessionGoalObservationState::NoReadableSession);
-    };
-    session_goal_observation_state_in_txn(txn, verifier, &session).await
-}
-
-/// A client's goal state for its next message in `session_id`, read in one
-/// snapshot with the session row that scopes it. The client acts as
-/// `actor_did` until the session exists and as the session's requester after,
-/// so the requester scope and the goal state come from the same row rather
-/// than two reads of it.
-pub async fn load_client_session_goal_observation_state(
-    access: &ConfigAccess,
-    verifier: &dyn NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-) -> Result<SessionGoalObservationState> {
-    access
-        .transact_readonly("goal.read_client_observation", |txn| {
-            Box::pin(async move {
-                let Some(session) =
-                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
-                        txn, node_did, session_id,
-                    )
-                    .await?
-                else {
-                    return Ok(SessionGoalObservationState::NoReadableSession);
-                };
-                anyhow::ensure!(
-                    session.session.requester_did.is_some(),
-                    "existing session has no requester provenance"
-                );
-                session_goal_observation_state_in_txn(txn, verifier, &session).await
-            })
-        })
-        .await
-}
-
-async fn session_goal_observation_state_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    verifier: &dyn NodeIdentity,
-    session: &SessionOwnerRow,
-) -> Result<SessionGoalObservationState> {
-    match rows_in_txn(txn, session).await?.first() {
-        Some(row) => Ok(match verified(verifier, session, row).await? {
-            Some(observation) => SessionGoalObservationState::Observed(Box::new(observation)),
-            None => SessionGoalObservationState::Unknown,
-        }),
-        None => Ok(SessionGoalObservationState::Unknown),
-    }
-}
-
-pub(crate) async fn project_session_goal(
+/// Publishes `session_id`'s Goal projection signed by `signer`, its selected
+/// Agent. The runtime's reconciler is the production caller; tests on a served
+/// runtime call it to publish the projection a client then reads.
+pub async fn project_session_goal(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn NodeIdentity>,
     signer: &Arc<dyn NodeIdentity>,
