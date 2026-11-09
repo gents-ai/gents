@@ -109,7 +109,9 @@ async fn node() -> Arc<EmbeddedNode> {
 fn runtime_owned_tool(node: &Arc<EmbeddedNode>) -> SchemaTool {
     let runtime = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
     SchemaTool {
+        node_did: runtime.to_string(),
         access: ConfigAccess::local_as(node.clone(), runtime),
+        home: None,
     }
 }
 
@@ -135,7 +137,13 @@ async fn schema_preview_and_publication_expose_ignored_native_directives() {
             .await
             .unwrap();
     }
-    let tool = SchemaTool::for_managed_agent(db.node.clone(), agent.as_ref()).unwrap();
+    let tool = SchemaTool::for_managed_agent(
+        db.node.clone(),
+        db.node_identity.did(),
+        None,
+        agent.as_ref(),
+    )
+    .unwrap();
     let preview = call(
         &tool,
         json!({"argv":["collection","preview","create"],"options":{
@@ -259,7 +267,12 @@ async fn schema_publication_uses_agent_native_authority() {
             crate::store::identity::RegisteredIdentity::from_registered_did(agent.did(), None)
                 .unwrap();
         assert!(matches!(
-            SchemaTool::for_managed_agent(node.clone(), &did_only),
+            SchemaTool::for_managed_agent(
+                node.clone(),
+                node.node_identity_did().unwrap(),
+                None,
+                &did_only
+            ),
             Err(SchemaIdentityError::ConfigClient(
                 crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired
             ))
@@ -272,12 +285,23 @@ async fn schema_publication_uses_agent_native_authority() {
             crate::store::identity::resolve_agent_identity(&foreign_root, &foreign_binding)
                 .unwrap();
         assert!(matches!(
-            SchemaTool::for_managed_agent(node.clone(), foreign_agent.as_ref()),
+            SchemaTool::for_managed_agent(
+                node.clone(),
+                node.node_identity_did().unwrap(),
+                None,
+                foreign_agent.as_ref(),
+            ),
             Err(SchemaIdentityError::ConfigClient(
                 crate::store::config_client::ConfigClientError::TransactionActorMismatch
             ))
         ));
-        let tool = SchemaTool::for_managed_agent(node.clone(), agent.as_ref()).unwrap();
+        let tool = SchemaTool::for_managed_agent(
+            node.clone(),
+            node.node_identity_did().unwrap(),
+            None,
+            agent.as_ref(),
+        )
+        .unwrap();
         assert!(
             tool.call(args(json!({"argv":["collection","list"]})))
                 .await
@@ -335,6 +359,19 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .add_collection("type AgentViewInput { name: String }")
         .await
         .unwrap();
+    for scratch in ["AgentScratch", "AgentScratchKept"] {
+        owner
+            .add_collection(&format!("type {scratch} {{ name: String }}"))
+            .await
+            .unwrap();
+        owner
+            .write(
+                "schema_test.seed",
+                &format!(r#"mutation {{ create_{scratch}(input:{{name:"row"}}) {{ _docID }} }}"#),
+            )
+            .await
+            .unwrap();
+    }
     let actor_did = identity::Did::new(agent.did()).unwrap();
     let access =
         ConfigAccess::local_managed_agent(node.clone(), actor_did.clone(), agent.as_ref()).unwrap();
@@ -347,6 +384,11 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .is_err());
     assert!(access
         .materialize_schema_collection("AgentViewInput")
+        .await
+        .is_err());
+    assert!(access.truncate_collection("AgentScratch").await.is_err());
+    assert!(access
+        .remove_collections(&["AgentScratch".to_owned()])
         .await
         .is_err());
 
@@ -382,12 +424,37 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .materialize_schema_collection("AgentViewInput")
         .await
         .unwrap();
+    assert!(permissions.contains(&NodePermission::CollectionTruncate));
+    access.truncate_collection("AgentScratch").await.unwrap();
+    access
+        .remove_collections(&["AgentScratch".to_owned()])
+        .await
+        .unwrap();
+    assert!(owner
+        .collection_version("AgentScratch")
+        .await
+        .unwrap()
+        .is_none());
     for permission in &permissions {
         owner
             .revoke_node_permission(&actor_did, *permission)
             .await
             .unwrap();
     }
+    assert!(access
+        .truncate_collection("AgentScratchKept")
+        .await
+        .is_err());
+    assert_eq!(
+        owner
+            .execute("{ AgentScratchKept { name } }")
+            .await
+            .unwrap()["data"]["AgentScratchKept"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert!(access
         .add_schema_view(
             "AgentViewInput { name }",
@@ -864,4 +931,357 @@ async fn invalid_sdl_points_to_its_concept_without_rewriting_it() {
             .unwrap()
             .is_none());
     }
+}
+
+async fn refusal(tool: &SchemaTool, value: Value) -> Value {
+    serde_json::from_str(&tool.call(args(value)).await.unwrap_err().0).unwrap()
+}
+
+async fn scratch_rows(node: &Arc<EmbeddedNode>) -> usize {
+    ConfigAccess::local(node.clone())
+        .execute("{ Scratch { title } }")
+        .await
+        .unwrap()["data"]["Scratch"]
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+async fn seed_scratch(node: &Arc<EmbeddedNode>, title: &str) {
+    ConfigAccess::write_local(
+        node,
+        "schema_test.seed",
+        &format!(r#"mutation {{ create_Scratch(input:{{title:"{title}"}}) {{ _docID }} }}"#),
+    )
+    .await
+    .unwrap();
+}
+
+const SCRATCH_SDL: &str = "type Scratch { title: String @index }";
+
+#[tokio::test]
+async fn collection_cleanup_empties_removes_and_frees_the_name() {
+    let node = node().await;
+    let tool = SchemaTool::new(node.clone());
+    let access = ConfigAccess::local(node.clone());
+    apply(
+        &tool,
+        json!({"argv":["collection","create"],"options":{"sdl":SCRATCH_SDL}}),
+    )
+    .await;
+    seed_scratch(&node, "one").await;
+    seed_scratch(&node, "two").await;
+
+    let full = refusal(
+        &tool,
+        json!({"argv":["collection","preview","remove","Scratch"]}),
+    )
+    .await;
+    assert!(full["error"].as_str().unwrap().contains("2 document(s)"));
+    assert_eq!(
+        full["recovery"]["args"]["argv"],
+        json!(["collection", "preview", "empty", "Scratch"])
+    );
+
+    let preview = call(&tool, full["recovery"]["args"].clone()).await;
+    assert_eq!(preview["loss"]["documents"], 2);
+    assert_eq!(preview["loss"]["indexes"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["loss"]["views_reading_it"], json!([]));
+    assert_eq!(scratch_rows(&node).await, 2);
+
+    seed_scratch(&node, "three").await;
+    assert!(tool
+        .call(args(preview["next_call"]["args"].clone()))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("stale digest"));
+    assert_eq!(scratch_rows(&node).await, 3);
+
+    let emptied = apply(&tool, json!({"argv":["collection","empty","Scratch"]})).await;
+    assert_eq!(
+        emptied,
+        json!({"committed":true,"result":{"collection":"Scratch","documents_removed":3}})
+    );
+    assert_eq!(scratch_rows(&node).await, 0);
+    assert!(access
+        .collection_version("Scratch")
+        .await
+        .unwrap()
+        .is_some());
+
+    let removal = call(
+        &tool,
+        json!({"argv":["collection","preview","remove","Scratch"]}),
+    )
+    .await;
+    assert_eq!(removal["loss"]["documents"], 0);
+    assert_eq!(removal["loss"]["versions"], 1);
+    let removed = call(&tool, removal["next_call"]["args"].clone()).await;
+    assert_eq!(
+        removed,
+        json!({"committed":true,"result":{"collection":"Scratch","removed":true}})
+    );
+    assert!(access
+        .collection_version("Scratch")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!access.collection_names().await.unwrap().contains("Scratch"));
+    assert!(access
+        .collection_versions()
+        .await
+        .unwrap()
+        .iter()
+        .all(|version| version["Name"] != "Scratch"));
+
+    apply(
+        &tool,
+        json!({"argv":["collection","create"],"options":{"sdl":SCRATCH_SDL}}),
+    )
+    .await;
+    assert_eq!(scratch_rows(&node).await, 0);
+    seed_scratch(&node, "one").await;
+    let rows = access
+        .execute(r#"{ Scratch(filter: {title: {_eq: "one"}}) { title } }"#)
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["Scratch"].as_array().unwrap().len(), 1);
+    assert_eq!(scratch_rows(&node).await, 1);
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn collection_cleanup_refuses_managed_and_referenced_collections() {
+    use crate::pack::{HomePackInstall, PackKind, PackUxPlugin, UxContributions, UxDataSurface};
+
+    let node = node().await;
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let home = tempfile::tempdir().unwrap();
+    let tool = SchemaTool {
+        access: ConfigAccess::local(node.clone()),
+        node_did: node_did.clone(),
+        home: Some(home.path().to_owned()),
+    };
+    let access = ConfigAccess::local(node.clone());
+    apply(
+        &tool,
+        json!({"argv":["collection","create"],"options":{"sdl":SCRATCH_SDL}}),
+    )
+    .await;
+    seed_scratch(&node, "kept").await;
+
+    for verb in ["empty", "remove"] {
+        for managed in ["AgentSession", "DatastoreToolSurface", "PackInstallation"] {
+            let refused =
+                refusal(&tool, json!({"argv":["collection","preview",verb,managed]})).await;
+            assert!(
+                refused["error"].as_str().unwrap().contains("Gents-managed"),
+                "{verb} {managed}: {refused}"
+            );
+        }
+    }
+
+    let users = |refused: &Value| -> Vec<String> {
+        refused["recovery"]["release_first"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{refused}"))
+            .iter()
+            .map(|user| {
+                assert!(!user["release_with"].as_str().unwrap().is_empty());
+                user["user"].as_str().unwrap().to_owned()
+            })
+            .collect()
+    };
+    let write = |mutation: String| {
+        let node = node.clone();
+        async move {
+            let response = ConfigAccess::write_local(&node, "schema_test.reference", &mutation)
+                .await
+                .unwrap();
+            let data = response.get("data").unwrap_or(&response);
+            let (_, rows) = data.as_object().unwrap().iter().next().unwrap();
+            rows[0]["_docID"].as_str().unwrap().to_owned()
+        }
+    };
+    let delete = |collection: &'static str, id: String| {
+        let node = node.clone();
+        async move {
+            ConfigAccess::write_local(
+                &node,
+                "schema_test.release",
+                &format!(r#"mutation {{ delete_{collection}(docID: "{id}") {{ _docID }} }}"#),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    let did = crate::store::graphql::escape_graphql_string(&node_did);
+    let entries = gents_protocol::graphql::graphql_input_literal(&json!({"entries": [
+        {"kind":"query","tool_name":"find_scratch","collection":"Scratch",
+         "description":"Find scratch rows","fields":["title"]}
+    ]}))
+    .unwrap();
+    let references = [
+        (
+            "DatastoreToolSurface",
+            format!(
+                r#"mutation {{ create_DatastoreToolSurface(input: {{node_did:"{did}",surface_id:"scratch-tools",enabled:true,entries:{entries}}}) {{_docID}} }}"#
+            ),
+            "datastore surface \"scratch-tools\"",
+        ),
+        (
+            "EventSource",
+            format!(
+                r#"mutation {{ create_EventSource(input: {{node_did:"{did}",event_source_id:"scratch-events",source_collection:"Scratch",event_kind:"created"}}) {{_docID}} }}"#
+            ),
+            "event source \"scratch-events\"",
+        ),
+        (
+            "PeerPairingDesired",
+            format!(
+                r#"mutation {{ create_PeerPairingDesired(input: {{peer_id:"peer-a",node_did:"{did}",actor_did:"{did}",source:"manual",template:"client",replicator_addresses:["addr"],collections:["Scratch"]}}) {{_docID}} }}"#
+            ),
+            "P2P pairing with peer \"peer-a\"",
+        ),
+    ];
+    for (collection, mutation, expected) in references {
+        let id = write(mutation).await;
+        for verb in ["empty", "remove"] {
+            let refused = refusal(
+                &tool,
+                json!({"argv":["collection","preview",verb,"Scratch"]}),
+            )
+            .await;
+            assert!(refused["error"].as_str().unwrap().contains("still in use"));
+            let users = users(&refused);
+            assert_eq!(users.len(), 1, "{refused}");
+            assert!(users[0].contains(expected), "{refused}");
+            assert_eq!(
+                refused["recovery"]["then"]["args"]["argv"],
+                json!(["collection", "preview", verb])
+            );
+        }
+        delete(collection, id).await;
+    }
+
+    let surface = write(format!(
+        r#"mutation {{ create_DatastoreToolSurface(input: {{node_did:"{did}",surface_id:"scratch-board",enabled:true,entries:{entries}}}) {{_docID}} }}"#
+    ))
+    .await;
+    let pack_home = home.path().to_owned();
+    tokio::task::spawn_blocking(move || {
+        let ux = vec![PackUxPlugin {
+            name: "board".into(),
+            description: "the board".into(),
+            entry: Some("ux/board/plugin.js".into()),
+            css: None,
+            plugin: None,
+            contributes: UxContributions {
+                areas: vec!["plugin.pages".into()],
+                directives: vec![],
+            },
+            default_enabled: None,
+            data: vec![UxDataSurface {
+                surface: "scratch-board".into(),
+                tools: vec!["find_scratch".into()],
+            }],
+        }];
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(source.path().join("ux/board")).unwrap();
+        std::fs::create_dir_all(source.path().join("schemas")).unwrap();
+        std::fs::write(source.path().join("README.md"), "# Board").unwrap();
+        std::fs::write(source.path().join("ux/board/plugin.js"), "export default {}").unwrap();
+        std::fs::write(source.path().join("schemas/scratch.graphql"), SCRATCH_SDL).unwrap();
+        std::fs::write(source.path().join("config.json"), "{}").unwrap();
+        let manifest = json!({"manifest_version":1,"name":"board","namespace":"acme",
+            "version":"1.0.0","description":"cleanup fixture","kind":"documents",
+            "authors":["Fixture"],"assets":["README.md","ux/board/plugin.js","schemas/scratch.graphql","config.json"],
+            "config":"config.json","schemas":["schemas/scratch.graphql"],"ux":&ux});
+        std::fs::write(
+            source.path().join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let (bytes, header) = crate::pack::archive::pack_dir(source.path()).unwrap();
+        crate::pack::store::PackStore::new(&pack_home)
+            .import(bytes.as_slice(), Some(&header.digest))
+            .unwrap();
+        crate::pack::write_home_install(
+            &pack_home,
+            &HomePackInstall {
+                coordinate: "acme/board".into(),
+                version: "1.0.0".into(),
+                digest: header.digest,
+                kind: PackKind::Documents,
+                assets: "packs/.materialized/acme/board/fixture".into(),
+                plugins: vec![],
+                dependency_assets: Vec::new(),
+                installed_via: None,
+                installed_at: "2026-01-01T00:00:00Z".into(),
+                ux,
+            },
+        )
+        .unwrap();
+    })
+    .await
+    .unwrap();
+    let refused = refusal(
+        &tool,
+        json!({"argv":["collection","preview","remove","Scratch"]}),
+    )
+    .await;
+    let found = users(&refused);
+    assert_eq!(found.len(), 3, "{refused}");
+    assert!(
+        found[0].contains("page acme/board/board data grant"),
+        "{refused}"
+    );
+    assert!(
+        found[1].contains("installed pack acme/board declares it"),
+        "{refused}"
+    );
+    assert!(found[2].contains("datastore surface"), "{refused}");
+
+    let kept = crate::collection_use::remove_unused_collections(
+        &access,
+        Some(home.path()),
+        &node_did,
+        [
+            "Scratch".to_owned(),
+            "AgentSession".to_owned(),
+            "Absent".to_owned(),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(kept.len(), 1);
+    assert!(!kept[0].removed);
+    assert_eq!(kept[0].kept_for.len(), 3);
+    assert_eq!(scratch_rows(&node).await, 1);
+
+    delete("DatastoreToolSurface", surface).await;
+    crate::pack::forget_home_install(home.path(), "acme/board").unwrap();
+    let cleaned = crate::collection_use::remove_unused_collections(
+        &access,
+        Some(home.path()),
+        &node_did,
+        ["Scratch".to_owned()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(cleaned.len(), 1);
+    assert!(cleaned[0].removed);
+    assert_eq!(cleaned[0].documents_removed, Some(1));
+    assert!(access
+        .collection_version("Scratch")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(access
+        .collection_version("AgentSession")
+        .await
+        .unwrap()
+        .is_some());
+    node.shutdown().await.unwrap();
 }

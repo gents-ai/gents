@@ -421,6 +421,8 @@ impl ToolSurface {
             tools.push(Box::new(
                 crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
                     runtime.node.clone(),
+                    &runtime.node_did,
+                    runtime.plugin_home(),
                     agent.as_ref(),
                 )?,
             ));

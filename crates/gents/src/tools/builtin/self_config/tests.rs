@@ -409,6 +409,8 @@ impl SelfConfigFixture {
     pub(super) fn schema_tool(&self) -> crate::tools::builtin::schema_help::SchemaTool {
         crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
             self.db.node.clone(),
+            self.db.node_identity.did(),
+            None,
             self.agent.as_ref(),
         )
         .unwrap()
@@ -2790,6 +2792,8 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     );
     let schema = crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
         fixture.db.node.clone(),
+        fixture.db.node_identity.did(),
+        None,
         fixture.agent.as_ref(),
     )
     .unwrap();
@@ -6988,6 +6992,64 @@ async fn pack_document_installation_uses_existing_lifecycle() {
             .unwrap()
             .is_none()
     );
+    let collection = || fixture.db.node.get_collection("FixtureJob").unwrap();
+    assert!(
+        collection().is_some(),
+        "remove keeps collections by default"
+    );
+
+    let install = [
+        "pack",
+        "install",
+        "fixture/documents_fixture",
+        "--digest",
+        digest,
+        "--inference-slot",
+        &slot,
+    ];
+    let with_collections = [
+        "pack",
+        "remove",
+        "fixture/documents_fixture",
+        "--with-collections",
+    ];
+    config_call(&tools, &install).await.unwrap();
+    let admin =
+        crate::ConfigAccess::local_as(fixture.db.node.clone(), identity::Did::new(did).unwrap());
+    admin
+        .write(
+            "pack_test.seed",
+            r#"mutation { create_FixtureJob(input:{job_id:"one"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let denied = config_call(&tools, &with_collections).await.unwrap_err();
+    assert!(
+        denied
+            .to_string()
+            .contains("cleaning up its collections failed"),
+        "{denied}"
+    );
+    assert!(
+        collection().is_some(),
+        "the Agent's own DID lacks truncate-collection"
+    );
+
+    admin
+        .grant_node_permission(
+            &identity::Did::new(fixture.agent_did()).unwrap(),
+            crate::store::config_client::NodePermission::CollectionTruncate,
+        )
+        .await
+        .unwrap();
+    config_call(&tools, &install).await.unwrap();
+    let removed: Value =
+        serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
+    assert_eq!(
+        removed["collections"],
+        json!([{"collection":"FixtureJob","removed":true,"documents_removed":1}])
+    );
+    assert!(collection().is_none());
 }
 
 async fn account_state_rows(fixture: &SelfConfigFixture) -> Value {

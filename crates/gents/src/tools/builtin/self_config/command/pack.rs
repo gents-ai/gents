@@ -171,9 +171,13 @@ impl ConfigCommandTool {
                 installer.apply(verb, change).await
             }
             "remove" => {
-                anyhow::ensure!(argv.len() == 2, "pack remove requires exactly one PACKAGE");
+                let with_collections = argv.get(2).is_some_and(|flag| flag == "--with-collections");
+                anyhow::ensure!(
+                    argv.len() == 2 || (argv.len() == 3 && with_collections),
+                    "pack remove takes one PACKAGE and optionally --with-collections"
+                );
                 self.execution.enter_mutation();
-                installer.remove(&argv[1]).await
+                installer.remove(&argv[1], with_collections).await
             }
             other => bail!("unknown pack command {other:?}; see [\"help\",\"pack\"]"),
         }

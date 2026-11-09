@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- The `schema` tool can clean up application collections: `collection empty`
+  deletes every document and keeps the definition, and `collection remove`
+  deletes an empty collection, each behind a preview that states the loss.
+  Both refuse Gents-managed collections and any collection a datastore
+  surface entry, a page data grant, an event source, an installed pack or a
+  P2P pairing still names. The schema tool grant now carries DefraDB's
+  `truncate-collection` node permission. `config pack remove PACKAGE
+  --with-collections` also removes the pack's collections that nothing else
+  uses; the default still keeps them (#3572).
 - Breaking: P2P carries only discovery and enrollment, so the agent-facing
   application-collection pairing and sync surface is removed. The `p2p` tool
   drops `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`,

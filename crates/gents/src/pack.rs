@@ -62,7 +62,7 @@ pub use installation::{
     Retained,
 };
 pub(crate) use installation::{
-    prepare_document_pack_archive_with_provisioner,
+    declared_collections, prepare_document_pack_archive_with_provisioner,
     record_staged_plugin_store_change_as_with_node_binding, sdl_paths, PluginStageContext,
 };
 pub use installation::{

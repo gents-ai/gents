@@ -44,6 +44,21 @@ pub fn document_pack_schema_paths(manifest: &super::super::PackManifest) -> Resu
     Ok(sdl_paths(manifest).into_iter().collect())
 }
 
+/// The collections the SDL of the stored pack `digest` declares.
+pub(crate) fn declared_collections(
+    home: &Path,
+    digest: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    let archive = crate::pack::store::PackStore::new(home).open(digest)?;
+    let mut declared = std::collections::BTreeSet::new();
+    for path in sdl_paths(archive.manifest()) {
+        let sdl = std::str::from_utf8(archive.asset(path)?)
+            .with_context(|| format!("pack schema {path:?} is not UTF-8"))?;
+        declared.extend(query::parse_sdl(sdl)?.into_iter().map(|schema| schema.name));
+    }
+    Ok(declared)
+}
+
 /// The fields of a declared collection and the field sets of its unique
 /// indexes, as DefraDB's SDL parser reads them.
 #[derive(Default)]

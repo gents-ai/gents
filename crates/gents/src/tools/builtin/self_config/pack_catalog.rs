@@ -155,7 +155,13 @@ impl PackInstaller {
     /// it lists. Never resolves the package (no
     /// store or registry lookup); releases its home and plugin store records
     /// but no plugin bytes or archive; use `gents pack remove` for that.
-    pub(super) async fn remove(&self, package: &str) -> anyhow::Result<String> {
+    /// `with_collections` then also empties and removes each collection the
+    /// pack's SDL declared that nothing else on the node names.
+    pub(super) async fn remove(
+        &self,
+        package: &str,
+        with_collections: bool,
+    ) -> anyhow::Result<String> {
         let args = PackInstallParams {
             package: package.to_owned(),
             variables: BTreeMap::new(),
@@ -177,6 +183,22 @@ impl PackInstaller {
             }
         }
         let access = self.core.access()?;
+        let declared = if with_collections {
+            let home = self
+                .home
+                .clone()
+                .context("--with-collections reads the pack's SDL from the node home, which this runtime does not have; remove without it, then use schema collection preview remove NAME")?;
+            crate::collection_use::pack_declared_collections(
+                &access,
+                &home,
+                self.core.node_did(),
+                &coordinate,
+            )
+            .await
+            .with_context(|| format!("{coordinate}: its declared collections cannot be read, so nothing was removed; remove without --with-collections"))?
+        } else {
+            Default::default()
+        };
         let report = crate::pack::remove_pack(
             &access,
             self.core.node_did(),
@@ -194,10 +216,23 @@ impl PackInstaller {
                 )?;
             }
         }
+        let collections = crate::collection_use::remove_unused_collections(
+            &access,
+            self.home.as_deref(),
+            self.core.node_did(),
+            declared,
+        )
+        .await
+        .with_context(|| format!("{coordinate} and its documents were removed, but cleaning up its collections failed; inspect them with schema collection list"))?;
         ordered! {
             "pack": coordinate,
             "removed": report,
-            "effect": "The package's documents were removed. Package SDL schemas stay.",
+            "collections": with_collections.then_some(collections),
+            "effect": if with_collections {
+                "The package's documents were removed. Each declared collection nothing else names was emptied and removed; the rest are listed with what still uses them."
+            } else {
+                "The package's documents were removed. Its collections and their documents stay; pack remove PACKAGE --with-collections also removes the ones nothing else uses, or use schema collection preview remove NAME."
+            },
         }
         .pretty()
     }

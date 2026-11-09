@@ -18,7 +18,9 @@ mod declared_access;
 mod dependencies;
 mod documents;
 mod hosted;
-pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
+pub(crate) use documents::{
+    declared_collections, prepare_document_pack_archive_with_provisioner, sdl_paths,
+};
 mod removal;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use documents::{
