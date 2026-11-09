@@ -1,4 +1,6 @@
 use super::*;
+use crate::pack::PackKind;
+use crate::plugin::authority;
 
 /// Install document and plugins-only packs from the home's pack store or the registry through the
 /// canonical resolver, package publication, and activation owners. The running
@@ -21,13 +23,6 @@ pub(super) struct PackInstallParams {
 }
 
 /// The pack kinds this installer installs: document and plugins-only packs.
-pub(super) fn installs_kind(kind: &crate::pack::PackKind) -> bool {
-    matches!(
-        kind,
-        crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
-    )
-}
-
 pub(super) struct ConfigPackDistribution(pub(super) crate::pack::resolve::ResolvedNamedPack);
 
 impl ConfigPackDistribution {
@@ -165,17 +160,11 @@ impl PackInstaller {
             };
             // Local built artifacts flow through the same canonical
             // installers as registry-resolved packs: documents through
-            // prepare/install_prepared_document_pack, plugins-only through
-            // plugins_pack. Plugin authority follows `grants_authority`:
+            // prepare/install_prepared_document_pack, plugins and assets
+            // packs through plugins_pack. Plugin authority follows `grants_authority`:
             // without it preview reports installation_blockers and commit
             // refuses them; with it the install grants what the pack asks
             // for and the receipt lists it.
-            anyhow::ensure!(
-                installs_kind(&archive.manifest().metadata.kind),
-                "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
-                archive.manifest().name,
-                archive.manifest().metadata.kind
-            );
             return Ok(ConfigPackDistribution(
                 crate::pack::resolve::ResolvedNamedPack {
                     archive,
@@ -218,21 +207,14 @@ impl PackInstaller {
             },
         )
         .await?;
-        let distribution = ConfigPackDistribution(resolved);
-        anyhow::ensure!(
-            operation == "get" || installs_kind(&distribution.manifest().metadata.kind),
-            "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
-            distribution.manifest().name,
-            distribution.manifest().metadata.kind
-        );
-        Ok(distribution)
+        Ok(ConfigPackDistribution(resolved))
     }
 
     pub(super) async fn installation_status(
         &self,
         manifest: &crate::pack::PackManifest,
     ) -> anyhow::Result<Option<Value>> {
-        if manifest.metadata.kind == crate::pack::PackKind::Plugins {
+        if manifest.metadata.kind != PackKind::Documents {
             return self
                 .home
                 .as_deref()
@@ -272,10 +254,8 @@ impl PackInstaller {
         let mut granted = Vec::new();
         for manifest in manifests {
             for plugin in &manifest.metadata.plugins {
-                let declared = crate::plugin::authority::declared_manifold(plugin)?;
-                if let Some(description) =
-                    crate::plugin::authority::describe_plugin_authority(plugin, &declared)
-                {
+                let declared = authority::declared_manifold(plugin)?;
+                if let Some(description) = authority::describe_plugin_authority(plugin, &declared) {
                     granted.push(json!({
                         "plugin": format!("{}/{}", manifest.metadata.namespace, plugin.name),
                         "granted": description,
@@ -353,19 +333,13 @@ impl PackInstaller {
                 distribution.digest()
             );
         }
-        if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
-            return self
-                .plugins_pack(operation, &args, &distribution, false)
-                .await;
+        match distribution.manifest().metadata.kind {
+            PackKind::Documents => self.documents(operation, &args, &distribution, false).await,
+            PackKind::Plugins | PackKind::Assets => {
+                self.plugins_pack(operation, &args, &distribution, false)
+                    .await
+            }
         }
-        if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
-            return self.documents(operation, &args, &distribution, false).await;
-        }
-        anyhow::bail!(
-            "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
-            distribution.manifest().name,
-            distribution.manifest().metadata.kind
-        )
     }
 
     pub(super) async fn apply(
@@ -382,18 +356,12 @@ impl PackInstaller {
             "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
             distribution.digest()
         );
-        if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
-            return self
-                .plugins_pack(operation, &args, &distribution, true)
-                .await;
+        match distribution.manifest().metadata.kind {
+            PackKind::Documents => self.documents(operation, &args, &distribution, true).await,
+            PackKind::Plugins | PackKind::Assets => {
+                self.plugins_pack(operation, &args, &distribution, true)
+                    .await
+            }
         }
-        if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
-            return self.documents(operation, &args, &distribution, true).await;
-        }
-        anyhow::bail!(
-            "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
-            distribution.manifest().name,
-            distribution.manifest().metadata.kind
-        )
     }
 }

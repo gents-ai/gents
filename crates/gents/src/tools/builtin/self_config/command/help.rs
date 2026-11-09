@@ -399,7 +399,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "Read tools get and effective config get to verify resolved selection. Start a fresh request to call the selected plugin.",
         },
         "pack" => Page {
-            what: "inspect verified local plugin artifacts and discover registry packs; install document or plugins-only packs (pack grant).",
+            what: "inspect verified local plugin artifacts and discover registry packs; install document, plugins and assets packs (pack grant).",
             commands: &[
                 "pack search  options: query (omit to browse), page (starts at 1); reads the registry",
                 "pack list  options: limit, cursor; shows installed and locally stored versions",

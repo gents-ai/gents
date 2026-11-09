@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugin::{store, PluginRunner};
 
 fn plugin_discovery_calls(plugins: &[(String, String)]) -> Vec<serde_json::Value> {
     plugins
@@ -18,7 +19,7 @@ impl PackInstaller {
         let home = self
             .home
             .as_deref()
-            .context("plugins packs require a runtime plugin home")?;
+            .context("plugins and assets packs require a runtime plugin home")?;
         let manifest = distribution.manifest();
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         let installed = crate::pack::read_home_install(home, &coordinate)?;
@@ -28,7 +29,7 @@ impl PackInstaller {
         );
         anyhow::ensure!(
             args.variables.is_empty(),
-            "plugins-only packs do not consume document variables"
+            "plugins and assets packs do not consume document variables"
         );
         let access = self.core.access()?;
         let node_binding = self.core.refresh_node_binding().await?;
@@ -49,8 +50,10 @@ impl PackInstaller {
         let mut blockers = self.plugin_install_blockers(manifest);
         if let Some(previous) = &installed {
             anyhow::ensure!(
-                previous.kind == crate::pack::PackKind::Plugins,
-                "the existing home install is not a plugins-only pack"
+                previous.kind == manifest.metadata.kind,
+                "the existing home install of {coordinate} is a {:?} pack, not {:?}",
+                previous.kind,
+                manifest.metadata.kind
             );
             if previous.plugins.iter().any(|old| {
                 !manifest
@@ -63,7 +66,7 @@ impl PackInstaller {
             }
         }
         for plugin in &manifest.metadata.plugins {
-            if let Err(error) = crate::plugin::store::check_plugin_ownership(
+            if let Err(error) = store::check_plugin_ownership(
                 home,
                 &manifest.metadata.namespace,
                 &plugin.name,
@@ -71,10 +74,7 @@ impl PackInstaller {
             ) {
                 blockers.push(json!({"plugin":plugin.name,"reason":format!("{error:#}")}));
             }
-            crate::plugin::PluginRunner::compile(
-                distribution.0.archive.asset(&plugin.artifact)?,
-                plugin,
-            )?;
+            PluginRunner::compile(distribution.0.archive.asset(&plugin.artifact)?, plugin)?;
         }
         let ready = blockers.is_empty() && missing.is_empty();
         let authority = self.granted_authority([manifest])?;
@@ -155,7 +155,7 @@ impl PackInstaller {
             "installed": record,
             "next_call": single,
             "next_calls": discovery,
-            "guidance": "Installation installs every plugin in `plugins` but selects no tool: installed is not selected. Read the current Tools document first and preserve its full `integrations` object, including every existing entry and plugin; do not generate a replacement patch or overwrite the whole object. Then explicitly select each installed plugin by name in `Tools.integrations.plugins`, one entry per plugin. Read config tools get and config get after selection; start a fresh request to call each selected plugin.",
+            "guidance": if plugins.is_empty() { "The pack's assets and pages are installed; a page appears in ux list." } else { "Installation installs every plugin in `plugins` but selects no tool: installed is not selected. Read the current Tools document first and preserve its full `integrations` object, including every existing entry and plugin; do not generate a replacement patch or overwrite the whole object. Then explicitly select each installed plugin by name in `Tools.integrations.plugins`, one entry per plugin. Read config tools get and config get after selection; start a fresh request to call each selected plugin." },
             "granted_authority": authority,
             "plugins": plugins,
             "artifact_digest": distribution.digest(),

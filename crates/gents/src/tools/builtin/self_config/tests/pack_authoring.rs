@@ -203,6 +203,45 @@ async fn compiling_plugin_source_needs_the_authority_grant() {
     .await;
     for verb in ["build", "test"] {
         let error = config_call(&tools, &["pack", verb, "tool_a"])
+/// An assets pack carries no documents: its page installs through the home
+/// record alone.
+#[tokio::test]
+async fn a_shell_less_agent_installs_an_assets_pack_with_a_page() {
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let (_fixture, tools) =
+        authoring_tool("pack-assets", home.path(), root.path(), &["tools"], false).await;
+    config_json(
+        &tools,
+        &[
+            "pack",
+            "scaffold",
+            "board",
+            "--template",
+            "assets",
+            "--page",
+            "true",
+        ],
+    )
+    .await;
+    let built = config_json(&tools, &["pack", "build", "board"]).await;
+    let digest = built["digest"].as_str().unwrap().to_owned();
+    let preview = config_json(&tools, &["pack", "preview", "install", "./board"]).await;
+    assert_eq!(preview["ready"], true, "{preview}");
+    assert_eq!(preview["manifest"]["kind"], "assets", "{preview}");
+    let installed = config_json(&tools, &["pack", "install", "./board", "--digest", &digest]).await;
+    assert_eq!(installed["committed"], true, "{installed}");
+    assert!(
+        crate::plugin::ux::list(home.path())
+            .unwrap()
+            .iter()
+            .any(|listing| listing.id == "gents/board/board"),
+        "the assets pack's page is listed"
+    );
+    let got = config_json(&tools, &["pack", "get", "./board"]).await;
+    assert_eq!(got["installed"]["digest"], digest.as_str(), "{got}");
+}
+
             .await
             .unwrap_err()
             .to_string();

@@ -53,7 +53,7 @@ impl PackInstaller {
             let kind = current
                 .map(|entry| &entry.kind)
                 .or_else(|| manifest.map(|manifest| &manifest.metadata.kind));
-            let installable = manifest.is_some() && kind.is_some_and(installs_kind);
+            let installable = manifest.is_some();
             items.push(json!({
                 "name": coordinate,
                 "version": listing.installed.as_ref().map(|entry| &entry.version),
@@ -108,7 +108,7 @@ impl PackInstaller {
         ordered! {
             "items": items,
             "next_call": if has_more { page.checked_add(1).map(|next| json!({"argv":["pack","search"],"options":{"query":query,"page":next}})) } else { None },
-            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document and plugins-only packs; search includes other kinds too.",
+            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer installs document, plugins and assets packs.",
             "registry": registry,
             "page": page,
             "has_more": has_more,
@@ -133,12 +133,7 @@ impl PackInstaller {
             node_binding.as_ref(),
         )
         .await?;
-        let installable = installs_kind(&distribution.manifest().metadata.kind);
-        let installed = if installable {
-            self.installation_status(distribution.manifest()).await?
-        } else {
-            None
-        };
+        let installed = self.installation_status(distribution.manifest()).await?;
         Ok(serde_json::to_string_pretty(&json!({
             "source": distribution.source(),
             "manifest": distribution.manifest(),
@@ -146,11 +141,13 @@ impl PackInstaller {
             "registry_artifact_digest": distribution.registry_artifact_digest(),
             "inference": inference,
             "installed": installed,
-            "installable": installable,
+            "installable": true,
             "installation_blockers": self.plugin_install_blockers(distribution.manifest()),
-            "supported_operations": if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
-                Some(vec!["preview install", "install", "preview update", "update"])
-            } else { installable.then_some(vec!["preview install", "install", "preview update", "update", "remove"]) },
+            "supported_operations": if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
+                vec!["preview install", "install", "preview update", "update", "remove"]
+            } else {
+                vec!["preview install", "install", "preview update", "update"]
+            },
         }))?)
     }
 
