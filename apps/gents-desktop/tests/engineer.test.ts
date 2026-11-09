@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import setupSelfConfig from "../../../crates/gents-protocol/presets/engineer-self-config.json";
 import { deployment } from "./config-panel-wiring/fixtures";
 import {
   ENGINEER_AGENT_TAG,
@@ -50,23 +51,7 @@ describe("engineer setup patches", () => {
     });
     expect(tools).toMatchObject({
       id: "tools-a",
-      changes: {
-        self_config: {
-          enable_self_config: true,
-          self_config_categories: [
-            "node",
-            "agent",
-            "tools",
-            "profile",
-            "backend",
-            "mcp_service",
-            "automation",
-          ],
-          self_config_no_lockout: true,
-          self_config_preview: true,
-          enable_pack_install: true,
-        },
-      },
+      changes: { self_config: setupSelfConfig },
     });
   });
 

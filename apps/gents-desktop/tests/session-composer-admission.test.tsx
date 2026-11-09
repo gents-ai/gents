@@ -132,8 +132,9 @@ describe("SessionScreen canonical composer admission", () => {
             content: "Stable transcript",
             reasoning: null,
             timestamp: null,
+            reconstruction: { state: "ready" },
           },
-        ] as DesktopSessionSnapshot["timelineItems"],
+        ] satisfies DesktopSessionSnapshot["timelineItems"],
       }),
     });
     markdownRender.mockClear();
