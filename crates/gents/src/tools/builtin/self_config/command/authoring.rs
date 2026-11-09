@@ -313,11 +313,21 @@ impl ConfigCommandTool {
             *path = context.resolve_existing_file(path.to_str().context("path is not UTF-8")?)?;
         }
         let pack_dir = dir.clone();
-        let assets = tokio::task::spawn_blocking(move || {
+        let added = tokio::task::spawn_blocking(move || {
             let mut pack = PackEdit::load(&pack_dir)?;
+            let before = pack.manifest["assets"].clone();
             pack.add(addition)?;
             pack.save()?;
-            anyhow::Ok(pack.manifest["assets"].clone())
+            let before = before.as_array().map(Vec::as_slice).unwrap_or_default();
+            anyhow::Ok(
+                pack.manifest["assets"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|asset| !before.contains(asset))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
         })
         .await
         .context("pack add task did not finish")??;
@@ -325,9 +335,9 @@ impl ConfigCommandTool {
         ordered! {
             "completed": true,
             "dir": relative,
-            "assets": assets,
+            "added": added,
             "next_call": json!({"argv":["pack","check",relative]}),
-            "note": "Edit the new files with the file tools, then check the pack.",
+            "note": "Edit the added files with the file tools, then check the pack. The manifest lists every asset.",
         }
         .pretty()
     }

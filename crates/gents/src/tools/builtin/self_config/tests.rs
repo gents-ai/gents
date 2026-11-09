@@ -2481,7 +2481,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
         .await
         .unwrap();
     assert!(
-        create_help.starts_with("datastore:") && create_help.contains("create ID | update ID"),
+        create_help.starts_with("datastore create: "),
         "{create_help}"
     );
     assert!(
@@ -3454,10 +3454,18 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         help.contains("Fields of Tools:") && help.contains("agents"),
         "{help}"
     );
-    let shapes = call_config_tool(&tools, vec!["tools".into(), "edit".into(), "--help".into()])
-        .await
-        .unwrap();
-    assert!(shapes.contains("\"agents\":{\"enabled\""), "{shapes}");
+    let shapes = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--help".into(),
+            "agents".into(),
+        ],
+    )
+    .await
+    .unwrap();
+    assert!(shapes.contains("Tools.agents: {\"enabled\""), "{shapes}");
     assert!(shapes.contains("target_ids"), "{shapes}");
 
     let mailbox_help = call_config_tool(

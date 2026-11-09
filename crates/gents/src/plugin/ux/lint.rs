@@ -387,7 +387,7 @@ const UNDEFINED_TOKEN: &str = "undefined css token";
 const TOKEN_HINT: &str = "use a frame token instead of the color, such as var(--text), \
 var(--text-muted), var(--bg), var(--card), var(--border), var(--primary), \
 var(--destructive) or var(--chart-1) (--background and --foreground do not exist); \
-the SDK reference lists them all";
+the SDK reference's tokens section lists them all";
 
 static FRAME_TOKENS: LazyLock<RapidHashSet<&'static str>> =
     LazyLock::new(|| reference::frame_tokens().collect());

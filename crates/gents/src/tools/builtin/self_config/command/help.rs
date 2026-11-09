@@ -47,6 +47,9 @@ impl ConfigCommandTool {
                 &command[1..],
             );
         }
+        if resource == "page" && command.first() == Some(&"sdk") {
+            return super::ux::sdk_help(&command[1..]);
+        }
         if resource == "page" {
             if let Some((_, text)) = PAGE_TOPICS
                 .iter()
@@ -265,7 +268,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "validate" => Page {
             what: "audit saved configuration for your authenticated node; read-only (agent catalog grant).",
             commands: &["validate"],
-            notes: "Uses the same canonical fields, references and publication checks as writes. Also checks selected datastore tools against current collection schemas. Read each affected object, correct it with resource update, and validate again; create only missing objects. Preserve unrelated fields and entries. References to remote nodes are not locally verified. This does not test credentials, running helpers or whether the setup meets the user's goal. Inspect selections with agent get; exercise tools to test runtime agent.",
+            notes: "Uses the same canonical fields, references and publication checks as writes. Also checks selected datastore tools against current collection schemas; config and schema observations are not one atomic snapshot. Read each affected object, correct it with resource update, and validate again; create only missing objects. Preserve unrelated fields and entries. References to remote nodes are not locally verified. This does not test credentials, running helpers or whether the setup meets the user's goal. Inspect selections with agent get; exercise tools to test runtime agent.",
             next: "fix reported errors before reporting completion; state what remains untested.",
         },
         "skill" => Page {
@@ -290,7 +293,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "datastore [preview] create|edit  set: surface fields, or options.mailbox",
             ],
             notes: concat!(
-                "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\"]}.\nCreate fields: {name} arguments; omitted or empty means none. Query fields: columns; filter_fields: exact-match {name} arguments. Describe use, inputs and effects.\nfill: correlation uses the request/trigger correlation ID; fill: {source_field: F} copies trigger field F. Omit fill for caller-supplied values. Filled fields cannot be required.\nCaller value: {\"name\":\"correlation\"}. Runtime ID: {\"name\":\"request_correlation\",\"fill\":\"correlation\"}.\nInstall schemas before selection; selection checks names only. Grant requested operations only.\n",
+                "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}.\nCreate fields: {name} arguments; omitted or empty means none. Query fields: columns; filter_fields: exact-match {name} arguments. Describe use, inputs and effects.\nfill: correlation uses the request/trigger correlation ID; fill: {source_field: F} copies trigger field F. Omit fill for caller-supplied values. Filled fields cannot be required.\nCaller value: {\"name\":\"correlation\"}. Runtime ID: {\"name\":\"request_correlation\",\"fill\":\"correlation\"}.\nInstall schemas before selection; selection checks names only. Grant requested operations only.\n",
                 mailbox_identity_choice!(),
                 " A monitor uses condition identity: {\"argv\":[\"datastore\",\"create\"],\"target_id\":\"monitor-mailbox\",\"options\":{\"mailbox\":{\"identity\":{\"mode\":\"condition\",\"key\":\"host-health\"},\"kind\":\"flag\",\"action\":\"ack\"}}}"
             ),
@@ -305,7 +308,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "execution" => Page {
             what: "an InferenceExecution: the run limits (turns, deadline, tokens, stream timeouts) a profile selects (profile grant). EXECUTION_ID goes in target_id.",
             commands: &["execution list", "execution get EXECUTION_ID", "execution [preview] create|edit EXECUTION_ID  set: execution fields"],
-            notes: "deadline_duration_secs limits one request across model/tool turns; provider_idle_timeout_secs limits provider silence. Omitted fields use defaults. A profile selects it through execution_id.",
+            notes: "deadline_duration_secs limits one request across model/tool turns; provider_idle_timeout_secs limits provider silence. Omitted fields use defaults, which agent get shows as execution_settings: max_total_tokens null means unlimited, retry_policy_id null uses the request-origin retry policy, stream_batch_ms batches persistence and stream_liveness_timeout_secs is the renewed execution lease, independent of provider output. A profile selects it through execution_id.",
             next: "bind it as in the recipe, then read it back with profile get execution and options.agent.",
         },
         "agent" => Page {
@@ -320,13 +323,13 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "agent [preview] edit AGENT_DID  set/clear: agent fields",
                 "agent context get|preview|edit  options.agent; set/clear: context fields",
             ],
-            notes: "Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
+            notes: "Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. A change is durable once its transaction commits and runs after the runtime reconciler swaps generations; select the agent in a new session, since existing sessions remain bound to their original agent; canonical documents replicate to authorized paired clients and are reloaded after restart. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
             next: "give it tools ([\"help\",\"tools\"]) and test it in a fresh session.",
         },
         "tools" => Page {
             what: "an agent's Tools: what it may use, in groups (tools grant).",
             commands: &["tools get|preview|edit  options.agent (default: the invoking agent); set/clear: groups"],
-            notes: "A group in set replaces that whole group: read it with tools get and send back what you keep. host.root is the workspace path alongside host.files and host.bash. When WorkspaceRoot policy is configured, selecting host file, shell or LSP tools and a root does not grant the selected Agent access to a published WorkspaceRoot covering that path. Only a User (the Node owner or an administrator) grants it, from their own client: gents config workspace-root grant-reader --graphql GRAPHQL_URL --path PUBLISHED_ROOT --agent-did AGENT_DID, where PUBLISHED_ROOT is the published root's path, not a descendant. No config or policy call grants it; agent create returns host_root_access with the exact command to give the User. On your own Tools, a set that would drop existing settings is refused and names them; options.allow-drop with the group names drops them on purpose. Tools that more than one agent reaches are refused by default; options.shared = \"acknowledge\" edits them for every agent that selects them, and the receipt lists those agents and the new sha256. The acknowledgement waives only the sharing refusal: a shared edit still needs the agent catalog grant (category node). host.bash.mode selects bash (Off by default); execution_mode, argv prefixes and background_enabled only constrain it. For one approved write command use mode Unrestricted with allowed_argv_prefixes holding only that prefix; the process ceiling still applies. integrations.plugins[].job lets a plugin that declares job: true run job steps within its ceiling; absent means non-job verbs only, and a job-capable plugin is called by its plugin name — the name in its namespace/name coordinate — as a model tool. Its bounds, defaults and policy are in tools edit --help; native document authorization governs updates.",
+            notes: "A group in set replaces that whole group: read it with tools get and send back what you keep. host.root is the workspace path alongside host.files and host.bash. When WorkspaceRoot policy is configured, selecting host file, shell or LSP tools and a root does not grant the selected Agent access to a published WorkspaceRoot covering that path. Only a User (the Node owner or an administrator) grants it, from their own client: gents config workspace-root grant-reader --graphql GRAPHQL_URL --path PUBLISHED_ROOT --agent-did AGENT_DID, where PUBLISHED_ROOT is the published root's path, not a descendant. No config or policy call grants it; agent create returns host_root_access with the exact command to give the User. On your own Tools, a set that would drop existing settings is refused and names them; options.allow-drop with the group names drops them on purpose. Tools that more than one agent reaches are refused by default; options.shared = \"acknowledge\" edits them for every agent that selects them, and the receipt lists those agents and the new sha256. The acknowledgement waives only the sharing refusal: a shared edit still needs the agent catalog grant (category node). host.bash.mode selects bash (Off by default); execution_mode, argv prefixes and background_enabled only constrain it. For one approved write command use mode Unrestricted with allowed_argv_prefixes holding only that prefix; the process ceiling still applies. integrations.plugins[].job lets a plugin that declares job: true run job steps within its ceiling; absent means non-job verbs only, and a job-capable plugin is called by its plugin name — the name in its namespace/name coordinate — as a model tool. Its bounds, defaults and policy: [\"tools\",\"edit\",\"--help\",\"integrations\"]; native document authorization governs updates.",
             next: "verify saved Tools restrictions and runtime_effective with agent get, then test in a fresh session of that agent.",
         },
         "profile" => Page {
@@ -611,17 +614,66 @@ fn crud_help(
             return Ok(text);
         }
     }
-    let mut out = format!("{resource}: {}\n", page.what);
-    writeln!(out, "Verbs: list | get ID | create ID | update ID | delete ID. Preview: {resource} preview create|update|delete ID.")?;
-    if verb == Some("list") {
-        writeln!(
+    let Some(mut verb) = verb else {
+        return crud_page(resource, target, page);
+    };
+    let names_field = contracts(resource, None)
+        .iter()
+        .any(|contract| contract["field_shapes"].get(verb).is_some());
+    if names_field {
+        verb = "update";
+    } else if !matches!(
+        verb,
+        "list" | "get" | "create" | "update" | "edit" | "delete"
+    ) {
+        return match command_help(resource, page, command) {
+            Some(text) => Ok(text),
+            None => crud_page(resource, target, page),
+        };
+    }
+    let mut out = format!("{resource} {verb}: ");
+    match verb {
+        "list" => writeln!(
             out,
             "options.limit: 1..50 (default 20); options.cursor: previous page.next_cursor."
-        )?;
+        )?,
+        "delete" => writeln!(out, "options.digest: plan_digest from preview delete. Remove references first; changed targets require a new preview.")?,
+        "get" => writeln!(out, "returns the saved document.")?,
+        _ => writeln!(out, "set: the fields below; clear: optional field names to remove. {resource} preview {verb} shows the change without committing.")?,
     }
-    if verb == Some("delete") {
-        writeln!(out, "options.digest: plan_digest from preview delete. Remove references first; changed targets require a new preview.")?;
+    if matches!(resource, "tools" | "context" | "profile" | "backend")
+        && matches!(verb, "get" | "update" | "edit")
+    {
+        writeln!(out, "Choose one: target_id names the exact document; or omit target_id and use options.agent to select the agent's bound document (default: you). Do not combine them.")?;
     }
+    if matches!(verb, "create" | "update" | "edit") {
+        for contract in contracts(resource, None)
+            .into_iter()
+            .filter(|c| c["collection"] == target.collection_name())
+        {
+            field_shapes(&mut out, resource, verb, target, &contract, command)?;
+        }
+        if resource == "datastore" {
+            writeln!(out, "options.mailbox policy values: {}", mailbox_values())?;
+            writeln!(out, "{}", mailbox_identity_choice!())?;
+        }
+        if resource == "backend" {
+            writeln!(out, "Create requires set.endpoint; optional set.name/openai_wire_api. Only enabled unauthenticated OpenAI-compatible endpoints can be created.")?;
+        }
+        let rule = verb_rule(resource);
+        if !rule.is_empty() {
+            writeln!(out, "{rule}")?;
+        }
+    }
+    write!(out, "Page and recipe: [\"help\",\"{resource}\"]")?;
+    Ok(out)
+}
+
+/// `help RESOURCE`: what it is, its verbs, the notes and one recipe. Field
+/// shapes belong to the verb pages.
+fn crud_page(resource: &str, target: SelfConfigTarget, page: &Page) -> Result<String> {
+    let mut out = format!("{resource}: {}\n", page.what);
+    writeln!(out, "Verbs: list | get ID | create ID | update ID | delete ID. Preview: {resource} preview create|update|delete ID.")?;
     if resource == "agent" {
         out = out.replace("create ID", "create (options.display-name, system-prompt, preset, profile; allocates ID and Context/Tools)");
         out = out.replace(
@@ -633,22 +685,30 @@ fn crud_help(
             "Also: agent clone, disable, default. Use context get/update for its selected Context."
         )?;
     }
-    if matches!(resource, "tools" | "context" | "profile" | "backend") {
-        writeln!(out, "For get/update, choose one: target_id names the exact document; or omit target_id and use options.agent to select the agent's bound document (default: you). Do not combine them. agent get shows the selected document IDs.")?;
-    }
-    if resource == "backend" {
-        writeln!(out, "Create requires set.endpoint; optional set.name/openai_wire_api. Only enabled unauthenticated OpenAI-compatible endpoints can be created. Also: backend discover ID; backend accounts (read-only).")?;
-    }
-    if resource == "skill" {
-        writeln!(
+    match resource {
+        "backend" => writeln!(
+            out,
+            "Also: backend discover ID; backend accounts (read-only)."
+        )?,
+        "skill" => writeln!(
             out,
             "Also: skill [preview] import ID PATH reads a SKILL.md inside the tool root."
-        )?;
-    }
-    if resource == "task" {
-        writeln!(
+        )?,
+        "task" => writeln!(
             out,
             "Also: task run ID fires it once now; see task run --help."
+        )?,
+        _ => {}
+    }
+    for contract in contracts(resource, None)
+        .into_iter()
+        .filter(|c| c["collection"] == target.collection_name())
+    {
+        writeln!(
+            out,
+            "Fields of {}: {}. Append --help to create/update for shapes.",
+            target.collection_name(),
+            contract["writable_fields"]
         )?;
     }
     if resource == "page" {
@@ -666,51 +726,79 @@ fn crud_help(
                 .join(", ")
         )?;
     }
-    let writes = command.is_empty()
-        || command
-            .iter()
-            .any(|word| matches!(*word, "create" | "update" | "edit"))
-            && !command.contains(&"delete");
-    if writes {
-        for contract in contracts(resource, None)
-            .into_iter()
-            .filter(|c| c["collection"] == target.collection_name())
-        {
-            if command.is_empty() {
-                writeln!(
-                    out,
-                    "Fields of {}: {}. Append --help to create/update for shapes.",
-                    target.collection_name(),
-                    contract["writable_fields"]
-                )?;
-            } else {
-                writeln!(
-                    out,
-                    "{} fields: {}. Protected: {}.",
-                    target.collection_name(),
-                    contract["field_shapes"],
-                    contract["protected_fields"]
-                )?;
-            }
-        }
-    }
-    if writes && !command.is_empty() && resource == "datastore" {
-        writeln!(out, "options.mailbox policy values: {}", mailbox_values())?;
-    }
     writeln!(out, "{}", page.notes)?;
-    if command.is_empty() {
-        for (title, steps) in recipes(resource).into_iter().take(1) {
-            writeln!(out, "Recipe: {title}")?;
-            for (call, next) in steps {
-                writeln!(out, "  {}", render_call(&call))?;
-                if let Some(next) = next {
-                    writeln!(out, "  {next}")?;
-                }
+    for (title, steps) in recipes(resource).into_iter().take(1) {
+        writeln!(out, "Recipe: {title}")?;
+        for (call, next) in steps {
+            writeln!(out, "  {}", render_call(&call))?;
+            if let Some(next) = next {
+                writeln!(out, "  {next}")?;
             }
         }
     }
     write!(out, "Next: {}", page.next)?;
     Ok(out)
+}
+
+/// A document whose shapes exceed this is listed by field; a caller changing
+/// one field asks for that field's shape.
+const WHOLE_SHAPES_LIMIT: usize = 2_500;
+
+fn field_shapes(
+    out: &mut String,
+    resource: &str,
+    verb: &str,
+    target: SelfConfigTarget,
+    contract: &Value,
+    narrowed: &[&str],
+) -> Result<()> {
+    let collection = target.collection_name();
+    let shapes = &contract["field_shapes"];
+    let chosen = narrowed
+        .iter()
+        .filter_map(|name| shapes.get(*name).map(|shape| (*name, shape)))
+        .collect::<Vec<_>>();
+    if !chosen.is_empty() {
+        for (name, shape) in chosen {
+            writeln!(out, "{collection}.{name}: {shape}")?;
+        }
+    } else if shapes.to_string().len() <= WHOLE_SHAPES_LIMIT {
+        writeln!(out, "{collection} fields: {shapes}.")?;
+    } else {
+        writeln!(out, "{collection} fields, one per line with what it holds. Shapes for one: [\"{resource}\",\"{verb}\",\"--help\",FIELD]; several may follow.")?;
+        for (name, shape) in shapes.as_object().into_iter().flatten() {
+            match shape.as_object() {
+                Some(inner) => writeln!(
+                    out,
+                    "  {name}: {}",
+                    inner
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?,
+                None => writeln!(
+                    out,
+                    "  {name}: {}",
+                    shape.as_str().unwrap_or("see its shape")
+                )?,
+            }
+        }
+    }
+    writeln!(out, "Protected: {}.", contract["protected_fields"])?;
+    Ok(())
+}
+
+/// The one rule a create or update of this resource most often breaks.
+fn verb_rule(resource: &str) -> &'static str {
+    match resource {
+        "tools" => "A group in set replaces that whole group: read it with tools get and send back what you keep. Tools apply from the next request.",
+        "task" => "options.agent chooses the owner on create (default: you); it cannot change later.",
+        "trigger" => "Create the source and the Task first; the Task decides who handles the event.",
+        "event-source" | "schedule" => "A source alone starts no work: add a Task, then a Trigger linking them.",
+        "datastore" => "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}. Select the surface in Tools to grant its tools; they exist from the next request.",
+        _ => "",
+    }
 }
 
 #[cfg(test)]

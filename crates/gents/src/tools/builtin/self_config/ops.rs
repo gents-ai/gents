@@ -60,10 +60,8 @@ impl std::fmt::Display for MissingAgent {
     }
 }
 
-pub const EFFECT_TIMING_NOTE: &str = "Committed changes are picked up by the runtime reconciler \
-     (typically within a few seconds) and apply to requests dispatched after \
-     the resulting generation swap; the current turn keeps its existing \
-     configuration.";
+pub const EFFECT_TIMING_NOTE: &str = "Applies from the next request, once the runtime reconciler \
+     picks it up (a few seconds); the current turn keeps its existing configuration.";
 
 #[derive(Clone)]
 pub struct SelfConfigCore {

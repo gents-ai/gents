@@ -3,8 +3,26 @@ use crate::plugin::ux;
 
 mod page;
 
-/// The generated SDK reference `help page sdk` returns.
+/// The generated SDK reference behind `help page sdk`.
 pub(super) const SDK_REFERENCE: &str = ux::reference::SDK_REFERENCE;
+
+/// `help page sdk` is the index; `help page sdk NAME ...` is those exports'
+/// sections, so a page author reads only the blocks it uses.
+pub(super) fn sdk_help(names: &[&str]) -> Result<String> {
+    if names.is_empty() {
+        return Ok(ux::reference::sdk_index().to_owned());
+    }
+    let mut sections = Vec::with_capacity(names.len());
+    for name in names {
+        let (name, body) = ux::reference::sdk_sections()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+            .with_context(|| {
+                format!("no SDK export {name:?}; [\"help\",\"page\",\"sdk\"] lists them, and \"tokens\" is the token list")
+            })?;
+        sections.push(format!("### {name}\n\n{body}"));
+    }
+    Ok(sections.join("\n\n"))
+}
 
 /// How much module source one tool result carries; the digest and byte count
 /// describe the rest.

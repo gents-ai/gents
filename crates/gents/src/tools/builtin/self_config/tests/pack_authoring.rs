@@ -48,6 +48,22 @@ async fn config_json(tools: &[Box<dyn ToolDyn>], argv: &[&str]) -> Value {
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{argv:?}: {error}: {text}"))
 }
 
+/// Runs one call and records the size of the text the model reads, named by
+/// its first three words, against `ceiling`.
+async fn config_sized(
+    tools: &[Box<dyn ToolDyn>],
+    argv: &[&str],
+    sizes: &mut Vec<(String, usize, usize)>,
+    ceiling: usize,
+) -> Value {
+    let text = config_call(tools, argv)
+        .await
+        .unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+    let name = argv.iter().take(3).copied().collect::<Vec<_>>().join(" ");
+    sizes.push((name, text.len(), ceiling));
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("{argv:?}: {error}: {text}"))
+}
+
 #[tokio::test]
 async fn a_shell_less_agent_takes_a_data_pack_from_scaffold_to_installed() {
     let root = tempfile::tempdir().unwrap();
@@ -55,36 +71,61 @@ async fn a_shell_less_agent_takes_a_data_pack_from_scaffold_to_installed() {
     let (fixture, tools) =
         authoring_tool("pack-loop", home.path(), root.path(), &["tools"], false).await;
 
-    config_json(
+    let mut sizes = Vec::new();
+    config_sized(
         &tools,
         &["pack", "scaffold", "notes_app", "--template", "assets"],
+        &mut sizes,
+        460,
     )
     .await;
-    let added = config_json(
+    let added = config_sized(
         &tools,
         &["pack", "add", "schema", "Note", "--dir", "notes_app"],
+        &mut sizes,
+        360,
     )
     .await;
     assert_eq!(added["next_call"]["argv"][1], "check", "{added}");
-    let check = config_json(&tools, &["pack", "check", "notes_app"]).await;
+    let new_files = added["added"].as_array().unwrap();
+    assert!(
+        new_files.contains(&json!("schemas/note.graphql"))
+            && !new_files.contains(&json!("README.md")),
+        "only what this call added: {added}"
+    );
+    let check = config_sized(&tools, &["pack", "check", "notes_app"], &mut sizes, 350).await;
     assert_eq!(check["problems"], json!([]), "{check}");
 
-    let built = config_json(&tools, &["pack", "build", "notes_app"]).await;
+    let built = config_sized(&tools, &["pack", "build", "notes_app"], &mut sizes, 420).await;
     let digest = built["digest"].as_str().unwrap().to_owned();
     assert_eq!(built["next_call"]["argv"][1], "preview", "{built}");
     assert_eq!(built["operator_action"], Value::Null, "{built}");
     assert!(built["out"].as_str().unwrap().ends_with(".pack"), "{built}");
 
-    let preview = config_json(&tools, &["pack", "preview", "install", "./notes_app"]).await;
+    let preview = config_sized(
+        &tools,
+        &["pack", "preview", "install", "./notes_app"],
+        &mut sizes,
+        900,
+    )
+    .await;
     assert_eq!(preview["ready"], true, "{preview}");
     assert_eq!(preview["artifact_digest"], digest.as_str(), "{preview}");
+    assert_eq!(
+        preview["apply_with"]["argv_prefix"][3], "--digest",
+        "{preview}"
+    );
+    assert_eq!(preview["inference"]["profiles"], Value::Null, "{preview}");
 
-    let installed = config_json(
+    let installed = config_sized(
         &tools,
         &["pack", "install", "./notes_app", "--digest", &digest],
+        &mut sizes,
+        580,
     )
     .await;
     assert_eq!(installed["artifact_digest"], digest.as_str(), "{installed}");
+    crate::tools::builtin::self_config::text_tests::assert_sizes(&sizes);
     let response = fixture
         .user_access()
         .execute("query { Note { run_id } }")
@@ -503,6 +544,61 @@ async fn page_help_discloses_detail_per_command_and_topic() {
 
     let topic = help(vec!["help", "page", "data"]).await;
     assert!(topic.contains("ux[].data"), "{topic}");
+
+    let sdk = help(vec!["help", "page", "sdk"]).await;
+    assert!(
+        sdk.contains("export default {") && sdk.contains("- `Table`: columns, rows"),
+        "{sdk}"
+    );
+    assert!(sdk.contains(r#"["help","page","sdk",NAME]"#), "{sdk}");
+    assert!(
+        sdk.contains("never\n`--background`") && !sdk.contains("--popover-foreground"),
+        "the tokens rule, not the token list: {sdk}"
+    );
+    assert!(
+        !sdk.contains("field names, or { key, label"),
+        "props are one read further: {sdk}"
+    );
+    let table = help(vec!["help", "page", "sdk", "Table"]).await;
+    assert!(
+        table.starts_with("### Table\n")
+            && table.contains("- `defaultSort`: ")
+            && table.contains("jsx(Table, {"),
+        "{table}"
+    );
+    assert!(!table.contains("### Stat"), "{table}");
+    let two = help(vec!["help", "page", "sdk", "stat", "useQuery"]).await;
+    assert!(
+        two.contains("### Stat") && two.contains("### useQuery") && two.contains("recoverFields"),
+        "{two}"
+    );
+    let tokens = help(vec!["help", "page", "sdk", "tokens"]).await;
+    assert!(tokens.contains("- `--popover-foreground`: "), "{tokens}");
+    let unknown = config_call(&tools, &["help", "page", "sdk", "Chart"])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        unknown.contains(r#"[\"help\",\"page\",\"sdk\"] lists them"#),
+        "{unknown}"
+    );
+    let pack = help(vec!["help", "pack"]).await;
+    for fact in [
+        "options.digest from the preview",
+        "A pack directory must be spelled ./DIR",
+        "build first, then preview the .pack",
+        "Installing does not select model tools",
+        "a preview with ready:false supplies no apply call",
+    ] {
+        assert!(pack.contains(fact), "{fact}: {pack}");
+    }
+    crate::tools::builtin::self_config::text_tests::assert_sizes(&[
+        ("help page sdk".into(), sdk.len(), 4_800),
+        ("help page sdk Table".into(), table.len(), 600),
+        ("help page sdk tokens".into(), tokens.len(), 2_800),
+        ("help pack".into(), pack.len(), 4_300),
+        ("help page".into(), page.len(), 1_150),
+    ]);
 
     let lint = help(vec!["ux", "lint", "--help"]).await;
     assert!(lint.starts_with("ux lint FILE"), "{lint}");

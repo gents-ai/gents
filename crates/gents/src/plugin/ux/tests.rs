@@ -347,3 +347,40 @@ fn the_sdk_reference_carries_the_skeleton_and_every_token() {
         assert!(reference::SDK_REFERENCE.contains(token), "{token}");
     }
 }
+
+/// The index is what every page author reads; a section is what one block
+/// costs. Ceilings sit a little above the generated sizes.
+#[test]
+fn the_sdk_reference_is_an_index_and_one_section_per_export() {
+    let index = reference::sdk_index();
+    assert!(index.contains("export default {") && index.contains("ctx.registerMany"));
+    assert!(index.contains("`gents ux lint` refuses raw hex"), "{index}");
+    assert!(
+        !index.contains("<!--") && !index.contains("\n### "),
+        "{index}"
+    );
+    assert!(index.len() <= 4_800, "the index is {} chars", index.len());
+    let sections: Vec<_> = reference::sdk_sections().collect();
+    assert!(sections.len() > 50, "{}", sections.len());
+    for (name, section) in &sections {
+        assert_eq!(reference::sdk_section(name), Some(*section));
+        assert!(
+            !section.is_empty() && !section.contains("### "),
+            "{section}"
+        );
+        if *name == "tokens" {
+            assert!(section.len() <= 2_800, "tokens is {} chars", section.len());
+            continue;
+        }
+        assert!(
+            index.contains(&format!("`{name}`")) || index.contains(&format!("`{name}(")),
+            "{name} is missing from the index"
+        );
+        assert!(section.len() <= 600, "{name} is {} chars", section.len());
+    }
+    assert!(
+        reference::sdk_section("table").is_some(),
+        "names ignore case"
+    );
+    assert!(reference::sdk_section("Chart").is_none());
+}

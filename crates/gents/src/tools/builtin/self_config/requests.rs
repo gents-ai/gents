@@ -1,7 +1,20 @@
 use super::*;
 
 pub(super) fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
-    serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
+    crate::tools::output::Ordered::reading_order(
+        serde_json::to_value(outcome)?,
+        &[
+            "committed",
+            "collection",
+            "target_id",
+            "agent_did",
+            "connection",
+            "created",
+            "changed",
+            "effect",
+        ],
+    )
+    .pretty()
 }
 
 pub(super) fn anchored_request(

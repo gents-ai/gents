@@ -315,6 +315,10 @@ pub(crate) fn is_help_call(args: &Value) -> bool {
         .is_some_and(|argv| config_help_resource(&argv).is_some())
 }
 
+/// A help call's words after the resource: the verb, then what narrows it (a
+/// Tools group, SDK export names), wherever `--help` sits among them.
+const HELP_WORDS: usize = 12;
+
 fn help_verb(argv: &[String]) -> Vec<&str> {
     let Some(first) = argv.first() else {
         return Vec::new();
@@ -329,9 +333,8 @@ fn help_verb(argv: &[String]) -> Vec<&str> {
         .unwrap_or_default()
         .iter()
         .map(String::as_str)
-        .take_while(|word| !matches!(*word, "--help" | "-h"))
         .filter(|word| !word.starts_with('-') && *word != "help")
-        .take(3)
+        .take(HELP_WORDS)
         .collect::<Vec<_>>();
     if words.len() > 1 && words[0] == "preview" {
         words.remove(0);
