@@ -1,5 +1,6 @@
 mod chat;
 mod graphql;
+mod journal;
 mod manage;
 mod setup;
 
@@ -21,9 +22,9 @@ pub use manage::{
 };
 pub use setup::PeerMutationResult;
 
-pub(crate) use chat::goal_delivery;
 pub(crate) use chat::prepare_request_submission;
-pub(crate) use chat::submission_journal;
+pub(crate) use journal::goal_delivery;
+pub(crate) use journal::records as submission_journal;
 pub(crate) use manage::{
     apply_config_components_with_publication_on, upsert_agent_with_publication_on,
 };

@@ -1,8 +1,7 @@
-//! Client-key journals that remain after the chat send became an optimistic
-//! send (Lean `ClientOptimisticSend`): the Goal command receipt and the Agent
-//! publication record. A chat send keeps no journal: the frontend keeps the
-//! payload until it is confirmed, and the runtime's create is idempotent on
-//! the request identity.
+//! Client-key journals: the Goal command receipt and the Agent publication
+//! record. Both are rows of the `PendingChatSubmission` collection, whose name
+//! is persisted schema. A chat send keeps no journal (Lean
+//! `ClientOptimisticSend`).
 
 pub(crate) mod goal_delivery;
-pub(crate) mod journal;
+pub(crate) mod records;

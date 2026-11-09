@@ -534,7 +534,7 @@ def caseCoverage : List CoverageEntry :=
       "triggers::callback::tests::callback_parent_requires_the_selected_authenticated_agent")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases"
-      "client::mutations::chat::request::receipt::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations")
+      "client::mutations::journal::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "root_admission_cases"
@@ -1653,7 +1653,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "identity_private_journal_policy"
       "PrivateJournalSigner"
-      "client::mutations::chat::request::receipt::journal::signer_tests::client_journal_refuses_a_different_local_signer")
+      "client::mutations::journal::records::signer_tests::client_journal_refuses_a_different_local_signer")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "file_image_read_grant_cases"

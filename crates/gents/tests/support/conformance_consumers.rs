@@ -455,10 +455,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_initial_inference_keeps_unselected_models_and_limits_unpinned",
         },
         ConformanceConsumer::RustTest {
-            id: "client::mutations::chat::request::receipt::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations",
+            id: "client::mutations::journal::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations",
             package: "gents-desktop-core",
-            source_path: "crates/gents-desktop-core/src/client/mutations/chat/request/receipt/goal_delivery/tests.rs",
-            module_path: "client::mutations::chat::request::receipt::goal_delivery::tests",
+            source_path: "crates/gents-desktop-core/src/client/mutations/journal/goal_delivery/tests.rs",
+            module_path: "client::mutations::journal::goal_delivery::tests",
             function: "generated_goal_delivery_histories_bind_native_signed_preparations",
         },
         ConformanceConsumer::RustTest {
@@ -1330,10 +1330,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "chat_send_replays_lean_optimistic_send_traces",
         },
         ConformanceConsumer::RustTest {
-            id: "client::mutations::chat::request::receipt::journal::signer_tests::client_journal_refuses_a_different_local_signer",
+            id: "client::mutations::journal::records::signer_tests::client_journal_refuses_a_different_local_signer",
             package: "gents-desktop-core",
-            source_path: "crates/gents-desktop-core/src/client/mutations/chat/request/receipt/journal.rs",
-            module_path: "client::mutations::chat::request::receipt::journal::signer_tests",
+            source_path: "crates/gents-desktop-core/src/client/mutations/journal/records.rs",
+            module_path: "client::mutations::journal::records::signer_tests",
             function: "client_journal_refuses_a_different_local_signer",
         },
         ConformanceConsumer::RustTest {
