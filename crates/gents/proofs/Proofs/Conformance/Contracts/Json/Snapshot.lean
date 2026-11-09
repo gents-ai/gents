@@ -138,6 +138,7 @@ import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientDelivery
 import Proofs.Conformance.GoalClientStart
 import Proofs.Conformance.GoalObservation
+import Proofs.Conformance.GoalSessionObservation
 import Proofs.Conformance.PluginApproval
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
@@ -426,6 +427,7 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
     ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
+    ++ "\"goal_session_observation_cases\":" ++ Conformance.GoalSessionObservationContracts.casesJson ++ ","
     ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
     ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
     ++ "\"workspace_command_root_cases\":" ++ Conformance.WorkspaceCommandRoot.casesJson.compress ++ ","
