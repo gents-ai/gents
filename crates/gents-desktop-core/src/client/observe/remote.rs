@@ -10,10 +10,9 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
 use super::{ObservedStore, ObserverMetrics, RuntimeConnectionEvent};
-use crate::client::SnapshotReadError;
 use gents::store::config_client::SubscriptionEnd;
 use crate::client::query::OBSERVED_COLLECTIONS;
-use crate::client::PeerRecord;
+use crate::client::{PeerRecord, SnapshotReadError};
 
 /// One event of a source task (`RuntimeConnectionObservation.armedEvent` or
 /// `streamEndEvent`).
@@ -36,29 +35,27 @@ pub(super) fn armed_event(renewal: bool) -> RuntimeConnectionEvent {
 pub(super) fn armed_after(was_armed: bool, event: RuntimeConnectionEvent) -> bool {
     match event {
         RuntimeConnectionEvent::SubscriptionsReady | RuntimeConnectionEvent::Renewed => true,
-        RuntimeConnectionEvent::TransportFailed | RuntimeConnectionEvent::PermissionDenied => {
-            false
-        }
+        RuntimeConnectionEvent::TransportFailed | RuntimeConnectionEvent::Refused => false,
         RuntimeConnectionEvent::SourceStarted
         | RuntimeConnectionEvent::SnapshotSucceeded
         | RuntimeConnectionEvent::EndpointMissing => was_armed,
     }
 }
 
-/// `RuntimeConnectionObservation.SnapshotOutcome` of a failed read.
+/// `RuntimeConnectionObservation.SnapshotOutcome` of a read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SnapshotOutcome {
     Succeeded,
     Refused,
-    RootWithheld,
     Unreachable,
 }
 
+/// The snapshot owner's classification of a failed read; an omitted root is
+/// not a failure (`load_node_snapshot_on`).
 pub(super) fn snapshot_outcome(error: &SnapshotReadError) -> SnapshotOutcome {
     match error {
-        SnapshotReadError::RootsWithheld { .. } => SnapshotOutcome::RootWithheld,
-        SnapshotReadError::Read(_) if error.refused() => SnapshotOutcome::Refused,
-        SnapshotReadError::Read(_) => SnapshotOutcome::Unreachable,
+        SnapshotReadError::Refused(_) => SnapshotOutcome::Refused,
+        SnapshotReadError::Failed(_) => SnapshotOutcome::Unreachable,
     }
 }
 
@@ -66,9 +63,7 @@ pub(super) fn snapshot_outcome(error: &SnapshotReadError) -> SnapshotOutcome {
 pub(super) fn snapshot_event(outcome: SnapshotOutcome) -> RuntimeConnectionEvent {
     match outcome {
         SnapshotOutcome::Succeeded => RuntimeConnectionEvent::SnapshotSucceeded,
-        SnapshotOutcome::Refused | SnapshotOutcome::RootWithheld => {
-            RuntimeConnectionEvent::PermissionDenied
-        }
+        SnapshotOutcome::Refused => RuntimeConnectionEvent::Refused,
         SnapshotOutcome::Unreachable => RuntimeConnectionEvent::TransportFailed,
     }
 }
@@ -82,9 +77,18 @@ pub(super) fn renewal_start(started: Instant, arm: Duration, period: Duration) -
 pub(super) struct Source {
     pub endpoint: GraphqlEndpoint,
     pub generation: u64,
-    pub denied: bool,
-    reprobe_at: Option<Instant>,
+    /// When the ended source reconnects at the same endpoint; `None` while
+    /// its task runs.
+    reconnect_at: Option<Instant>,
     abort: AbortHandle,
+}
+
+impl Source {
+    /// The source ended and waits for its reconnect; its notices and loads
+    /// are no longer current.
+    pub(super) fn ended(&self) -> bool {
+        self.reconnect_at.is_some()
+    }
 }
 
 impl Drop for Source {
@@ -96,47 +100,75 @@ impl Drop for Source {
 #[derive(Default)]
 pub(super) struct Sources {
     pub entries: BTreeMap<String, Source>,
-    denials: BTreeMap<String, u32>,
+    /// Consecutive reconnects per node (`RuntimeConnectionObservation.reconnectAttempt`).
+    attempts: BTreeMap<String, u32>,
+    /// When the node's current source first connected (a successful snapshot
+    /// of its armed subscriptions); cleared by its reconnect.
+    connected_at: BTreeMap<String, Instant>,
+    /// Nodes whose due reconnect dropped their source; the next reconcile
+    /// restarts them at this endpoint without resetting the shown status.
+    reconnecting: BTreeMap<String, String>,
     generation: u64,
     /// Every node this owner last published a connection status for.
     observed: BTreeSet<String>,
 }
 
-/// `RuntimeConnectionObservation.transportRetryDelayMs`.
-pub(super) const TRANSPORT_RETRY_DELAY: Duration = Duration::from_millis(250);
+const RECONNECT_BASE_MS: u64 = 250;
+const RECONNECT_FLAT_ATTEMPTS: u32 = 5;
+const RECONNECT_CAP_MS: u64 = 30_000;
+/// `RuntimeConnectionObservation.reconnectStableMs`.
+pub(super) const RECONNECT_STABLE: Duration = Duration::from_secs(30);
 
-const REPROBE_BASE_MS: u64 = 1000;
-const REPROBE_CAP_MS: u64 = 30_000;
+/// `RuntimeConnectionObservation.Origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Origin {
+    /// A notice of the source task (its handshake or its stream).
+    Source,
+    /// The observer's own snapshot read.
+    Snapshot,
+}
 
-/// `RuntimeConnectionObservation.reprobeDelayMs`.
-pub(super) fn reprobe_delay(denials: u32) -> Duration {
+/// `RuntimeConnectionObservation.reconnectDelayMs`: the one delay of every
+/// reconnect, after a transport failure or a refusal.
+pub(super) fn reconnect_delay(attempt: u32) -> Duration {
+    if attempt < RECONNECT_FLAT_ATTEMPTS {
+        return Duration::from_millis(RECONNECT_BASE_MS);
+    }
     Duration::from_millis(
         1_u64
-            .checked_shl(denials)
-            .and_then(|factor| factor.checked_mul(REPROBE_BASE_MS))
-            .map_or(REPROBE_CAP_MS, |delay| delay.min(REPROBE_CAP_MS)),
+            .checked_shl(attempt + 1 - RECONNECT_FLAT_ATTEMPTS)
+            .and_then(|factor| factor.checked_mul(RECONNECT_BASE_MS))
+            .map_or(RECONNECT_CAP_MS, |delay| delay.min(RECONNECT_CAP_MS)),
     )
 }
 
-/// `RuntimeConnectionObservation.nextDenials`.
-pub(super) fn next_denials(denials: u32, event: RuntimeConnectionEvent) -> u32 {
-    match event {
-        RuntimeConnectionEvent::PermissionDenied => denials.saturating_add(1),
-        RuntimeConnectionEvent::SnapshotSucceeded => 0,
-        RuntimeConnectionEvent::SourceStarted
-        | RuntimeConnectionEvent::SubscriptionsReady
-        | RuntimeConnectionEvent::TransportFailed
-        | RuntimeConnectionEvent::Renewed
-        | RuntimeConnectionEvent::EndpointMissing => denials,
+/// `RuntimeConnectionObservation.reconnects`.
+pub(super) fn reconnects(origin: Origin, event: RuntimeConnectionEvent) -> bool {
+    matches!(
+        (origin, event),
+        (Origin::Source, RuntimeConnectionEvent::TransportFailed)
+            | (_, RuntimeConnectionEvent::Refused)
+    )
+}
+
+/// `RuntimeConnectionObservation.reconnectAttempt`: the count a reconnect is
+/// scheduled with, given how long the source had been connected.
+pub(super) fn reconnect_attempt(attempts: u32, connected_for: Option<Duration>) -> u32 {
+    match connected_for {
+        Some(connected) if connected >= RECONNECT_STABLE => 0,
+        _ => attempts,
     }
 }
 
 impl Sources {
-    /// Publishes `event` for `node` and advances its re-probe schedule. A
-    /// denial stops the source and schedules its restart at the same endpoint.
+    /// Publishes `event` for `node` and advances its reconnect schedule. An
+    /// event that reconnects stops the source and schedules its restart at
+    /// the same endpoint after `reconnect_delay` of its consecutive count; a
+    /// snapshot that failed for a transport reason leaves the source armed.
     pub(super) fn observe(
         &mut self,
         node: &str,
+        origin: Origin,
         event: RuntimeConnectionEvent,
         store: &ObservedStore,
         now: Instant,
@@ -152,32 +184,69 @@ impl Sources {
             _ => {}
         }
         store.observe_runtime_connection(node, event);
-        let denials = self.denials.get(node).copied().unwrap_or_default();
-        if matches!(event, RuntimeConnectionEvent::PermissionDenied) {
-            if let Some(source) = self.entries.get_mut(node) {
-                source.denied = true;
-                source.reprobe_at = Some(now + reprobe_delay(denials));
-                source.abort.abort();
-            }
+        if event == RuntimeConnectionEvent::SnapshotSucceeded {
+            self.connected_at.entry(node.to_owned()).or_insert(now);
         }
-        self.denials
-            .insert(node.to_owned(), next_denials(denials, event));
+        if !reconnects(origin, event) {
+            return;
+        }
+        let connected_for = self
+            .connected_at
+            .remove(node)
+            .map(|since| now.saturating_duration_since(since));
+        let attempt = reconnect_attempt(
+            self.attempts.get(node).copied().unwrap_or_default(),
+            connected_for,
+        );
+        if let Some(source) = self.entries.get_mut(node) {
+            metrics.reconnects.fetch_add(1, Ordering::Relaxed);
+            source.reconnect_at = Some(now + reconnect_delay(attempt));
+            source.abort.abort();
+        }
+        self.attempts
+            .insert(node.to_owned(), attempt.saturating_add(1));
     }
 
-    pub(super) fn next_reprobe(&self) -> Option<Instant> {
+    /// A source for `node` whose task never sends, as `reconcile` would start
+    /// it; returns its generation.
+    #[cfg(test)]
+    pub(super) fn start_inert(&mut self, node: &str) -> u64 {
+        self.generation += 1;
+        self.connected_at.remove(node);
+        let task = tokio::spawn(std::future::pending::<()>());
+        self.entries.insert(
+            node.to_owned(),
+            Source {
+                endpoint: GraphqlEndpoint::anonymous("http://127.0.0.1:9/api/v0/graphql"),
+                generation: self.generation,
+                reconnect_at: None,
+                abort: task.abort_handle(),
+            },
+        );
+        self.generation
+    }
+
+    pub(super) fn next_reconnect(&self) -> Option<Instant> {
         self.entries
             .values()
-            .filter_map(|source| source.reprobe_at)
+            .filter_map(|source| source.reconnect_at)
             .min()
     }
 
-    /// Drops denied sources whose re-probe is due so the next reconcile
+    /// Drops ended sources whose reconnect is due so the next reconcile
     /// restarts them; returns whether any was dropped.
-    pub(super) fn take_due_reprobes(&mut self, now: Instant) -> bool {
-        let before = self.entries.len();
-        self.entries
-            .retain(|_, source| source.reprobe_at.is_none_or(|due| due > now));
-        self.entries.len() != before
+    pub(super) fn take_due_reconnects(&mut self, now: Instant) -> bool {
+        let due: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(_, source)| source.reconnect_at.is_some_and(|due| due <= now))
+            .map(|(node, source)| (node.clone(), source.endpoint.to_string()))
+            .collect();
+        for (node, endpoint) in &due {
+            self.entries.remove(node);
+            self.reconnecting.insert(node.clone(), endpoint.clone());
+        }
+        !due.is_empty()
     }
 
     /// Starts, keeps or drops each peer's source and owns every node's
@@ -211,18 +280,28 @@ impl Sources {
             store.observe_runtime_connection(node, RuntimeConnectionEvent::EndpointMissing);
         }
         self.observed = observed;
+        // A source of an unchanged endpoint is kept even after its task
+        // finished: every task end sends its end notice (`EndNotice`), which
+        // schedules the reconnect on the backoff. Restarting it here would
+        // skip that delay (TLA `ReconnectsWaitTheBackoff`).
         self.entries.retain(|node, source| {
             endpoints
                 .get(node)
                 .is_some_and(|endpoint| endpoint.to_string() == source.endpoint.to_string())
-                && (source.denied || !source.abort.is_finished())
         });
-        self.denials.retain(|node, _| endpoints.contains_key(node));
+        self.attempts.retain(|node, _| endpoints.contains_key(node));
+        self.connected_at.retain(|node, _| self.entries.contains_key(node));
+        let reconnecting = std::mem::take(&mut self.reconnecting);
         for (node, endpoint) in endpoints {
             if self.entries.contains_key(&node) {
                 continue;
             }
-            store.observe_runtime_connection(&node, RuntimeConnectionEvent::SourceStarted);
+            // A reconnect keeps the shown status: an outage stays
+            // `disconnected` until the runtime answers.
+            if reconnecting.get(&node) != Some(&endpoint.to_string()) {
+                store.observe_runtime_connection(&node, RuntimeConnectionEvent::SourceStarted);
+            }
+            self.connected_at.remove(&node);
             self.generation += 1;
             let current = self.generation;
             let task = tokio::spawn(observe(
@@ -238,8 +317,7 @@ impl Sources {
                 Source {
                     endpoint,
                     generation: current,
-                    denied: false,
-                    reprobe_at: None,
+                    reconnect_at: None,
                     abort: task.abort_handle(),
                 },
             );
@@ -251,18 +329,18 @@ impl Sources {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StreamEnd {
     Ended(SubscriptionEnd),
-    /// `denied` is the access owner's classification of the failure.
-    Failed { denied: bool },
+    /// `refused` is the access owner's classification of the failure.
+    Failed { refused: bool },
 }
 
 /// `RuntimeConnectionObservation.streamEndEvent`.
 pub(super) fn stream_end_event(end: StreamEnd) -> Option<RuntimeConnectionEvent> {
     match end {
         StreamEnd::Ended(SubscriptionEnd::RenewalDue) => None,
-        StreamEnd::Ended(SubscriptionEnd::Completed) | StreamEnd::Failed { denied: false } => {
+        StreamEnd::Ended(SubscriptionEnd::Completed) | StreamEnd::Failed { refused: false } => {
             Some(RuntimeConnectionEvent::TransportFailed)
         }
-        StreamEnd::Failed { denied: true } => Some(RuntimeConnectionEvent::PermissionDenied),
+        StreamEnd::Failed { refused: true } => Some(RuntimeConnectionEvent::Refused),
     }
 }
 
@@ -287,15 +365,15 @@ fn stream_end(
 fn failed(node: &str, error: &anyhow::Error) -> StreamEnd {
     tracing::warn!(node_did = %node, error = %error, "runtime subscription disconnected");
     StreamEnd::Failed {
-        denied: error.permission_denied(),
+        refused: error.permission_denied(),
     }
 }
 
 /// Every renewal period the source arms a replacement set while the current
 /// set keeps streaming, then drops the old set and reports `renewed`
 /// (make-before-break), so no change goes undelivered across a renewal. Any
-/// other end reports its `streamEndEvent` and re-arms after
-/// `transportRetryDelayMs` unless it was a denial.
+/// other end reports its `streamEndEvent` and ends the task; the observer
+/// reconnects it after `reconnect_delay`.
 async fn observe(
     node: String,
     endpoint: GraphqlEndpoint,
@@ -304,6 +382,11 @@ async fn observe(
     store: Arc<ObservedStore>,
     metrics: Arc<ObserverMetrics>,
 ) {
+    let mut end = EndNotice {
+        notices: Some(notices.clone()),
+        node: node.clone(),
+        generation,
+    };
     let send = |event| {
         notices
             .send(Notice {
@@ -345,10 +428,37 @@ async fn observe(
         let Some(event) = stream_end_event(ended) else {
             continue;
         };
-        if !send(event) || matches!(event, RuntimeConnectionEvent::PermissionDenied) {
-            return;
+        end.send(event);
+        return;
+    }
+}
+
+/// Sends the source task's end notice exactly once, however the task ends:
+/// with its `streamEndEvent`, or `transportFailed` if it ends without one (a
+/// panic). An aborted source is already replaced or ended, so its notice is
+/// stale and dropped by generation. The observer's reconcile keeps a finished
+/// source on this guarantee.
+struct EndNotice {
+    notices: Option<mpsc::UnboundedSender<Notice>>,
+    node: String,
+    generation: u64,
+}
+
+impl EndNotice {
+    fn send(&mut self, event: RuntimeConnectionEvent) {
+        if let Some(notices) = self.notices.take() {
+            let _ = notices.send(Notice {
+                node: std::mem::take(&mut self.node),
+                generation: self.generation,
+                event,
+            });
         }
-        tokio::time::sleep(TRANSPORT_RETRY_DELAY).await;
+    }
+}
+
+impl Drop for EndNotice {
+    fn drop(&mut self) {
+        self.send(RuntimeConnectionEvent::TransportFailed);
     }
 }
 

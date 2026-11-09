@@ -59,33 +59,33 @@ def reload (m : Machine) (read : Read) (node : Nat) (incoming : List FootprintRo
                        rows := reloadRows node m.rows incoming })
   else (outcome, m)
 
-/-- The observer clears a denied node with a fresh capture. -/
+/-- The observer clears a refused node with a fresh capture. -/
 def clear (m : Machine) (node : Nat) : Machine :=
   (reload m (beginRead m.pub) node []).2
 
 def loadResult : String → LoadResult
   | "transport_failed" => .transportFailed
-  | "denied" => .denied
+  | "refused" => .refused
   | _ => .rows
 
 def settlementName : Settlement → String
   | .published => "published"
   | .superseded => "superseded"
   | .transportFailed => "transport_failed"
-  | .denied => "denied"
+  | .refused => "refused"
 
 def statusName : Status → String
   | .connecting => "connecting"
   | .connected => "connected"
   | .disconnected => "disconnected"
-  | .denied => "denied"
+  | .refused => "refused"
   | .noEndpoint => "noEndpoint"
 
 def presentationName : Presentation → String
   | .catchingUp => "catching_up"
   | .current => "current"
   | .retrying => "retrying"
-  | .denied => "denied"
+  | .refused => "refused"
   | .noEndpoint => "no_endpoint"
   | .stalled => "stalled"
 
@@ -111,9 +111,9 @@ def step (m : Machine) (op : Op) : Machine × Option Json :=
   | "transcript_event" => ({ m with pub := transcriptInvalidation m.pub }, none)
   | "stream_failed" =>
       (dropRead (withSlot { m with pub := requestEvent m.pub } n (streamFailed slot)) n, none)
-  | "stream_denied" =>
+  | "stream_refused" =>
       let m := clear { m with pub := requestEvent m.pub } n
-      (dropRead (withSlot m n (streamDenied slot)) n, none)
+      (dropRead (withSlot m n (streamRefused slot)) n, none)
   | "publish" => ((reload m (beginRead m.pub) n (snapshot n op.result)).2, none)
   | "seed_unowned" =>
       ({ m with pub := dataChange m.pub .all,
@@ -127,7 +127,7 @@ def step (m : Machine) (op : Op) : Machine × Option Json :=
           let (outcome, next) := match loadResult op.result with
             | .rows => reload m read n (snapshot n op.result)
             | .transportFailed => (.transportFailed, m)
-            | .denied => (.denied, clear m n)
+            | .refused => (.refused, clear m n)
           (dropRead (withSlot next n (settle slot outcome)) n,
             some (Json.mkObj [("settlement", toJson (settlementName outcome)),
               ("patch_accepted", toJson patch)]))

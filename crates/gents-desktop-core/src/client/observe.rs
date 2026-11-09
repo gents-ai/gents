@@ -32,7 +32,8 @@ enum Settlement {
     /// store already shows newer rows, so the next load needs no back-off.
     Superseded,
     TransportFailed,
-    Denied,
+    /// The access owner refused the read; the source reconnects.
+    Refused,
 }
 
 impl Settlement {
@@ -42,7 +43,7 @@ impl Settlement {
             Self::Published => Some(remote::snapshot_event(remote::SnapshotOutcome::Succeeded)),
             Self::Superseded => None,
             Self::TransportFailed => Some(RuntimeConnectionEvent::TransportFailed),
-            Self::Denied => Some(RuntimeConnectionEvent::PermissionDenied),
+            Self::Refused => Some(RuntimeConnectionEvent::Refused),
         }
     }
 }
@@ -65,8 +66,8 @@ enum SourceNotice {
     Armed,
     /// `ObserverResync.streamFailed`.
     StreamFailed,
-    /// `ObserverResync.streamDenied`.
-    Denied,
+    /// `ObserverResync.streamRefused`.
+    Refused,
 }
 
 impl SourceNotice {
@@ -75,7 +76,7 @@ impl SourceNotice {
     /// source task sends.
     fn of(event: RuntimeConnectionEvent) -> Option<Self> {
         match event {
-            RuntimeConnectionEvent::PermissionDenied => Some(Self::Denied),
+            RuntimeConnectionEvent::Refused => Some(Self::Refused),
             _ if remote::armed_after(false, event) => Some(Self::Armed),
             _ if !remote::armed_after(true, event) => Some(Self::StreamFailed),
             _ => None,
@@ -88,9 +89,46 @@ impl SourceNotice {
     }
 }
 
+/// The loop's handling of a notice from `node`'s current source at
+/// `generation`: the slot transition (`Queue::notice`) and the connection
+/// status and reconnect schedule (`Sources::observe`, origin `source`).
+/// Returns the notice so the caller aborts the node's load when it says so.
+fn apply_source_notice(
+    queue: &mut Queue,
+    sources: &mut remote::Sources,
+    store: &ObservedStore,
+    node: &str,
+    generation: u64,
+    event: RuntimeConnectionEvent,
+    metrics: &ObserverMetrics,
+) -> Option<SourceNotice> {
+    let kind = SourceNotice::of(event)?;
+    queue.notice(store, node, generation, kind);
+    sources.observe(node, remote::Origin::Source, event, store, Instant::now(), metrics);
+    Some(kind)
+}
+
+/// The loop's handling of a finished load of `node`: the connection status
+/// and reconnect schedule (`Sources::observe`, origin `snapshot`) and the
+/// slot transition (`Queue::settle`).
+fn apply_settlement(
+    queue: &mut Queue,
+    sources: &mut remote::Sources,
+    store: &ObservedStore,
+    node: &str,
+    settlement: Settlement,
+    now: Instant,
+    metrics: &ObserverMetrics,
+) {
+    if let Some(event) = settlement.connection_event() {
+        sources.observe(node, remote::Origin::Snapshot, event, store, now, metrics);
+    }
+    queue.settle(node, settlement, now);
+}
+
 impl Queue {
-    /// Applies `notice` from `node`'s source at `generation`. A denial also
-    /// clears the node's rows, as a denied load does.
+    /// Applies `notice` from `node`'s source at `generation`. A refusal also
+    /// clears the node's rows, as a refused load does.
     fn notice(&mut self, store: &ObservedStore, node: &str, generation: u64, notice: SourceNotice) {
         match notice {
             SourceNotice::Armed => {
@@ -100,9 +138,9 @@ impl Queue {
             SourceNotice::StreamFailed => {
                 self.armed.remove(node);
             }
-            SourceNotice::Denied => {
+            SourceNotice::Refused => {
                 clear_node(store, node);
-                self.settle(node, Settlement::Denied, Instant::now());
+                self.settle(node, Settlement::Refused, Instant::now());
             }
         }
     }
@@ -126,7 +164,7 @@ impl Queue {
                 self.pending.insert(node.to_owned());
                 self.retry_at.insert(node.to_owned(), now + SNAPSHOT_RETRY_DELAY);
             }
-            Settlement::Denied => {
+            Settlement::Refused => {
                 self.pending.remove(node);
                 self.retry_at.remove(node);
                 self.armed.remove(node);
@@ -178,7 +216,7 @@ struct InFlight {
 
 /// Each runtime's snapshot runs as its own task so one stalled runtime delays
 /// neither another runtime nor shutdown. At most one load per node is in
-/// flight; a load whose source was replaced, removed or denied is aborted and
+/// flight; a load whose source was replaced, removed or ended is aborted and
 /// its result, if it already finished, is dropped by id.
 #[derive(Default)]
 struct Loads {
@@ -225,7 +263,7 @@ impl Loads {
             .iter()
             .filter(|(node, load)| {
                 !sources.entries.get(*node).is_some_and(|source| {
-                    source.generation == load.source_generation && !source.denied
+                    source.generation == load.source_generation && !source.ended()
                 })
             })
             .map(|(node, _)| node.clone())
@@ -293,7 +331,7 @@ pub fn spawn_observer(
                 .retry_at
                 .values()
                 .copied()
-                .chain(sources.next_reprobe())
+                .chain(sources.next_reconnect())
                 .min();
             tokio::select! {
                 changed = stop_rx.changed() => {
@@ -312,13 +350,12 @@ pub fn spawn_observer(
                 }
                 notice = notice_rx.recv() => {
                     let Some(notice) = notice else { break; };
-                    if let Some(generation) = sources.entries.get(&notice.node).filter(|source| source.generation == notice.generation && !source.denied).map(|source| source.generation) {
-                        let Some(kind) = SourceNotice::of(notice.event) else { continue; };
-                        if kind.aborts_load() {
+                    if let Some(generation) = sources.entries.get(&notice.node).filter(|source| source.generation == notice.generation && !source.ended()).map(|source| source.generation) {
+                        let applied = apply_source_notice(&mut queue, &mut sources, &store,
+                            &notice.node, generation, notice.event, &metrics_for_task);
+                        if applied.is_some_and(SourceNotice::aborts_load) {
                             loads.cancel(&notice.node);
                         }
-                        queue.notice(&store, &notice.node, generation, kind);
-                        sources.observe(&notice.node, notice.event, &store, Instant::now(), &metrics_for_task);
                     }
                 }
                 changed = resync_requests.changed() => {
@@ -357,18 +394,16 @@ pub fn spawn_observer(
                             tracing::warn!(node_did = %node, error = %error, "runtime snapshot failed");
                             metrics_for_task.fetch_failures.fetch_add(1, Ordering::Relaxed);
                             let event = remote::snapshot_event(remote::snapshot_outcome(&error));
-                            if matches!(event, RuntimeConnectionEvent::PermissionDenied) {
+                            if matches!(event, RuntimeConnectionEvent::Refused) {
                                 clear_node(&store, &node);
-                                Settlement::Denied
+                                Settlement::Refused
                             } else {
                                 Settlement::TransportFailed
                             }
                         }
                     };
-                    if let Some(event) = settlement.connection_event() {
-                        sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
-                    }
-                    queue.settle(&node, settlement, Instant::now());
+                    apply_settlement(&mut queue, &mut sources, &store, &node, settlement,
+                        Instant::now(), &metrics_for_task);
                 }
                 _ = async {
                     if let Some(deadline) = wake {
@@ -377,7 +412,7 @@ pub fn spawn_observer(
                 }, if wake.is_some() => {}
             }
             let now = Instant::now();
-            if sources.take_due_reprobes(now) {
+            if sources.take_due_reconnects(now) {
                 sources.reconcile(
                     &configured_peers.records(),
                     &capability,

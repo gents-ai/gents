@@ -1,4 +1,0 @@
----- MODULE MCRuntimeConnectionWithheldRootLiveness ----
-EXTENDS RuntimeConnectionTransport
-
-====

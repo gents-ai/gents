@@ -948,18 +948,35 @@ namespace RuntimeConnectionObservation
 authenticated HTTP as the User. `noEndpoint` is a directory peer with no
 operator GraphQL endpoint (a discovery- or enrollment-only peer): nothing can
 be observed, and the state says so instead of reading as a connection attempt.
-A peer that is absent from the directory has no state. -/
+A peer that is absent from the directory has no state.
+
+`refused` is a runtime that said it does not accept this client's credentials:
+the access owner classified a request as refused (HTTP 401/403, or a
+`PERMISSION_DENIED` envelope). That is the runtime's own answer, not an
+inference, so the state names it and the user can act on it (the device is not
+enrolled there, its key was rotated, or its grant was removed); the source keeps
+reconnecting on `reconnectDelayMs`, so restored access connects by itself.
+
+There is no state inferred from what the client cannot see. Native ACP hides
+the documents a reader may not read by design: a reader whose grant was revoked
+on the pinned served runtime sees fewer documents, possibly none, and the
+runtime does not say why. The client never infers a denial from an omitted or
+empty result; a view with nothing visible is an ordinary `connected` view. -/
 inductive Status where
-  | connecting | connected | disconnected | denied | noEndpoint
+  | connecting | connected | disconnected | refused | noEndpoint
   deriving DecidableEq, Repr
 
 /-- `renewed` is the source re-arming its subscriptions after a planned stream
 end: the pinned DefraDB HTTP server authenticates a subscription only at its
 handshake, so a locally minted bearer's subscription ends at half the bearer
-lifetime and re-authenticates. It is not a transport failure. `endpointMissing`
-is the reconcile of a peer that has no operator endpoint. -/
+lifetime and re-authenticates. It is not a transport failure. `refused` is the
+access owner's classification of a request it rejected (HTTP 401/403 at a
+handshake or a read, or a `PERMISSION_DENIED` envelope on a stream): the
+source's credentials were not accepted, as with an expired or rotated bearer,
+so the source reconnects with freshly minted ones (`reconnectDelayMs`).
+`endpointMissing` is the reconcile of a peer that has no operator endpoint. -/
 inductive Event where
-  | sourceStarted | subscriptionsReady | snapshotSucceeded | transportFailed | permissionDenied
+  | sourceStarted | subscriptionsReady | snapshotSucceeded | transportFailed | refused
   | renewed | endpointMissing
   deriving DecidableEq, Repr
 
@@ -970,14 +987,17 @@ peer or replication observations do not determine this state. A planned
 renewal keeps the state, whatever it is: the source arms the replacement
 subscriptions before it drops the old ones, so no change goes undelivered and a
 `connected` snapshot stays current across it (TLA `ConnectedAfterArmedSnapshot`).
-A renewal says nothing about reachability or authorization; the resnapshot that
-follows it decides those (`snapshotEvent`). -/
+A refusal is shown as `refused` until a read is accepted: a reconnect that arms
+its subscriptions keeps it, since a runtime that accepts the handshake may still
+refuse every read, and showing `connecting` on each re-arm would hide the cause
+behind a state that looks like progress. -/
 def observe (status : Status) (event : Event) : Status :=
   match event with
-  | .sourceStarted | .subscriptionsReady => .connecting
+  | .sourceStarted => .connecting
+  | .subscriptionsReady => if status = .refused then .refused else .connecting
+  | .refused => .refused
   | .snapshotSucceeded => .connected
   | .transportFailed => .disconnected
-  | .permissionDenied => .denied
   | .renewed => status
   | .endpointMissing => .noEndpoint
 
@@ -987,10 +1007,18 @@ theorem empty_snapshot_is_connected (status : Status) :
     observe status .snapshotSucceeded = .connected := by rfl
 
 theorem subscription_alone_is_not_a_completed_read (status : Status) :
-    observe status .subscriptionsReady = .connecting := by rfl
+    observe status .subscriptionsReady ≠ .connected := by
+  cases status <;> simp [observe]
 
-theorem denial_is_not_an_empty_result (status : Status) :
-    observe status .permissionDenied = .denied := by rfl
+/-- A refusal names itself, never an outage or a connection attempt. -/
+theorem refusal_is_named (status : Status) :
+    observe status .refused = .refused := by rfl
+
+/-- A re-arm or a renewal of a refused source keeps the refusal shown; only an
+accepted read (or another endpoint, or an outage) replaces it. -/
+theorem refusal_shown_until_a_read_is_accepted :
+    observe .refused .subscriptionsReady = .refused ∧ observe .refused .renewed = .refused :=
+  ⟨rfl, rfl⟩
 
 theorem renewal_keeps_connected : observe .connected .renewed = .connected := by rfl
 
@@ -1004,6 +1032,14 @@ theorem only_snapshot_enters_connected (status : Status) (event : Event)
     (h : status ≠ .connected) (hc : observe status event = .connected) :
     event = .snapshotSucceeded := by
   cases event <;> simp_all [observe]
+  split at hc <;> simp_all
+
+/-- Only a transport failure shows an outage. -/
+theorem only_transport_failure_disconnects (status : Status) (event : Event)
+    (h : status ≠ .disconnected) (hd : observe status event = .disconnected) :
+    event = .transportFailed := by
+  cases event <;> simp_all [observe]
+  split at hd <;> simp_all
 
 theorem missing_endpoint_is_not_connecting (status : Status) :
     observe status .endpointMissing = .noEndpoint := by rfl
@@ -1013,12 +1049,12 @@ re-authentication end of a subscription that keeps its own renewal deadline;
 the observer's source takes that cadence (`renewalStartMs`) and never sees it.
 `completed` is the runtime sending `complete`, which is not planned by the
 client and is reported as a transport failure until a re-arm proves otherwise.
-A failure is a denial exactly when the access owner classifies it as one (HTTP
+A failure is `refused` exactly when the access owner classifies it so (HTTP
 401/403 at the handshake, or a `PERMISSION_DENIED` GraphQL error envelope on the
 stream). The pinned served runtime produces neither for a revoked User; see
 `SnapshotOutcome`. -/
 inductive StreamEnd where
-  | renewalDue | completed | failed (denied : Bool)
+  | renewalDue | completed | failed (refused : Bool)
   deriving DecidableEq, Repr
 
 /-- The event a stream end publishes. A renewal publishes nothing until its
@@ -1027,12 +1063,12 @@ failure. -/
 def streamEndEvent : StreamEnd → Option Event
   | .renewalDue => none
   | .completed => some .transportFailed
-  | .failed true => some .permissionDenied
+  | .failed true => some .refused
   | .failed false => some .transportFailed
 
 theorem renewal_publishes_no_failure : streamEndEvent .renewalDue = none := by rfl
 
-theorem classified_denial_is_denied : streamEndEvent (.failed true) = some .permissionDenied := by
+theorem classified_refusal_is_refused : streamEndEvent (.failed true) = some .refused := by
   rfl
 
 /-- The notice a source sends once every subscription of an arm is armed:
@@ -1042,14 +1078,14 @@ notice fields. -/
 def armedEvent (renewal : Bool) : Event := if renewal then .renewed else .subscriptionsReady
 
 /-- Whether the source is armed after a notice of its task, so the observer
-may run a snapshot of it. An armed notice arms it; a failure or a denial
-disarms it until its next armed notice. The task sends no other event (the
-remaining cases leave it as it was): a snapshot result is the observer's own,
-and a snapshot that failed for a transport reason leaves the streams armed and
-is retried after `snapshotRetryDelayMs`. -/
+may run a snapshot of it. An armed notice arms it; a failure or a refusal
+ends the source until its reconnect arms again. The task sends no other event
+(the remaining cases leave it as it was): a snapshot result is the observer's
+own, and a snapshot that failed for a transport reason leaves the streams armed
+and is retried after `snapshotRetryDelayMs`. -/
 def armedAfter (wasArmed : Bool) : Event → Bool
   | .subscriptionsReady | .renewed => true
-  | .transportFailed | .permissionDenied => false
+  | .transportFailed | .refused => false
   | .sourceStarted | .snapshotSucceeded | .endpointMissing => wasArmed
 
 theorem armed_notice_schedules_a_snapshot (wasArmed renewal : Bool) :
@@ -1061,94 +1097,207 @@ theorem stream_end_disarms (wasArmed : Bool) (streamEnd : StreamEnd) (event : Ev
   cases streamEnd with
   | renewalDue => simp [streamEndEvent] at h
   | completed => simp [streamEndEvent] at h; subst h; rfl
-  | failed denied => cases denied <;> simp [streamEndEvent] at h <;> subst h <;> rfl
+  | failed refused => cases refused <;> simp [streamEndEvent] at h <;> subst h <;> rfl
 
 /-- How the source's snapshot read ended. `refused` is an HTTP 401/403 or a
 `PERMISSION_DENIED` envelope (the access owner's classification).
-`rootWithheld` is external premise: the pinned served runtime answers a User
-whose grant was revoked with HTTP 200, no `errors`, and `data` that omits the
-selected roots; it also accepts that User's SSE handshake and keeps its streams
-silent (observe tests `revoked_user_is_answered_without_a_classified_denial`).
-An authorized reader whose rows ACP filters gets each root as an empty list
-(`denial_is_not_an_empty_result`), so an omitted root is the runtime refusing
-the collection and is the only signal a revocation produces. It is a denial:
-classifying it as a transport failure would show a reachable runtime as an
-outage, keep the rows the User may no longer read, and retry it at the
-transport rate forever. -/
+
+External premise: the pinned served runtime answers a User whose grant was
+revoked with HTTP 200, no `errors`, and `data` that omits the selected roots;
+it also accepts that User's SSE handshake and keeps its streams silent (observe
+test `revoked_user_is_answered_with_omitted_roots`). That is native ACP hiding
+what the User may not read, not a refusal: the snapshot reader decodes an
+omitted root as an empty list, and the read `succeeded`. Classifying it as a
+denial would show a state the runtime never asserted; classifying it as a
+failure would reconnect a quiet runtime forever. -/
 inductive SnapshotOutcome where
-  | succeeded | refused | rootWithheld | unreachable
+  | succeeded | refused | unreachable
   deriving DecidableEq, Repr
 
 def snapshotEvent : SnapshotOutcome → Event
   | .succeeded => .snapshotSucceeded
-  | .refused | .rootWithheld => .permissionDenied
+  | .refused => .refused
   | .unreachable => .transportFailed
 
-theorem withheld_root_is_a_denial : snapshotEvent .rootWithheld = .permissionDenied := by rfl
+/-- Where an event came from: the source task's notice (its stream or its
+handshake), or the observer's own snapshot read. -/
+inductive Origin where
+  | source | snapshot
+  deriving DecidableEq, Repr
 
-/-- A denial is not terminal. A grant restored on the runtime emits nothing a
-denied reader can subscribe to, and a 401 from an expired or rotated bearer is
-also reported as a denial, so the observer restarts a denied source at the same
-endpoint after `reprobeDelayMs` of its consecutive-denial count. The count grows
-on each denial, resets once an authenticated snapshot succeeds, and the delay
-doubles from `reprobeBaseMs` up to `reprobeCapMs`, bounding both the probe rate
-against a still-denied runtime and the time a restored grant stays unobserved.
-Refresh reads outside the source do not move this state: rows they publish do
-not establish a connection, and a denial they observe is confirmed by the
-source. -/
-def reprobeBaseMs : Nat := 1000
+/-- Whether the event ends the source and schedules its reconnect. A source
+whose stream failed for a transport reason, or whose credentials were refused,
+has ended; a refused read means the credentials the source armed with are not
+accepted, so it reconnects too. A snapshot that failed for a transport reason
+does not: the source's streams are still armed and deliver every change, so
+only the read is retried, after `snapshotRetryDelayMs` (`armedAfter`,
+`ObserverResync.settle .transportFailed`, TLA `FinishLoad`). Reconnecting there
+would tear down every healthy subscription for one failed read. -/
+def reconnects : Origin → Event → Bool
+  | .source, .transportFailed | .source, .refused | .snapshot, .refused => true
+  | _, _ => false
 
-def reprobeCapMs : Nat := 30000
+theorem snapshot_transport_failure_keeps_the_streams :
+    reconnects .snapshot .transportFailed = false := by rfl
 
-def reprobeDelayMs (denials : Nat) : Nat := min (reprobeBaseMs * 2 ^ denials) reprobeCapMs
+theorem every_refusal_reconnects (origin : Origin) : reconnects origin .refused = true := by
+  cases origin <;> rfl
 
-def nextDenials (denials : Nat) : Event → Nat
-  | .permissionDenied => denials + 1
-  | .snapshotSucceeded => 0
-  | .sourceStarted | .subscriptionsReady | .transportFailed | .renewed | .endpointMissing =>
-    denials
+/-- Only a failure or a refusal reconnects; an arm, a renewal, a successful
+read or a missing endpoint never does. -/
+theorem only_failures_reconnect (origin : Origin) (event : Event)
+    (h : reconnects origin event = true) : event = .transportFailed ∨ event = .refused := by
+  cases origin <;> cases event <;> simp_all [reconnects]
 
-theorem denied_source_restarts :
-    observe .denied .sourceStarted = .connecting := by rfl
+/-- The source task sends a reconnecting event exactly when its notice
+disarms the source. -/
+theorem source_reconnects_iff_disarmed (event : Event)
+    (h : event ≠ .sourceStarted ∧ event ≠ .snapshotSucceeded ∧ event ≠ .endpointMissing) :
+    reconnects .source event = !armedAfter true event := by
+  cases event <;> simp_all [reconnects, armedAfter]
 
-theorem reprobe_delay_bounded (denials : Nat) : reprobeDelayMs denials ≤ reprobeCapMs :=
-  Nat.min_le_right _ _
+/-- The flat reconnect delay, and how many consecutive reconnects use it. An
+ended source is restarted at the same endpoint after `reconnectDelayMs` of its
+consecutive reconnect count. The first `reconnectFlatAttempts` reconnects wait
+`reconnectBaseMs`, so a brief outage or a runtime restart is noticed within a
+quarter second; later ones double up to `reconnectCapMs`, bounding the dial
+rate against a runtime that stays down, keeps refusing or keeps dropping its
+streams, and bounding how long a recovered runtime stays unobserved. -/
+def reconnectBaseMs : Nat := 250
 
-theorem reprobe_delay_positive (denials : Nat) : 0 < reprobeDelayMs denials := by
-  unfold reprobeDelayMs reprobeBaseMs reprobeCapMs
-  exact Nat.lt_min.mpr ⟨Nat.mul_pos (by decide) (Nat.pow_pos (by decide)), by decide⟩
+def reconnectFlatAttempts : Nat := 5
 
-theorem reprobe_delay_monotone (denials : Nat) :
-    reprobeDelayMs denials ≤ reprobeDelayMs (denials + 1) := by
-  have h : reprobeBaseMs * 2 ^ denials ≤ reprobeBaseMs * 2 ^ (denials + 1) :=
-    Nat.mul_le_mul_left _ (Nat.pow_le_pow_right (by decide) (Nat.le_succ _))
-  unfold reprobeDelayMs
-  simp only [Nat.min_def]
-  split <;> split <;> omega
+def reconnectCapMs : Nat := 30000
 
-theorem connected_snapshot_resets_reprobe (denials : Nat) :
-    nextDenials denials .snapshotSucceeded = 0 := by rfl
+/-- `attempt` counts the consecutive reconnects since the source last stayed
+connected for `reconnectStableMs` (`reconnectAttempt`). -/
+def reconnectDelayMs (attempt : Nat) : Nat :=
+  if attempt < reconnectFlatAttempts then reconnectBaseMs
+  else min (reconnectBaseMs * 2 ^ (attempt + 1 - reconnectFlatAttempts)) reconnectCapMs
 
-theorem renewal_keeps_reprobe (denials : Nat) : nextDenials denials .renewed = denials := by rfl
+theorem first_reconnects_are_flat (attempt : Nat) (h : attempt < reconnectFlatAttempts) :
+    reconnectDelayMs attempt = reconnectBaseMs := by
+  simp [reconnectDelayMs, h]
 
-/-- A source whose stream failed for a transport reason re-arms after this
-fixed delay. It is not a backoff: an unreachable runtime is re-dialed (every
-subscription re-armed) at this rate until it answers. Whether to back off,
-which would delay noticing a recovered runtime, is an open product decision. A
-denial, including a withheld root, is never retried at this rate; it waits
-`reprobeDelayMs`. -/
-def transportRetryDelayMs : Nat := 250
+theorem first_five_reconnects_wait_250ms :
+    (List.range 5).map reconnectDelayMs = [250, 250, 250, 250, 250] := by decide
+
+theorem reconnect_delay_doubles_after_the_flat_attempts :
+    (List.range 13).map reconnectDelayMs =
+      [250, 250, 250, 250, 250, 500, 1000, 2000, 4000, 8000, 16000, 30000, 30000] := by decide
+
+theorem reconnect_delay_bounded (attempt : Nat) : reconnectDelayMs attempt ≤ reconnectCapMs := by
+  unfold reconnectDelayMs
+  split
+  · decide
+  · exact Nat.min_le_right _ _
+
+theorem reconnect_delay_positive (attempt : Nat) : 0 < reconnectDelayMs attempt := by
+  unfold reconnectDelayMs reconnectBaseMs reconnectCapMs
+  split
+  · decide
+  · exact Nat.lt_min.mpr ⟨Nat.mul_pos (by decide) (Nat.pow_pos (by decide)), by decide⟩
+
+theorem reconnect_delay_monotone (attempt : Nat) :
+    reconnectDelayMs attempt ≤ reconnectDelayMs (attempt + 1) := by
+  unfold reconnectDelayMs reconnectFlatAttempts reconnectBaseMs reconnectCapMs
+  by_cases h : attempt + 1 < 5
+  · have h' : attempt < 5 := by omega
+    simp [h, h']
+  · by_cases h' : attempt < 5
+    · have e : attempt = 4 := by omega
+      subst e; decide
+    · simp only [h, h', if_false]
+      have hp : 250 * 2 ^ (attempt + 1 - 5) ≤ 250 * 2 ^ (attempt + 1 + 1 - 5) :=
+        Nat.mul_le_mul_left _ (Nat.pow_le_pow_right (by decide) (by omega))
+      simp only [Nat.min_def]
+      split <;> split <;> omega
+
+/-- The delay never decreases while reconnects continue: once past the flat
+attempts it is monotone up to the cap. -/
+theorem reconnect_delay_monotone_le (a b : Nat) (h : a ≤ b) :
+    reconnectDelayMs a ≤ reconnectDelayMs b := by
+  induction b with
+  | zero => have : a = 0 := by omega
+            subst this; exact Nat.le_refl _
+  | succ b ih =>
+    rcases Nat.lt_or_ge a (b + 1) with hlt | hge
+    · exact Nat.le_trans (ih (by omega)) (reconnect_delay_monotone b)
+    · have : a = b + 1 := by omega
+      subst this; exact Nat.le_refl _
+
+theorem reconnect_delay_reaches_the_cap (attempt : Nat) (h : 11 ≤ attempt) :
+    reconnectDelayMs attempt = reconnectCapMs := by
+  apply Nat.le_antisymm (reconnect_delay_bounded attempt)
+  have := reconnect_delay_monotone_le 11 attempt h
+  exact Nat.le_trans (by decide) this
+
+/-- How long a source must stay connected (armed, with a successful snapshot)
+before its consecutive reconnect count resets. A count that reset at a
+successful arm, or at a successful snapshot, would let a runtime that accepts
+both and then drops the stream (or refuses every read after the arm) be redialed
+at the flat rate forever: every cycle would start again at attempt 0. Resetting
+only after the connection held for as long as the longest wait bounds the dial
+rate of such a runtime at the cap, while a runtime that was up and then
+restarts is noticed within `reconnectBaseMs`. It is a duration, not a renewal:
+a delegated credential has no renewal (`renewalPeriodMs`). -/
+def reconnectStableMs : Nat := 30000
+
+/-- The count a reconnect is scheduled with, given the count so far and how
+long the source had been connected when it ended (`none`: it had not connected
+since its last reconnect). The count after the reconnect is this plus one. -/
+def reconnectAttempt (attempts : Nat) : Option Nat → Nat
+  | some connectedMs => if reconnectStableMs ≤ connectedMs then 0 else attempts
+  | none => attempts
+
+theorem stable_connection_resets (attempts connectedMs : Nat)
+    (h : reconnectStableMs ≤ connectedMs) :
+    reconnectDelayMs (reconnectAttempt attempts (some connectedMs)) = reconnectBaseMs := by
+  simp [reconnectAttempt, h, reconnectDelayMs, reconnectFlatAttempts]
+
+theorem short_connection_keeps_counting (attempts connectedMs : Nat)
+    (h : connectedMs < reconnectStableMs) :
+    reconnectAttempt attempts (some connectedMs) = attempts := by
+  simp [reconnectAttempt, Nat.not_le.mpr h]
+
+theorem unconnected_reconnect_keeps_counting (attempts : Nat) :
+    reconnectAttempt attempts none = attempts := rfl
+
+/-- The counts of `cycles` consecutive reconnects of a runtime that each time
+connects for `connectedMs` (or never, with `none`) and then ends again. -/
+def flapCount (connected : Option Nat) : Nat → Nat
+  | 0 => 0
+  | n + 1 => reconnectAttempt (flapCount connected n) connected + 1
+
+theorem flap_count_grows (connected : Option Nat)
+    (h : ∀ ms, connected = some ms → ms < reconnectStableMs) (n : Nat) :
+    flapCount connected n = n := by
+  induction n with
+  | zero => rfl
+  | succ n ih =>
+    cases connected with
+    | none => simp [flapCount, ih, reconnectAttempt]
+    | some ms => simp [flapCount, ih, short_connection_keeps_counting _ _ (h ms rfl)]
+
+/-- A runtime that never holds a connection for `reconnectStableMs` (it drops
+every stream right after the arm and snapshot, refuses every read, or refuses
+every handshake) is dialed at the flat rate at most `reconnectFlatAttempts`
+times in a row, and from the twelfth reconnect on only once per cap. -/
+theorem flapping_runtime_backs_off (connected : Option Nat)
+    (h : ∀ ms, connected = some ms → ms < reconnectStableMs) (n : Nat) :
+    (reconnectFlatAttempts ≤ n → reconnectBaseMs < reconnectDelayMs (flapCount connected n)) ∧
+      (11 ≤ n → reconnectDelayMs (flapCount connected n) = reconnectCapMs) := by
+  rw [flap_count_grows connected h n]
+  refine ⟨fun hn => ?_, reconnect_delay_reaches_the_cap n⟩
+  have := reconnect_delay_monotone_le 5 n hn
+  exact Nat.lt_of_lt_of_le (by decide) this
 
 /-- A snapshot whose read failed for a transport reason, or whose result
 raced a newer store write, is retried after this delay while its source stays
-armed. It is the same decision as `transportRetryDelayMs` and named separately
-because the observer owns two timers. -/
-def snapshotRetryDelayMs : Nat := transportRetryDelayMs
+armed. It is not a reconnect: the streams are still armed. -/
+def snapshotRetryDelayMs : Nat := 250
 
-theorem transport_retry_positive : 0 < transportRetryDelayMs := by decide
-
-theorem transport_retry_below_first_reprobe : transportRetryDelayMs < reprobeDelayMs 0 := by
-  decide
+theorem snapshot_retry_positive : 0 < snapshotRetryDelayMs := by decide
 
 /-- Half the locally minted bearer lifetime (60s): how long the source keeps
 an armed subscription set before it re-authenticates by arming a replacement. -/
@@ -1169,16 +1318,18 @@ theorem a_slow_arm_does_not_make_renewal_due (startedMs armMs : Nat) :
   unfold renewalStartMs renewalPeriodMs; omega
 
 /-- What the user sees for a runtime connection. `waiting` states progress
-without the user: the source is connecting, or it retries an outage on
-`transportRetryDelayMs`. `blocked` states name a cause the user may need to act
-on: a denial (re-probed on `reprobeDelayMs`, but restored only by a grant on the
-runtime) or a peer with no endpoint, which nothing in the client can connect. -/
+without the user: the source is connecting or reconnecting, or it retries an
+outage on `reconnectDelayMs`. `blocked` names a cause the user may need to act
+on: a peer with no endpoint, which nothing in the client can connect, or a
+runtime that refuses this client's credentials, which only its owner can
+change (the source keeps reconnecting, so restored access needs no action
+here). -/
 inductive Tone where
   | ready | waiting | blocked
   deriving DecidableEq, Repr
 
 inductive Reason where
-  | connected | connecting | disconnected | permissionDenied | noEndpoint
+  | connected | connecting | disconnected | refused | noEndpoint
   deriving DecidableEq, Repr
 
 /-- `none` is a peer the observer has not yet reconciled. The desktop bridge
@@ -1188,36 +1339,39 @@ def presentation : Option Status → Tone × Reason
   | none | some .connecting => (.waiting, .connecting)
   | some .connected => (.ready, .connected)
   | some .disconnected => (.waiting, .disconnected)
-  | some .denied => (.blocked, .permissionDenied)
+  | some .refused => (.blocked, .refused)
   | some .noEndpoint => (.blocked, .noEndpoint)
 
-/-- A served runtime held steady while the observer runs. -/
+/-- A served runtime held steady while the observer runs. `granted` is
+whether the User's grant stands; the served runtime answers a revoked User by
+omitting what it may not read. `refuses` is a runtime whose access owner
+refuses this client's every request (HTTP 401/403): the client is not enrolled
+there, its key was rotated, or a runtime that refuses at the handshake removed
+its grant. -/
 structure Served where
   reachable : Bool
   granted : Bool
+  refuses : Bool
   deriving DecidableEq, Repr
 
 def Served.read (served : Served) : SnapshotOutcome :=
-  if !served.reachable then .unreachable
-  else if !served.granted then .rootWithheld
-  else .succeeded
+  if !served.reachable then .unreachable else if served.refuses then .refused else .succeeded
 
 /-- The event the observer next produces by itself at `status` against a
 steady runtime, or `none` when only an outside change moves it. A `connecting`
-source arms and reads a snapshot. A disconnected source re-arms after
-`transportRetryDelayMs`. A connected source sees a lost runtime as a stream
-failure; it sees a revocation only through the resnapshot after its next
-renewal (`renewalPeriodMs`), because the served runtime keeps a revoked User's
-streams open and silent. A denied source restarts after `reprobeDelayMs`. -/
+or `refused` source (re)arms and reads a snapshot. A disconnected source
+reconnects after `reconnectDelayMs`. A connected source sees a lost runtime as
+a stream failure and a refusing one as a refused renewal; a quiet or empty
+view is never a reason to reconnect. -/
 def sourceEvent (served : Served) : Status → Option Event
-  | .connecting =>
+  | .connecting | .refused =>
     if served.reachable then some (snapshotEvent served.read) else some .transportFailed
-  | .disconnected => some (if served.reachable then .subscriptionsReady else .transportFailed)
+  | .disconnected =>
+    some (if !served.reachable then .transportFailed
+      else if served.refuses then .refused else .subscriptionsReady)
   | .connected =>
     if !served.reachable then some .transportFailed
-    else if !served.granted then some (snapshotEvent served.read)
-    else none
-  | .denied => some .sourceStarted
+    else if served.refuses then some .refused else none
   | .noEndpoint => none
 
 def step (served : Served) (status : Status) : Status :=
@@ -1238,66 +1392,68 @@ theorem run_add (served : Served) (m n : Nat) (status : Status) :
   | zero => simp [run]
   | succ m ih => rw [Nat.add_right_comm, run_succ, run_succ, ih]
 
-/-- A reachable runtime that granted the User: every status with an endpoint
-is `connected` within two source steps, and stays there. -/
-theorem healthy_settles_connected (status : Status) (h : status ≠ .noEndpoint) (n : Nat) :
-    run ⟨true, true⟩ (n + 2) status = .connected := by
-  have fixed : ∀ k, run ⟨true, true⟩ k .connected = .connected := by
+/-- A reachable runtime, whether or not it still grants the User: every
+status with an endpoint is `connected` within two source steps, and stays
+there. A revoked User sees a connected view with nothing visible. -/
+theorem reachable_settles_connected (granted : Bool) (status : Status)
+    (h : status ≠ .noEndpoint) (n : Nat) :
+    run ⟨true, granted, false⟩ (n + 2) status = .connected := by
+  have fixed : ∀ k, run ⟨true, granted, false⟩ k .connected = .connected := by
     intro k; induction k with
     | zero => rfl
-    | succ k ih => rw [run_succ]; exact ih
+    | succ k ih => rw [run_succ]; simpa [step, sourceEvent] using ih
   rw [Nat.add_comm, run_add]
   cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
 
-/-- A revoked User at a reachable runtime: after one source step the status
-is only ever `denied` or the `connecting` of a re-probe, which reads the
-withheld root and returns to `denied`. It never reads as an outage. -/
-theorem revoked_alternates_denied_and_reprobe (status : Status) (h : status ≠ .noEndpoint)
-    (n : Nat) : run ⟨true, false⟩ (n + 1) status = .denied ∨
-      run ⟨true, false⟩ (n + 1) status = .connecting := by
-  have closed : ∀ k s, (s = Status.denied ∨ s = .connecting) →
-      (run ⟨true, false⟩ k s = .denied ∨ run ⟨true, false⟩ k s = .connecting) := by
-    intro k; induction k with
-    | zero => intro s hs; exact hs
-    | succ k ih =>
-      intro s hs; rw [run_succ]; apply ih
-      rcases hs with rfl | rfl <;> simp [step, sourceEvent, observe, snapshotEvent, Served.read]
-  rw [Nat.add_comm, run_add]
-  apply closed
-  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
-
-theorem revoked_reaches_denied (status : Status) (h : status ≠ .noEndpoint) :
-    run ⟨true, false⟩ 1 status = .denied ∨ run ⟨true, false⟩ 2 status = .denied := by
-  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+/-- A revoked User's connected view at a reachable runtime produces no event:
+no reconnect, no resnapshot loop. -/
+theorem quiet_view_never_reconnects (granted : Bool) :
+    sourceEvent ⟨true, granted, false⟩ .connected = none := by
+  cases granted <;> rfl
 
 /-- An unreachable runtime: every status with an endpoint is `disconnected`
-within two source steps and stays there, retrying, until the runtime answers. -/
-theorem unreachable_settles_disconnected (granted : Bool) (status : Status)
+within two source steps and stays there, reconnecting, until the runtime
+answers. -/
+theorem unreachable_settles_disconnected (granted refuses : Bool) (status : Status)
     (h : status ≠ .noEndpoint) (n : Nat) :
-    run ⟨false, granted⟩ (n + 2) status = .disconnected := by
-  have fixed : ∀ k, run ⟨false, granted⟩ k .disconnected = .disconnected := by
+    run ⟨false, granted, refuses⟩ (n + 2) status = .disconnected := by
+  have fixed : ∀ k, run ⟨false, granted, refuses⟩ k .disconnected = .disconnected := by
     intro k; induction k with
     | zero => rfl
     | succ k ih => rw [run_succ]; simpa [step, sourceEvent, observe] using ih
   rw [Nat.add_comm, run_add]
   cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
 
+/-- A reachable runtime that refuses this client: every status with an
+endpoint is `refused` within two source steps and stays there, reconnecting on
+the backoff, until the runtime accepts the client. -/
+theorem refusing_settles_refused (granted : Bool) (status : Status)
+    (h : status ≠ .noEndpoint) (n : Nat) :
+    run ⟨true, granted, true⟩ (n + 2) status = .refused := by
+  have fixed : ∀ k, run ⟨true, granted, true⟩ k .refused = .refused := by
+    intro k; induction k with
+    | zero => rfl
+    | succ k ih =>
+      rw [run_succ]; simpa [step, sourceEvent, observe, snapshotEvent, Served.read] using ih
+  rw [Nat.add_comm, run_add]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+
 /-- What a steady runtime settles into reads as its cause: `ready` exactly for
-a healthy runtime, `blocked` with `permissionDenied` for a revoked User (between
-re-probes), and `waiting` with `disconnected` only for an unreachable one. A
-revoked User is never shown an outage. -/
-theorem settled_presentation_names_the_cause (status : Status) (h : status ≠ .noEndpoint)
-    (n : Nat) :
-    presentation (some (run ⟨true, true⟩ (n + 2) status)) = (.ready, .connected) ∧
-    (presentation (some (run ⟨true, false⟩ (n + 1) status)) = (.blocked, .permissionDenied) ∨
-      presentation (some (run ⟨true, false⟩ (n + 1) status)) = (.waiting, .connecting)) ∧
-    presentation (some (run ⟨false, false⟩ (n + 2) status)) = (.waiting, .disconnected) ∧
-    presentation (some (run ⟨false, true⟩ (n + 2) status)) = (.waiting, .disconnected) := by
-  refine ⟨?_, ?_, ?_, ?_⟩
-  · rw [healthy_settles_connected status h n]; rfl
-  · rcases revoked_alternates_denied_and_reprobe status h n with e | e <;> rw [e] <;> simp [presentation]
-  · rw [unreachable_settles_disconnected false status h n]; rfl
-  · rw [unreachable_settles_disconnected true status h n]; rfl
+a reachable runtime that accepts the client, whatever the User may read there;
+`waiting` with `disconnected` only for an unreachable one; and `blocked` with
+`refused` for one that refuses the client, which is never a silent
+`connecting`. A revoked User of the served runtime is never shown an outage or
+a refusal. -/
+theorem settled_presentation_names_the_cause (granted refuses : Bool) (status : Status)
+    (h : status ≠ .noEndpoint) (n : Nat) :
+    presentation (some (run ⟨true, granted, false⟩ (n + 2) status)) = (.ready, .connected) ∧
+    presentation (some (run ⟨false, granted, refuses⟩ (n + 2) status)) =
+      (.waiting, .disconnected) ∧
+    presentation (some (run ⟨true, granted, true⟩ (n + 2) status)) = (.blocked, .refused) := by
+  refine ⟨?_, ?_, ?_⟩
+  · rw [reachable_settles_connected granted status h n]; rfl
+  · rw [unreachable_settles_disconnected granted refuses status h n]; rfl
+  · rw [refusing_settles_refused granted status h n]; rfl
 
 /-- Distinct statuses name distinct reasons, so an outage never reads as a
 connection attempt and a missing endpoint never reads as either. -/
@@ -1334,18 +1490,20 @@ inductive Settlement where
   back-off. -/
   | superseded
   | transportFailed
-  | denied
+  /-- The access owner refused the read; the source reconnects with fresh
+  credentials (`RuntimeConnectionObservation.refused`). -/
+  | refused
   deriving DecidableEq, Repr
 
 inductive LoadResult where
-  | rows | transportFailed | denied
+  | rows | transportFailed | refused
   deriving DecidableEq, Repr
 
 /-- `check` is the reload's `reloadCheck`. -/
 def settlement (s : State) (read : Read) (check : Scope) : LoadResult → Settlement
   | .rows => if acceptsReloadFor s read check then .published else .superseded
   | .transportFailed => .transportFailed
-  | .denied => .denied
+  | .refused => .refused
 
 structure Slot where
   pending : Bool
@@ -1354,8 +1512,8 @@ structure Slot where
   loading : Bool
   /-- The node's current source has armed every root. While it has not, the
   source's transport task owns progress: it retries the subscription after
-  its back-off until every root arms or the runtime denies the User
-  (`observe/remote.rs`; this premise is outside the model). -/
+  its reconnect delay until every root arms (`observe/remote.rs`; this
+  premise is outside the model). -/
   armed : Bool
   status : Status
   deriving DecidableEq, Repr
@@ -1364,18 +1522,23 @@ def initial : Slot :=
   { pending := false, waiting := false, loading := false, armed := false, status := .connecting }
 
 /-- `SourceStarted`: a new source for the node, configured, replaced or
-re-probed after a denial. The previous source's load is aborted. -/
+reconnected. The previous source's load is aborted. -/
 def sourceStarted (n : Slot) : Slot :=
   { n with loading := false, armed := false, status := .connecting }
 
-/-- `SubscriptionsReady`: every root is armed, so the snapshot may start. -/
-def armed (n : Slot) : Slot := { n with pending := true, armed := true, status := .connecting }
+/-- `SubscriptionsReady`: every root is armed, so the snapshot may start. A
+refused slot stays refused until a read is accepted
+(`RuntimeConnectionObservation.observe`). -/
+def armed (n : Slot) : Slot :=
+  { n with pending := true, armed := true,
+           status := if n.status = .refused then .refused else .connecting }
 
 /-- A delivered event, a direct refresh the fence rejected, or an explicit
 resync request queues the node; queued requests coalesce into one load. -/
 def queue (n : Slot) : Slot := { n with pending := true }
 
-/-- A load starts only on an armed source. A denied slot is never armed. -/
+/-- A load starts only on an armed source. A refused slot is unarmed until its
+reconnect arms it. -/
 def startable (n : Slot) : Bool := n.pending && !n.waiting && !n.loading && n.armed
 
 def start (n : Slot) : Slot :=
@@ -1393,12 +1556,12 @@ def settle (n : Slot) : Settlement → Slot
   | .superseded => { n with loading := false, pending := true }
   | .transportFailed =>
       { n with loading := false, pending := true, waiting := true, status := .disconnected }
-  | .denied =>
+  | .refused =>
       { n with loading := false, pending := false, waiting := false, armed := false,
-               status := .denied }
+               status := .refused }
 
-/-- A denial the stream reports settles the slot as a denied load does. -/
-def streamDenied (n : Slot) : Slot := settle n .denied
+/-- A refusal the stream reports settles the slot as a refused load does. -/
+def streamRefused (n : Slot) : Slot := settle n .refused
 
 /-- What the user sees for a node, and why it is not stuck. -/
 inductive Presentation where
@@ -1408,8 +1571,10 @@ inductive Presentation where
   /-- Cause: the runtime is unreachable. Next: the retry timer or the
   transport's re-arm, then a load. -/
   | retrying
-  /-- Cause: the runtime refused the User. Next: the re-probe schedule. -/
-  | denied
+  /-- Cause: the runtime refused this client's credentials. Next: the source's
+  reconnect on the backoff re-arms and reads again; the user may ask the
+  runtime's owner to restore access. -/
+  | refused
   /-- Cause: the directory has no operator endpoint for the peer, so it has no
   source. Next: a reconcile that supplies one starts a source
   (`RuntimeConnectionObservation`). -/
@@ -1420,11 +1585,11 @@ inductive Presentation where
 
 def present (n : Slot) : Presentation :=
   match n.status with
-  | .denied => .denied
   | .noEndpoint => .noEndpoint
   | .disconnected =>
       if n.pending || n.waiting || n.loading || !n.armed then .retrying else .stalled
   | .connecting => if n.pending || n.loading || !n.armed then .catchingUp else .stalled
+  | .refused => if n.pending || n.loading || !n.armed then .refused else .stalled
   | .connected => if n.pending || n.loading then .catchingUp else .current
 
 /-- Every connecting or disconnected slot has a queued or running load or an
@@ -1433,10 +1598,11 @@ queued: the user-visible state is progressing or names its cause. -/
 def Owned (n : Slot) : Prop :=
   (n.waiting = true → n.pending = true) ∧
     (n.status = .connecting → n.pending = true ∨ n.loading = true ∨ n.armed = false) ∧
-    (n.status = .disconnected → n.pending = true ∨ n.loading = true ∨ n.armed = false)
+    (n.status = .disconnected → n.pending = true ∨ n.loading = true ∨ n.armed = false) ∧
+    (n.status = .refused → n.pending = true ∨ n.loading = true ∨ n.armed = false)
 
 theorem owned_never_stalls (n : Slot) (h : Owned n) : present n ≠ .stalled := by
-  obtain ⟨_, hConnecting, hDisconnected⟩ := h
+  obtain ⟨_, hConnecting, hDisconnected, hRefused⟩ := h
   cases n with
   | mk pending waiting loading armed status =>
     cases status <;> cases pending <;> cases waiting <;> cases loading <;> cases armed <;>
@@ -1446,12 +1612,12 @@ theorem owned_never_stalls (n : Slot) (h : Owned n) : present n ≠ .stalled := 
 start now, the retry timer is due, a load is running, or the source is
 arming. -/
 theorem owned_names_next_step (n : Slot) (h : Owned n)
-    (hs : n.status = .connecting ∨ n.status = .disconnected) :
+    (hs : n.status = .connecting ∨ n.status = .disconnected ∨ n.status = .refused) :
     startable n = true ∨ n.waiting = true ∨ n.loading = true ∨ n.armed = false := by
-  obtain ⟨hWaiting, hConnecting, hDisconnected⟩ := h
+  obtain ⟨hWaiting, hConnecting, hDisconnected, hRefused⟩ := h
   cases n with
   | mk pending waiting loading armed status =>
-    rcases hs with hs | hs <;> subst hs <;>
+    rcases hs with hs | hs | hs <;> subst hs <;>
       cases pending <;> cases waiting <;> cases loading <;> cases armed <;>
       simp_all [startable]
 
@@ -1462,7 +1628,8 @@ theorem source_started_owned (n : Slot) (h : Owned n) : Owned (sourceStarted n) 
   cases n; simp_all [Owned, sourceStarted]
 
 theorem armed_owned (n : Slot) : Owned (armed n) := by
-  simp [Owned, armed]
+  simp only [Owned, armed]
+  split <;> simp
 
 theorem queue_owned (n : Slot) (h : Owned n) : Owned (queue n) := by
   cases n; simp_all [Owned, queue]
@@ -1480,8 +1647,8 @@ theorem settle_owned (n : Slot) (h : Owned n) (outcome : Settlement) :
 theorem stream_failed_owned (n : Slot) (h : Owned n) : Owned (streamFailed n) := by
   cases n; simp_all [Owned, streamFailed]
 
-theorem stream_denied_owned (n : Slot) (h : Owned n) : Owned (streamDenied n) :=
-  settle_owned n h .denied
+theorem stream_refused_owned (n : Slot) (h : Owned n) : Owned (streamRefused n) :=
+  settle_owned n h .refused
 
 theorem timer_owned (n : Slot) (h : Owned n) : Owned (timer n) := by
   cases n; simp_all [Owned, timer]
@@ -1493,8 +1660,18 @@ theorem stream_failure_waits_for_arm (n : Slot) :
       startable (armed (streamFailed n)) = !n.waiting := by
   simp [startable, streamFailed, armed]
 
-theorem denied_never_starts (n : Slot) : startable (streamDenied n) = false := by
-  simp [startable, streamDenied, settle]
+theorem refused_never_starts (n : Slot) : startable (streamRefused n) = false := by
+  simp [startable, streamRefused, settle]
+
+/-- A refused slot names the refusal while its reconnect is pending. -/
+theorem refused_is_named (n : Slot) : present (streamRefused n) = .refused := by
+  simp [present, streamRefused, settle]
+
+/-- A snapshot that failed for a transport reason keeps the source armed: the
+read is retried after the timer, the streams are not torn down. -/
+theorem transport_failed_load_keeps_armed (n : Slot) :
+    (settle n .transportFailed).armed = n.armed := by
+  simp [settle]
 
 /-- A superseded load queues the node again with no back-off. -/
 theorem superseded_requeues_without_delay (n : Slot) :

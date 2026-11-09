@@ -270,16 +270,20 @@ pub async fn desktop_session_rename(
 }
 
 #[tauri::command]
-pub async fn desktop_request_retry(
+pub async fn desktop_request_retry<R>(
+    window: tauri::WebviewWindow<R>,
     request_id: String,
     node_did: Option<String>,
     state: State<'_, DesktopAppState>,
-) -> Result<ChatSendResult, BridgeError> {
+) -> Result<ChatSendResult, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
-    let scope = node_did.or_else(|| core.selected_node_did());
+    let scope = state.window_command_node(window.label(), node_did.as_deref());
     crate::commands::retry_request(&core, &request_id, scope.as_deref())
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))

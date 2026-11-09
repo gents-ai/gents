@@ -355,9 +355,11 @@ export function runtimeConnectionBlocksAdmission(connection: string | null | und
 }
 
 /** `RuntimeConnectionObservation.presentation`: each status names its own
-    reason, so an outage never reads as a connection attempt. A null status
-    is a peer the observer has not reconciled yet; the bridge never withholds
-    a reconciled status, since admission reads it. */
+    reason, so an outage or a refusal never reads as a connection attempt.
+    `refused` is the runtime's own answer that it does not accept this
+    client's credentials; nothing it merely hides is shown as one. A null
+    status is a peer the observer has not reconciled yet; the bridge never
+    withholds a reconciled status, since admission reads it. */
 export function projectRuntimeConnectionStatus(
   connection: string | null | undefined,
 ): OperationalStatus {
@@ -366,14 +368,14 @@ export function projectRuntimeConnectionStatus(
       return status({ kind: "ready", layer: "runtime", reason: "connected",
         label: "Runtime is connected", shortLabel: "Connected",
         detail: "The authenticated runtime connection is ready." });
-    case "denied":
-      return status({ kind: "blocked", layer: "runtime", reason: "permission_denied",
-        label: "Runtime access denied", shortLabel: "Access denied",
-        detail: "The runtime rejected this client's access." });
     case "noEndpoint":
       return status({ kind: "blocked", layer: "runtime", reason: "no_endpoint",
         label: "Runtime has no address", shortLabel: "No address",
         detail: "This node has no runtime endpoint this app can connect to." });
+    case "refused":
+      return status({ kind: "blocked", layer: "runtime", reason: "refused",
+        label: "Runtime refused this app", shortLabel: "Refused",
+        detail: "The runtime does not accept this app's credentials. Ask its owner to restore this device's access; it reconnects by itself once they do." });
     case "disconnected":
       return status({ kind: "waiting", layer: "runtime", reason: "disconnected",
         label: "Runtime unreachable", shortLabel: "Reconnecting",

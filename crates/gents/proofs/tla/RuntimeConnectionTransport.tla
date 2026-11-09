@@ -8,69 +8,105 @@
 (*    subscriptions one at a time, then sends a ready notice; every         *)
 (*    renewal period it arms a replacement set while the old set keeps      *)
 (*    streaming, swaps them and sends a renewed notice; a stream ends by a  *)
-(*    transport failure or a denial;                                        *)
+(*    transport failure or a refusal, and the task ends;                    *)
 (*  - the Observer loop (observe.rs): applies notices of the current        *)
-(*    generation, runs one snapshot load at a time, re-probes a denied      *)
-(*    source after a bounded delay;                                         *)
+(*    generation, runs one snapshot load at a time, and reconnects an      *)
+(*    ended source at the same endpoint after the Lean `reconnectDelayMs`   *)
+(*    of its consecutive reconnect count (`Delay`);                         *)
 (*  - Reconcile: a peer directory change (endpoint added, changed or        *)
 (*    removed, peer removed) replaces or drops the source.                  *)
 (* The environment revokes/restores the User's grant and takes the runtime  *)
 (* offline/online a bounded number of times. `Revocation` is how the        *)
 (* runtime answers a revoked User: "served" is the pinned served runtime    *)
 (* (handshake accepted, streams silent, a read answers with the selected    *)
-(* roots omitted; observe tests `revoked_user_is_answered_without_a_        *)
-(* classified_denial`); "handshake" (HTTP 403 at the handshake and on a     *)
-(* read) and "envelope" (a PERMISSION_DENIED envelope on an open stream and *)
-(* HTTP 403 on a read) are the access owner's other classified surfaces,    *)
-(* checked so a runtime that adopts them stays correct.                     *)
+(* roots omitted; observe test `revoked_user_is_answered_with_omitted_      *)
+(* roots`), which native ACP means as "nothing visible", and the observer   *)
+(* reads it as an ordinary empty view; "handshake" (HTTP 403 at the         *)
+(* handshake and on a read) and "envelope" (a PERMISSION_DENIED envelope on *)
+(* an open stream and HTTP 403 on a read) are the access owner's refusals,  *)
+(* checked so a runtime that adopts them stays correct. A refusal is the    *)
+(* runtime's own answer, so it is shown (status refused) while the source   *)
+(* keeps reconnecting on the backoff; nothing omitted or empty is shown as  *)
+(* one. `Drops` adds a runtime that accepts the arm and the snapshot and    *)
+(* then drops the stream at any time (a flapping runtime).                  *)
 (*                                                                         *)
-(* Generations are compared only for equality, so a new source takes the   *)
-(* smallest generation no notice or load still names (`FreshGen`).         *)
-(* A tokio abort lands at the task's next await, so an aborted task may     *)
-(* still enqueue one notice (`Abort`).                                      *)
+(* Durations are ticks: `Delay(n)` is 1 tick for the first `Flat`           *)
+(* reconnects, then doubles up to `Cap` (Lean `reconnectDelayMs`: 250 ms    *)
+(* five times, then doubling to 30 s). The count resets only after the      *)
+(* source stayed connected for the stable period (Lean `reconnectStableMs`; *)
+(* `Stabilize`), never at an arm or a snapshot alone. The count saturates   *)
+(* at `MaxAttempts` *)
+(* for TLC. Generations are compared only for equality, so a new source     *)
+(* takes the smallest generation no notice or load still names              *)
+(* (`FreshGen`). A tokio abort lands at the task's next await, so an        *)
+(* aborted task may still enqueue one notice (`Abort`).                     *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
   K,                  \* subscriptions armed per connection
   MaxGen,             \* generation labels (only equality matters)
-  Cap,                \* reprobe cap, in ticks (Lean reprobeCapMs)
+  Flat,               \* reconnects at the base delay (Lean reconnectFlatAttempts)
+  Cap,                \* reconnect cap, in ticks (Lean reconnectCapMs)
+  MaxAttempts,        \* reconnect count saturation for TLC
   MaxEnv,             \* environment changes (grant, reachability, endpoint)
   MaxChan,            \* notice channel bound for TLC
   Revocation,         \* "served" | "handshake" | "envelope" (see header)
+  Capped,             \* FALSE: the backoff doubles without a cap
   RenewalAsFailure,   \* RED: planned renewal reported as a transport failure
   MakeBeforeBreak,    \* FALSE: a renewal drops the armed set before re-arming
-  WithheldClassified, \* FALSE: a read with withheld roots is a transport failure
+  OmittedIsEmpty,     \* FALSE: a read with omitted roots reconnects the source
   NamedNoEndpoint,    \* FALSE: a peer without an endpoint has no status
   GenerationCheck,    \* FALSE: notices of a replaced source are applied
-  ArmBeforeReady      \* FALSE: ready is sent before every subscription is armed
+  ArmBeforeReady,     \* FALSE: ready is sent before every subscription is armed
+  Drops,              \* a reachable runtime may drop an open stream at any time
+  KeepEnded,          \* FALSE: a reconcile restarts a source whose task ended
+                      \* before its end notice was applied
+  ResetOnConnect      \* RED: a connected snapshot resets the reconnect count
 
 Endpoints == {"e1", "e2"}
 Peers == {"absent", "none"} \cup Endpoints
-Statuses == {"unset", "connecting", "connected", "disconnected", "denied", "noEndpoint"}
-Kinds == {"ready", "renewed", "failed", "denied"}
-Phases == {"idle", "arming", "streaming", "retry", "ended"}
+Statuses == {"unset", "connecting", "connected", "disconnected", "refused", "noEndpoint"}
+Kinds == {"ready", "renewed", "failed", "refused"}
+Phases == {"idle", "arming", "streaming", "ended"}
 Gens == 1..MaxGen
 
 VARIABLES
-  peer, grant, reachable, env, dirty,      \* environment and peer directory
-  srcGen, srcEndpoint, srcReady, srcDenied, \* Sources entry (0 = none)
-  tPhase, tArmed, tRenewing, tNew,          \* the live source task
-  chan,                                     \* notice channel
-  status,                                   \* ObservedStore runtime_connection
-  pending, load,                            \* observer snapshot scheduling
-  denials, reprobeIn,                       \* re-probe schedule
-  fresh, outage                             \* ghosts
+  peer, grant, reachable, env, dirty,         \* environment and peer directory
+  srcGen, srcEndpoint, srcReady, srcRetrying, \* Sources entry (0 = none)
+  tPhase, tArmed, tRenewing, tNew,            \* the live source task
+  chan,                                       \* notice channel
+  status,                                     \* ObservedStore runtime_connection
+  pending, load,                              \* observer snapshot scheduling
+  attempts, retryIn, stable,                  \* reconnect schedule
+  fresh, outage, causeless, waited, flatDials, \* ghosts
+  skipped
+
+\* `stable`: the current source stayed connected for the stable period.
+\* `waited`: ticks waited since the runtime last stopped giving a reason to
+\* reconnect (it answers and accepts the client), until the source re-arms.
+\* `flatDials`: reconnects scheduled at the base delay since the source last
+\* stayed connected for the stable period.
+\* `skipped`: a source of the same endpoint was restarted without its
+\* reconnect delay.
+ghosts == <<waited, flatDials>>
 
 vars == <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, srcReady,
-          srcDenied, tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
-          denials, reprobeIn, fresh, outage>>
+          srcRetrying, tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
+          attempts, retryIn, stable, fresh, outage, causeless, waited, flatDials, skipped>>
 
 NoLoad == [gen |-> 0, afterArm |-> FALSE]
 
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 
-ReprobeDelay(n) == IF 2 ^ n < Cap THEN 2 ^ n ELSE Cap
+Doubled(n) == 2 ^ (n + 1 - Flat)
+
+\* Lean `reconnectDelayMs`, in ticks.
+Delay(n) ==
+  IF n < Flat THEN 1
+  ELSE IF Capped /\ Doubled(n) > Cap THEN Cap ELSE Doubled(n)
+
+MaxDelay == IF Capped THEN Cap ELSE Doubled(MaxAttempts)
 
 UsedGens == {chan[i].gen : i \in 1..Len(chan)} \cup {load.gen, srcGen}
 
@@ -82,46 +118,62 @@ TypeOK ==
   /\ peer \in Peers /\ grant \in BOOLEAN /\ reachable \in BOOLEAN
   /\ env \in 0..MaxEnv /\ dirty \in BOOLEAN
   /\ srcGen \in 0..MaxGen /\ srcEndpoint \in Endpoints \cup {"none"}
-  /\ srcReady \in BOOLEAN /\ srcDenied \in BOOLEAN
+  /\ srcReady \in BOOLEAN /\ srcRetrying \in BOOLEAN
   /\ tPhase \in Phases /\ tArmed \in 0..K /\ tRenewing \in BOOLEAN /\ tNew \in 0..K
   /\ \A i \in 1..Len(chan) : chan[i].gen \in Gens /\ chan[i].kind \in Kinds
   /\ status \in Statuses /\ pending \in BOOLEAN
   /\ load.gen \in 0..MaxGen /\ load.afterArm \in BOOLEAN
-  /\ denials \in 0..Cap /\ reprobeIn \in 0..Cap
-  /\ fresh \in BOOLEAN /\ outage \in BOOLEAN
+  /\ attempts \in 0..MaxAttempts /\ retryIn \in 0..MaxDelay /\ stable \in BOOLEAN
+  /\ fresh \in BOOLEAN /\ outage \in BOOLEAN /\ causeless \in BOOLEAN
+  /\ waited \in 0..(MaxDelay + 1) /\ flatDials \in 0..(Flat + 1) /\ skipped \in BOOLEAN
 
 Init ==
   /\ peer \in Endpoints /\ grant = TRUE /\ reachable = TRUE /\ env = 0
   /\ dirty = TRUE
-  /\ srcGen = 0 /\ srcEndpoint = "none" /\ srcReady = FALSE /\ srcDenied = FALSE
+  /\ srcGen = 0 /\ srcEndpoint = "none" /\ srcReady = FALSE /\ srcRetrying = FALSE
   /\ tPhase = "idle" /\ tArmed = 0 /\ tRenewing = FALSE /\ tNew = 0
   /\ chan = <<>> /\ status = "unset" /\ pending = FALSE /\ load = NoLoad
-  /\ denials = 0 /\ reprobeIn = 0 /\ fresh = FALSE /\ outage = FALSE
+  /\ attempts = 0 /\ retryIn = 0 /\ stable = FALSE /\ fresh = FALSE
+  /\ outage = FALSE /\ causeless = FALSE /\ waited = 0 /\ flatDials = 0
+  /\ skipped = FALSE
 
 Send(kind) == chan' = Append(chan, [gen |-> srcGen, kind |-> kind])
+
+\* The runtime gives a reason to reconnect: it is unreachable, or it refuses
+\* a revoked User. A quiet or empty view of a reachable runtime is none.
+HasCause == ~reachable \/ (~grant /\ Revocation # "served")
 
 (* --------------------------- environment ------------------------------ *)
 
 EnvStep == env < MaxEnv /\ env' = env + 1
 
 MovePeer(p) ==
-  /\ EnvStep /\ p # peer /\ peer' = p /\ dirty' = TRUE
-  /\ UNCHANGED <<grant, reachable, srcGen, srcEndpoint, srcReady, srcDenied,
+  /\ EnvStep /\ p # peer /\ peer' = p /\ dirty' = TRUE /\ waited' = 0
+  /\ UNCHANGED <<grant, reachable, srcGen, srcEndpoint, srcReady, srcRetrying,
                  tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
-                 denials, reprobeIn, fresh, outage>>
+                 attempts, retryIn, stable, fresh, outage, causeless, flatDials, skipped>>
 
 ToggleGrant ==
-  /\ EnvStep /\ grant' = ~grant
-  /\ UNCHANGED <<peer, reachable, dirty, srcGen, srcEndpoint, srcReady, srcDenied,
+  /\ EnvStep /\ grant' = ~grant /\ waited' = 0
+  /\ UNCHANGED <<peer, reachable, dirty, srcGen, srcEndpoint, srcReady, srcRetrying,
                  tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
-                 denials, reprobeIn, fresh, outage>>
+                 attempts, retryIn, stable, fresh, outage, causeless, flatDials, skipped>>
+
+\* Another peer's record changed: the directory is reconciled with this
+\* peer unchanged.
+TouchDirectory ==
+  /\ EnvStep /\ dirty' = TRUE
+  /\ UNCHANGED <<peer, grant, reachable, srcGen, srcEndpoint, srcReady, srcRetrying,
+                 tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
+                 attempts, retryIn, stable, fresh, outage, causeless, waited, flatDials,
+                 skipped>>
 
 ToggleReachable ==
   /\ EnvStep /\ reachable' = ~reachable
-  /\ outage' = (outage \/ reachable)
-  /\ UNCHANGED <<peer, grant, dirty, srcGen, srcEndpoint, srcReady, srcDenied,
+  /\ outage' = (outage \/ reachable) /\ waited' = 0 /\ UNCHANGED skipped
+  /\ UNCHANGED <<peer, grant, dirty, srcGen, srcEndpoint, srcReady, srcRetrying,
                  tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
-                 denials, reprobeIn, fresh>>
+                 attempts, retryIn, stable, fresh, causeless, flatDials>>
 
 (* ----------------------------- reconcile ------------------------------ *)
 
@@ -134,81 +186,99 @@ DropSource(staleKind) ==
         /\ staleKind \in Kinds
         /\ chan' = Append(chan, [gen |-> srcGen, kind |-> staleKind])
 
-StartSource(endpoint) ==
+\* A new source task. A reconnect keeps the shown status (an outage stays
+\* `disconnected` until the runtime answers); a new endpoint shows
+\* `connecting`.
+StartSource(endpoint, newStatus) ==
   /\ srcGen' = FreshGen /\ srcEndpoint' = endpoint
-  /\ srcReady' = FALSE /\ srcDenied' = FALSE
+  /\ srcReady' = FALSE /\ srcRetrying' = FALSE
   /\ tPhase' = "arming" /\ tArmed' = 0 /\ tRenewing' = FALSE /\ tNew' = 0
-  /\ status' = "connecting" /\ reprobeIn' = 0 /\ fresh' = FALSE
-  /\ load' = NoLoad
+  /\ status' = newStatus /\ retryIn' = 0 /\ fresh' = FALSE
+  /\ load' = NoLoad /\ stable' = FALSE
 
-Keep == srcGen # 0 /\ srcEndpoint = peer /\ (srcDenied \/ tPhase # "ended")
+\* A reconcile keeps the source of an unchanged endpoint, including one whose
+\* task has ended: its end notice is already queued (every task end sends
+\* one) and schedules the reconnect on the backoff. Restarting it here would
+\* skip that delay.
+Keep == srcGen # 0 /\ srcEndpoint = peer /\ (KeepEnded \/ srcRetrying \/ tPhase # "ended")
 
 Reconcile ==
   /\ dirty /\ dirty' = FALSE
+  /\ skipped' = (skipped \/ (peer \in Endpoints /\ srcGen # 0 /\ srcEndpoint = peer /\ ~Keep))
   /\ IF peer \in Endpoints
        THEN IF Keep
-              THEN UNCHANGED <<srcGen, srcEndpoint, srcReady, srcDenied, tPhase,
-                               tArmed, tRenewing, tNew, chan, status, load, reprobeIn,
-                               fresh, pending>>
+              THEN UNCHANGED <<srcGen, srcEndpoint, srcReady, srcRetrying, tPhase,
+                               tArmed, tRenewing, tNew, chan, status, load, retryIn,
+                               stable, fresh, pending>>
               ELSE /\ CanStart
                    /\ \E k \in Kinds \cup {"none"} : DropSource(k)
-                   /\ StartSource(peer)
+                   /\ StartSource(peer, "connecting")
                    /\ pending' = FALSE
        ELSE /\ \E k \in Kinds \cup {"none"} : DropSource(k)
             /\ srcGen' = 0 /\ srcEndpoint' = "none" /\ srcReady' = FALSE
-            /\ srcDenied' = FALSE /\ tPhase' = "idle" /\ tArmed' = 0
+            /\ srcRetrying' = FALSE /\ tPhase' = "idle" /\ tArmed' = 0
             /\ tRenewing' = FALSE /\ tNew' = 0 /\ load' = NoLoad /\ pending' = FALSE
-            /\ reprobeIn' = 0 /\ fresh' = FALSE
+            /\ retryIn' = 0 /\ fresh' = FALSE /\ stable' = FALSE
             /\ status' = IF peer = "none" /\ NamedNoEndpoint THEN "noEndpoint" ELSE "unset"
-  /\ denials' = IF peer \in Endpoints THEN denials ELSE 0
-  /\ UNCHANGED <<peer, grant, reachable, env, outage>>
+  \* A peer removed from the directory forgets its schedule; re-adding it is
+  \* the user's action, not a redial.
+  /\ attempts' = IF peer \in Endpoints THEN attempts ELSE 0
+  /\ flatDials' = IF peer \in Endpoints THEN flatDials ELSE 0
+  /\ UNCHANGED <<peer, grant, reachable, env, outage, causeless, waited>>
 
 (* ---------------------------- source task ----------------------------- *)
 
 TaskUnchanged == UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint,
-                             srcReady, srcDenied, status, pending, load, denials,
-                             reprobeIn, outage>>
+                             srcReady, srcRetrying, status, pending, load, attempts,
+                             retryIn, stable, outage, flatDials, skipped>>
 
-\* The task ends after a failure notice and re-arms after the fixed
-\* transport retry delay; after a denial it ends for good. A failure drops
-\* every set, including a replacement still arming.
-Fail(kind) ==
+\* The task sends its end notice and ends; the observer schedules the
+\* reconnect. A failure drops every set, including a replacement still arming.
+EndTask(kind) ==
   /\ Len(chan) < MaxChan /\ Send(kind) /\ fresh' = FALSE
-  /\ tPhase' = IF kind = "denied" THEN "ended" ELSE "retry"
+  /\ tPhase' = "ended"
   /\ tArmed' = 0 /\ tRenewing' = FALSE /\ tNew' = 0
+
+Fail(kind) == EndTask(kind) /\ causeless' = (causeless \/ ~HasCause)
 
 \* One handshake: refused when unreachable, or for a revoked User only when
 \* the runtime refuses at the handshake.
 Handshake(armed) ==
   IF ~reachable THEN Fail("failed")
-  ELSE IF ~grant /\ Revocation = "handshake" THEN Fail("denied")
-  ELSE armed
+  ELSE IF ~grant /\ Revocation = "handshake" THEN Fail("refused")
+  ELSE armed /\ UNCHANGED causeless
 
 ArmOne ==
   /\ srcGen # 0 /\ tPhase = "arming" /\ tArmed < K
   /\ Handshake(tArmed' = tArmed + 1 /\ UNCHANGED <<chan, tPhase, tRenewing, tNew, fresh>>)
-  /\ TaskUnchanged
+  /\ TaskUnchanged /\ UNCHANGED waited
 
 ArmDone ==
   /\ srcGen # 0 /\ tPhase = "arming"
   /\ IF ArmBeforeReady THEN tArmed = K ELSE TRUE
   /\ Len(chan) < MaxChan
   /\ Send(IF tRenewing THEN "renewed" ELSE "ready")
-  /\ tPhase' = "streaming" /\ tRenewing' = FALSE
-  /\ UNCHANGED <<tArmed, tNew, fresh>>
+  /\ tPhase' = "streaming" /\ tRenewing' = FALSE /\ waited' = 0
+  /\ UNCHANGED <<tArmed, tNew, fresh, causeless>>
   /\ TaskUnchanged
 
 StreamFails ==
   /\ srcGen # 0 /\ tPhase = "streaming" /\ ~reachable
-  /\ Fail("failed") /\ TaskUnchanged
+  /\ Fail("failed") /\ TaskUnchanged /\ UNCHANGED waited
+
+\* A flapping runtime: reachable, it accepted the arm (and maybe the
+\* snapshot), and drops the open stream. Not fair: it may happen at any time.
+StreamDrops ==
+  /\ Drops /\ srcGen # 0 /\ tPhase = "streaming" /\ reachable
+  /\ EndTask("failed") /\ TaskUnchanged /\ UNCHANGED <<causeless, waited>>
 
 \* A runtime that answers an open stream of a revoked User with a GraphQL
 \* errors envelope; the served runtime keeps it silent instead.
-StreamDenied ==
+StreamRefused ==
   /\ srcGen # 0 /\ tPhase = "streaming" /\ ~grant /\ reachable
   /\ Revocation = "envelope"
-  /\ Fail("denied")
-  /\ TaskUnchanged
+  /\ Fail("refused")
+  /\ TaskUnchanged /\ UNCHANGED waited
 
 \* A renewal period elapsed since the current set was armed. Make-before-
 \* break: the replacement is armed while the current set keeps streaming,
@@ -220,114 +290,136 @@ Renew ==
        THEN Fail("failed")
        ELSE IF MakeBeforeBreak
        THEN /\ tRenewing' = TRUE /\ tNew' = 0
-            /\ UNCHANGED <<chan, tPhase, tArmed, fresh>>
+            /\ UNCHANGED <<chan, tPhase, tArmed, fresh, causeless>>
        ELSE /\ tPhase' = "arming" /\ tArmed' = 0 /\ tRenewing' = TRUE
-            /\ fresh' = FALSE /\ UNCHANGED <<chan, tNew>>
-  /\ TaskUnchanged
+            /\ fresh' = FALSE /\ UNCHANGED <<chan, tNew, causeless>>
+  /\ TaskUnchanged /\ UNCHANGED waited
 
 ArmReplacement ==
   /\ srcGen # 0 /\ tPhase = "streaming" /\ tRenewing /\ tNew < K
   /\ Handshake(tNew' = tNew + 1 /\ UNCHANGED <<chan, tPhase, tArmed, tRenewing, fresh>>)
-  /\ TaskUnchanged
+  /\ TaskUnchanged /\ UNCHANGED waited
 
 \* The replacement is armed: the old set is dropped and `renewed` is sent so
-\* the observer resnapshots, the only read that reveals a revocation on the
-\* served runtime.
+\* the observer resnapshots, the only read that shows the served runtime's
+\* current view of a revoked User.
 Swap ==
   /\ srcGen # 0 /\ tPhase = "streaming" /\ tRenewing /\ tNew = K
   /\ Len(chan) < MaxChan /\ Send("renewed")
   /\ tRenewing' = FALSE /\ tNew' = 0
-  /\ UNCHANGED <<tPhase, tArmed, fresh>>
-  /\ TaskUnchanged
-
-Retry ==
-  /\ srcGen # 0 /\ tPhase = "retry"
-  /\ tPhase' = "arming" /\ tArmed' = 0
-  /\ UNCHANGED <<chan, tRenewing, tNew, fresh>>
+  /\ UNCHANGED <<tPhase, tArmed, fresh, causeless, waited>>
   /\ TaskUnchanged
 
 (* ------------------------------ observer ------------------------------ *)
 
-Denied ==
-  /\ srcReady' = FALSE /\ srcDenied' = TRUE /\ status' = "denied"
-  /\ load' = NoLoad /\ pending' = FALSE
-  /\ reprobeIn' = ReprobeDelay(denials)
-  /\ denials' = IF denials < Cap THEN denials + 1 ELSE denials
+\* Lean `reconnectAttempt` and `reconnectDelayMs`: the count restarts only
+\* when the source stayed connected for the stable period.
+Schedule ==
+  LET a == IF stable THEN 0 ELSE attempts IN
+  /\ srcReady' = FALSE /\ srcRetrying' = TRUE /\ load' = NoLoad
+  /\ retryIn' = Delay(a) /\ stable' = FALSE
+  /\ attempts' = IF a < MaxAttempts THEN a + 1 ELSE a
+  /\ flatDials' = IF stable THEN 1
+                  ELSE IF Delay(a) = 1 THEN Min({flatDials + 1, Flat + 1}) ELSE flatDials
 
 Notice ==
   /\ Len(chan) > 0
   /\ LET n == Head(chan) IN
      /\ chan' = Tail(chan)
-     /\ IF srcGen # 0 /\ ~srcDenied /\ (n.gen = srcGen \/ ~GenerationCheck)
+     /\ IF srcGen # 0 /\ ~srcRetrying /\ (n.gen = srcGen \/ ~GenerationCheck)
           THEN CASE n.kind = "ready" ->
-                      /\ srcReady' = TRUE /\ status' = "connecting" /\ pending' = TRUE
-                      /\ UNCHANGED <<srcDenied, load, reprobeIn, denials>>
+                      /\ srcReady' = TRUE /\ pending' = TRUE
+                      /\ status' = IF status = "refused" THEN "refused" ELSE "connecting"
+                      /\ UNCHANGED <<srcRetrying, load, retryIn, attempts, stable, flatDials>>
                  [] n.kind = "renewed" ->
                       /\ srcReady' = TRUE /\ pending' = TRUE
-                      /\ UNCHANGED <<status, srcDenied, load, reprobeIn, denials>>
+                      /\ UNCHANGED <<status, srcRetrying, load, retryIn, attempts, stable,
+                                     flatDials>>
                  [] n.kind = "failed" ->
-                      /\ srcReady' = FALSE /\ status' = "disconnected" /\ load' = NoLoad
-                      /\ UNCHANGED <<srcDenied, pending, reprobeIn, denials>>
-                 [] n.kind = "denied" -> Denied
-          ELSE UNCHANGED <<srcReady, srcDenied, status, pending, load, reprobeIn, denials>>
+                      /\ Schedule /\ status' = "disconnected"
+                      /\ UNCHANGED pending
+                 [] n.kind = "refused" ->
+                      /\ Schedule /\ status' = "refused" /\ pending' = FALSE
+          ELSE UNCHANGED <<srcReady, srcRetrying, status, pending, load, retryIn, attempts,
+                           stable, flatDials>>
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, tPhase,
-                 tArmed, tRenewing, tNew, fresh, outage>>
+                 tArmed, tRenewing, tNew, fresh, outage, causeless, waited, skipped>>
 
 StartLoad ==
-  /\ pending /\ srcReady /\ ~srcDenied /\ load.gen = 0 /\ srcGen # 0
+  /\ pending /\ srcReady /\ ~srcRetrying /\ load.gen = 0 /\ srcGen # 0
   /\ load' = [gen |-> srcGen, afterArm |-> (tPhase = "streaming" /\ tArmed = K)]
   /\ pending' = FALSE
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, srcReady,
-                 srcDenied, tPhase, tArmed, tRenewing, tNew, chan, status, denials,
-                 reprobeIn, fresh, outage>>
+                 srcRetrying, tPhase, tArmed, tRenewing, tNew, chan, status, attempts,
+                 retryIn, stable, fresh, outage, causeless, ghosts, skipped>>
 
-\* A revoked User's read is refused (HTTP 403) or, on the served runtime,
-\* answered with the selected roots withheld; the observer classifies both
-\* as a denial (Lean `snapshotEvent`) unless `WithheldClassified` is FALSE.
+\* A served runtime answers a revoked User's read with the selected roots
+\* omitted, which the snapshot reader decodes as empty (Lean `SnapshotOutcome`
+\* has no withheld case); `OmittedIsEmpty = FALSE` is the rejected reading
+\* that treats it as a failure. A refused read (HTTP 403) aborts the source
+\* task and reconnects it. A read that failed for a transport reason leaves
+\* the streams armed and is retried (Lean `reconnects .snapshot
+\* .transportFailed = false`); it neither schedules a reconnect nor ends the
+\* task.
 FinishLoad ==
   /\ load.gen # 0 /\ load.gen = srcGen
-  /\ IF ~reachable \/ (~grant /\ Revocation = "served" /\ ~WithheldClassified)
+  /\ IF ~reachable
        THEN /\ status' = "disconnected" /\ pending' = TRUE /\ load' = NoLoad
-            /\ UNCHANGED <<srcReady, srcDenied, reprobeIn, denials, fresh, tPhase>>
-       ELSE IF ~grant
-       \* A denied snapshot aborts the source task.
-       THEN /\ Denied /\ tPhase' = "ended" /\ UNCHANGED fresh
-       ELSE /\ status' = "connected" /\ load' = NoLoad /\ denials' = 0
+            /\ UNCHANGED <<srcReady, srcRetrying, retryIn, attempts, stable, fresh, tPhase,
+                           causeless, flatDials>>
+       ELSE IF ~grant /\ (Revocation # "served" \/ ~OmittedIsEmpty)
+       THEN /\ Schedule /\ status' = "refused" /\ pending' = FALSE
+            /\ tPhase' = "ended" /\ UNCHANGED fresh
+            /\ causeless' = (causeless \/ ~HasCause)
+       ELSE /\ status' = "connected" /\ load' = NoLoad
+            /\ attempts' = IF ResetOnConnect THEN 0 ELSE attempts
             /\ fresh' = (fresh \/ load.afterArm)
-            /\ UNCHANGED <<srcReady, srcDenied, pending, reprobeIn, tPhase>>
+            /\ UNCHANGED <<srcReady, srcRetrying, pending, retryIn, stable, tPhase, causeless,
+                           flatDials>>
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint,
-                 tArmed, tRenewing, tNew, chan, outage>>
+                 tArmed, tRenewing, tNew, chan, outage, waited, skipped>>
+
+\* The source stayed connected for the stable period (Lean
+\* `reconnectStableMs`): its next reconnect starts the count again.
+Stabilize ==
+  /\ srcGen # 0 /\ ~srcRetrying /\ tPhase = "streaming" /\ status = "connected"
+  /\ ~stable /\ stable' = TRUE /\ flatDials' = 0
+  /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, srcReady,
+                 srcRetrying, tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
+                 attempts, retryIn, fresh, outage, causeless, waited, skipped>>
 
 Tick ==
-  /\ srcDenied /\ reprobeIn > 0 /\ reprobeIn' = reprobeIn - 1
+  /\ srcRetrying /\ retryIn > 0 /\ retryIn' = retryIn - 1
+  /\ waited' = IF HasCause THEN 0 ELSE Min({waited + 1, MaxDelay + 1})
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, srcReady,
-                 srcDenied, tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
-                 denials, fresh, outage>>
+                 srcRetrying, tPhase, tArmed, tRenewing, tNew, chan, status, pending, load,
+                 attempts, stable, fresh, outage, causeless, flatDials, skipped>>
 
-\* `take_due_reprobes` then `reconcile`: the same endpoint, a new source.
-Reprobe ==
-  /\ srcDenied /\ reprobeIn = 0 /\ ~dirty /\ peer = srcEndpoint /\ CanStart
-  /\ StartSource(srcEndpoint) /\ pending' = FALSE /\ chan' = chan
-  /\ UNCHANGED <<peer, grant, reachable, env, dirty, denials, outage>>
+\* `take_due_reconnects` then `reconcile`: the same endpoint, a new source.
+Reconnect ==
+  /\ srcRetrying /\ retryIn = 0 /\ ~dirty /\ peer = srcEndpoint /\ CanStart
+  /\ StartSource(srcEndpoint, status) /\ pending' = FALSE /\ chan' = chan
+  /\ UNCHANGED <<peer, grant, reachable, env, dirty, attempts, outage, causeless, ghosts, skipped>>
 
-System == Reconcile \/ ArmOne \/ ArmDone \/ StreamFails \/ StreamDenied \/ Renew
-          \/ ArmReplacement \/ Swap \/ Retry \/ Notice \/ StartLoad \/ FinishLoad
-          \/ Tick \/ Reprobe
+System == Reconcile \/ ArmOne \/ ArmDone \/ StreamFails \/ StreamRefused \/ Renew
+          \/ ArmReplacement \/ Swap \/ Notice \/ StartLoad \/ FinishLoad
+          \/ Stabilize \/ Tick \/ Reconnect \/ StreamDrops
 
-Env == (\E p \in Peers : MovePeer(p)) \/ ToggleGrant \/ ToggleReachable
+Env == (\E p \in Peers : MovePeer(p)) \/ ToggleGrant \/ ToggleReachable \/ TouchDirectory
 
 Next == System \/ Env
 
 \* Every system step is weakly fair. Renewal is a timer the task cannot
-\* skip: a streaming source renews forever, which is how a revocation reaches
-\* an observer of the served runtime. Lean `renewalStartMs` spaces renewals
-\* a full period after each completed arm; durations are not modeled here.
+\* skip: a streaming source renews forever, which is how an observer of the
+\* served runtime reads its current view. Lean `renewalStartMs` spaces
+\* renewals a full period after each completed arm; durations are not
+\* modeled here beyond the reconnect ticks.
 Fairness ==
   /\ WF_vars(Reconcile) /\ WF_vars(ArmOne) /\ WF_vars(ArmDone)
-  /\ WF_vars(StreamFails) /\ WF_vars(StreamDenied) /\ WF_vars(Renew)
-  /\ WF_vars(ArmReplacement) /\ WF_vars(Swap) /\ WF_vars(Retry)
+  /\ WF_vars(StreamFails) /\ WF_vars(StreamRefused) /\ WF_vars(Renew)
+  /\ WF_vars(ArmReplacement) /\ WF_vars(Swap)
   /\ WF_vars(Notice) /\ WF_vars(StartLoad) /\ WF_vars(FinishLoad)
-  /\ WF_vars(Tick) /\ WF_vars(Reprobe)
+  /\ WF_vars(Stabilize) /\ WF_vars(Tick) /\ WF_vars(Reconnect)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -362,21 +454,43 @@ NoEndpointNamed == (peer = "none" /\ ~dirty) => status = "noEndpoint"
 \* neither a renewal nor a revocation reads as an outage.
 RenewalNeverDisconnects == status = "disconnected" => outage
 
-Stable == peer \in Endpoints /\ grant /\ reachable
+\* A quiet or empty view is never a reason to reconnect: every reconnect
+\* follows an unreachable runtime or a refusal.
+NoCauselessReconnect == ~causeless
 
-EventuallyConnected == <>[]Stable => <>[](status = "connected")
+\* Bounded recovery: once the runtime answers and accepts the client, the
+\* source re-arms within `Cap` ticks, however many reconnects came before.
+ReArmedWithinCap == waited <= Cap
 
-RevokedStable == peer \in Endpoints /\ ~grant /\ reachable
+\* A runtime that never holds a connection for the stable period (it drops
+\* every stream after the arm and the snapshot) is dialed at the base delay
+\* at most `Flat` times in a row; later dials back off.
+FlapBounded == flatDials <= Flat
 
-\* With the grant revoked, the source keeps showing the denial (re-probes
-\* pass through `connecting` only transiently).
-DenialObserved == <>[]RevokedStable => []<>(status = "denied")
+\* A source of an unchanged endpoint is restarted only by its reconnect,
+\* after the backoff; a directory reconcile never short-cuts it.
+ReconnectsWaitTheBackoff == ~skipped
+
+Reachable == peer \in Endpoints /\ reachable
+
+\* A recovered runtime is eventually re-armed (backoff delays, never stops,
+\* the reconnect), and its view eventually reads connected whatever the User
+\* may read there, unless it refuses the User.
+RecoveredEventuallyArmed ==
+  <>[](Reachable /\ (grant \/ Revocation = "served"))
+    => <>(tPhase = "streaming" /\ tArmed = K)
+
+EventuallyConnected ==
+  <>[](Reachable /\ (grant \/ Revocation = "served")) => <>[](status = "connected")
+
+\* A runtime that refuses a revoked User names the refusal, and keeps naming
+\* it across every reconnect; it never reads as a silent connection attempt
+\* or an outage.
+RefusalNamed ==
+  <>[](Reachable /\ ~grant /\ Revocation # "served") => <>[](status = "refused")
 
 \* A peer without an endpoint is never shown as a connection attempt.
 NoEndpointEventuallyNamed ==
   <>[](peer = "none") => <>[](status = "noEndpoint")
-
-\* The re-probe of a denied source waits at most `Cap` ticks.
-ReprobeBounded == srcDenied => reprobeIn <= Cap
 
 ====

@@ -28,7 +28,6 @@ pub async fn session_provenance_request(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .or_else(|| core.selected_node_did())
         .ok_or("no node selected; pass nodeDid explicitly")?;
     session_provenance(
         core,

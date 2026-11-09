@@ -1,0 +1,4 @@
+---- MODULE MCWindowIndependence ----
+EXTENDS WindowIndependence
+
+====

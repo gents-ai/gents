@@ -97,6 +97,14 @@ describe("the composer's reason box", () => {
     inputOutOfReach();
   });
 
+  it("says a node refuses this app instead of connecting forever", () => {
+    show({ runtimeConnection: "refused" });
+    expect(box()).toHaveTextContent(/doesn't accept this app/);
+    expect(box()).toHaveTextContent(/restore this device's access/);
+    expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
+    inputOutOfReach();
+  });
+
   it("says a node has no address instead of waiting on it", () => {
     show({ source: "enrollment", graphql: null, runtimeConnection: "noEndpoint" });
     expect(box()).toHaveTextContent(/has no address this app can reach/);

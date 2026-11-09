@@ -77,8 +77,10 @@ impl ClientCore {
         .await;
         match submitted {
             Ok(result) => {
+                let node = result.node_did.clone();
                 let result =
-                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
+                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
+                        .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

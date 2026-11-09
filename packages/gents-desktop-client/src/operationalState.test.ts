@@ -226,6 +226,19 @@ describe("deployment operational state", () => {
     expect(state.summary.label).not.toBe("Connecting to runtime");
   });
 
+  it("names a runtime that refuses this app instead of connecting forever", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({ runtimeConnection: "refused" }),
+    );
+    expect(state.admissionBlocker).toBe(state.connection);
+    expect(state.connection).toMatchObject({
+      kind: "blocked",
+      reason: "refused",
+      shortLabel: "Refused",
+      animated: false,
+    });
+  });
+
   it("names a node without a runtime endpoint instead of connecting forever", () => {
     const state = projectDeploymentOperationalState(
       deployment({ source: "enrollment", graphql: null, runtimeConnection: "noEndpoint" }),

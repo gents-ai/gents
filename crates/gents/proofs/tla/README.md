@@ -120,27 +120,59 @@ See `../README.md` for how this fits the broader formal-verification model.
   source task arms `K` subscriptions one at a time and then sends a ready
   notice; every renewal period (weakly fair) it arms a replacement set while
   the current set keeps streaming, swaps them and sends `renewed`
-  (make-before-break); a stream ends by a transport failure or a denial. The
-  observer applies only notices of the current source generation, runs one
-  snapshot at a time, and re-probes a denied source after the Lean
-  `reprobeDelayMs`; reconcile replaces or drops the source when the peer's
-  endpoint changes or the peer is removed, and an aborted task may still
-  enqueue one notice. `Revocation` is how the runtime answers a revoked User:
+  (make-before-break); a stream ends by a transport failure or a refusal,
+  and the task ends, always with an end notice. The observer applies only
+  notices of the current source generation, runs one snapshot at a time, and
+  reconnects an ended source after the Lean `reconnectDelayMs` of its
+  consecutive reconnect count (flat for `Flat` reconnects, then doubling to
+  `Cap`); the count restarts only after the source stayed connected for the
+  stable period (`Stabilize`, Lean `reconnectStableMs`), never at an arm or a
+  snapshot alone. A snapshot that failed for a transport reason keeps the
+  streams armed and is retried; it never reconnects. Reconcile replaces or
+  drops the source when the peer's endpoint changes or the peer is removed,
+  keeps a source whose task ended until its end notice schedules the
+  reconnect, and an aborted task may still enqueue one notice. Nothing
+  omitted or empty is shown as a refusal: native ACP hides what a reader may
+  not read. `Revocation` is how the runtime answers a revoked User:
   `"served"` is the pinned served runtime (handshake accepted, streams
   silent, reads omit the selected roots; observe test
-  `revoked_user_is_answered_with_withheld_roots`), which only the renewal
-  resnapshot reveals; `"handshake"` and `"envelope"` are the access owner's
-  other classified surfaces. `ConnectedAfterArmedSnapshot`,
-  `StaleNoticeInert`, `RemovalClears`, `NoEndpointNamed`,
-  `RenewalNeverDisconnects`, `ReprobeBounded`, `EventuallyConnected`,
-  `DenialObserved` and `NoEndpointEventuallyNamed` hold for all three. The
-  diagnostics are the found defects and broken guards: `WithheldRoot` and
-  `WithheldRootLiveness` (a withheld root read as a transport failure shows
-  a revoked User an outage forever), `BreakBeforeMake` (a renewal that drops
-  the armed set shows Connected with nothing armed), `RenewalFlap` (a
-  renewal reported as a transport failure), `NoEndpoint`,
-  `StaleGeneration` and `EarlyReady`. Durations are not modeled: Lean
-  `renewalStartMs` spaces renewals a full period after each completed arm.
+  `revoked_user_is_answered_with_omitted_roots`), read as an empty connected
+  view; `"handshake"` and `"envelope"` are the access owner's refusals,
+  which reconnect on the backoff and are shown as `refused` across every
+  reconnect. `Drops` adds a flapping runtime that drops an open stream at any
+  time. `ConnectedAfterArmedSnapshot`, `StaleNoticeInert`, `RemovalClears`,
+  `NoEndpointNamed`, `RenewalNeverDisconnects`, `NoCauselessReconnect` (a
+  quiet or empty view is never a reason to reconnect), `ReArmedWithinCap` (a
+  runtime that answers and accepts the client is re-armed within `Cap` ticks
+  of doing so, however many reconnects came before), `FlapBounded` (at most
+  `Flat` consecutive reconnects at the base delay without a stable
+  connection), `ReconnectsWaitTheBackoff`, `EventuallyConnected`,
+  `RecoveredEventuallyArmed`, `RefusalNamed` and `NoEndpointEventuallyNamed`
+  hold for all three (GREEN `Transport`, `TransportEnvelope`,
+  `TransportHandshake`, with `Flat = 1`, `Cap = 4`: two doublings before the
+  cap); GREEN `Flap` checks the safety properties against a flapping runtime.
+  RED: `OmittedRoot` and `OmittedRootLiveness` (an omitted root read as a
+  failure reconnects a revoked User's quiet runtime forever, the retry
+  storm), `UncappedBackoff` (without a cap, a runtime that recovers while the
+  source waits 8 ticks is re-armed more than `Cap` ticks later),
+  `ResetOnConnect` (a count reset by a connected snapshot redials a flapping
+  runtime at the base delay forever), `EarlyRestart` (a reconcile restarts an
+  ended source before its notice and skips the backoff), `BreakBeforeMake` (a
+  renewal that drops the armed set shows Connected with nothing armed),
+  `RenewalFlap` (a renewal reported as a transport failure), `NoEndpoint`,
+  `StaleGeneration` and `EarlyReady`. Lean `renewalStartMs` spaces renewals a
+  full period after each completed arm.
+- `WindowIndependence` — several desktop windows, each on its own node
+  (Lean `ClientWindowScope`). One node-scoped observer publishes into one
+  store whose change notice is broadcast to every window; each window owns
+  its selection, pack watch and view, reads its own node's slice and
+  publishes only within its view epoch. `NoCrossDelivery` (a window shows and
+  is delivered only its own node), `Converges` (each window converges for its
+  own node) and `WatchFollowsSelection` hold (GREEN `MCWindowIndependence`,
+  two windows on two nodes). RED: `SharedFallback` (the code before: a view
+  falls back to the client core's one selection, which names a node only
+  while one window is open) breaks `Converges`, and `NoCancelOnSwitch` (a
+  selection change keeps the old node's watch) breaks `NoCrossDelivery`.
 - `ObserverResync` — the desktop observer's delivery and resync loop for
   runtime documents and the direct refresh beside it. A runtime write emits a
   subscription event only after the stream is armed; the observer queues the
@@ -291,27 +323,43 @@ in the same second, the client reopens, B completes and never appears);
 ./scripts/run-tlc.sh MCSessionHeadObservationNoHeadSeed
 ```
 
-For RuntimeConnectionTransport — the three green models check clean,
-including the three liveness properties:
+For RuntimeConnectionTransport — the four green models check clean, the
+first three including the four liveness properties:
 ```bash
 ./scripts/run-tlc.sh MCRuntimeConnectionTransport
 ./scripts/run-tlc.sh MCRuntimeConnectionTransportEnvelope
 ./scripts/run-tlc.sh MCRuntimeConnectionTransportHandshake
+./scripts/run-tlc.sh MCRuntimeConnectionFlap
 ```
 
-Its seven diagnostics are EXPECTED to report violations. `WithheldRoot` and
-`RenewalFlap` violate `RenewalNeverDisconnects`, `WithheldRootLiveness`
-violates `DenialObserved`, `BreakBeforeMake` and `EarlyReady` violate
+Its ten diagnostics are EXPECTED to report violations. `OmittedRoot`
+violates `NoCauselessReconnect` and `OmittedRootLiveness` violates
+`EventuallyConnected` (the revoked-User retry storm), `UncappedBackoff`
+violates `ReArmedWithinCap`, `ResetOnConnect` violates `FlapBounded`,
+`EarlyRestart` violates `ReconnectsWaitTheBackoff`, `RenewalFlap` violates
+`RenewalNeverDisconnects`, `BreakBeforeMake` and `EarlyReady` violate
 `ConnectedAfterArmedSnapshot`, `NoEndpoint` violates `NoEndpointNamed` and
 `StaleGeneration` violates `StaleNoticeInert`:
 ```bash
-./scripts/run-tlc.sh MCRuntimeConnectionWithheldRoot
-./scripts/run-tlc.sh MCRuntimeConnectionWithheldRootLiveness
+./scripts/run-tlc.sh MCRuntimeConnectionOmittedRoot
+./scripts/run-tlc.sh MCRuntimeConnectionOmittedRootLiveness
+./scripts/run-tlc.sh MCRuntimeConnectionUncappedBackoff
+./scripts/run-tlc.sh MCRuntimeConnectionResetOnConnect
+./scripts/run-tlc.sh MCRuntimeConnectionEarlyRestart
 ./scripts/run-tlc.sh MCRuntimeConnectionBreakBeforeMake
 ./scripts/run-tlc.sh MCRuntimeConnectionRenewalFlap
 ./scripts/run-tlc.sh MCRuntimeConnectionNoEndpoint
 ./scripts/run-tlc.sh MCRuntimeConnectionStaleGeneration
 ./scripts/run-tlc.sh MCRuntimeConnectionEarlyReady
+```
+
+For WindowIndependence — the green model (two windows, two nodes) checks
+clean; `SharedFallback` violates `Converges` and `NoCancelOnSwitch` violates
+`NoCrossDelivery`:
+```bash
+./scripts/run-tlc.sh MCWindowIndependence
+./scripts/run-tlc.sh MCWindowIndependenceSharedFallback
+./scripts/run-tlc.sh MCWindowIndependenceNoCancelOnSwitch
 ```
 
 For ObserverResync — the green model (two nodes, a renewal during every
@@ -471,16 +519,23 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCSessionHeadObservationNoLivePreference.cfg` | `Order = "noLive"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: B's claim ranks below A's same-second terminalization | 620 distinct states; 1,056 generated | 11 | <1s |
 | `MCSessionHeadObservationNoTerminalizationOrder.cfg` | `Order = "noTerminal"`, `Refusals = TRUE` | `ReplyObserved` intentionally VIOLATED: B refused in A's second loses the random tie | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationNoHeadSeed.cfg` | `Order = "lean"`, `HeadSeed = FALSE` | `ReplyObserved` intentionally VIOLATED: the head is B but the reader reads only nonterminal rows | 572 distinct states; 984 generated | 11 | <1s |
-| `MCRuntimeConnectionTransport.cfg` | `K = 2`, `MaxGen = 4`, `Cap = 2`, `MaxEnv = 3`, `MaxChan = 2`, `Revocation = "served"`, all guards | Passes `TypeOK`, `ConnectedAfterArmedSnapshot`, `RemovalClears`, `NoEndpointNamed`, `RenewalNeverDisconnects`, `ReprobeBounded`, `StaleNoticeInert`, `EventuallyConnected`, `DenialObserved`, `NoEndpointEventuallyNamed` | 65,879 distinct states; 432,424 generated | 54 | 5s |
-| `MCRuntimeConnectionTransportEnvelope.cfg` | as green, `Revocation = "envelope"` | Passes every invariant and property of the green row | 73,847 distinct states; 482,536 generated | 54 | 5s |
-| `MCRuntimeConnectionTransportHandshake.cfg` | as green, `Revocation = "handshake"` | Passes every invariant and property of the green row | 48,429 distinct states; 320,510 generated | 40 | 4s |
-| `MCRuntimeConnectionWithheldRoot.cfg` | as green, `WithheldClassified = FALSE` | `RenewalNeverDisconnects` intentionally VIOLATED: revoked grant, renewal resnapshot, withheld root read as a transport failure, Disconnected at a reachable runtime | 3,801 distinct states before counterexample; 15,907 generated | 9 | <1s |
-| `MCRuntimeConnectionWithheldRootLiveness.cfg` | as `WithheldRoot`, liveness only | `DenialObserved` intentionally VIOLATED: the revoked User loops through disconnected resnapshots and never reaches denied | 39,775 distinct states; 288,098 generated | 32 | 3s |
-| `MCRuntimeConnectionBreakBeforeMake.cfg` | as green, `MakeBeforeBreak = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: Connected while the renewal re-arm has no subscription armed | 3,564 distinct states before counterexample; 14,923 generated | 9 | <1s |
-| `MCRuntimeConnectionRenewalFlap.cfg` | as green, `RenewalAsFailure = TRUE` | `RenewalNeverDisconnects` intentionally VIOLATED: arm, ready, renewal, failure notice, Disconnected with the runtime reachable | 2,228 distinct states before counterexample; 8,158 generated | 8 | <1s |
-| `MCRuntimeConnectionNoEndpoint.cfg` | as green, `NamedNoEndpoint = FALSE` | `NoEndpointNamed` intentionally VIOLATED: the peer loses its endpoint and reconcile leaves no status | 50 distinct states before counterexample; 111 generated | 4 | <1s |
-| `MCRuntimeConnectionStaleGeneration.cfg` | as green, `GenerationCheck = FALSE` | `StaleNoticeInert` intentionally VIOLATED: the replaced source's queued notice moves the new source's status | 220 distinct states before counterexample; 596 generated | 5 | <1s |
-| `MCRuntimeConnectionEarlyReady.cfg` | as green, `ArmBeforeReady = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: ready before any subscription is armed, snapshot, Connected | 909 distinct states before counterexample; 2,713 generated | 6 | <1s |
+| `MCRuntimeConnectionTransport.cfg` | `K = 2`, `MaxGen = 4`, `Flat = 1`, `Cap = 4`, `MaxAttempts = 4`, `MaxEnv = 3`, `MaxChan = 2`, `Revocation = "served"`, all guards | Passes `TypeOK`, `ConnectedAfterArmedSnapshot`, `RemovalClears`, `NoEndpointNamed`, `RenewalNeverDisconnects`, `NoCauselessReconnect`, `ReArmedWithinCap`, `FlapBounded`, `ReconnectsWaitTheBackoff`, `StaleNoticeInert`, `EventuallyConnected`, `RecoveredEventuallyArmed`, `RefusalNamed`, `NoEndpointEventuallyNamed` | 62,330 distinct states; 442,448 generated | 71 | 7s |
+| `MCRuntimeConnectionTransportEnvelope.cfg` | as green, `Revocation = "envelope"` | Passes every invariant and property of the green row | 165,696 distinct states; 1,026,416 generated | 91 | 16s |
+| `MCRuntimeConnectionTransportHandshake.cfg` | as green, `Revocation = "handshake"` | Passes every invariant and property of the green row | 91,646 distinct states; 585,810 generated | 71 | 10s |
+| `MCRuntimeConnectionFlap.cfg` | as green, `Drops = TRUE` | Passes `TypeOK`, `ConnectedAfterArmedSnapshot`, `RemovalClears`, `NoEndpointNamed`, `NoCauselessReconnect`, `ReArmedWithinCap`, `FlapBounded`, `ReconnectsWaitTheBackoff` | 458,350 distinct states; 3,657,390 generated | 93 | 5s |
+| `MCRuntimeConnectionOmittedRoot.cfg` | as green, `OmittedIsEmpty = FALSE` | `NoCauselessReconnect` intentionally VIOLATED: revoked grant, renewal resnapshot, the omitted root read as a failure reconnects a reachable runtime | 3,822 distinct states before counterexample; 16,713 generated | — | <1s |
+| `MCRuntimeConnectionOmittedRootLiveness.cfg` | as `OmittedRoot`, liveness only | `EventuallyConnected` intentionally VIOLATED: the revoked User loops through reconnects and never settles on connected | 117,606 distinct states; 755,888 generated | — | 7s |
+| `MCRuntimeConnectionUncappedBackoff.cfg` | as green, `Capped = FALSE` | `ReArmedWithinCap` intentionally VIOLATED: three failed reconnects to an unreachable runtime (1, 2, 4 ticks), the runtime recovers while the source waits 8 ticks, and 5 ticks pass with no re-arm | 37,400 distinct states before counterexample; 263,209 generated | — | <1s |
+| `MCRuntimeConnectionResetOnConnect.cfg` | as `Flap`, `ResetOnConnect = TRUE` | `FlapBounded` intentionally VIOLATED: arm, snapshot (count reset), drop, reconnect at the base delay, arm, snapshot, drop, a second base-delay reconnect | 22,318 distinct states before counterexample; 133,143 generated | — | <1s |
+| `MCRuntimeConnectionEarlyRestart.cfg` | as green, `KeepEnded = FALSE` | `ReconnectsWaitTheBackoff` intentionally VIOLATED: the handshake fails, an unrelated directory change reconciles before the end notice, and the source restarts at once | 1,053 distinct states before counterexample; 3,857 generated | — | <1s |
+| `MCRuntimeConnectionBreakBeforeMake.cfg` | as green, `MakeBeforeBreak = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: Connected while the renewal re-arm has no subscription armed | 3,854 distinct states before counterexample; 16,871 generated | — | <1s |
+| `MCRuntimeConnectionRenewalFlap.cfg` | as green, `RenewalAsFailure = TRUE` | `RenewalNeverDisconnects` intentionally VIOLATED: arm, ready, renewal, failure notice, Disconnected with the runtime reachable | 2,433 distinct states before counterexample; 9,253 generated | — | <1s |
+| `MCRuntimeConnectionNoEndpoint.cfg` | as green, `NamedNoEndpoint = FALSE` | `NoEndpointNamed` intentionally VIOLATED: the peer loses its endpoint and reconcile leaves no status | 46 distinct states before counterexample; 116 generated | — | <1s |
+| `MCRuntimeConnectionStaleGeneration.cfg` | as green, `GenerationCheck = FALSE` | `StaleNoticeInert` intentionally VIOLATED: the replaced source's queued notice moves the new source's status | 220 distinct states before counterexample; 603 generated | — | <1s |
+| `MCRuntimeConnectionEarlyReady.cfg` | as green, `ArmBeforeReady = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: ready before any subscription is armed, snapshot, Connected | 911 distinct states before counterexample; 2,844 generated | — | <1s |
+| `MCWindowIndependence.cfg` | `Windows = {w1, w2}`, `Nodes = {n1, n2}`, `MaxWrites = 2`, `MaxSwitch = 3`, per-window fallback, cancel on switch | Passes `TypeOK`, `NoCrossDelivery`, `Converges`, `WatchFollowsSelection` | 126,444 distinct states; 753,497 generated | 20 | 10s |
+| `MCWindowIndependenceSharedFallback.cfg` | as green, `SharedFallback = TRUE` | `Converges` intentionally VIOLATED: with both windows open the shared selection names no node, so neither window's view loads | 2,628 distinct states; 12,601 generated | 12 | <1s |
+| `MCWindowIndependenceNoCancelOnSwitch.cfg` | as green, `CancelOnSwitch = FALSE` | `NoCrossDelivery` intentionally VIOLATED: the old node's watch delivers to the switched window | 979 distinct states before counterexample; 1,946 generated | 7 | <1s |
 | `MCObserverResync.cfg` | 2 nodes, `MaxWrites = 1`, `K = 1`, `MaxDrops = 1`, `MaxRefreshes = 1`, node-scoped events off the reload fence, immediate requeue, no refresh fallback, no widening | Passes `TypeOK`, `NoLostWrite`, `NoReadWithoutReason`, `NoStaleCommit`, `EventualPublication`, `Convergence` | 2,835,856 distinct states; 16,250,601 generated | 33 | 7min 5s |
 | `MCObserverResyncWiden.cfg` | 2 nodes, renewals during every load on both, each node's first publication widens (`MaxWidens = 1`), widened loads check their own node | Passes every invariant and property | 23,689 distinct states; 100,043 generated | 34 | 2s |
 | `MCObserverResyncRejectDelay.cfg` | `Widen` with the 250 ms wait after a rejected load | Passes every invariant and property: the wait is not a guard | 25,109 distinct states; 105,521 generated | 36 | 2s |
@@ -523,7 +578,7 @@ The six SessionHeadObservation rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 liveness rows checked `ReplyObserved` over the complete state space.
 
-The ten RuntimeConnectionTransport rows used TLC2 `2026.11.06.222357` (rev
+The fourteen RuntimeConnectionTransport rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 green rows checked their temporal properties over the complete state space.
 

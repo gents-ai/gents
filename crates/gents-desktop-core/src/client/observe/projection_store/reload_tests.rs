@@ -716,7 +716,7 @@ fn denied_resource_read_invalidates_stale_snapshot_and_allows_fresh_visible_rows
     let read = store.capture_read();
     let node = "did:test:reload";
     store.observe_runtime_connection(node, RuntimeConnectionEvent::SnapshotSucceeded);
-    store.invalidate_node_after_denied_read(node);
+    store.clear_node_after_refused_read(node);
     assert_eq!(
         store.runtime_connection(node),
         Some(RuntimeConnectionStatus::Connected)
