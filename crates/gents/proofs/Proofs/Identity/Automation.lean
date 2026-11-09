@@ -1,4 +1,5 @@
 import Proofs.Identity.Household
+import Proofs.Identity.DeclaredAccess
 
 namespace Identity.Automation
 
@@ -712,109 +713,103 @@ theorem producer_reader_allows_downstream_outcome :
     [Household.allowed 5 state "consumer" "children" "outcome" "read",
      Household.allowed 5 state "sibling" "children" "outcome" "read"] = [true, false] := by native_decide
 
-/-- The outcome of work is readable by the requester of that work. A FireOutcome
-publisher grants its request's requester DID one native `reader` tuple on that
-one FireOutcome child, in the same transaction that creates the child and its
-session relations. The requester is read from the outcome's own AgentRequest
-in that transaction; no other subject and no other document is granted. The
-requester of a self-requested stage is its own Agent, which the
-`working_agent` relation already covers. -/
-def outcomeRequesterReader (outcome requester : String) : Household.Relation :=
-  ⟨"children", outcome, "reader", .actor requester⟩
-
+/-- A Task's `outcome_readers` is declared access policy (`DeclaredAccess`):
+the pack (or the User authoring the Task) names which Agents read the
+FireOutcomes of that stage. The publisher applies exactly those `reader`
+tuples on that one FireOutcome child, in the transaction that creates it and
+its session relations, reading the declaration from its Task there. Nothing
+undeclared is granted; in particular a stage's requester gains no access from
+being its requester. The publisher owns the child it creates, so native ACP
+bounds the grants by that ownership. -/
 def publishOutcome (state : Household.State)
-    (publisher outcome session agent requester : String) (fresh committed : Bool) :
+    (publisher outcome session agent : String) (declared : List String) (fresh committed : Bool) :
     Household.State :=
   let published := publishTaskReceipt state publisher outcome session agent fresh committed
   if fresh && committed then
-    Household.apply published (.grantAs publisher (outcomeRequesterReader outcome requester))
+    DeclaredAccess.grantAll published publisher "children" outcome declared
   else published
 
-/-- Exactly one relation is added beyond the session-child publication, and it
-names only the outcome document and the requester. -/
-theorem outcome_requester_reader_is_one_relation (state : Household.State)
-    (publisher outcome session agent requester : String) (fresh committed : Bool) :
-    let base := publishTaskReceipt state publisher outcome session agent fresh committed
-    (publishOutcome state publisher outcome session agent requester fresh committed).relations =
-        base.relations ∨
-      (publishOutcome state publisher outcome session agent requester fresh committed).relations =
-        outcomeRequesterReader outcome requester :: base.relations := by
-  simp only [publishOutcome]
-  split
-  · simp only [Household.apply]
-    split
-    · exact Or.inr rfl
-    · exact Or.inl rfl
-  · exact Or.inl rfl
+/-- Every relation publication adds beyond the session-child publication is a
+declared `reader` tuple on the outcome. -/
+theorem outcome_readers_are_exactly_declared (state : Household.State)
+    (publisher outcome session agent : String) (declared : List String) (fresh committed : Bool)
+    (relation : Household.Relation)
+    (member : relation ∈
+      (publishOutcome state publisher outcome session agent declared fresh committed).relations) :
+    relation ∈ (publishTaskReceipt state publisher outcome session agent fresh committed).relations ∨
+      ∃ reader ∈ declared, relation = DeclaredAccess.readerRelation "children" outcome reader := by
+  simp only [publishOutcome] at member
+  split at member
+  · exact DeclaredAccess.grantAll_adds_only_declared _ _ _ _ _ _ member
+  · exact Or.inl member
 
-theorem outcome_requester_reader_creates_no_document (state : Household.State)
-    (publisher outcome session agent requester : String) (fresh committed : Bool) :
-    (publishOutcome state publisher outcome session agent requester fresh committed).objects =
+theorem outcome_readers_create_no_document (state : Household.State)
+    (publisher outcome session agent : String) (declared : List String) (fresh committed : Bool) :
+    (publishOutcome state publisher outcome session agent declared fresh committed).objects =
       (publishTaskReceipt state publisher outcome session agent fresh committed).objects := by
   simp only [publishOutcome]
   split
-  · simp only [Household.apply]; split <;> rfl
+  · exact DeclaredAccess.grantAll_preserves_objects _ _ _ _ _
   · rfl
 
-theorem outcome_requester_reader_targets_only_the_outcome (outcome requester : String) :
-    (outcomeRequesterReader outcome requester).resource = "children" ∧
-    (outcomeRequesterReader outcome requester).id = outcome ∧
-    (outcomeRequesterReader outcome requester).relation = "reader" := ⟨rfl, rfl, rfl⟩
-
-theorem outcome_requester_reader_abort (state : Household.State)
-    (publisher outcome session agent requester : String) (fresh : Bool) :
-    publishOutcome state publisher outcome session agent requester fresh false = state := by
+theorem outcome_readers_abort (state : Household.State)
+    (publisher outcome session agent : String) (declared : List String) (fresh : Bool) :
+    publishOutcome state publisher outcome session agent declared fresh false = state := by
   cases fresh <;> rfl
 
-theorem outcome_requester_reader_duplicate_preserves_revocation (state : Household.State)
-    (publisher outcome session agent requester : String) (committed : Bool) :
-    publishOutcome state publisher outcome session agent requester false committed = state := by
+theorem outcome_readers_duplicate_preserves_revocation (state : Household.State)
+    (publisher outcome session agent : String) (declared : List String) (committed : Bool) :
+    publishOutcome state publisher outcome session agent declared false committed = state := by
   rfl
 
-/-- A stage requested by a supervisor Agent: the supervisor reads the outcome,
-cannot update it, and gains nothing else; the sibling and the outcome's other
-readers are unchanged. -/
-def outcomeRequesterFixture : Household.State :=
+/-- A stage whose Task declares the supervisor as an outcome reader: the
+supervisor reads the outcome, cannot update it, and gains nothing else. -/
+def outcomeReaderFixture : Household.State :=
   { taskReceiptFixture with
     objects := ⟨"children", "other-outcome", "agent"⟩ :: taskReceiptFixture.objects
     relations := ⟨"children", "other-outcome", "parent", .object "sessions" "session"⟩ ::
       taskReceiptFixture.relations }
 
-def requesterActors : List String := ["user", "agent", "supervisor", "sibling"]
-def requesterDocuments : List (String × String) :=
+def outcomeActors : List String := ["user", "agent", "supervisor", "sibling"]
+def outcomeDocuments : List (String × String) :=
   [("children", "outcome"), ("children", "other-outcome"), ("sessions", "session"),
    ("agents", "agent-doc"), ("nodes", "node")]
-def requesterPermissions : List String := ["read", "update", "delete"]
+def outcomePermissions : List String := ["read", "update", "delete"]
 
-def outcomeRequesterPublished : Household.State :=
-  publishOutcome outcomeRequesterFixture "agent" "outcome" "session" "agent" "supervisor" true true
-def outcomeRequesterBase : Household.State :=
-  publishTaskReceipt outcomeRequesterFixture "agent" "outcome" "session" "agent" true true
+def outcomeDeclared : Household.State :=
+  publishOutcome outcomeReaderFixture "agent" "outcome" "session" "agent" ["supervisor"] true true
+def outcomeUndeclared : Household.State :=
+  publishOutcome outcomeReaderFixture "agent" "outcome" "session" "agent" [] true true
 
-theorem outcome_is_readable_by_its_requester :
-    Household.allowed 5 outcomeRequesterBase "supervisor" "children" "outcome" "read" = false ∧
-    Household.allowed 5 outcomeRequesterPublished "supervisor" "children" "outcome" "read" = true ∧
-    Household.allowed 5 outcomeRequesterPublished "supervisor" "children" "outcome" "update" = false := by
+theorem declared_outcome_reader_reads :
+    Household.allowed 5 outcomeDeclared "supervisor" "children" "outcome" "read" = true ∧
+    Household.allowed 5 outcomeDeclared "supervisor" "children" "outcome" "update" = false := by
   native_decide
 
-/-- Apart from the requester's read of the outcome, every actor's permission
-on every fixture document is unchanged by the grant. -/
-theorem outcome_requester_reader_grants_no_other_subject_anything :
-    requesterActors.all (fun actor => requesterDocuments.all (fun (resource, id) =>
-      requesterPermissions.all (fun permission =>
+theorem undeclared_outcome_read_stays_denied :
+    Household.allowed 5 outcomeUndeclared "supervisor" "children" "outcome" "read" = false ∧
+    Household.allowed 5 outcomeDeclared "sibling" "children" "outcome" "read" = false := by
+  native_decide
+
+/-- Apart from the declared reader's read of the outcome, every actor's
+permission on every fixture document is what an undeclared publication gives. -/
+theorem declared_outcome_reader_grants_no_other_subject_anything :
+    outcomeActors.all (fun actor => outcomeDocuments.all (fun (resource, id) =>
+      outcomePermissions.all (fun permission =>
         (actor == "supervisor" && resource == "children" && id == "outcome" && permission == "read") ||
-        Household.allowed 5 outcomeRequesterPublished actor resource id permission ==
-          Household.allowed 5 outcomeRequesterBase actor resource id permission))) = true := by
+        Household.allowed 5 outcomeDeclared actor resource id permission ==
+          Household.allowed 5 outcomeUndeclared actor resource id permission))) = true := by
   native_decide
 
-/-- Every modeled actor, document and permission before and after publication. -/
-def outcomeRequesterReaderCasesJson : Lean.Json :=
-  Lean.toJson (requesterActors.flatMap fun actor => requesterDocuments.flatMap fun (resource, id) =>
-    requesterPermissions.map fun permission => Lean.Json.mkObj
+/-- Every modeled actor, document and permission under the declared and the
+undeclared publication. -/
+def outcomeReaderCasesJson : Lean.Json :=
+  Lean.toJson (outcomeActors.flatMap fun actor => outcomeDocuments.flatMap fun (resource, id) =>
+    outcomePermissions.map fun permission => Lean.Json.mkObj
       [("actor", Lean.toJson actor), ("resource", Lean.toJson resource), ("id", Lean.toJson id),
-       ("permission", Lean.toJson permission),
-       ("before", Lean.toJson (Household.allowed 5 outcomeRequesterBase actor resource id permission)),
-       ("after", Lean.toJson (Household.allowed 5 outcomeRequesterPublished actor resource id permission))])
+       ("permission", Lean.toJson permission), ("declared", Lean.toJson ["supervisor"]),
+       ("undeclared", Lean.toJson (Household.allowed 5 outcomeUndeclared actor resource id permission)),
+       ("after", Lean.toJson (Household.allowed 5 outcomeDeclared actor resource id permission))])
 
 /-- A callback child belongs to its authenticated agent. The publisher must
 bind the physical Agent parent to that same actor even if the actor can read

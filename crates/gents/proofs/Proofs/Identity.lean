@@ -4,6 +4,7 @@ import Proofs.Identity.Properties
 import Proofs.Identity.Conformance
 import Proofs.Identity.SessionChild
 import Proofs.Identity.Automation
+import Proofs.Identity.DeclaredAccess
 import Proofs.Identity.PackPlacementReaders
 import Proofs.Identity.Configuration
 import Proofs.Identity.McpService
