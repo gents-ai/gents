@@ -1,10 +1,10 @@
 use super::*;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::file_changes::{FileChangeImages, FileImage, FilePermissions, ImageFailure};
+use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{
     FileChangeMetadata, FileImageMetadata, FileInventoryAdmission,
 };
-use gents_protocol::file_inventory::FileInventoryRequest;
 use serde_json::Value;
 
 fn text(value: &Value) -> String {
@@ -151,7 +151,6 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
         let mut admission = FileInventoryAdmission {
             request: FileInventoryRequest {
                 request_key: name.into(),
-                peer_id: "direct-reader".into(),
                 requester_did: reader.did().into(),
                 node_did: tool.node_did().into(),
                 session_id: tool.session_id().into(),

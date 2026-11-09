@@ -778,14 +778,7 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
     let baseline = gents_migration::DEFAULT_BASELINE
         .iter()
         .copied()
-        .filter(|entry| {
-            ![
-                gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-                gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
-                gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME,
-            ]
-            .contains(&entry.name)
-        })
+        .filter(|entry| entry.name != gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .collect::<Vec<_>>();
     let registry = Registry {
         baseline: &baseline,
@@ -835,22 +828,11 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         .await
         .unwrap();
     let report = ensure_migrations(&node).await.unwrap();
-    assert_eq!(report.baseline_registered, 3);
+    assert_eq!(report.baseline_registered, 1);
     assert!(node
         .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .unwrap()
         .is_some());
-    assert!(node
-        .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME)
-        .unwrap()
-        .is_some());
-    assert!(
-        !node
-            .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
-            .unwrap()
-            .unwrap()
-            .is_branchable
-    );
     let canonical = gents_migration::canonical_versions().unwrap();
     for (name, version) in versions {
         // A collection stored at its rc0 root moves on to its canonical version; every other
@@ -871,38 +853,6 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
     assert_eq!(
         ensure_migrations(&node).await.unwrap().baseline_registered,
         0
-    );
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn file_image_receipt_is_local_and_matches_its_pinned_root() {
-    use gents_protocol::schemas::{
-        FILE_IMAGE_HYDRATION_RECEIPT, FILE_IMAGE_HYDRATION_RECEIPT_NAME,
-        TOOL_FILE_CHANGE_POLICY_ID, TOOL_FILE_CHANGE_POLICY_RESOURCE,
-    };
-    let node = fresh_node().await;
-    node.add_collection(FILE_IMAGE_HYDRATION_RECEIPT)
-        .await
-        .unwrap();
-    let collection = node
-        .get_collection(FILE_IMAGE_HYDRATION_RECEIPT_NAME)
-        .unwrap()
-        .unwrap();
-    assert!(!collection.is_branchable);
-    let policy = collection.policy.as_ref().unwrap();
-    assert_eq!(policy.id, TOOL_FILE_CHANGE_POLICY_ID);
-    assert_eq!(policy.resource_name, TOOL_FILE_CHANGE_POLICY_RESOURCE);
-    assert!(gents_protocol::schemas::is_local_only_collection(
-        FILE_IMAGE_HYDRATION_RECEIPT_NAME
-    ));
-    let baseline = gents_migration::DEFAULT_BASELINE
-        .iter()
-        .find(|entry| entry.name == FILE_IMAGE_HYDRATION_RECEIPT_NAME)
-        .unwrap();
-    assert_eq!(
-        Some(collection.version_id.as_str()),
-        baseline.expected_version
     );
     node.shutdown().await.expect("shut down test node");
 }
@@ -1160,7 +1110,11 @@ async fn starter_columns_preserve_each_supported_session_lineage() {
 /// collection, field positions and rows, and its existing rows read nulls.
 #[tokio::test]
 async fn added_route_and_reader_columns_preserve_existing_rows() {
-    const ROUTE: &[(&str, bool)] = &[("handoff_id", true), ("reply_session_id", true), ("attempt", true)];
+    const ROUTE: &[(&str, bool)] = &[
+        ("handoff_id", true),
+        ("reply_session_id", true),
+        ("attempt", true),
+    ];
     for (name, sdl, create, added) in [
         (
             schemas::CALLBACK_RESULT_NAME,
@@ -1235,13 +1189,21 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
             );
         }
         assert_eq!(node.execute(&query).await.data, retained.data, "{name}");
-        let selection = added.iter().map(|(field, _)| *field).collect::<Vec<_>>().join(" ");
+        let selection = added
+            .iter()
+            .map(|(field, _)| *field)
+            .collect::<Vec<_>>()
+            .join(" ");
         let values = node.execute(&format!("{{{name} {{{selection}}}}}")).await;
         let row = values.data.unwrap()[name][0].clone();
         for (field, _) in added {
             assert!(row[*field].is_null(), "{name}.{field}: {row}");
         }
-        assert_eq!(ensure_migrations(&node).await.unwrap().steps_applied, 0, "{name}");
+        assert_eq!(
+            ensure_migrations(&node).await.unwrap().steps_applied,
+            0,
+            "{name}"
+        );
         node.shutdown().await.expect("shut down test node");
     }
 }

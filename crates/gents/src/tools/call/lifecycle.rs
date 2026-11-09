@@ -113,10 +113,8 @@ use defra_node::Node as EmbeddedNode;
 pub(crate) mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
 pub(crate) mod file_inventory;
-mod file_review_access;
 pub(crate) mod query;
 pub use crate::tools::native::file_contents::ContentDocument;
-pub use file_review_access::VerifiedFileImageReceipt;
 pub use query::{
     load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
     load_tool_call_result, load_tool_file_change_observation, render_tool_result,
@@ -137,11 +135,11 @@ mod background_conformance;
 #[cfg(test)]
 mod background_hook_conformance;
 #[cfg(test)]
+mod client_control_race_tests;
+#[cfg(test)]
 pub(crate) mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
-#[cfg(test)]
-mod client_control_race_tests;
 #[cfg(test)]
 mod recovery_closeout_conformance;
 #[cfg(test)]

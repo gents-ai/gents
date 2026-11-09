@@ -6,11 +6,11 @@ use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents::NodeIdentity;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{
     DirectFileInventoryRequest, FileInventoryAdmission, FileInventoryObservation,
     FileInventoryReadAction, FILE_INVENTORY_OPERATOR_PATH,
 };
-use gents_protocol::file_inventory::FileInventoryRequest;
 use identity::Identity;
 use serde_json::{json, Value};
 use tokio::io::DuplexStream;
@@ -98,7 +98,6 @@ async fn inventory_requests_go_to_the_runtime_as_the_desktop_client() -> Result<
         admission: FileInventoryAdmission {
             request: FileInventoryRequest {
                 request_key: "request".into(),
-                peer_id: core.local_peer_id().into(),
                 requester_did: core.node_identity().did().into(),
                 node_did: runtime.did().into(),
                 session_id: "inventory-bridge".into(),

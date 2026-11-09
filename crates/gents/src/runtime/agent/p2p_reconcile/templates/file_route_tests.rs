@@ -38,7 +38,7 @@ fn generated_routes_follow_executable_scope_filters() {
     }
     let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let cases: Vec<Case> =
-        serde_json::from_value(snapshot["file_image_hydration_route_cases"].clone()).unwrap();
+        serde_json::from_value(snapshot["file_review_route_cases"].clone()).unwrap();
     assert!(!cases.is_empty());
     for case in cases {
         let direction = PairingDirection::parse(&case.direction).unwrap();

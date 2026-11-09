@@ -106,7 +106,6 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
         session_doc_id: session.doc_id,
         request: FileInventoryRequest {
             request_key: "inventory-source-unknown".into(),
-            peer_id: "fixture-peer".into(),
             requester_did: requester.clone(),
             node_did: fixture.node_did.clone(),
             session_id,
@@ -242,7 +241,6 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             session_doc_id: session.doc_id,
             request: FileInventoryRequest {
                 request_key: name.into(),
-                peer_id: "fixture-peer".into(),
                 requester_did: scope.requester_did.clone(),
                 node_did: scope.node_did.clone(),
                 session_id: scope.session_id.clone(),
@@ -657,7 +655,6 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
                     session_doc_id: session.doc_id,
                     request: FileInventoryRequest {
                         request_key: format!("fork-inventory-{session_id}"),
-                        peer_id: "fixture-peer".into(),
                         node_did: did,
                         requester_did: requester,
                         session_id,
@@ -1113,7 +1110,6 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         session_doc_id: session.doc_id,
         request: FileInventoryRequest {
             request_key: "inventory-terminal-chronology".into(),
-            peer_id: "fixture-peer".into(),
             requester_did: requester,
             node_did: fixture.node_did.clone(),
             session_id: first.session_id().into(),

@@ -1018,11 +1018,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_fork_cases,
         ),
         (
-            "file_inventory_selected_image_cases",
-            "FileInventorySelectedImageCases",
-            &snapshot.file_inventory_selected_image_cases,
-        ),
-        (
             "file_inventory_reader_cases",
             "FileInventoryReaderCases",
             &snapshot.file_inventory_reader_cases,
@@ -1033,9 +1028,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_source_projection_cases,
         ),
         (
-            "file_image_hydration_route_cases",
-            "FileImageHydrationRouteCases",
-            &snapshot.file_image_hydration_route_cases,
+            "file_review_route_cases",
+            "FileReviewRouteCases",
+            &snapshot.file_review_route_cases,
         ),
         (
             "scope_node_route_cases",
@@ -1046,16 +1041,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "file_review_subscription_cases",
             "FileReviewSubscriptionCases",
             &snapshot.file_review_subscription_cases,
-        ),
-        (
-            "stored_file_image_access_cases",
-            "StoredFileImageAccessCases",
-            &snapshot.stored_file_image_access_cases,
-        ),
-        (
-            "file_image_read_grant_cases",
-            "FileImageReadGrantCases",
-            &snapshot.file_image_read_grant_cases,
         ),
         (
             "logical_output_obligation_cases",

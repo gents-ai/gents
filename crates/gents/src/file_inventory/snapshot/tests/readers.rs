@@ -117,7 +117,6 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
         session_doc_id: session.doc_id,
         request: FileInventoryRequest {
             request_key: "shared-reader-inventory".into(),
-            peer_id: "independent-reader-peer".into(),
             requester_did: reader.did().into(),
             node_did: fixture.node_did.clone(),
             session_id,
@@ -159,13 +158,7 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
     // The owning Agent toggles the reader on its projection. Its baseline
     // grant set adds relationships; revoking one needs the node's relation
     // delete permission, which the node admin grants for this toggle.
-    let owning_agent: identity::Did = tool
-        .access()
-        .unwrap()
-        .actor_did()
-        .unwrap()
-        .parse()
-        .unwrap();
+    let owning_agent: identity::Did = tool.access().unwrap().actor_did().unwrap().parse().unwrap();
     ConfigAccess::local_as(node.clone(), fixture.node_did.parse().unwrap())
         .grant_node_permission(
             &owning_agent,

@@ -143,7 +143,6 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
                     session_doc_id: session.doc_id,
                     request: gents_protocol::file_inventory::FileInventoryRequest {
                         request_key: "native-inventory".into(),
-                        peer_id: "native-peer".into(),
                         requester_did: requester_did.clone().unwrap(),
                         node_did: node_did.clone(),
                         session_id: session_id.clone(),

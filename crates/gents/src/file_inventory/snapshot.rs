@@ -1,17 +1,16 @@
 use super::admission::SESSION_COLLECTIONS;
 use super::{selection::load_canonical_selection_in_txn, *};
+use crate::file_inventory::SessionCollection;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::required_rows;
 use crate::tools::call::lifecycle::query::load_tool_call_read_in_txn;
 use crate::tools::call::lifecycle::ToolCallState;
 use gents_protocol::enrollment::canonical_domain_payload;
-use gents_protocol::file_image_hydration::FileImageScope;
 use gents_protocol::file_inventory::{
-    coherent_inventory_entries, FileChangeMetadata, FileInventoryAdmission, FileInventoryBinding,
-    FileInventoryCoverage, FileInventoryCursor, FileInventoryEntry, FileInventoryPage,
-    FILE_INVENTORY_PAGE_LIMIT,
+    coherent_inventory_entries, FileChangeMetadata, FileImageScope, FileInventoryAdmission,
+    FileInventoryBinding, FileInventoryCoverage, FileInventoryCursor, FileInventoryEntry,
+    FileInventoryPage, FILE_INVENTORY_PAGE_LIMIT,
 };
-use crate::file_inventory::SessionCollection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -187,7 +186,12 @@ async fn load_copied_facts(
         .iter()
         .filter(|row| retained.contains(row.doc_id.as_str()))
         .flat_map(|row| crate::session::message_tool_references(&row.message))
-        .filter(|tool| !input.native.iter().any(|fact| fact.tool_call_doc_id == *tool))
+        .filter(|tool| {
+            !input
+                .native
+                .iter()
+                .any(|fact| fact.tool_call_doc_id == *tool)
+        })
         .collect::<std::collections::BTreeSet<_>>();
     if named.is_empty() {
         return Ok(Vec::new());
@@ -375,7 +379,6 @@ impl FileInventorySnapshot {
                 && [
                     admission.session_doc_id.as_str(),
                     &admission.request.request_key,
-                    &admission.request.peer_id,
                     &admission.request.requester_did,
                     &admission.request.session_id
                 ]
@@ -651,18 +654,20 @@ impl FileInventorySnapshot {
             )
             .await?;
             for (fact, projection) in copied {
-                entries.extend(projection.changes.iter().map(|change| FileInventoryEntry {
-                    request_coverage: None,
-                    order: None,
-                    tool_call_doc_id: fact.tool_call_doc_id.clone(),
-                    request_doc_id: fact.request_doc_id.clone(),
-                    scope: fact.scope.clone(),
-                    projection_doc_id: projection.doc_id.clone(),
-                    observation_doc_id: projection
-                        .observation_doc_id
-                        .clone()
-                        .expect("validated image projection"),
-                    change: change.clone(),
+                entries.extend(projection.changes.iter().map(|change| {
+                    FileInventoryEntry {
+                        request_coverage: None,
+                        order: None,
+                        tool_call_doc_id: fact.tool_call_doc_id.clone(),
+                        request_doc_id: fact.request_doc_id.clone(),
+                        scope: fact.scope.clone(),
+                        projection_doc_id: projection.doc_id.clone(),
+                        observation_doc_id: projection
+                            .observation_doc_id
+                            .clone()
+                            .expect("validated image projection"),
+                        change: change.clone(),
+                    }
                 }));
                 admissions.push(super::order::Admission {
                     document: fact.tool_call_doc_id.clone(),

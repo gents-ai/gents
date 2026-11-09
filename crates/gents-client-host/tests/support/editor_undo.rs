@@ -1,4 +1,4 @@
-use super::{editor_review, fake_llm, Attachment, ChatAction};
+use super::{fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
 use base64::Engine;
 use gents::{store::graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
@@ -248,32 +248,7 @@ pub async fn verify(
                     );
                 }
             }
-            let receipts = editor_review::review_receipts(access, physical).await?;
-            ensure!(
-                !receipts.is_empty() && node != author,
-                "Undo bypassed enrolled image delivery"
-            );
-            for receipt in receipts {
-                let demand = gents_protocol::file_image_hydration::FileImageDemand {
-                    inventory_reference: None,
-                    admission: gents_protocol::file_inventory::FileInventoryRequest {
-                        request_key: text(&receipt, "request_key")?.into(),
-                        peer_id: text(&receipt, "peer_id")?.into(),
-                        requester_did: author.into(),
-                        node_did: node.into(),
-                        session_id: request.session_id.clone().context("Undo session")?,
-                    },
-                    request_doc_id: physical_request.into(),
-                    tool_call_doc_id: physical.into(),
-                };
-                editor_review::verify_model_receipt(verifier, &receipt, &demand).await?;
-                ensure!(
-                    receipt["status"] == "served"
-                        && receipt["observation_doc_id"] == retained[0]["_docID"]
-                        && receipt["outcome_signer_did"] == node,
-                    "Undo image read lost source-signed selection"
-                );
-            }
+            ensure!(node != author, "Undo must cross enrolled client identities");
             observations.push(json!({"requestId":request.request_id,"sessionId":request.session_id,"toolCallDocId":physical,"path":path}));
         }
     }

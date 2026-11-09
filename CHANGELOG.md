@@ -24,6 +24,11 @@ source consistency checks, not a separate runtime compatibility version.
   request (`DirectFileInventoryRequest`) drops `peer_id`, and a direct read's
   admission carries an empty `peer_id`. The generated `HydrationRequest`
   TypeScript type is now `FileInventoryRequest`.
+- Breaking: the dormant peer inventory path is removed. The
+  `FileImageHydrationRequest`, `FileImageHydrationReceipt`,
+  `FileInventoryImageRequest` and `FileInventoryPage` collections leave the
+  schema baseline; existing homes keep any stored rows untouched. A file
+  inventory admission's request no longer carries `peer_id`.
 
 ## 1.0.0-rc1 - 2026-11-03
 

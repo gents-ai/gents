@@ -228,7 +228,6 @@ async fn check_turn_chronology(retry: bool) {
         session_doc_id: session.doc_id,
         request: FileInventoryRequest {
             request_key: format!("turn-inventory-{name}"),
-            peer_id: "fixture-peer".into(),
             requester_did: original.requester_did.clone().unwrap(),
             node_did: fixture.node_did.clone(),
             session_id: original.session_id,
