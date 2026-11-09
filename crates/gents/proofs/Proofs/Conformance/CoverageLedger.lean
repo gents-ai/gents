@@ -1572,6 +1572,16 @@ def caseCoverage : List CoverageEntry :=
       "store::config_client::desired_state::workspace_selection::tests::selected_callback_agents_follow_native_visibility")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
+      "pack_placement_reader_cases"
+      "PackPlacementReaderCases"
+      "pack::installation::tests::pack_install_grants_placement_readers_to_exactly_its_slots")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "native_route_cases"
+      "NativeRouteCases"
+      "triggers::engine::event_source::native_route_tests::native_documents_carry_the_modeled_route")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "workspace_datastore_write_cases"
       "WorkspaceDatastoreWriteCases"
       "documents::write_tool::tests::workspace_datastore_create_tools_follow_the_model")

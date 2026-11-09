@@ -2151,6 +2151,7 @@ def json : Json := Json.mkObj
        taskReceiptCaseJson agentDid agentDid "update" false,
        taskReceiptCaseJson agentDid siblingDid "read" false,
        taskReceiptCaseJson agentDid siblingDid "read" true]),
+   ("outcome_reader_cases", Automation.outcomeReaderCasesJson),
    ("pairing_overlay_cases", toJson
       ([false, true].flatMap fun revoked =>
         let state := if revoked then apply Configuration.agentPairingFixture
