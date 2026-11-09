@@ -114,19 +114,15 @@ impl ConfigApplyTxn<'_> {
             collection,
             doc_id,
         };
-        let Some(owner) = owner else {
-            return refused(unmanaged);
-        };
         let runtime = node
             .node_identity_did()
             .ok_or(ConfigClientError::LocalAccessRequired)?
             .to_owned();
-        if owner.as_str() != runtime && !self.configures_agent(&runtime, &owner).await? {
-            return refused(unmanaged);
-        }
         let requester = identity
             .as_ref()
             .ok_or(ConfigClientError::RelationshipActorRequired)?;
+        // Authority first: a requester that may not request the change learns
+        // nothing about who manages a document it may not even observe.
         if !self
             .owner_staged_request_allowed(requester, &runtime, collection, doc_id, authority)
             .await?
@@ -134,6 +130,12 @@ impl ConfigApplyTxn<'_> {
             return refused(|collection, doc_id| {
                 ConfigClientError::OwnerStagedRelationshipDenied { collection, doc_id }
             });
+        }
+        let Some(owner) = owner else {
+            return refused(unmanaged);
+        };
+        if owner.as_str() != runtime && !self.configures_agent(&runtime, &owner).await? {
+            return refused(unmanaged);
         }
         let context = defra_core::RequestContext::default().with_identity(Some(owner.to_string()));
         let node = Arc::clone(node);
