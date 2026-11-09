@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::Utc;
 use gents::request::lifecycle::TriggerLineage;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
@@ -41,8 +40,7 @@ impl ClientCore {
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let peer_record = self
-            .peer_record_for_chat_write(&invocation.node_did, Utc::now())
-            .await?;
+            .peer_record_for_chat_write(&invocation.node_did)?;
         ensure_peer_chat_ready(&invocation.node_did, peer_record.as_ref())?;
         let (signer, admission, requester_did) = self
             .request_authority(&invocation.node_did, peer_record.as_ref())

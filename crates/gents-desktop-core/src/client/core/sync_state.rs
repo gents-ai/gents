@@ -930,10 +930,6 @@ mod tests {
                 include_str!("writes/pending_queue.rs"),
             ),
             (
-                "writes/pending_submissions",
-                include_str!("writes/pending_submissions.rs"),
-            ),
-            (
                 "writes/request_patch",
                 include_str!("writes/request_patch.rs"),
             ),

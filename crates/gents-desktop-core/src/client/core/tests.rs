@@ -530,8 +530,11 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
     core.shutdown().await.expect("shutdown");
 }
 
+/// `ClientChatReadiness`: an expired enrollment lease is a route observation;
+/// a chat send neither reads nor rewrites it. A route without an endpoint is
+/// refused for that cause, before any request is prepared.
 #[tokio::test]
-async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
+async fn expired_enrollment_lease_neither_gates_nor_rewrites_the_route() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -567,13 +570,19 @@ async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
         .submit_request("session-a", "did:key:owner", "must not persist", None)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("route is not ready"));
-    assert!(!core.sync_state.records()[0].pairing_ready);
+    assert_eq!(
+        error
+            .downcast_ref::<super::writes::ChatRouteRefusal>()
+            .map(|refusal| refusal.cause().token()),
+        Some("endpoint_not_advertised"),
+        "{error:#}"
+    );
+    assert!(core.sync_state.records()[0].pairing_ready);
     assert!(core.store().snapshot().requests.is_empty());
     let persisted = crate::client::load_peer_records(core.paths().peer_directory_path())
         .await
         .unwrap();
-    assert!(!persisted[0].pairing_ready);
+    assert!(persisted[0].pairing_ready);
 
     Arc::new(core).shutdown().await.expect("shutdown");
 }
@@ -1850,31 +1859,17 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
         )
         .await?,
     );
-    // The fence ignores generation and lease fields (checked over every
-    // generated case in `peer_directory`); selection runs one complete,
-    // fresh generation per remaining route shape.
-    let cases: Vec<_> = crate::client::peer_directory::tests::chat_readiness_cases()
-        .into_iter()
-        .filter(|(record, _, _)| {
-            record.as_ref().is_none_or(|record| {
-                record.pairing_network_id.is_some()
-                    && record.enrollment_request_digest.is_some()
-                    && record.enrollment_authorization_sequence == Some(1)
-                    && record.enrollment_authorization_expires_at.as_deref()
-                        == Some("2026-01-01T00:00:08Z")
-            })
-        })
-        .collect();
-    assert_eq!(cases.len(), 1 + 4 * 2 * 2 * 2, "{}", cases.len());
-    for (index, (record, _, refusal)) in cases.into_iter().enumerate() {
+    // Selection runs every Lean route under every route observation; none of
+    // them may change which route a chat write selects.
+    let cases = crate::client::peer_directory::tests::chat_readiness_cases();
+    assert_eq!(cases.len(), 1 + 4 * 2 * 2 * 8, "{}", cases.len());
+    for (index, (record, refusal)) in cases.into_iter().enumerate() {
         let node_did = format!("did:key:runtime-{index}");
         if let Some(mut record) = record.clone() {
             record.node_did = node_did.clone();
             core.sync_state.upsert_for_test(record).await?;
         }
-        let selected = core
-            .peer_record_for_chat_write(&node_did, chrono::Utc::now())
-            .await;
+        let selected = core.peer_record_for_chat_write(&node_did);
         let gated = selected.and_then(|peer| {
             super::writes::ensure_peer_chat_ready(&node_did, peer.as_ref()).map(|()| peer)
         });
@@ -1896,114 +1891,11 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Replays every Lean `ClientChatReadiness.step` case through the native
-/// durable writer it names, then compares the written route and the fence.
-#[tokio::test]
-async fn chat_route_writers_match_lean() -> anyhow::Result<()> {
-    let temp = tempfile::tempdir()?;
-    let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().to_path_buf()),
-            ClientCoreOptions::local_simulated_route(),
-        )
-        .await?,
-    );
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot()?;
-    let cases = snapshot["client_chat_readiness_transitions"]
-        .as_array()
-        .unwrap();
-    assert!(cases.len() > 100, "{}", cases.len());
-    let mut kinds = std::collections::BTreeSet::new();
-    for (index, case) in cases.iter().enumerate() {
-        let mut record = crate::client::peer_directory::tests::chat_case_record(&case["route"])
-            .expect("transition cases name a saved route");
-        record.peer_id = format!("peer-{index}");
-        record.node_did = format!("did:key:runtime-{index}");
-        record.enrollment_request_id = Some(format!("request-{index}"));
-        record.enrollment_admin_did = Some("did:key:admin".into());
-        let token = |record: &crate::client::PeerRecord| {
-            record.chat_refusal().map(|cause| cause.token().to_owned())
-        };
-        assert_eq!(
-            token(&record).as_deref(),
-            case["refusal_before"].as_str(),
-            "{case}"
-        );
-        core.sync_state.upsert_for_test(record.clone()).await?;
-        let event = &case["event"];
-        let kind = event["kind"].as_str().unwrap();
-        kinds.insert(kind.to_owned());
-        match kind {
-            "restart" => core.mark_managed_runtime_restarting(&record.node_did).await?,
-            "authority_failure" => {
-                super::supervisor::demote_enrollment_readiness_after_authority_failure(
-                    &core.sync_state,
-                )
-                .await;
-            }
-            "reconciled" => {
-                if let Some(ready) = event["outcome"].as_bool() {
-                    core.sync_state.set_pairing_ready(&record, ready).await?;
-                }
-            }
-            "generation_rotation" => {
-                core.sync_state
-                    .upsert_enrollment_peer(
-                        &record.peer_id,
-                        &record.label,
-                        &record.addr,
-                        &record.node_did,
-                        record.pairing_network_id.as_deref().unwrap(),
-                        record.enrollment_request_id.as_deref().unwrap(),
-                        record.enrollment_request_digest.as_deref().unwrap(),
-                        "did:key:admin",
-                        record.enrollment_authorization_sequence.unwrap() + 1,
-                        record.enrollment_authorization_expires_at.as_deref().unwrap(),
-                    )
-                    .await?;
-            }
-            other => panic!("no native writer for {other}"),
-        }
-        let after = core
-            .sync_state
-            .records()
-            .into_iter()
-            .find(|saved| saved.peer_id == record.peer_id)
-            .expect("writers keep the route");
-        assert_eq!(
-            Some(after.pairing_ready),
-            case["after_pairing_ready"].as_bool(),
-            "{case}"
-        );
-        assert_eq!(
-            Some(after.operator_graphql().is_some()),
-            case["after_operator_endpoint"].as_bool(),
-            "{case}"
-        );
-        assert_eq!(
-            token(&after).as_deref(),
-            case["refusal_after"].as_str(),
-            "{case}"
-        );
-    }
-    assert_eq!(
-        kinds.into_iter().collect::<Vec<_>>(),
-        [
-            "authority_failure",
-            "generation_rotation",
-            "reconciled",
-            "restart"
-        ]
-    );
-    core.shutdown().await?;
-    Ok(())
-}
-
 #[test]
 fn route_leg_combination_matches_lean() {
     use super::route_manager::{combined_route_readiness, RouteReconcileState};
     let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["client_chat_readiness_legs"].as_array().unwrap();
+    let cases = snapshot["client_route_pairing_legs"].as_array().unwrap();
     assert_eq!(cases.len(), 9);
     let leg = |value: &serde_json::Value| match value.as_str().unwrap() {
         "ready" => RouteReconcileState::Ready,
