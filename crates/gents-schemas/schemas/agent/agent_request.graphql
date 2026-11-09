@@ -1,4 +1,4 @@
-type AgentRequest @branchable {
+type AgentRequest @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "delivered_requests") {
     request_id: String @index @immutable
     purpose: String @index @immutable
     node_did: String @index @immutable
@@ -14,8 +14,11 @@ type AgentRequest @branchable {
     runtime_issuer_did: String @index @immutable
     runtime_source_request_id: String @index @immutable
     runtime_source_kind: String @index @immutable
-    agent_id: String @index @immutable
+    agent_did: String @index @immutable
     session_id: String @index @immutable
+    session_doc_id: String @index @immutable
+    agent_doc_id: String @index @immutable
+    relationships_pending: Boolean @index
     retry_parent_request: String @immutable
     retry_parent_request_doc_id: String @index @immutable
     retry_root_request: String @immutable

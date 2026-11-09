@@ -78,6 +78,12 @@ pub(crate) struct FoldedConsumption {
     pub(crate) node_did: String,
     head: AgentRequest,
     selected_at_claim: bool,
+    client_admission: Option<(
+        AgentRequest,
+        crate::request::admission::ClientClaimAdmission,
+    )>,
+    verification_required: bool,
+    verified: bool,
 }
 
 impl FoldedConsumption {
@@ -93,7 +99,26 @@ impl FoldedConsumption {
             node_did: head.node_did.clone(),
             head: head.clone(),
             selected_at_claim: selected.iter().any(|entry| entry.request_doc_id == folded),
+            client_admission: None,
+            verification_required: false,
+            verified: false,
         })
+    }
+
+    pub(crate) fn bind_client_admission(
+        &mut self,
+        request: AgentRequest,
+        admission: crate::request::admission::ClientClaimAdmission,
+    ) {
+        self.client_admission = Some((request, admission));
+    }
+
+    pub(crate) fn require_verification(&mut self) {
+        self.verification_required = true;
+    }
+
+    pub(crate) fn mark_verified(&mut self) {
+        self.verified = true;
     }
 }
 
@@ -126,7 +151,7 @@ fn folds_into(
         && row.node_did.as_deref() == Some(head.node_did.as_str())
         && row.session_id.as_deref() == Some(head.session_id.as_str())
         && row.requester_did == head.requester_did
-        && row.agent_id.as_deref() == Some(head.agent_id.as_str())
+        && row.agent_did.as_deref() == Some(head.agent_did.as_str())
         && input.cwd == head.input.cwd
         && input.selected_skill_ids == head.input.selected_skill_ids
         && input.initial_title.is_none()
@@ -154,7 +179,7 @@ pub(crate) async fn fold_candidates(
     }
     let rows = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(identity::Did::new(head.agent_did.clone())?),
         "queue.fold_candidates",
         |txn| {
             Box::pin(async move {
@@ -167,7 +192,7 @@ pub(crate) async fn fold_candidates(
     rows.into_iter()
         .filter(|row| row.doc_id.as_deref() != Some(head.doc_id.as_str()))
         .filter(|row| folds_into(head, row, now))
-        .map(AgentRequest::try_from)
+        .map(|row| AgentRequest::try_from(row).map_err(anyhow::Error::from))
         .collect()
 }
 
@@ -296,6 +321,21 @@ pub(crate) async fn consume_folded_in_txn(
     {
         return Err(PendingInputChanged.into());
     }
+    if consumption.verification_required && !consumption.verified {
+        return Err(PendingInputChanged.into());
+    }
+    if let Some((request, admission)) = consumption.client_admission.as_ref() {
+        if request.doc_id != consumption.folded_request_doc_id
+            || !matches!(
+                admission.authorize_in_txn(txn, request).await?,
+                crate::request::admission::ClientClaimAuthorization::Allowed
+            )
+        {
+            return Err(PendingInputChanged.into());
+        }
+    } else if row.admission_kind.as_deref() == Some("client") {
+        return Err(PendingInputChanged.into());
+    }
     let doc_id = escape_graphql_string(&consumption.folded_request_doc_id);
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}", filter: {{
@@ -372,8 +412,11 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
     Ok(())
 }
 
+/// Reads as the claimed Agent through `access`, which carries its managed
+/// signer: the arrival read runs in a local write transaction, and a local
+/// non-node transaction without that signer is refused.
 pub(crate) async fn load_consumed_folded_inputs(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     head: &AgentRequest,
 ) -> Result<Vec<FoldedInput>> {
     if !heads_user_turn(head) {
@@ -393,21 +436,20 @@ pub(crate) async fn load_consumed_folded_inputs(
         escape_graphql_string(FOLDED_REASON),
         superseded = RequestLifecycleState::Superseded.as_str()
     );
-    let observed = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load the messages a claim folded",
-    )
-    .await?;
-    if crate::store::graphql::rows::<AgentRequestRow>(&observed, "AgentRequest")?.is_empty() {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(head.agent_did.as_str()),
+        "folded inputs are read by the claimed Agent"
+    );
+    let observed = access.execute(&query).await?;
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(observed["data"]["AgentRequest"].clone())
+            .context("decode folded requests")?;
+    if rows.is_empty() {
         return Ok(Vec::new());
     }
     let query = &query;
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "lifecycle.load_folded_inputs",
-        move |txn| {
+    access
+        .transact_write("lifecycle.load_folded_inputs", move |txn| {
             Box::pin(async move {
                 let response = txn.execute(query).await?;
                 let rows: Vec<AgentRequestRow> =
@@ -447,7 +489,6 @@ pub(crate) async fn load_consumed_folded_inputs(
                     })
                     .collect()
             })
-        },
-    )
-    .await
+        })
+        .await
 }

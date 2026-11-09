@@ -180,7 +180,7 @@ impl AcpService {
         let rows = crate::commands::grok_shim::sessions::load(
             &self.config.node,
             &self.config.node_did,
-            &self.config.agent_id,
+            &self.config.agent_did,
             &session_id,
         )
         .await?;

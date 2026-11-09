@@ -4,12 +4,10 @@ use super::{
     start_wait::*, status::*,
 };
 use crate::local_pairing::{
-    await_managed_pairing_approval, enrollment_request_is_not_visible_yet, resolve_managed_request,
-    select_managed_request, PairingApproval,
+    await_managed_pairing_approval, enrollment_request_is_not_visible_yet,
+    grant_then_approve_managed, resolve_managed_request, select_managed_request, PairingApproval,
 };
-use crate::local_pairing::{
-    observe_managed_runtime_schema, retry_managed_pairing, ManagedPairingTarget, PairingFailure,
-};
+use crate::local_pairing::{retry_managed_pairing, PairingFailure};
 use crate::state::ManagedServerState as ManagedServerRuntimeState;
 use crate::types::{ManagedServerState, ManagedServerToolCeiling};
 use gents_desktop_core::client::{ClientCore, EnrollmentRequestResult};
@@ -21,12 +19,12 @@ use std::time::Duration;
 
 mod authority;
 mod crash_loop;
-mod managed_schema;
 mod orchestration;
 mod pairing;
 mod readiness;
 mod reset;
 mod reset_store;
+mod startup_readiness;
 mod status;
 
 fn not_the_user_home() -> &'static Path {

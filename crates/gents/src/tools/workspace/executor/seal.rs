@@ -249,6 +249,7 @@ fn persist_seal_docs(
             seal_hash: seal_hash.clone(),
             work_unit_id: Some(workspace.work_unit_id.clone()),
             caused_by_correlation: Some(workspace.caused_by_correlation.clone()),
+            route: workspace.route.clone(),
             head_sha: None,
             changed_files: changed_files_json(&snapshot.changed_files),
             diff_artifact: bound_diff_artifact(&snapshot.diff),

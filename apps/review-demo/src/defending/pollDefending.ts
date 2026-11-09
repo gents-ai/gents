@@ -82,7 +82,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
       rejected_patch_count severity_counts top_risks summary human_actions
     }
     AgentRequest {
-      request_id session_id agent_id lifecycle_state caused_by_trigger_id
+      request_id session_id agent_did lifecycle_state caused_by_trigger_id
       caused_by_correlation caused_by_source_doc_id caused_by_parent_request_id
       caused_by_parent_tool_call_id request_hop content created_at
     }

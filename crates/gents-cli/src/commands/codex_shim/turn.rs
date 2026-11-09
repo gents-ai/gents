@@ -255,12 +255,22 @@ pub(super) async fn steer_gents_turn(
     let queued_after_request_id = active_turn.current_request_id.clone();
     let request_input =
         codex_queued_user_input(&cwd, &queued_after_request_id, &selected_skill_ids);
+    let Some(agent_signer) = state.agent_signer.as_ref() else {
+        return send_error(
+            &connection.outbound,
+            request_id,
+            JSONRPC_INTERNAL_ERROR,
+            "GENTS steering requires the bound Agent's managed signer, which this shim does not hold".to_string(),
+        )
+        .await;
+    };
     let submitted = match gents::enqueue_local_steering_request(
         &state.node,
         &active_turn.current_request_id,
         &active_turn.current_request_doc_id,
         &user_text,
         request_input,
+        agent_signer,
     )
     .await
     {

@@ -9,6 +9,9 @@ use serde_json::{json, Value};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
+#[path = "support/homes.rs"]
+mod homes;
+
 struct Peer {
     child: Child,
     input: FramedWrite<ChildStdin, LengthDelimitedCodec>,
@@ -20,6 +23,7 @@ impl Peer {
         let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
             .arg("--editor-checkpoints")
             .arg(directory)
+            .envs(homes::ProcessHomes::under(directory.parent().unwrap()).env())
             .env("GENTS_HOME", home)
             .env("GENTS_DESKTOP_HOME", home)
             .stdin(Stdio::piped())
@@ -143,6 +147,7 @@ async fn checkpoint_process_rejects_bootstrap_fields_and_never_initializes_clien
     let status = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .arg("--editor-checkpoints")
         .arg(&directory)
+        .envs(homes::ProcessHomes::under(directory.parent().unwrap()).env())
         .arg("--home")
         .arg(&unopened)
         .stdout(Stdio::null())

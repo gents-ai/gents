@@ -34,7 +34,7 @@ AGENTS = [
         "name": "planner",
         "role": "planner",
         "node_did": "did:test:autogen-planner",
-        "agent_id": "autogen.planner",
+        "agent_did": "autogen.planner",
         "description": "Plans the task and delegates research.",
         "content": (
             "PLAN: delegate adapter comparison to researcher; "
@@ -45,7 +45,7 @@ AGENTS = [
         "name": "researcher",
         "role": "researcher",
         "node_did": "did:test:autogen-researcher",
-        "agent_id": "autogen.researcher",
+        "agent_did": "autogen.researcher",
         "description": "Completes delegated research.",
         "content": (
             f"RESEARCH: completed child request {CHILD_REQUEST_ID} "
@@ -56,7 +56,7 @@ AGENTS = [
         "name": "reviewer",
         "role": "reviewer",
         "node_did": "did:test:autogen-reviewer",
-        "agent_id": "autogen.reviewer",
+        "agent_did": "autogen.reviewer",
         "description": "Reviews and approves outputs.",
         "content": "APPROVE: final multi-agent projection output is ready",
     },
@@ -67,7 +67,7 @@ SWARM_AGENTS = [
         "name": "planner",
         "role": "planner",
         "node_did": "did:test:autogen-swarm-planner",
-        "agent_id": "autogen.swarm.planner",
+        "agent_did": "autogen.swarm.planner",
         "description": "Plans the task and hands off research.",
         "message_type": "handoff",
         "target": "researcher",
@@ -80,7 +80,7 @@ SWARM_AGENTS = [
         "name": "researcher",
         "role": "researcher",
         "node_did": "did:test:autogen-swarm-researcher",
-        "agent_id": "autogen.swarm.researcher",
+        "agent_did": "autogen.swarm.researcher",
         "description": "Completes research and hands off review.",
         "message_type": "handoff",
         "target": "reviewer",
@@ -93,7 +93,7 @@ SWARM_AGENTS = [
         "name": "reviewer",
         "role": "reviewer",
         "node_did": "did:test:autogen-swarm-reviewer",
-        "agent_id": "autogen.swarm.reviewer",
+        "agent_did": "autogen.swarm.reviewer",
         "description": "Reviews the delegated task and approves it.",
         "message_type": "text",
         "content": "APPROVE: Swarm handoff projection output is ready",
@@ -209,7 +209,7 @@ def build_projection(result: TaskResult) -> dict[str, Any]:
         "source_request_id": REQUEST_ID,
         "source_session_id": CONTEXT_ID,
         "source_node_did": "did:test:autogen-team",
-        "source_agent_id": "autogen.round_robin_team",
+        "source_agent_did": "autogen.round_robin_team",
         "redaction_mode": "full",
         "provenance": {
             "runtime": "gents",
@@ -227,7 +227,7 @@ def build_projection(result: TaskResult) -> dict[str, Any]:
                 "participants": [
                     {
                         "node_did": definition["node_did"],
-                        "agent_id": definition["agent_id"],
+                        "agent_did": definition["agent_did"],
                         "role": definition["role"],
                     }
                     for definition in AGENTS
@@ -239,7 +239,7 @@ def build_projection(result: TaskResult) -> dict[str, Any]:
                         "child_request_id": CHILD_REQUEST_ID,
                         "parent_tool_call_id": "autogen:handoff:planner-to-researcher",
                         "node_did": "did:test:autogen-researcher",
-                        "agent_id": "autogen.researcher",
+                        "agent_did": "autogen.researcher",
                         "status": "completed",
                     }
                 ],
@@ -273,7 +273,7 @@ def build_swarm_projection(result: TaskResult) -> dict[str, Any]:
         "source_request_id": SWARM_REQUEST_ID,
         "source_session_id": SWARM_CONTEXT_ID,
         "source_node_did": "did:test:autogen-swarm-team",
-        "source_agent_id": "autogen.swarm_team",
+        "source_agent_did": "autogen.swarm_team",
         "redaction_mode": "full",
         "provenance": {
             "runtime": "gents",
@@ -291,7 +291,7 @@ def build_swarm_projection(result: TaskResult) -> dict[str, Any]:
                 "participants": [
                     {
                         "node_did": definition["node_did"],
-                        "agent_id": definition["agent_id"],
+                        "agent_did": definition["agent_did"],
                         "role": definition["role"],
                     }
                     for definition in SWARM_AGENTS
@@ -303,7 +303,7 @@ def build_swarm_projection(result: TaskResult) -> dict[str, Any]:
                         "child_request_id": SWARM_RESEARCH_REQUEST_ID,
                         "parent_tool_call_id": "autogen:swarm:handoff:planner-to-researcher",
                         "node_did": "did:test:autogen-swarm-researcher",
-                        "agent_id": "autogen.swarm.researcher",
+                        "agent_did": "autogen.swarm.researcher",
                         "status": "completed",
                     },
                     {
@@ -311,7 +311,7 @@ def build_swarm_projection(result: TaskResult) -> dict[str, Any]:
                         "child_request_id": SWARM_REVIEW_REQUEST_ID,
                         "parent_tool_call_id": "autogen:swarm:handoff:researcher-to-reviewer",
                         "node_did": "did:test:autogen-swarm-reviewer",
-                        "agent_id": "autogen.swarm.reviewer",
+                        "agent_did": "autogen.swarm.reviewer",
                         "status": "completed",
                     },
                 ],
@@ -443,7 +443,7 @@ def write_fixture(out_dir: Path, result: TaskResult) -> Path:
             "request_id": REQUEST_ID,
             "session_id": CONTEXT_ID,
             "node_did": "did:test:autogen-team",
-            "agent_id": "autogen.round_robin_team",
+            "agent_did": "autogen.round_robin_team",
             "actor_did": "did:test:autogen-fixture-reader",
             "status": task_status(result.stop_reason),
             "participants": [
@@ -451,7 +451,7 @@ def write_fixture(out_dir: Path, result: TaskResult) -> Path:
                     "native_name": definition["name"],
                     "role": definition["role"],
                     "node_did": definition["node_did"],
-                    "agent_id": definition["agent_id"],
+                    "agent_did": definition["agent_did"],
                     "request_id": (
                         CHILD_REQUEST_ID
                         if definition["name"] == "researcher"
@@ -467,7 +467,7 @@ def write_fixture(out_dir: Path, result: TaskResult) -> Path:
                     "parent_tool_call_id": "autogen:handoff:planner-to-researcher",
                     "tool_name": "handoff",
                     "node_did": "did:test:autogen-researcher",
-                    "agent_id": "autogen.researcher",
+                    "agent_did": "autogen.researcher",
                     "status": "completed",
                 }
             ],
@@ -515,7 +515,7 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
             "request_id": SWARM_REQUEST_ID,
             "session_id": SWARM_CONTEXT_ID,
             "node_did": "did:test:autogen-swarm-team",
-            "agent_id": "autogen.swarm_team",
+            "agent_did": "autogen.swarm_team",
             "actor_did": "did:test:autogen-fixture-reader",
             "status": task_status(result.stop_reason),
             "participants": [
@@ -523,7 +523,7 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
                     "native_name": definition["name"],
                     "role": definition["role"],
                     "node_did": definition["node_did"],
-                    "agent_id": definition["agent_id"],
+                    "agent_did": definition["agent_did"],
                     "request_id": (
                         SWARM_RESEARCH_REQUEST_ID
                         if definition["name"] == "researcher"
@@ -541,7 +541,7 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
                     "parent_tool_call_id": "autogen:swarm:handoff:planner-to-researcher",
                     "tool_name": "handoff",
                     "node_did": "did:test:autogen-swarm-researcher",
-                    "agent_id": "autogen.swarm.researcher",
+                    "agent_did": "autogen.swarm.researcher",
                     "status": "completed",
                 },
                 {
@@ -550,7 +550,7 @@ def write_swarm_fixture(out_dir: Path, result: TaskResult) -> Path:
                     "parent_tool_call_id": "autogen:swarm:handoff:researcher-to-reviewer",
                     "tool_name": "handoff",
                     "node_did": "did:test:autogen-swarm-reviewer",
-                    "agent_id": "autogen.swarm.reviewer",
+                    "agent_did": "autogen.swarm.reviewer",
                     "status": "completed",
                 },
             ],

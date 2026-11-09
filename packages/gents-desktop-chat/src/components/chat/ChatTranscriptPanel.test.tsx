@@ -9,7 +9,7 @@ import type { OptimisticPendingTurn } from "../../chat-shell.js";
 const session: DesktopSessionSnapshot = {
   sessionId: "session",
   nodeDid: "did:runtime",
-  agentId: "engineer",
+  agentDid: "engineer",
   title: null,
   previewText: null,
   status: "active",

@@ -7,17 +7,17 @@ import { NodeAgentStack } from "../src/ui/screens/NodeBehaviorStack";
 import { node, renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-const agent = (agentId: string, displayName: string) => ({
+const agent = (agentDid: string, displayName: string) => ({
   ...deployment.agents[0],
-  agentId,
+  agentDid,
   displayName,
 });
 
-const worker = (sessionId: string, agentId: string) =>
+const worker = (sessionId: string, agentDid: string) =>
   ({
     sessionId,
     nodeDid: "did:key:here",
-    agentId,
+    agentDid,
     title: null,
     turnState: null,
     updatedAt: null,
@@ -43,7 +43,7 @@ describe("an agent stack", () => {
       app(),
       <NodeAgentStack
         nodeDid="did:key:here"
-        agentId="default"
+        agentDid="default"
         workers={[1, 2, 3, 4, 5].map((n) => worker(`w${n}`, "default"))}
       />,
     );
@@ -56,7 +56,7 @@ describe("an agent stack", () => {
       app(),
       <NodeAgentStack
         nodeDid="did:key:here"
-        agentId="default"
+        agentDid="default"
         workers={[
           worker("w1", "code-reviewer"),
           worker("w2", "code-reviewer"),
@@ -74,7 +74,7 @@ describe("an agent stack", () => {
       app(),
       <NodeAgentStack
         nodeDid="did:key:here"
-        agentId="default"
+        agentDid="default"
         workers={ids.slice(1).map((id, i) => worker(`w${i}`, id))}
       />,
     );

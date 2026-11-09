@@ -54,7 +54,7 @@ pub fn support() -> Support {
 pub struct WorkspaceKey {
     pub node_did: String,
     pub requester_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub path: PathBuf,
 }
 
@@ -64,13 +64,13 @@ impl WorkspaceKey {
     pub fn canonical(
         node_did: &str,
         requester_did: &str,
-        agent_id: &str,
+        agent_did: &str,
         path: &Path,
     ) -> Result<Self> {
         anyhow::ensure!(
             !node_did.trim().is_empty()
                 && !requester_did.trim().is_empty()
-                && !agent_id.trim().is_empty(),
+                && !agent_did.trim().is_empty(),
             "Choose a runtime and agent before changing permissions."
         );
         anyhow::ensure!(path.is_absolute(), "Choose an absolute workspace folder.");
@@ -81,7 +81,7 @@ impl WorkspaceKey {
         Ok(Self {
             node_did: node_did.to_owned(),
             requester_did: requester_did.to_owned(),
-            agent_id: agent_id.to_owned(),
+            agent_did: agent_did.to_owned(),
             path,
         })
     }

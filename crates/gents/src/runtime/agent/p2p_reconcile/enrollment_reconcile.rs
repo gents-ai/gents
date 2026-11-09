@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -195,55 +195,6 @@ impl EnrollmentAuthorityHandle {
             .await
             .context("enrollment authority owner dropped fresh member response")?
     }
-
-    pub async fn client_observation_authorized(
-        &self,
-        authenticated_member: &str,
-        owner_node: &str,
-    ) -> Result<bool> {
-        let current = self
-            .fresh_member_authorization(authenticated_member)
-            .await?;
-        Ok(client_observation_admitted(
-            Some(authenticated_member),
-            owner_node,
-            current.as_ref(),
-        ))
-    }
-}
-
-/// The actor comes from DefraDB's verified request identity. The live enrollment
-/// owner supplies the unique current fence; callers must not reconstruct it from
-/// an unverified desired route or a client-provided generation.
-pub fn client_observation_admitted(
-    authenticated_member: Option<&str>,
-    owner_node: &str,
-    current: Option<&EnrollmentAuthorizationFence>,
-) -> bool {
-    match (authenticated_member, current) {
-        (Some(member), Some(authorization)) => {
-            !member.is_empty()
-                && !owner_node.is_empty()
-                && authorization.member_did == member
-                && authorization.owner_node == owner_node
-                && authorization.profile == CLIENT_TEMPLATE
-        }
-        _ => false,
-    }
-}
-
-/// The node operator uses the existing operator authority; other actors still
-/// require the current enrollment fence. This does not authorize document reads.
-pub fn runtime_observation_admitted(
-    actor: Option<&str>,
-    node: &str,
-    current: Option<&EnrollmentAuthorizationFence>,
-) -> bool {
-    (!node.is_empty()
-        && crate::tools::background::job::control::operator_control_authorized(
-            node, node, node, actor,
-        ))
-        || client_observation_admitted(actor, node, current)
 }
 
 #[async_trait]
@@ -564,7 +515,7 @@ pub(crate) fn exact_authorization_fence(
         member_did: active.request.candidate_did.clone(),
         member_peer: active.request.candidate_peer.clone(),
         member_ticket: active.request.candidate_ticket.clone(),
-        owner_node: active.request.owner_agent.clone(),
+        owner_node: active.request.owner_node_did.clone(),
         profile: active.request.profile.clone(),
         request_digest: active.request.request_digest.clone(),
         authorization_sequence: active.revision.sequence,
@@ -834,18 +785,37 @@ async fn reconcile_data_plane(
     store: &GraphqlEnrollmentStore,
     projection: &EnrollmentProjection,
 ) -> Result<()> {
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        r#"{
+    anyhow::ensure!(
+        node.node_identity_did() == Some(local_did),
+        "enrollment reconciler has another runtime identity"
+    );
+    let runtime = identity::Did::new(local_did)?;
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
+    let (response, owned) = access
+        .transact_readonly("p2p.query_enrollment_routes", |txn| {
+            let runtime = &runtime;
+            Box::pin(async move {
+                let response = txn.execute_local_response(
+                    r#"{
                 PeerPairingDesired {
-                    peer_id node_did template source collections replicator_addresses
+                    _docID peer_id node_did actor_did template source collections replicator_addresses
                     enrollment_request_digest enrollment_authorization_sequence
                     enrollment_authorization_expires_at
                 }
             }"#,
-        "query enrollment base-route ownership",
-    )
-    .await?;
+                )
+                .await?;
+                let ids = rows::<serde_json::Value>(&response, "PeerPairingDesired")?.into_iter()
+                    .map(|row| row["_docID"].as_str().map(str::to_owned).context("desired route has no ID"))
+                    .collect::<Result<Vec<_>>>()?;
+                let owners = if ids.is_empty() { Vec::new() } else { txn.document_owners("PeerPairingDesired", &ids).await? };
+                anyhow::ensure!(owners.len() == ids.len(), "desired route ownership is incomplete");
+                let owned = owners.into_iter().filter(|row| row.visible && row.owner.as_ref() == Some(runtime))
+                    .map(|row| row.doc_id).collect::<BTreeSet<_>>();
+                Ok::<_, anyhow::Error>((response, owned))
+            })
+        })
+        .await?;
     let existing = rows::<EnrollmentRouteRow>(&response, "PeerPairingDesired")?;
     let desired = desired_routes(projection);
     let client = resolve_template(CLIENT_TEMPLATE).context("client template is missing")?;
@@ -863,12 +833,20 @@ async fn reconcile_data_plane(
 
     let foreign_peers = existing
         .iter()
-        .filter(|row| row.source.as_deref() != Some(SOURCE_ENROLLMENT))
+        .filter(|row| {
+            row.source.as_deref() != Some(SOURCE_ENROLLMENT)
+                || row.actor_did.as_deref() != Some(local_did)
+                || !owned.contains(&row.doc_id)
+        })
         .map(|row| row.peer_id.clone())
         .collect::<BTreeSet<_>>();
     let enrollment_rows = existing
         .into_iter()
-        .filter(|row| row.source.as_deref() == Some(SOURCE_ENROLLMENT))
+        .filter(|row| {
+            row.source.as_deref() == Some(SOURCE_ENROLLMENT)
+                && row.actor_did.as_deref() == Some(local_did)
+                && owned.contains(&row.doc_id)
+        })
         .map(|row| (row.peer_id.clone(), row))
         .collect::<BTreeMap<_, _>>();
 
@@ -915,7 +893,7 @@ async fn reconcile_data_plane(
         }
         crate::store::config_client::ConfigAccess::transact_local_write(
             node,
-            None,
+            Some(runtime.clone()),
             "p2p.upsert_enrollment_route",
             |txn| {
                 let client_collections = &client_collections;
@@ -954,13 +932,7 @@ async fn reconcile_data_plane(
         if desired.contains_key(peer_id) {
             continue;
         }
-        let mutation = delete_enrollment_route_mutation(peer_id);
-        crate::store::config_client::ConfigAccess::write_local_response(
-            node,
-            "p2p.retract_enrollment_route",
-            &mutation,
-        )
-        .await?;
+        delete_enrollment_route(node, peer_id).await?;
     }
     Ok(())
 }
@@ -978,24 +950,43 @@ fn enrollment_route_matches_fence(
 }
 
 async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &str) -> Result<()> {
-    let mutation = delete_enrollment_route_mutation(peer_id);
-    Ok(
-        crate::store::config_client::ConfigAccess::write_local_response(
-            node,
-            "p2p.retract_enrollment_route_fenced",
-            &mutation,
-        )
-        .await
-        .map(|_| ())?,
-    )
+    let runtime = identity::Did::new(
+        node.node_identity_did()
+            .context("enrollment runtime identity missing")?,
+    )?;
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
+    let mutation = delete_enrollment_route_mutation(peer_id, runtime.as_str());
+    let peer = crate::store::graphql::escape_graphql_string(peer_id);
+    let node_did = crate::store::graphql::escape_graphql_string(runtime.as_str());
+    access.transact_write("p2p.retract_enrollment_route_fenced", |txn| {
+        let runtime = &runtime;
+        let mutation = &mutation;
+        let peer = &peer;
+        let node_did = &node_did;
+        Box::pin(async move {
+            txn.validate_runtime_actor(runtime)?;
+            crate::store::graphql::fence_arrivals(txn, "PeerPairingDesired").await?;
+            let response = txn.execute(&format!(r#"{{ PeerPairingDesired(filter: {{peer_id: {{_eq: "{peer}"}}, node_did: {{_eq: "{node_did}"}}, actor_did: {{_eq: "{node_did}"}}, source: {{_eq: "enrollment"}}}}) {{_docID}} }}"#)).await?;
+            let ids = gents_protocol::graphql::graphql_rows_from_response(&response, "PeerPairingDesired")
+                .into_iter().map(|row| row["_docID"].as_str().map(str::to_owned).context("desired route has no ID"))
+                .collect::<Result<Vec<_>>>()?;
+            if !ids.is_empty() {
+                let owners = txn.document_owners("PeerPairingDesired", &ids).await?;
+                anyhow::ensure!(owners.len() == ids.len() && owners.iter().all(|row| row.visible && row.owner.as_ref() == Some(runtime)), "desired route has another native owner");
+            }
+            txn.execute(mutation).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await
 }
 
-fn delete_enrollment_route_mutation(peer_id: &str) -> String {
+fn delete_enrollment_route_mutation(peer_id: &str, node_did: &str) -> String {
     let peer_id = crate::store::graphql::escape_graphql_string(peer_id);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
     format!(
         r#"mutation {{
             delete_PeerPairingDesired(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }} }}
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{_eq: "{node_did}"}}, actor_did: {{_eq: "{node_did}"}}, source: {{ _eq: "enrollment" }} }}
             ) {{ _docID }}
         }}"#
     )
@@ -1003,8 +994,11 @@ fn delete_enrollment_route_mutation(peer_id: &str) -> String {
 
 #[derive(Debug, Deserialize)]
 struct EnrollmentRouteRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     peer_id: String,
     node_did: Option<String>,
+    actor_did: Option<String>,
     template: Option<String>,
     source: Option<String>,
     collections: Option<Vec<String>>,
@@ -1059,7 +1053,7 @@ mod tests {
     use crate::store::identity::KeyIdentity;
 
     #[tokio::test]
-    async fn signed_enrollment_repairs_p2p_merged_production_unique_index_twins() {
+    async fn signed_enrollment_reconciles_the_local_pairing_witness_without_replicating_it() {
         use crate::runtime::agent::p2p_reconcile::embedded_impl::push_documents_to_peer;
         use crate::runtime::agent::p2p_reconcile::embedded_impl::tests::fixtures::{
             authorize_enrollment_peer, runtime_http_test_node, wait_for_active_peer,
@@ -1104,6 +1098,21 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        // Enrollment publication needs the receiver's own Node, written as the
+        // runtime identity so the document is owned by that identity.
+        crate::store::config_client::ConfigAccess::local_as(
+            receiver.clone(),
+            ::identity::Did::new(admin.did()).unwrap(),
+        )
+        .write(
+            "test.enrollment.admin_node",
+            &format!(
+                r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+                escape_graphql_string(admin.did())
+            ),
+        )
+        .await
+        .unwrap();
         authorize_enrollment_peer(
             receiver.clone(),
             admin.clone(),
@@ -1119,21 +1128,24 @@ mod tests {
             .expect("current signed enrollment");
         assert_eq!(signed.authorization_sequence, 1);
 
-        // Both local writes obey uniqueness. Only a remote merge may retain twins.
+        // Desired pairing is runtime-local state: P2P carries only discovery
+        // and enrollment, so neither a replicator nor a selected push can merge
+        // a remote twin into the receiver's uniquely indexed witness.
         let mut ids = Vec::new();
-        for (node, digest) in [
-            (receiver, "previous-request-a"),
-            (sender, "previous-request-b"),
+        for (node, owner, digest) in [
+            (receiver, &admin, "previous-request-a"),
+            (sender, &member, "previous-request-b"),
         ] {
             let input = serde_json::json!({
-                "peer_id": peer, "node_did": admin.did(), "source": "enrollment",
-                "template": "client", "collections": ["AgentRequest"], "profiles": null,
+                "peer_id": peer, "node_did": admin.did(), "actor_did": owner.did(), "source": "enrollment",
+                "template": "client", "collections": ["PeerRegistry"], "profiles": null,
                 "replicator_addresses": ["previous-address"],
                 "enrollment_request_digest": digest, "enrollment_authorization_sequence": 1,
-                "enrollment_authorization_expires_at": signed.authorization_expires_at,
+                "enrollment_authorization_expires_at": signed.authorization_expires_at, "parent_linked": false,
             });
+            // Each runtime owns the desired route it writes.
             let response = ConfigAccess::transact_local_write(
-                node, None, "test.desired.seed_unique_replica", |txn| {
+                node, Some(::identity::Did::new(owner.did()).unwrap()), "test.desired.seed_unique_replica", |txn| {
                     let input = input.clone();
                     Box::pin(async move {
                         txn.execute_with_variables(
@@ -1147,18 +1159,23 @@ mod tests {
                 crate::store::graphql::created_doc_id(&response, "PeerPairingDesired").unwrap(),
             );
         }
-        assert_ne!(ids[0], ids[1]);
-        let mut updates = crate::subscribe_collections(receiver, ["PeerPairingDesired"]).unwrap();
-        receiver_admin
+        let refused = receiver_admin
             .add_replicator(
                 &sender_addresses,
                 &["PeerPairingDesired".into()],
                 &PairingFilters::default(),
             )
-            .await
-            .unwrap();
+            .await;
+        assert!(
+            matches!(
+                refused,
+                Err(crate::runtime::agent::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(ref name))
+                    if name == "PeerPairingDesired"
+            ),
+            "{refused:?}"
+        );
         let receiver_peer = receiver.p2p().unwrap().local_peer_id().await.unwrap();
-        push_documents_to_peer(
+        let pushed = push_documents_to_peer(
             sender,
             &receiver_peer,
             vec![P2pDocumentRequest {
@@ -1166,81 +1183,26 @@ mod tests {
                 doc_id: ids[1].clone(),
             }],
         )
-        .await
-        .unwrap();
+        .await;
+        assert!(pushed.is_err(), "desired pairing reached the P2P transport");
+        sender.shutdown().await.expect("node shutdown");
         let access = ConfigAccess::local(receiver.clone());
         const ROWS: &str = "{ PeerPairingDesired { _docID peer_id node_did source template collections profiles replicator_addresses enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at created_at updated_at } }";
-        // Delivery ACK only admits a head; observe both fully merged documents.
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let response = access.execute(ROWS).await.unwrap();
-                let rows = response["data"]["PeerPairingDesired"].as_array().unwrap();
-                if ids
-                    .iter()
-                    .all(|id| rows.iter().any(|row| row["_docID"] == *id))
-                {
-                    break;
-                }
-                updates
-                    .recv()
-                    .await
-                    .expect("desired subscription stays open");
-            }
-        })
-        .await
-        .expect("both genuinely remote-merged twins become visible");
-        sender.shutdown().await;
         let before = access.execute(ROWS).await.unwrap();
         let before_rows = before["data"]["PeerPairingDesired"].as_array().unwrap();
-        assert_eq!(before_rows.len(), 2);
-        ids.sort();
-        let parked = before_rows
-            .iter()
-            .find(|row| row["_docID"] == ids[1])
-            .unwrap()
-            .clone();
-        assert_ne!(
-            before_rows[0]["enrollment_request_digest"],
-            before_rows[1]["enrollment_request_digest"]
-        );
-        assert!(before_rows
-            .iter()
-            .all(|row| row["enrollment_authorization_sequence"] == 1));
+        assert_eq!(before_rows.len(), 1, "no remote twin was merged");
+        assert_eq!(before_rows[0]["_docID"], ids[0]);
 
-        let old = ConfigAccess::write_local(receiver, "test.desired.old_filter_upsert", &format!(
-            "mutation {{ upsert_PeerPairingDesired(filter: {{peer_id: {{_eq: \"{}\"}}}}, add: {{peer_id: \"{}\", collections: null, replicator_addresses: null}}, update: {{template: \"client\"}}) {{ _docID }} }}",
-            escape_graphql_string(&peer), escape_graphql_string(&peer),
-        )).await;
-        assert!(
-            old.is_err(),
-            "real indexed twins must reproduce the old upsert failure; got {old:?}"
-        );
-        assert!(format!("{:#}", old.unwrap_err()).contains("multiple matching documents"));
-        assert_eq!(
-            access.execute(ROWS).await.unwrap(),
-            before,
-            "failed upsert is atomic"
-        );
-
-        // Exercise the production caller: signed projection is reloaded and fenced
-        // inside the same transaction as canonical witness materialization.
+        // Exercise the production caller: the signed projection is reloaded and
+        // fenced inside the same transaction as the canonical witness.
         reconcile_data_plane(receiver, admin.did(), &store, &projection)
             .await
             .unwrap();
         let after = access.execute(ROWS).await.unwrap();
         let after_rows = after["data"]["PeerPairingDesired"].as_array().unwrap();
-        assert_eq!(after_rows.len(), 2);
-        assert_eq!(
-            after_rows
-                .iter()
-                .find(|row| row["_docID"] == ids[1])
-                .unwrap(),
-            &parked
-        );
-        let canonical = after_rows
-            .iter()
-            .find(|row| row["_docID"] == ids[0])
-            .unwrap();
+        assert_eq!(after_rows.len(), 1);
+        let canonical = &after_rows[0];
+        assert_eq!(canonical["_docID"], ids[0]);
         assert_eq!(canonical["node_did"], admin.did());
         assert_eq!(
             canonical["enrollment_request_digest"],
@@ -1258,74 +1220,15 @@ mod tests {
             canonical["replicator_addresses"],
             serde_json::json!([ticket])
         );
-        let indexed = access
-            .execute(&format!(
-                "{{ PeerPairingDesired(filter: {{peer_id: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-                escape_graphql_string(&peer),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(
-            indexed["data"]["PeerPairingDesired"],
-            serde_json::json!([{ "_docID": ids[0] }])
-        );
         reconcile_data_plane(receiver, admin.did(), &store, &projection)
             .await
             .unwrap();
         assert_eq!(
             access.execute(ROWS).await.unwrap(),
             after,
-            "a repeated sweep preserves both witnesses"
+            "a repeated sweep preserves the witness"
         );
-        receiver.shutdown().await;
-    }
-
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct ClientObservationCase {
-        name: String,
-        actor: Option<String>,
-        node: String,
-        current: Option<super::super::enrollment::EnrollmentRequestAuthority>,
-        expected_admitted: bool,
-        expected_runtime_admitted: bool,
-    }
-
-    #[test]
-    fn generated_client_observation_admission_matches_lean() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot()
-            .expect("Lean client observation admission cases");
-        let cases: Vec<ClientObservationCase> =
-            serde_json::from_value(snapshot["client_observation_admission_cases"].clone())
-                .expect("decode client observation admission cases");
-        assert!(!cases.is_empty());
-        for case in cases {
-            let current = case.current.map(|authority| EnrollmentAuthorizationFence {
-                network_id: authority.network_id,
-                request_id: "request".into(),
-                admin_did: authority.admin_did,
-                member_did: authority.candidate_did,
-                member_peer: authority.candidate_peer,
-                member_ticket: "ticket".into(),
-                owner_node: authority.owner_node,
-                profile: authority.profile,
-                request_digest: "digest".into(),
-                authorization_sequence: 1,
-                authorization_expires_at: "2099-01-01T00:00:00Z".into(),
-            });
-            assert_eq!(
-                runtime_observation_admitted(case.actor.as_deref(), &case.node, current.as_ref()),
-                case.expected_runtime_admitted,
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                client_observation_admitted(case.actor.as_deref(), &case.node, current.as_ref()),
-                case.expected_admitted,
-                "{}",
-                case.name,
-            );
-        }
+        receiver.shutdown().await.expect("node shutdown");
     }
 
     enum ScriptedProjection {
@@ -1369,7 +1272,7 @@ mod tests {
             candidate_did: "did:key:member-placeholder".into(),
             candidate_peer: "member-peer".into(),
             candidate_ticket: "member-ticket".into(),
-            owner_agent: "did:key:owner-placeholder".into(),
+            owner_node_did: "did:key:owner-placeholder".into(),
             profile: "client".into(),
             client_nonce: format!("nonce-{sequence}"),
             issued_at: "2030-01-01T00:00:00Z".into(),
@@ -1385,7 +1288,7 @@ mod tests {
             admin_did: request.admin_did.clone(),
             candidate_did: request.candidate_did.clone(),
             candidate_peer: request.candidate_peer.clone(),
-            owner_agent: request.owner_agent.clone(),
+            owner_node_did: request.owner_node_did.clone(),
             decision: EnrollmentDecisionKind::Approved,
             authorization_sequence: sequence,
             authorization_expires_at: expires_at.into(),
@@ -1402,7 +1305,7 @@ mod tests {
             admin_did: request.admin_did.clone(),
             member_did: request.candidate_did.clone(),
             member_peer: request.candidate_peer.clone(),
-            owner_agent: request.owner_agent.clone(),
+            owner_node_did: request.owner_node_did.clone(),
             sequence,
             authorization_expires_at: expires_at.into(),
             kind: AuthorizationRevisionKind::Active,
@@ -1604,64 +1507,6 @@ mod tests {
         assert!(task.await.unwrap());
     }
 
-    #[tokio::test]
-    async fn client_observation_reloads_current_scoped_authority() {
-        let active = active_enrollment(1, "2099-01-01T00:00:00Z");
-        let member = active.request.candidate_did.clone();
-        let node = active.request.owner_agent.clone();
-        let mut peer = active.clone();
-        peer.request.profile = "peer".into();
-        let mut ambiguous = projection_with_active(active.clone());
-        ambiguous
-            .active
-            .push(active_enrollment(2, "2099-01-01T00:00:00Z"));
-        let script = ScriptedProjectionReader {
-            steps: Mutex::new(VecDeque::from([
-                ScriptedProjection::Projection(Box::new(projection_with_active(active.clone()))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(active.clone()))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(peer))),
-                ScriptedProjection::Projection(Box::new(projection_with_revoked(&active))),
-                ScriptedProjection::Projection(Box::default()),
-                ScriptedProjection::Projection(Box::new(ambiguous)),
-                ScriptedProjection::Error("unavailable enrollment projection"),
-            ])),
-        };
-        let (mut owner, handle) = enrollment_authority_channel();
-        let task = tokio::spawn(async move {
-            for _ in 0..7 {
-                let command = owner
-                    .commands
-                    .recv()
-                    .await
-                    .expect("observation authorization");
-                handle_authority_command(&script, &owner.sender, command).await;
-            }
-        });
-        assert!(handle
-            .client_observation_authorized(&member, &node)
-            .await
-            .unwrap());
-        assert!(!handle
-            .client_observation_authorized(&member, "another-node")
-            .await
-            .unwrap());
-        for _ in 0..3 {
-            assert!(!handle
-                .client_observation_authorized(&member, &node)
-                .await
-                .unwrap());
-        }
-        assert!(handle
-            .client_observation_authorized(&member, &node)
-            .await
-            .is_err());
-        assert!(handle
-            .client_observation_authorized(&member, &node)
-            .await
-            .is_err());
-        task.await.unwrap();
-    }
-
     fn projection_with_revoked(active: &ActiveEnrollment) -> EnrollmentProjection {
         let mut revision = active.revision.clone();
         revision.kind = AuthorizationRevisionKind::Revoked;
@@ -1683,15 +1528,16 @@ mod tests {
         node: Arc<EmbeddedNode>,
         target: &dyn NodeIdentity,
         member: &dyn NodeIdentity,
+        agent_did: &str,
         active: &ActiveEnrollment,
         label: &str,
-    ) -> crate::request::watcher::AgentRequest {
+    ) -> gents_protocol::row::AgentRequest {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("agent-request-{label}"),
             target.did(),
             member.did(),
-            "behavior-1",
+            agent_did,
             format!("session-{label}"),
             format!("content-{label}"),
             "interactive",
@@ -1708,37 +1554,67 @@ mod tests {
         crate::sign_agent_request_create(member, &mut create)
             .await
             .expect("sign enrollment AgentRequest");
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(
-            !response.has_errors(),
-            "create enrollment AgentRequest: {:?}",
-            response.errors
-        );
-        let doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| {
-                data.get("create_AgentRequest")
-                    .or_else(|| data.get("add_AgentRequest"))
-            })
-            .and_then(|value| {
-                value.get("_docID").or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
+        // The runtime stores the member's signed request and grants its target
+        // Agent the `working_agent` edge it reads and terminalizes through.
+        let mutation = create.graphql_mutation().unwrap();
+        let working_agent = ::identity::Did::new(agent_did).unwrap();
+        let doc_id = runtime_access(&node, target)
+            .transact_write("test.enrollment_request", |txn| {
+                let (mutation, working_agent) = (&mutation, &working_agent);
+                Box::pin(async move {
+                    let response = txn.execute(mutation).await?;
+                    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    txn.add_actor_relationship(
+                        "AgentRequest",
+                        &doc_id,
+                        "working_agent",
+                        working_agent,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(doc_id)
                 })
             })
-            .and_then(serde_json::Value::as_str)
-            .expect("created AgentRequest doc id");
-        crate::request::admission::load_request_for_admission_test(node.as_ref(), doc_id)
+            .await
+            .expect("create enrollment AgentRequest");
+        crate::request::admission::load_request_for_admission_test_as(&node, &doc_id, agent_did)
             .await
             .expect("load queued AgentRequest")
     }
 
+    fn runtime_access(
+        node: &Arc<EmbeddedNode>,
+        target: &dyn NodeIdentity,
+    ) -> crate::store::config_client::ConfigAccess {
+        crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(target.did()).unwrap(),
+        )
+    }
+
+    async fn request_row_as_runtime<T>(
+        node: &Arc<EmbeddedNode>,
+        target: &dyn NodeIdentity,
+        request_id: &str,
+    ) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let response = runtime_access(node, target)
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    lifecycle_state claimed_at failure_reason
+                }} }}"#,
+                crate::store::graphql::escape_graphql_string(request_id),
+            ))
+            .await
+            .expect("query AgentRequest as its runtime");
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone())
+            .expect("decode AgentRequest row")
+    }
+
     #[test]
     fn enrollment_route_delete_remains_scoped_to_its_source() {
-        let delete = delete_enrollment_route_mutation("peer-\"\\");
+        let delete = delete_enrollment_route_mutation("peer-\"\\", "node");
         assert!(delete.contains("source: { _eq: \"enrollment\" }"));
         assert!(delete.contains("peer-\\\"\\\\"));
     }
@@ -1752,7 +1628,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn final_claim_fence_reloads_revocation_expiry_supersession_and_read_failure() {
+    async fn enrollment_authority_reloads_each_generation_and_cross_actor_claims_stay_blocked() {
         let target_dir = tempfile::tempdir().unwrap();
         let member_dir = tempfile::tempdir().unwrap();
         let target: Arc<dyn NodeIdentity> = Arc::new(
@@ -1761,19 +1637,34 @@ mod tests {
         let member: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
         );
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(target.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
-        crate::test_support::install_test_agent(&node, target.did(), "behavior-1").await;
+        let binding = crate::store::identity::provision_agent_identity(target.as_ref()).unwrap();
+        crate::test_support::install_test_agent_binding(
+            &node,
+            target.did(),
+            "behavior-1",
+            &binding,
+        )
+        .await;
+        let agent =
+            crate::store::identity::resolve_agent_identity(target.as_ref(), &binding).unwrap();
 
         let mut generation_one = active_enrollment(1, "2030-01-01T00:10:00Z");
         generation_one.request.candidate_did = member.did().to_string();
-        generation_one.request.owner_agent = target.did().to_string();
+        generation_one.request.owner_node_did = target.did().to_string();
         generation_one.decision.candidate_did = member.did().to_string();
-        generation_one.decision.owner_agent = target.did().to_string();
+        generation_one.decision.owner_node_did = target.did().to_string();
         generation_one.revision.member_did = member.did().to_string();
-        generation_one.revision.owner_agent = target.did().to_string();
+        generation_one.revision.owner_node_did = target.did().to_string();
         let mut expired = generation_one.clone();
         expired.request.request_id = "enrollment-request-expired".into();
         expired.request.request_digest = "enrollment-digest-expired".into();
@@ -1785,16 +1676,17 @@ mod tests {
         expired.revision.authorization_expires_at = "2030-01-01T00:05:00Z".into();
         let mut generation_two = active_enrollment(2, "2030-01-01T00:20:00Z");
         generation_two.request.candidate_did = member.did().to_string();
-        generation_two.request.owner_agent = target.did().to_string();
+        generation_two.request.owner_node_did = target.did().to_string();
         generation_two.decision.candidate_did = member.did().to_string();
-        generation_two.decision.owner_agent = target.did().to_string();
+        generation_two.decision.owner_node_did = target.did().to_string();
         generation_two.revision.member_did = member.did().to_string();
-        generation_two.revision.owner_agent = target.did().to_string();
+        generation_two.revision.owner_node_did = target.did().to_string();
 
         let revoked_request = create_enrollment_request(
             node.clone(),
             target.as_ref(),
             member.as_ref(),
+            agent.did(),
             &generation_one,
             "revoked",
         )
@@ -1803,6 +1695,7 @@ mod tests {
             node.clone(),
             target.as_ref(),
             member.as_ref(),
+            agent.did(),
             &expired,
             "expired",
         )
@@ -1811,6 +1704,7 @@ mod tests {
             node.clone(),
             target.as_ref(),
             member.as_ref(),
+            agent.did(),
             &generation_one,
             "superseded",
         )
@@ -1819,25 +1713,20 @@ mod tests {
             node.clone(),
             target.as_ref(),
             member.as_ref(),
+            agent.did(),
             &generation_two,
             "replacement",
         )
         .await;
 
+        // The authority owner reloads the signed projection on every fresh
+        // read: revocation, supersession and a read failure each surface there.
         let script = ScriptedProjectionReader {
             steps: Mutex::new(VecDeque::from([
                 ScriptedProjection::Projection(Box::new(projection_with_active(
                     generation_one.clone(),
                 ))),
                 ScriptedProjection::Projection(Box::new(projection_with_revoked(&generation_one))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(expired.clone()))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(expired))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(
-                    generation_one.clone(),
-                ))),
-                ScriptedProjection::Projection(Box::new(projection_with_active(
-                    generation_two.clone(),
-                ))),
                 ScriptedProjection::Projection(Box::new(projection_with_active(
                     generation_two.clone(),
                 ))),
@@ -1846,7 +1735,7 @@ mod tests {
         };
         let (mut owner, handle) = enrollment_authority_channel();
         let command_task = tokio::spawn(async move {
-            for _ in 0..8 {
+            for _ in 0..4 {
                 let command = owner.commands.recv().await.expect("authority command");
                 handle_authority_command(&script, &owner.sender, command).await;
             }
@@ -1854,133 +1743,81 @@ mod tests {
         let verifier =
             AgentRequestAdmissionVerifier::new(node.clone(), target.clone(), handle.clone());
 
-        assert!(handle
-            .fresh_member_authorization(member.did())
-            .await
-            .unwrap()
-            .is_some());
-        let revoked_request_id = revoked_request.request_id.clone();
-        let rejected = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
-            &verifier,
-            node.clone(),
-            "behavior-1",
-            revoked_request,
-        )
-        .await;
-        assert!(rejected.is_none());
-        #[derive(Deserialize)]
-        struct RejectedRow {
-            lifecycle_state: RequestLifecycleState,
-            claimed_at: Option<String>,
-            failure_reason: Option<String>,
-        }
-        let response = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    lifecycle_state claimed_at failure_reason
-                }} }}"#,
-                crate::store::graphql::escape_graphql_string(&revoked_request_id),
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "query rejected request: {:?}",
-            response.errors
-        );
-        let rejected_row: RejectedRow = crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .expect("rejected request row");
-        assert_eq!(rejected_row.lifecycle_state, RequestLifecycleState::Failed);
-        assert!(rejected_row.claimed_at.is_none());
-        assert!(rejected_row
-            .failure_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("request admission denied")));
-
-        assert!(handle
-            .fresh_member_authorization(member.did())
-            .await
-            .unwrap()
-            .is_some());
-        let expiry_error = verifier
-            .verify_fresh_at(
-                &expired_request,
-                "behavior-1",
-                "2030-01-01T00:05:00Z".parse().unwrap(),
-            )
-            .await
-            .unwrap_err();
-        assert!(expiry_error.is_denied());
-        assert!(expiry_error.to_string().contains("lease expired"));
-
         let first_fence = handle
             .fresh_member_authorization(member.did())
             .await
             .unwrap()
-            .unwrap();
+            .expect("generation one is active");
         assert_eq!(first_fence.authorization_sequence, 1);
-        let superseded_error = verifier
-            .verify_fresh_at(
-                &superseded_request,
-                "behavior-1",
-                "2030-01-01T00:06:00Z".parse().unwrap(),
-            )
+        assert!(handle
+            .fresh_member_authorization(member.did())
+            .await
+            .unwrap()
+            .is_none());
+        let second_fence = handle
+            .fresh_member_authorization(member.did())
+            .await
+            .unwrap()
+            .expect("generation two supersedes generation one");
+        assert_eq!(second_fence.authorization_sequence, 2);
+        let read_error = handle
+            .fresh_member_authorization(member.did())
             .await
             .unwrap_err();
-        assert!(superseded_error.is_denied());
-        assert!(superseded_error
-            .to_string()
-            .contains("stale or mixed enrollment generation"));
-
-        let verified = verifier
-            .verify_fresh_at(
-                &replacement_request,
-                "behavior-1",
-                "2030-01-01T00:06:00Z".parse().unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(verified.request_id, replacement_request.request_id);
-
-        let read_error = verifier
-            .verify_fresh_at(
-                &replacement_request,
-                "behavior-1",
-                "2030-01-01T00:06:00Z".parse().unwrap(),
-            )
-            .await
-            .unwrap_err();
-        assert!(!read_error.is_denied());
         assert!(format!("{read_error:#}").contains("injected enrollment projection read failure"));
         command_task.await.unwrap();
 
-        let replacement_request_id = replacement_request.request_id.clone();
-        assert!(
-            crate::runtime::agent::daemon::verify_request_at_claim_boundary(
-                &verifier,
-                node.clone(),
-                "behavior-1",
-                replacement_request,
-            )
-            .await
-            .is_none()
-        );
-        let response = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    lifecycle_state claimed_at failure_reason
-                }} }}"#,
-                crate::store::graphql::escape_graphql_string(&replacement_request_id),
-            ))
-            .await;
-        let pending_row: RejectedRow = crate::store::graphql::first_row(&response, "AgentRequest")
-            .unwrap()
-            .expect("temporarily unavailable request row");
-        assert_eq!(pending_row.lifecycle_state, RequestLifecycleState::Pending);
-        assert!(pending_row.claimed_at.is_none());
-        assert!(pending_row
-            .failure_reason
-            .as_deref()
-            .is_none_or(str::is_empty));
+        // A member-signed request is cross-actor work for the target Agent.
+        // Without atomic requester authorization in the claim transaction the
+        // modeled decision is blocked (Request.CrossActorAuthorization): it is
+        // neither denied nor claimed, so every generation stays pending.
+        #[derive(Deserialize)]
+        struct PendingRow {
+            lifecycle_state: RequestLifecycleState,
+            claimed_at: Option<String>,
+            failure_reason: Option<String>,
+        }
+        for request in [
+            revoked_request,
+            expired_request,
+            superseded_request,
+            replacement_request,
+        ] {
+            let request_id = request.request_id.clone();
+            let blocked = verifier
+                .verify_fresh_at(
+                    &request,
+                    agent.did(),
+                    "2030-01-01T00:06:00Z".parse().unwrap(),
+                )
+                .await
+                .unwrap_err();
+            assert!(!blocked.is_denied(), "{request_id}: {blocked:#}");
+            assert!(
+                format!("{blocked:#}").contains("atomic requester authorization"),
+                "{request_id}: {blocked:#}"
+            );
+            assert!(
+                crate::runtime::agent::daemon::verify_request_at_claim_boundary(
+                    &verifier,
+                    node.clone(),
+                    agent.as_ref(),
+                    request,
+                )
+                .await
+                .is_none()
+            );
+            let row: PendingRow = request_row_as_runtime(&node, target.as_ref(), &request_id).await;
+            assert_eq!(
+                row.lifecycle_state,
+                RequestLifecycleState::Pending,
+                "{request_id}"
+            );
+            assert!(row.claimed_at.is_none(), "{request_id}");
+            assert!(
+                row.failure_reason.as_deref().is_none_or(str::is_empty),
+                "{request_id}"
+            );
+        }
     }
 }

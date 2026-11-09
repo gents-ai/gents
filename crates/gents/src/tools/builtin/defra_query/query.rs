@@ -2,7 +2,8 @@ use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::render::{render_filter, validate_identifier};
+use super::render::render_filter;
+use crate::store::config_client::schema_introspection::validate_identifier;
 
 pub const DEFAULT_LIMIT: u32 = 50;
 /// Caps database rows per query to bound result allocation and provider input.
@@ -13,6 +14,7 @@ pub const MAX_LIMIT: u32 = 1000;
 // fields are never selected, filtered or listed regardless of scope.
 pub(crate) const RESTRICTED_FIELDS: &[(&str, &str)] = &[
     ("InferenceBackend", "auth"),
+    ("BackendCredential", "secret"),
     ("OAuthCredential", "access_token"),
     ("OAuthCredential", "refresh_token"),
     ("OAuthCredential", "id_token"),
@@ -69,7 +71,7 @@ pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
     "AgentTarget",
     "Skill",
     "DatastoreToolSurface",
-    "InferenceBackend",
+    "InferenceBackendMetadata",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -82,7 +84,6 @@ pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
     "Trigger",
     "NodeRuntime",
     "Network",
-    "PeerEndpoint",
     "PeerRegistry",
     "PeerPairingDesired",
     "PeerPairingApplied",
@@ -273,6 +274,7 @@ mod tests {
             );
             let sdl = match *collection {
                 "InferenceBackend" => gents_protocol::schemas::INFERENCE_BACKEND,
+                "BackendCredential" => gents_protocol::schemas::BACKEND_CREDENTIAL,
                 "OAuthCredential" => gents_protocol::schemas::OAUTH_CREDENTIAL,
                 other => panic!("restricted field on unexpected collection {other}"),
             };

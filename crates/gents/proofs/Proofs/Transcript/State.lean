@@ -380,14 +380,6 @@ def terminalizeToolCall (s : TranscriptState)
     inFlight := s.inFlight.erase callId
   }
 
-def cancelPendingOwnedCalls (s : TranscriptState)
-    (owned : List (SessionId × Sequence × ToolExecution.ToolCallId)) : TranscriptState :=
-  { s with toolCalls := s.toolCalls.map fun row =>
-      if (row.sessionId, row.messageSequence, row.callId) ∈ owned &&
-          row.state == .pending then
-        { row with state := .cancelled }
-      else row }
-
 def abandonHookOwnership (s : TranscriptState) : TranscriptState :=
   { s with inFlight := ∅ }
 

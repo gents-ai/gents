@@ -8,26 +8,33 @@ use gents_protocol::row::AgentRequestRow;
 
 #[tokio::test]
 async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
-    let temp = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(temp.path().join("principal.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+    let node = configured_event_node().await;
     node.add_collection("type ResumedGoalOutput { run_id: String @index summary: String }")
         .await
         .unwrap();
-    crate::goal::set_goal(
-        &node,
+    let identity = crate::triggers::callback::test_root_identity();
+    let agent = crate::triggers::callback::test_agent_identity();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        ::identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    crate::test_support::create_agent_owned_session(
+        &access,
+        identity.did(),
+        "resumed-event-session",
+        Some(agent.did()),
+    )
+    .await;
+    let goal = crate::goal::set_goal_from_access(
+        &access,
         identity.did(),
         "resumed-event-session",
         Some("Emit the remaining correlated result"),
         Some(crate::goal::GoalStatus::Paused),
         Some(Some(1000)),
+        None,
     )
     .await
     .unwrap();
@@ -35,32 +42,38 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         gents_protocol::request_admission::RequestPurpose::Normal,
         "resumed-event-parent",
         identity.did(),
-        identity.did(),
-        "general",
+        agent.did(),
+        agent.did(),
         "resumed-event-session",
         "Original correlated work",
         "interactive",
         "2020-01-01T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(identity.did()),
+        AgentRequestAdmissionRecord::local_self(agent.did()),
     );
     parent.caused_by_correlation = Some("resumed-run-correlation".into());
-    crate::sign_agent_request_create(&identity, &mut parent)
+    crate::sign_agent_request_create(agent.as_ref(), &mut parent)
         .await
         .unwrap();
-    let response = node.execute(&parent.graphql_mutation().unwrap()).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let response = node
-        .execute(
-            r#"mutation {
-        update_AgentRequest(filter: {request_id: {_eq: "resumed-event-parent"}},
-            input: {lifecycle_state: "completed"}) { _docID }
-    }"#,
+    let response = access
+        .write(
+            "test.resumed_goal_parent",
+            &parent.graphql_mutation().unwrap(),
         )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+        .await
+        .unwrap();
+    let parent_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    access.transact_write("test.bind_resumed_goal", |txn| {
+        let goal = &goal;
+        let parent_doc = &parent_doc;
+        Box::pin(async move {
+            crate::goal::bind_goal_first_request_in_txn(txn, goal, parent_doc, None).await?;
+            txn.execute(&format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{lifecycle_state: "completed"}}) {{_docID}} }}"#, escape_graphql_string(parent_doc))).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
     let receipt = crate::goal::resume_goal_request(
-        &crate::ConfigAccess::local(node.clone()),
-        &identity,
+        &access,
+        agent.as_ref(),
         identity.did(),
         "resumed-event-session",
         "resumed-event-parent",
@@ -68,18 +81,18 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     .await
     .unwrap();
     assert!(receipt.created);
-    let response = node
+    let response = access
         .execute(&format!(
             "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ {} }} }}",
             escape_graphql_string(&receipt.request_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+        .await
+        .unwrap();
     let rows: Vec<AgentRequestRow> =
-        serde_json::from_value(response.data.unwrap()["AgentRequest"].clone()).unwrap();
+        serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
     assert_eq!(rows.len(), 1);
-    let child = crate::request::watcher::AgentRequest::try_from(rows[0].clone()).unwrap();
+    let child = gents_protocol::row::AgentRequest::try_from(rows[0].clone()).unwrap();
     assert_eq!(
         child.caused_by_correlation.as_deref(),
         Some("resumed-run-correlation")
@@ -94,10 +107,12 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
             r#"{ run_id: { _eq: "resumed-run-correlation" } }"#,
         )
     };
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("resumed-output-trigger".to_owned(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;

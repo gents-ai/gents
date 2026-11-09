@@ -1,4 +1,8 @@
-import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
+import type {
+  AgentContext,
+  AgentView,
+  AgentIdentityBinding,
+} from "@source-inc/gents-desktop-client";
 
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { ShellActions } from "@/../hooks/shellActions";
@@ -21,6 +25,7 @@ export type WrittenAgent = {
 
 export async function writeAgentDraft({
   changeConfig,
+  identity,
   deployment,
   agent,
   next,
@@ -29,6 +34,7 @@ export async function writeAgentDraft({
   newContextId,
 }: {
   changeConfig: ShellActions["changeConfig"];
+  identity: () => Promise<AgentIdentityBinding>;
   deployment: NodeView;
   agent: AgentView;
   next: Draft;
@@ -59,8 +65,9 @@ export async function writeAgentDraft({
         compactionId: next.compactionId,
         skillIds: next.skillIds,
       });
+  const binding = await identity();
   const agentDocument = {
-    agent_id: agent.agentId,
+    ...binding,
     node_did: deployment.nodeDid,
     display_name: next.displayName.trim(),
     description: next.description.trim() || null,
@@ -109,7 +116,7 @@ export async function writeAgentDraft({
         },
         {
           collection: "Agent",
-          id: agent.agentId,
+          id: agent.agentDid,
           changes: {
             display_name: agentDocument.display_name,
             description: agentDocument.description,
@@ -147,7 +154,7 @@ export function contextOutcome(
   const left =
     previous && previous.context_id !== contextId
       ? usersOf(deployment, previous.context_id).filter(
-          (b) => b.agentId !== agent.agentId,
+          (b) => b.agentDid !== agent.agentDid,
         )
       : null;
   if (previous && left) {

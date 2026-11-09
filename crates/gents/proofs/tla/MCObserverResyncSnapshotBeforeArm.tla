@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncSnapshotBeforeArm ----
+EXTENDS ObserverResync
+
+====

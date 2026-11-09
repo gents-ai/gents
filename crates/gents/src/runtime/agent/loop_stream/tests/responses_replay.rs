@@ -102,7 +102,11 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         profile,
     );
     let capture_factory =
-        crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone());
+        crate::inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
+            node.clone(),
+            lifecycle.managed_agent_signer().expect("claimed Agent signer"),
+        )
+        .unwrap();
     let capture_scope = crate::inference::rendered_request::scope_from_factory(
         crate::inference::rendered_request::context_for_claimed_request(
             lifecycle.request(),

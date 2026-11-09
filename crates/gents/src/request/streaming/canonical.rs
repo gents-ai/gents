@@ -8,15 +8,15 @@ mod close;
 mod publish;
 mod source;
 
-pub(crate) use append::append_provider_segment;
 #[cfg(test)]
-pub(crate) use append::append_provider_segment_at;
-pub(crate) use close::close_provider_attempt;
+pub(crate) use append::append_provider_segment_at_with_access;
+pub(super) use append::append_provider_segment_with_signer;
 #[cfg(test)]
-pub(crate) use close::close_provider_attempt_at;
-pub(crate) use publish::publish_provider_turn;
+pub(crate) use close::close_provider_attempt_at_with_access;
+pub(super) use close::close_provider_attempt_with_signer;
 #[cfg(test)]
-pub(crate) use publish::publish_provider_turn_at;
+pub(crate) use publish::publish_provider_turn_at_with_access;
+pub(super) use publish::publish_provider_turn_with_signer;
 pub(super) use publish::publish_provider_turn_with_time;
 pub(crate) use source::{
     retained_partial_blocks, validate_closed_source_extent, validate_source_purpose,

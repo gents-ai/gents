@@ -1,5 +1,5 @@
 use super::*;
-use gents::session::canonical_rows::{
+use gents_protocol::output::rows::{
     decode_scoped_canonical_rows, decode_scoped_request_output_segments,
     decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
@@ -570,7 +570,7 @@ mod tests {
             &mut RequestPromptOwnership::default()
         )
         .is_err());
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
     }
 
     #[test]
@@ -763,7 +763,7 @@ mod tests {
             std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
         }
         tracing::info!(report = %report, "folded prompt ownership benchmark");
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -854,7 +854,7 @@ mod tests {
             .session_tip_request("session", Some("agent"), Some("other"), "foreign")
             .expect("foreign row in its own scope");
         assert_eq!(foreign_tip.request_id, "foreign");
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
     }
 }
 

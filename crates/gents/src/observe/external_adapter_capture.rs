@@ -47,7 +47,7 @@ pub struct ExternalAdapterMapping {
     #[serde(default)]
     pub node_did: Option<String>,
     #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub actor_did: Option<String>,
     #[serde(default)]
@@ -68,7 +68,7 @@ pub struct ExternalParticipantMapping {
     #[serde(default)]
     pub node_did: Option<String>,
     #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
 }
@@ -84,7 +84,7 @@ pub struct ExternalDelegationMapping {
     #[serde(default)]
     pub node_did: Option<String>,
     #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
 }
@@ -222,7 +222,7 @@ fn first_owned<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<
 fn imported_session(
     session_id: &str,
     node_did: Option<&str>,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     created_at: &str,
     title: String,
     preview: Option<&str>,
@@ -231,14 +231,14 @@ fn imported_session(
         AgentSession, SessionObservation, SessionTitle, SessionTitleSource,
     };
     let node_did = node_did.filter(|value| !value.trim().is_empty())?;
-    let agent_id = agent_id.filter(|value| !value.trim().is_empty())?;
+    let agent_did = agent_did.filter(|value| !value.trim().is_empty())?;
     Some(TimelineSessionRow {
         doc_id: None,
         session: AgentSession {
             session_id: session_id.to_owned(),
             node_did: node_did.to_owned(),
             requester_did: None,
-            agent_id: agent_id.to_owned(),
+            agent_did: agent_did.to_owned(),
             created_at: created_at.to_owned(),
             closed_at: None,
             archived_at: None,

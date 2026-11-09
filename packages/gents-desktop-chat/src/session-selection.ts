@@ -2,10 +2,10 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
 export function sessionBelongsToAgent(
   session: SessionSummary,
-  selectedAgentId: string | null,
+  selectedAgentDid: string | null,
 ) {
-  if (!selectedAgentId) {
+  if (!selectedAgentDid) {
     return true;
   }
-  return session.agentId === selectedAgentId;
+  return session.agentDid === selectedAgentDid;
 }

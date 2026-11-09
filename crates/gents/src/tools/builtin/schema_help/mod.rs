@@ -1,4 +1,4 @@
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::store::config_client::ConfigAccess;
 use anyhow::{bail, ensure, Context, Result};
@@ -86,6 +86,14 @@ fn apply_call(args: &SchemaParams, digest: &str) -> SchemaParams {
 pub struct SchemaError(String);
 
 #[derive(Debug, thiserror::Error)]
+pub enum SchemaIdentityError {
+    #[error(transparent)]
+    InvalidDid(#[from] identity::Error),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::store::config_client::ConfigClientError),
+}
+
+#[derive(Debug, thiserror::Error)]
 #[error("missing or stale digest: run the returned preview call, inspect the effect, then use its next_call. options.digest binds the command and observed schema")]
 struct SchemaDigestMismatch;
 
@@ -95,17 +103,33 @@ struct SchemaSdlFailure;
 
 #[derive(Clone)]
 pub struct SchemaTool {
-    node: Arc<EmbeddedNode>,
+    access: ConfigAccess,
 }
 
 impl SchemaTool {
+    #[cfg(test)]
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self { node }
+        Self {
+            access: ConfigAccess::local(node),
+        }
+    }
+
+    pub fn for_managed_agent(
+        node: Arc<EmbeddedNode>,
+        agent: &dyn crate::store::identity::NodeIdentity,
+    ) -> std::result::Result<Self, SchemaIdentityError> {
+        Ok(Self {
+            access: ConfigAccess::local_managed_agent(
+                node,
+                identity::Did::new(agent.did())?,
+                agent,
+            )?,
+        })
     }
 
     async fn execute(&self, command: &SchemaCommand) -> Result<Value> {
         let args = &command.args;
-        let access = ConfigAccess::local(self.node.clone());
+        let access = &self.access;
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
         let target = || {
             args.target_id.as_deref().filter(|s| !s.is_empty()).context("target_id is required; use collection list or version list to discover exact names and IDs")
@@ -171,7 +195,7 @@ impl SchemaTool {
                 return Ok(json!({"versions":values}));
             }
             ["version", "get"] => {
-                return Ok(json!({"version":find_version(&access, target()?).await?}))
+                return Ok(json!({"version":find_version(access, target()?).await?}))
             }
             _ => {}
         }
@@ -179,12 +203,20 @@ impl SchemaTool {
             !(command.preview && command.digest.is_some()),
             "preview returns a digest; omit options.digest while previewing"
         );
+        let mut sdl_warnings = Vec::new();
         let before = match words.as_slice() {
             ["collection", "create"] | ["view", "create"] => {
                 if words[0] == "view" {
                     text("query")?;
                 }
-                let definitions = query::parse_sdl(text("sdl")?).context(SchemaSdlFailure)?;
+                let parsed = query::sdl_parse::parse_sdl_with_warnings(text("sdl")?)
+                    .context(SchemaSdlFailure)?;
+                sdl_warnings = parsed
+                    .warnings
+                    .into_iter()
+                    .map(|warning| warning.to_string())
+                    .collect();
+                let definitions = parsed.collections;
                 ensure!(
                     !definitions.is_empty(),
                     "SDL must declare at least one collection"
@@ -201,7 +233,7 @@ impl SchemaTool {
                     );
                 }
                 if words[0] == "collection" {
-                    crate::store::config_client::preview_schema_install(&access, text("sdl")?).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
+                    crate::store::config_client::preview_schema_install(access, text("sdl")?).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
                 }
                 Value::Object(existing)
             }
@@ -218,7 +250,7 @@ impl SchemaTool {
                 current
             }
             ["version", "activate"] => {
-                let version = find_version(&access, target()?).await?;
+                let version = find_version(access, target()?).await?;
                 let name = version["Name"]
                     .as_str()
                     .context("version has no collection name")?;
@@ -233,9 +265,9 @@ impl SchemaTool {
                     !config.lenses.is_empty(),
                     "config.Lenses must contain inline WASM modules"
                 );
-                let source = find_version(&access, &config.source_collection_version_id).await?;
+                let source = find_version(access, &config.source_collection_version_id).await?;
                 let destination =
-                    find_version(&access, &config.destination_collection_version_id).await?;
+                    find_version(access, &config.destination_collection_version_id).await?;
                 for v in [&source, &destination] {
                     ensure_application_collection(
                         v["Name"]
@@ -255,12 +287,14 @@ impl SchemaTool {
             )?)
         );
         if command.preview {
-            return Ok(
-                json!({"committed":false,"digest":digest,"command":args.argv,"target_id":args.target_id,"before":before,
+            let mut preview = json!({"committed":false,"digest":digest,"command":args.argv,"target_id":args.target_id,"before":before,
                 "effect":help::effect(&words),
                 "validation":"Input shape and observed schema checked. DefraDB validates and authorizes publication when applied; preview is not a transaction.",
-                "next_call":{"tool":"schema","args":apply_call(args, &digest)}}),
-            );
+                "next_call":{"tool":"schema","args":apply_call(args, &digest)}});
+            if !sdl_warnings.is_empty() {
+                preview["warnings"] = json!(sdl_warnings);
+            }
+            return Ok(preview);
         }
         if command.digest.as_deref() != Some(digest.as_str()) {
             return Err(SchemaDigestMismatch.into());
@@ -268,10 +302,10 @@ impl SchemaTool {
         let result = match words.as_slice() {
             ["collection", "create"] => {
                 let plan =
-                    crate::store::config_client::preview_schema_install(&access, text("sdl")?)
+                    crate::store::config_client::preview_schema_install(access, text("sdl")?)
                         .await?;
                 let installed = crate::store::config_client::apply_schema_install(
-                    &access,
+                    access,
                     text("sdl")?,
                     &plan.artifact_digest,
                 )
@@ -306,7 +340,11 @@ impl SchemaTool {
             }
             _ => unreachable!(),
         };
-        Ok(json!({"committed":true,"result":result}))
+        let mut response = json!({"committed":true,"result":result});
+        if !sdl_warnings.is_empty() {
+            response["warnings"] = json!(sdl_warnings);
+        }
+        Ok(response)
     }
 }
 
@@ -473,10 +511,16 @@ impl SchemaTool {
                 let encoded = if command.preview {
                     let effect = value.as_object_mut().unwrap().remove("effect").unwrap();
                     let next_call = value.as_object_mut().unwrap().remove("next_call").unwrap();
+                    let warnings = value.as_object_mut().unwrap().remove("warnings");
+                    let mut output =
+                        json!({"effect":effect,"next_call":next_call,"metadata":value});
+                    if let Some(warnings) = warnings {
+                        output["warnings"] = warnings;
+                    }
                     serde_json::to_string(
                         &crate::tools::builtin::self_config::Ordered::reading_order(
-                            json!({"effect":effect,"next_call":next_call,"metadata":value}),
-                            &["effect", "next_call", "metadata"],
+                            output,
+                            &["effect", "warnings", "next_call", "metadata"],
                         ),
                     )
                 } else {

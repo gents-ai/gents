@@ -29,7 +29,8 @@ pub struct TrialSpec {
     pub trial_id: String,
     pub pack_dir: PathBuf,
     pub pack_digest: String,
-    pub agent_id: String,
+    pub agent_slot: String,
+    pub evaluator_did: String,
     pub inference: InferenceBinding,
     pub fixtures: TrialFixtures,
     #[serde(default)]
@@ -46,11 +47,18 @@ pub struct TrialSpec {
 impl TrialSpec {
     #[cfg(test)]
     pub(crate) fn empty_for_tests(trial_id: &str) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let evaluator = crate::store::identity::KeyIdentity::load_or_create(
+            directory.path().join("evaluator.key"),
+            None,
+        )
+        .unwrap();
         Self {
             trial_id: trial_id.to_string(),
             pack_dir: PathBuf::new(),
             pack_digest: String::new(),
-            agent_id: String::new(),
+            agent_slot: String::new(),
+            evaluator_did: crate::store::identity::NodeIdentity::did(&evaluator).to_owned(),
             inference: InferenceBinding {
                 profile: Value::Null,
                 backend: Value::Null,
@@ -84,6 +92,8 @@ pub struct InferenceBinding {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialFixtures {
     pub schemas: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seed_schemas: Vec<String>,
     pub documents: Vec<FixtureDocument>,
     pub files: Vec<FixtureFile>,
 }
@@ -92,6 +102,12 @@ pub struct TrialFixtures {
 pub struct FixtureDocument {
     pub collection: String,
     pub document: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_readers: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub session_agent_owned: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expired_client_request: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +189,8 @@ pub struct TrialLocator {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_agent: Option<super::subject_binding::SubjectAgent>,
     pub stage_id: String,
     pub request_id: Option<String>,
     pub terminal_state: Option<RequestLifecycleState>,

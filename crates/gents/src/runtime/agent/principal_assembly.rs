@@ -5,7 +5,7 @@ use crate::store::identity::RuntimeNode;
 
 #[derive(Debug)]
 pub struct AgentBuildError {
-    pub agent_id: String,
+    pub agent_did: String,
     pub error: anyhow::Error,
 }
 
