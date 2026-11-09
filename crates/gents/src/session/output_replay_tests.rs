@@ -684,10 +684,11 @@ async fn fixture_with_provider_payload_options(
                 declaration(0, 1, 0, StreamPayload::Reasoning),
                 declaration(1, 1, 0, StreamPayload::ReasoningSignature),
                 declaration(2, 0, 0, StreamPayload::ReasoningStop),
-                declaration(3, 1, 1, StreamPayload::Reasoning),
+                declaration(3, 1, 1, StreamPayload::Text),
+                declaration(4, 1, 2, StreamPayload::Reasoning),
             ],
-            "ASU".into(),
-            vec![1, 1, 0, 1],
+            "ASTU".into(),
+            vec![1, 1, 0, 1, 1],
         )
     } else if signed {
         let parts = ["思考", "sig-α", "answer", "", "sig-empty", "{\"x\":1}"];
@@ -836,16 +837,27 @@ async fn fixture_with_provider_payload_options(
         role: MessageRole::Assistant,
         native_id: (signed && !recovered).then(|| "provider-id".into()),
         blocks: if recovered {
-            vec![MessageBlock::Reasoning {
-                id: None,
-                parts: vec![ReasoningPart::Text {
-                    text: PayloadRef {
-                        close_doc_id: close_doc_id.clone(),
-                        stream: 0,
+            vec![
+                MessageBlock::Reasoning {
+                    id: None,
+                    parts: vec![ReasoningPart::Text {
+                        text: PayloadRef {
+                            close_doc_id: close_doc_id.clone(),
+                            stream: 0,
+                        },
+                        signature: Some("S".into()),
+                    }],
+                },
+                MessageBlock::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id: close_doc_id.clone(),
+                            stream: 3,
+                        },
+                        presentation: PayloadPresentation::Full,
                     },
-                    signature: Some("S".into()),
-                }],
-            }]
+                },
+            ]
         } else if signed {
             let reference = |stream| PayloadRef {
                 close_doc_id: close_doc_id.clone(),
@@ -961,7 +973,9 @@ async fn recovered_stopped_reasoning_replays_only_with_its_authenticated_prefix(
     let Message::Assistant { id, content, .. } = candidate.message.clone() else {
         panic!("expected assistant")
     };
-    assert_eq!(content.len(), 1);
+    assert_eq!(content.len(), 2);
+    assert!(matches!(content[0], AssistantContent::Reasoning(_)));
+    assert!(matches!(content[1], AssistantContent::Text(_)));
     let rows = vec![TaggedAssistantRow {
         source: Some(tag.clone()),
         physical_header: Some(candidate.header_doc_id),
