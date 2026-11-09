@@ -88,11 +88,8 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     lastError: null,
     connectedPeerCount: 1,
     activationErrorCount: 0,
-    pendingDagCount: 0,
-    persistedPendingDagCount: 0,
-    pushRetryMarkerCount: 0,
-    exhaustedFetchCount: 0,
-    quarantinedDagCount: 0,
+    cause: null,
+    nextAction: null,
     ...overrides,
   };
 }
@@ -249,33 +246,13 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("does not let unrelated database work block current signed readiness", () => {
-    const state = projectDeploymentOperationalState(
-      deployment(),
-      null,
-      syncHealth({ state: "syncing", pendingDagCount: 2 }),
-    );
-
-    expect(state.admissionBlocker).toBeNull();
-    expect(state.summary.kind).toBe("ready");
-    expect(state.sync).toMatchObject({
-      layer: "sync",
-      kind: "syncing",
-      shortLabel: "Syncing",
-    });
-  });
-
-  it("does not let database lag override current runtime readiness", () => {
+  it("does not let a waiting sync cause block current signed readiness", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         readinessSource: { state: "current" },
       }),
       null,
-      syncHealth({
-        state: "syncing",
-        pendingDagCount: 1,
-        exhaustedFetchCount: 3,
-      }),
+      syncHealth({ state: "waiting", cause: "discovery_degraded", nextAction: "wait" }),
     );
 
     expect(state.admissionBlocker).toBeNull();
@@ -283,27 +260,29 @@ describe("deployment operational state", () => {
     expect(state.summary.kind).toBe("ready");
     expect(state.sync).toMatchObject({
       layer: "sync",
-      kind: "syncing",
-      shortLabel: "Syncing",
+      kind: "waiting",
+      reason: "discovery_degraded",
+      shortLabel: "Discovery degraded",
     });
   });
 
-  it("reports P2P schema mismatch separately from runtime readiness", () => {
-    const detail =
-      "this app and the agent runtime are different Gents versions; update the app and the runtime to the same version";
+  it("reports a blocked sync cause separately from runtime readiness", () => {
     const state = projectDeploymentOperationalState(
       deployment(),
       null,
-      syncHealth({ state: "incompatible", lastError: detail }),
+      syncHealth({
+        state: "blocked",
+        cause: "enrollment_authentication",
+        nextAction: "enroll_again",
+      }),
     );
 
     expect(state.summary.kind).toBe("ready");
     expect(state.sync).toMatchObject({
       layer: "sync",
       kind: "blocked",
-      reason: "incompatible",
-      shortLabel: "Update required",
-      detail,
+      reason: "enrollment_authentication",
+      shortLabel: "Enroll again",
       action: null,
     });
   });

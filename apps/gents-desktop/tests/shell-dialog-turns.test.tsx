@@ -127,11 +127,8 @@ const healthy: SyncHealthView = {
   lastError: null,
   connectedPeerCount: 1,
   activationErrorCount: 0,
-  pendingDagCount: 0,
-  persistedPendingDagCount: 0,
-  pushRetryMarkerCount: 0,
-  exhaustedFetchCount: 0,
-  quarantinedDagCount: 0,
+  cause: null,
+  nextAction: null,
 };
 
 const context = {
@@ -202,7 +199,7 @@ describe("shell dialogs take turns (#1778)", () => {
     render(<Harness />);
 
     await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
-    expect(screen.getByRole("dialog", { name: "Database sync details" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Sync details" })).toBeVisible();
 
     await user.click(screen.getByTestId("context-meter"));
     expect(dialogs().length).toBeLessThanOrEqual(1);

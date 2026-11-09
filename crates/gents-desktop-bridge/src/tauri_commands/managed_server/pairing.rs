@@ -1,7 +1,7 @@
 use super::port::{matching_external_server, user_status_signer};
 use crate::local_pairing::{
-    ensure_managed_runtime_pairing, observe_managed_runtime_schema, retry_managed_pairing,
-    ManagedPairingTarget, PairingFailure, MANAGED_PAIRING_ATTEMPTS, MANAGED_PAIRING_RETRY_DELAY,
+    ensure_managed_runtime_pairing, retry_managed_pairing, ManagedPairingTarget, PairingFailure,
+    MANAGED_PAIRING_ATTEMPTS, MANAGED_PAIRING_RETRY_DELAY,
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::ManagedServerStatus;
@@ -55,42 +55,6 @@ pub(in crate::tauri_commands) async fn start_running_managed_pairing(
             error = %error,
             "failed to refresh native managed runtime route before pairing"
         );
-        return;
-    }
-    start_managed_runtime_pairing(state, core, target).await;
-}
-
-pub(super) async fn start_managed_runtime_pairing(
-    state: &DesktopAppState,
-    core: Arc<ClientCore>,
-    target: ManagedPairingTarget,
-) {
-    {
-        let mut managed = state.managed_server.lock().await;
-        if !managed
-            .schema_observation_task
-            .as_ref()
-            .is_some_and(|task| !task.inner().is_finished())
-        {
-            let observed_core = Arc::clone(&core);
-            let observed_target = target.clone();
-            managed.schema_observation_task = Some(tauri::async_runtime::spawn(async move {
-                if let Err(error) =
-                    observe_managed_runtime_schema(&observed_core, &observed_target).await
-                {
-                    tracing::warn!(
-                        target: "gents_desktop::managed_server",
-                        node_did = %observed_target.node_did,
-                        error = %error,
-                        "managed runtime replicated schema observation failed"
-                    );
-                }
-            }));
-        }
-    }
-
-    if let Err(error) = core.request_p2p_repair().await {
-        tracing::warn!(error = %error, "failed to request managed route reconciliation");
     }
 }
 
@@ -175,9 +139,6 @@ pub(super) fn pairing_target(status: &ManagedServerStatus) -> Option<ManagedPair
 pub(in crate::tauri_commands) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
     let task = {
         let mut managed = state.managed_server.lock().await;
-        if let Some(observation) = managed.schema_observation_task.take() {
-            observation.abort();
-        }
         if let Some(cancel) = managed.pairing_cancel.take() {
             cancel.cancel();
         }

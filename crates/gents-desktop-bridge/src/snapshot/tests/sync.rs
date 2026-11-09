@@ -1,45 +1,40 @@
-use std::time::{Duration, SystemTime};
-
 use gents_desktop_core::client::{
     project_sync_health, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
-    P2pSyncStatusSnapshot, SyncHealthState,
+    RuntimeConnectionStatus,
 };
 use serde_json::json;
 
 use crate::snapshot::to_sync_health_view;
 use crate::types::ClientUpdateEvent;
 
-fn t(secs: u64) -> SystemTime {
-    SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
-}
-
 #[test]
-fn sync_health_view_keeps_database_quarantine_failed() {
-    let health = project_sync_health(&ClientSyncStateSnapshot {
+fn sync_health_view_names_the_cause_and_next_action() {
+    let sync = ClientSyncStateSnapshot {
         transport: P2PHealth {
-            status: P2PHealthStatus::Healthy,
-            consecutive_failures: 0,
-            connected_peer_count: 1,
-            replicator_count: 1,
-            last_error: None,
-            last_ok_at: Some(t(50)),
-            last_failure_at: None,
+            status: P2PHealthStatus::Degraded,
+            last_error: Some("probe failed".into()),
+            ..P2PHealth::default()
         },
-        database_sync: Some(P2pSyncStatusSnapshot {
-            quarantined_pending_dags: 1,
-            ..P2pSyncStatusSnapshot::default()
-        }),
-        database_sync_error: None,
-        peer_schema_skew: Default::default(),
         enrollment_activation_errors: Default::default(),
         directory: Vec::new(),
         peers: Vec::new(),
-    })
-    .unwrap();
-    assert_eq!(health.state, SyncHealthState::Failed);
-    let view = to_sync_health_view(&health);
-    assert_eq!(view.state, "failed");
-    assert_eq!(view.quarantined_dag_count, Some(1));
+    };
+    let view = to_sync_health_view(&project_sync_health(
+        &sync,
+        [Some(RuntimeConnectionStatus::Connected)],
+    ));
+    assert_eq!(view.state, "blocked");
+    assert_eq!(view.cause.as_deref(), Some("discovery_offline"));
+    assert_eq!(view.next_action.as_deref(), Some("check_network"));
+    assert_eq!(view.last_error.as_deref(), Some("probe failed"));
+
+    let view = to_sync_health_view(&project_sync_health(
+        &sync,
+        [Some(RuntimeConnectionStatus::Refused)],
+    ));
+    assert_eq!(view.cause.as_deref(), Some("runtime_refused"));
+    assert_eq!(view.next_action.as_deref(), Some("restore_access"));
+    assert_eq!(view.last_error, None);
 }
 
 #[test]

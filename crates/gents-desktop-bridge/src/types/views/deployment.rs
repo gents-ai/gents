@@ -13,7 +13,6 @@ use super::bootstrap::DesktopBootstrapSummary;
 pub struct P2PHealthView {
     pub status: String,
     pub connected_peer_count: usize,
-    pub replicator_count: usize,
     pub consecutive_failures: u32,
     pub last_error: Option<String>,
     pub last_ok_at: Option<String>,
@@ -24,14 +23,11 @@ pub struct P2PHealthView {
 #[serde(rename_all = "camelCase")]
 pub struct SyncHealthView {
     pub state: String,
+    pub cause: Option<String>,
+    pub next_action: Option<String>,
     pub last_error: Option<String>,
     pub connected_peer_count: usize,
     pub activation_error_count: usize,
-    pub pending_dag_count: Option<usize>,
-    pub persisted_pending_dag_count: Option<usize>,
-    pub push_retry_marker_count: Option<usize>,
-    pub exhausted_fetch_count: Option<u64>,
-    pub quarantined_dag_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -427,7 +423,7 @@ pub struct DeploymentView {
 pub struct DesktopRuntimeSnapshot {
     pub client_did: String,
     pub p2p_health: P2PHealthView,
-    pub sync_health: Option<SyncHealthView>,
+    pub sync_health: SyncHealthView,
     pub enrollment_requests: Option<Vec<EnrollmentRequestView>>,
     pub row_count: usize,
     pub approx_serialized_bytes: usize,
