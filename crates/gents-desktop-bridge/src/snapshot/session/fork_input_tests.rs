@@ -83,28 +83,48 @@ fn nested_fork_keeps_automated_input_origin_without_child_turn_membership() {
 #[tokio::test]
 async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
     use gents::store::config_client::ConfigAccess;
+    use gents::NodeIdentity as _;
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
-    let node = std::sync::Arc::new(crate::tests::support::node_builder().build().await.unwrap());
+    let home = tempfile::tempdir().unwrap();
+    let identity = gents::KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
+    let amy = identity.did().to_owned();
+    // A real provisioned Agent: its DID derives from the runtime key and the
+    // creation nonce the canonical Agent document carries.
+    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+    let agent = binding.agent_did.clone();
+    let node = std::sync::Arc::new(
+        gents::defra_node::Node::builder()
+            .with_node_identity_did(&amy)
+            .build()
+            .await
+            .unwrap(),
+    );
     gents::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
+    // The runtime itself creates the forks.
+    let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(&amy).unwrap());
     for mutation in [
-        r#"mutation { create_Agent(input: {node_did:"did:test:amy", agent_did:"agent", inference_profile_id:"profile", enabled:true}) { _docID } }"#,
-        r#"mutation { create_AgentSession(input: {node_did:"did:test:amy", agent_did:"agent", session_id:"source", created_at:"2026-10-26T00:00:00Z"}) { _docID } }"#,
+        format!(
+            r#"mutation {{ create_Agent(input: {{node_did:"{amy}", agent_did:"{agent}", creation_nonce:"{}", inference_profile_id:"profile", enabled:true}}) {{ _docID }} }}"#,
+            binding.creation_nonce
+        ),
+        format!(
+            r#"mutation {{ create_AgentSession(input: {{node_did:"{amy}", agent_did:"{agent}", session_id:"source", created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }} }}"#
+        ),
     ] {
-        ConfigAccess::write_local(&node, "test.fork_input", mutation)
+        ConfigAccess::write_local(&node, "test.fork_input", &mutation)
             .await
             .unwrap();
     }
-    let response = ConfigAccess::write_local(&node, "test.fork_input", r#"mutation {
-        create_AgentRequest(input: {purpose:"normal", node_did:"did:test:amy", agent_did:"agent",
+    let response = ConfigAccess::write_local(&node, "test.fork_input", &format!(r#"mutation {{
+        create_AgentRequest(input: {{purpose:"normal", node_did:"{amy}", agent_did:"{agent}",
             request_id:"goal-continuation", session_id:"source", lifecycle_state:"completed",
             caused_by_trigger_kind:"goal", caused_by_trigger_id:"goal",
-            input:{queue:{source:"goal",policy:"coalesce",key:"goal:source"},goal_continuation:{sequence:3,wrapup:false}},
-            created_at:"2026-10-26T00:00:00Z"}) { _docID }
-    }"#).await.unwrap();
+            input:{{queue:{{source:"goal",policy:"coalesce",key:"goal:source"}},goal_continuation:{{sequence:3,wrapup:false}}}},
+            created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }}
+    }}"#)).await.unwrap();
     let request_doc = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let mut rows = ClientStoreRows::default();
     push_canonical_text_message(
@@ -116,8 +136,10 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
         MessageRole::User,
         "Continue the durable Goal, preserving its budget.",
     );
-    let header = rows.transcript_messages.pop().unwrap().message;
-    let segment = rows.output_segments.pop().unwrap().segment;
+    let mut header = rows.transcript_messages.pop().unwrap().message;
+    let mut segment = rows.output_segments.pop().unwrap().segment;
+    header.node_did.clone_from(&amy);
+    segment.node_did.clone_from(&amy);
     ConfigAccess::transact_local_write(&node, None, "test.fork_input_output", |txn| {
         let mut header = header.clone();
         let segment = segment.clone();
@@ -142,7 +164,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
     })
     .await
     .unwrap();
-    let original = gents::session::load_history(&node, "source", "did:test:amy", None)
+    let original = gents::session::load_history(&node, "source", &amy, None)
         .await
         .unwrap();
     assert_eq!(original.len(), 1);
@@ -153,7 +175,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
             gents::session::ForkParams {
                 source_session_id: &source,
                 boundary: gents::session::ForkBoundary::UserTurn(1),
-                caller_node_did: "did:test:amy",
+                caller_node_did: &amy,
                 caller_requester_did: None,
                 target_agent_did: None,
             },
@@ -164,9 +186,9 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
         source = fork.session_id;
     }
     let page = gents_desktop_core::client::load_session_transcript_page_on(
-        &access,
+        &ConfigAccess::local(node.clone()),
         &source,
-        Some("did:test:amy"),
+        Some(&amy),
         None,
         None,
         Some(10),
@@ -203,7 +225,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
     ));
     assert!(messages[0].runtime_control);
     assert!(messages[0].request_turn.is_none());
-    let copied = gents::session::load_history(&node, &source, "did:test:amy", None)
+    let copied = gents::session::load_history(&node, &source, &amy, None)
         .await
         .unwrap();
     assert_eq!(copied, original);
