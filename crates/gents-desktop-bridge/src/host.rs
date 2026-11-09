@@ -31,6 +31,15 @@ pub struct ClientHost {
 }
 
 impl ClientHost {
+    /// The node a windowless attachment's command acts on when it names
+    /// none: the client core's selection, which the bridge sets only while
+    /// exactly one window is open (`DesktopBridge::apply_window_selection`).
+    /// Window commands never read it; they resolve their own window's node
+    /// (`ClientWindowScope.commandNode`).
+    fn windowless_node(&self) -> Option<String> {
+        self.core.selected_node_did()
+    }
+
     /// The executable digest is compatibility metadata, never runtime identity
     /// or document authority. Embedded application hosts retain their own lifetime.
     pub fn for_installation(core: Arc<ClientCore>, build: String) -> Self {
@@ -402,11 +411,14 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
-            ClientCommand::SessionProvenance { request } => encode(
-                crate::provenance::session_provenance_request(&self.core, request)
-                    .await
-                    .map_err(BridgeError::untyped)?,
-            ),
+            ClientCommand::SessionProvenance { mut request } => {
+                request.node_did = request.node_did.or_else(|| self.windowless_node());
+                encode(
+                    crate::provenance::session_provenance_request(&self.core, request)
+                        .await
+                        .map_err(BridgeError::untyped)?,
+                )
+            }
             ClientCommand::GoalControl { request } => {
                 encode(crate::commands::control_goal(&self.core, *request).await?)
             }
@@ -453,11 +465,14 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
-            ClientCommand::Interrupt { request } => encode(
-                crate::interrupt::interrupt_request(&self.core, &request)
-                    .await
-                    .map_err(BridgeError::untyped)?,
-            ),
+            ClientCommand::Interrupt { mut request } => {
+                request.node_did = request.node_did.or_else(|| self.windowless_node());
+                encode(
+                    crate::interrupt::interrupt_request(&self.core, &request)
+                        .await
+                        .map_err(BridgeError::untyped)?,
+                )
+            }
             ClientCommand::ProcessControl { request } => {
                 encode(crate::process_control::process_control(&self.core, &request).await?)
             }

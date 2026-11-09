@@ -92,7 +92,6 @@ pub async fn interrupt_request(
     let node_did = req
         .node_did
         .clone()
-        .or_else(|| core.selected_node_did())
         .ok_or("Select the hosting runtime before interrupting a request.")?;
     let access = core
         .operator_access(&node_did)

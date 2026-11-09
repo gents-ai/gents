@@ -556,10 +556,14 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("POST", "/desktop/session-provenance") => {
-            let request = decode::<DesktopSessionProvenanceRequest>(
+            let mut request = decode::<DesktopSessionProvenanceRequest>(
                 &request.body,
                 "decoding session provenance request",
             )?;
+            // The runner serves one frontend, whose selection is the core's.
+            request.node_did = request
+                .node_did
+                .or_else(|| fixture.desktop_core().selected_node_did());
             let view = session_provenance_request(fixture.desktop_core(), request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
@@ -922,8 +926,12 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         ("POST", "/desktop/interrupt/request") => {
-            let request =
+            let mut request =
                 decode::<DesktopInterruptRequest>(&request.body, "decoding interrupt request")?;
+            // The runner serves one frontend, whose selection is the core's.
+            request.node_did = request
+                .node_did
+                .or_else(|| fixture.desktop_core().selected_node_did());
             let result = interrupt_request(fixture.desktop_core(), &request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;

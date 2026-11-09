@@ -93,8 +93,10 @@ impl ClientCore {
         .await
         {
             Ok(result) => {
+                let node = result.node_did.clone();
                 let result =
-                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
+                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
+                        .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -106,12 +108,6 @@ impl ClientCore {
             }
             Err(error) => Err(self.submit_failure(error)),
         }
-    }
-
-    pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {
-        let selected_node_did = self.selected_node_did();
-        self.resend_request_in_scope(stale_request_id, selected_node_did.as_deref())
-            .await
     }
 
     pub fn request_in_scope(
@@ -157,8 +153,10 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
+                let node = result.node_did.clone();
                 let result =
-                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
+                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
+                        .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -170,59 +168,6 @@ impl ClientCore {
                 Ok(result)
             }
             Err(error) => Err(self.record_mutation_error("resend request", error)),
-        }
-    }
-
-    pub async fn interrupt_request(&self, request_id: &str) -> Result<()> {
-        let snapshot = self.store.snapshot();
-        let selected_node_did = self.selected_node_did();
-        let mut requests = snapshot
-            .requests
-            .iter()
-            .filter(|request| request.request_id == request_id)
-            .filter(|request| {
-                selected_node_did
-                    .as_deref()
-                    .is_none_or(|selected| request.node_did.as_deref() == Some(selected))
-            });
-        let request = requests
-            .next()
-            .with_context(|| format!("request {request_id} is absent from the selected node"))?;
-        anyhow::ensure!(
-            requests.next().is_none(),
-            "request {request_id} is ambiguous across the selected node scope"
-        );
-        let node_did = request
-            .node_did
-            .as_deref()
-            .context("request has no node_did")?;
-        let peer_record = self
-            .peer_record_for_chat_write(node_did, Utc::now())
-            .await?;
-        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
-        let request_doc_id = request
-            .doc_id
-            .as_deref()
-            .context("request has no physical identity")?;
-        match gents::request::interrupt::interrupt_request_by_doc_id_with_access(
-            &self.session_queue_access(node_did)?,
-            request_doc_id,
-            node_did,
-            request.requester_did.as_deref(),
-        )
-        .await
-        {
-            Ok(()) => {
-                self.clear_mutation_error();
-                tracing::info!(
-                    target: "gents_desktop_core::writes",
-                    action = "chat_interrupt",
-                    row_id = %request_id,
-                    "desktop write saved"
-                );
-                Ok(())
-            }
-            Err(error) => Err(self.record_mutation_error("interrupt request", error)),
         }
     }
 
@@ -259,8 +204,10 @@ impl ClientCore {
         .await;
         match result {
             Ok(result) => {
+                let node = result.node_did.clone();
                 let result =
-                    observe_submitted_request(&self.store, result, self.refresh_store()).await;
+                    observe_submitted_request(&self.store, result, self.refresh_written_node(&node))
+                        .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

@@ -287,7 +287,9 @@ impl ClientCore {
         let Some(receipt) = resolved else {
             return Ok(None);
         };
-        let receipt = observe_submitted_request(&self.store, receipt, self.refresh_store()).await;
+        let node = receipt.node_did.clone();
+        let receipt =
+            observe_submitted_request(&self.store, receipt, self.refresh_written_node(&node)).await;
         self.clear_mutation_error();
         Ok(Some(receipt))
     }

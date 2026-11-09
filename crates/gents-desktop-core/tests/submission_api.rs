@@ -163,7 +163,9 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
         .context("forcing stale state")?;
     core.refresh_store().await?;
 
-    let resent = core.resend_request(&original.request_id).await?;
+    let resent = core
+        .resend_request_in_scope(&original.request_id, Some(&original.node_did))
+        .await?;
 
     let new_row: AgentRequestRow = query_single(
         &runtime.user_access(),

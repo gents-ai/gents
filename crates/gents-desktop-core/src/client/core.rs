@@ -644,6 +644,16 @@ impl ClientCore {
         Ok(refresh)
     }
 
+    /// Reads the node a write landed on. A write names its node, so it never
+    /// reads every routed node, which `refresh_store` does while no single
+    /// window selection names one.
+    pub(crate) async fn refresh_written_node(&self, node_did: &str) -> Result<StoreRefresh> {
+        match self.refresh_node(node_did).await? {
+            Some(refresh) => Ok(refresh),
+            None => self.refresh_store().await,
+        }
+    }
+
     /// [`Self::refresh_store`] for one node; `None` when `node_did` is blank.
     pub async fn refresh_node(&self, node_did: &str) -> Result<Option<StoreRefresh>> {
         let node_did = node_did.trim();
