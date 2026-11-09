@@ -14,6 +14,9 @@ import {
   type DesktopSessionSnapshot,
   type GoalControlAction,
   type GoalControlResult,
+  type SessionGoalNextAction,
+  type SessionGoalState,
+  type SessionGoalView,
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
@@ -27,13 +30,9 @@ import { nodeOrFirst, nodeOf } from "./fleetStore";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { heldFor, readSession } from "./sessionStore";
-import {
-  unresolvedSubmissionFor,
-  forgetUnresolvedSubmission,
-} from "./unresolvedSubmissions";
 import type { ShellProjection, ShellStores } from "./shellProjection";
-import { createChatDelivery } from "./chatDelivery";
-import { chatDraftRequest, retainChatDraft, type ChatDraft } from "./chatDrafts";
+import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
+import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
 
@@ -47,11 +46,6 @@ type ChatActionParams = {
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
 };
-
-export const DELIVERY_UNKNOWN_HINT =
-  "Your message may have been delivered. Use Check message delivery or Resume saved message to resolve the original send.";
-export const EARLIER_SEND_NOT_DELIVERED_HINT =
-  "Your earlier message was not delivered. Send it again.";
 
 export function sessionShowsRequest(
   session: DesktopSessionSnapshot | null,
@@ -91,6 +85,41 @@ function queueEditFailure(
   if (requestIds.every((id) => waiting.has(id)))
     return "The queue changed before it was saved";
   return actionFailure(doing, error);
+}
+
+/** What to do instead when a state's next action is not the one requested.
+ * An unknown state carries its own reason from the runtime owner. */
+const GOAL_NEXT_STEP: Record<
+  Exclude<SessionGoalNextAction, "await_publication">,
+  string
+> = {
+  send: "This chat is not open on its runtime yet. Send a message to open it, then change its Goal.",
+  start_goal: "This chat has no Goal to change. Start one first.",
+  control_goal: "This chat already has a Goal. Change it instead.",
+};
+
+/** Only an observed state establishes a Goal or its absence (Lean
+ * `SessionObservation`). The runtime owner supplies each state's next action
+ * and an unknown state's reason; this boundary acts only on those. */
+function observedGoal(
+  state: SessionGoalState | null,
+  nodeDid: string,
+  sessionId: string,
+  accepts: readonly SessionGoalNextAction[],
+): SessionGoalView {
+  if (!state) throw new Error("Connect this client before changing a Goal.");
+  if (!accepts.includes(state.next))
+    throw new Error(
+      state.kind === "unknown"
+        ? state.reason
+        : GOAL_NEXT_STEP[state.next as keyof typeof GOAL_NEXT_STEP],
+    );
+  if (state.kind !== "observed")
+    throw new Error("The Goal state for this chat is not observed.");
+  const observation = state.observation;
+  if (observation.nodeDid !== nodeDid || observation.sessionId !== sessionId)
+    throw new Error("The Goal observation belongs to another chat.");
+  return observation;
 }
 
 const GOAL_CONTROL_DOING = {
@@ -240,7 +269,7 @@ export function createChatActions({
 
   async function sendMessage(
     content: string,
-    agentId?: string | null,
+    agentDid?: string | null,
     attachments: RequestAttachment[] = [],
     followUp?: QueueDelivery,
     acceptsView: () => boolean = () => true,
@@ -270,9 +299,9 @@ export function createChatActions({
       return null;
     }
     const admission =
-      agentId === undefined
+      agentDid === undefined
         ? projection.agentReadiness
-        : selectedNodeReadinessDecision(node, agentId);
+        : selectedNodeReadinessDecision(node, agentDid);
     if (admission.kind !== "ready") {
       reportSendFailure("The selected agent is unavailable");
       return null;
@@ -286,72 +315,11 @@ export function createChatActions({
     chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
       if (!callerDid) throw new Error("Connect this client before sending a message.");
-      let earlier = unresolvedSubmissionFor(
-        node.nodeDid,
-        selectedSessionId,
-        content,
-        attachments,
-      );
-      if (
-        earlier &&
-        sessionShowsRequest(
-          heldFor(readSession(stores.session), earlier.sessionId, node.nodeDid),
-          earlier.requestId,
-        )
-      ) {
-        forgetUnresolvedSubmission(earlier.requestId);
-        earlier = undefined;
-      }
-      if (earlier) {
-        const reply = await api.sendChatMessage({
-          nodeDid: node.nodeDid,
-          agentId: admission.agentId,
-          sessionId: earlier.sessionId,
-          content,
-          attachments,
-          resolveRequestId: earlier.requestId,
-        });
-        if (
-          reply.nodeDid !== earlier.nodeDid ||
-          reply.sessionId !== earlier.sessionId ||
-          reply.requestId !== earlier.requestId
-        )
-          throw new Error("The reply does not match the earlier saved message.");
-        if (reply.outcome !== "deliveryUnknown")
-          forgetUnresolvedSubmission(earlier.requestId);
-        if (reply.outcome) {
-          if (acceptsView() && selection.acceptsIntent(store, intent)) {
-            chat.resetWorkflow(stores.chat);
-            reportSendFailure(
-              reply.outcome === "notDelivered"
-                ? EARLIER_SEND_NOT_DELIVERED_HINT
-                : DELIVERY_UNKNOWN_HINT,
-            );
-          }
-          return null;
-        }
-        const draft = retainChatDraft(
-          {
-            clientDid: callerDid,
-            requestId: reply.requestId,
-            nodeDid: reply.nodeDid,
-            sessionId: reply.sessionId,
-            agentId: reply.agentId,
-            content,
-            attachments,
-            cwd,
-          },
-          selectedSessionId,
-          status.kind === "queue",
-        );
-        await applyChatResult(reply, draft, intent, acceptsView);
-        return reply;
-      }
       const result = await chatDelivery.submit(
         {
           clientDid: callerDid,
           nodeDid: node.nodeDid,
-          agentId: admission.agentId,
+          agentDid: admission.agentDid,
           sessionId: selectedSessionId,
           content,
           attachments,
@@ -363,21 +331,15 @@ export function createChatActions({
         status.kind === "queue",
         (result, draft) => applyChatResult(result, draft, intent, acceptsView),
       );
-      if (result.outcome) {
-        if (acceptsView() && selection.acceptsIntent(store, intent)) {
-          chat.resetWorkflow(stores.chat);
-          reportSendFailure(
-            result.outcome === "notDelivered"
-              ? EARLIER_SEND_NOT_DELIVERED_HINT
-              : DELIVERY_UNKNOWN_HINT,
-          );
-        }
-        return null;
-      }
       return result;
     } catch (error) {
-      if (!acceptsView() || !selection.acceptsIntent(store, intent)) return null;
+      if (!acceptsView() || !selection.acceptsIntent(store, intent))
+        return error instanceof ChatViewUpdateError ? error.result : null;
       chat.resetWorkflow(stores.chat);
+      if (error instanceof ChatViewUpdateError) {
+        reportFailure(error.message);
+        return error.result;
+      }
       reportSendFailure(actionFailure("send the message", error));
       return null;
     } finally {
@@ -390,7 +352,7 @@ export function createChatActions({
       already on the session is replaced, fenced on the revision observed. */
   async function setGoal(
     objective: string,
-    agentId?: string | null,
+    agentDid?: string | null,
     acceptsView: () => boolean = () => true,
   ): Promise<GoalControlResult | null> {
     if (submissionInFlight) return null;
@@ -403,9 +365,9 @@ export function createChatActions({
       return null;
     }
     const admission =
-      agentId === undefined
+      agentDid === undefined
         ? projection.agentReadiness
-        : selectedNodeReadinessDecision(node, agentId);
+        : selectedNodeReadinessDecision(node, agentDid);
     if (admission.kind !== "ready") {
       reportFailure("The selected agent is unavailable");
       return null;
@@ -426,17 +388,13 @@ export function createChatActions({
       if (!goalClientDid)
         throw new Error("Connect this client before changing a Goal.");
       const current = selectedSessionId
-        ? await api.fetchSessionGoal(node.nodeDid, selectedSessionId)
+        ? observedGoal(
+            await api.fetchSessionGoal(node.nodeDid, selectedSessionId),
+            node.nodeDid,
+            selectedSessionId,
+            ["start_goal", "control_goal"],
+          )
         : null;
-      if (
-        selectedSessionId &&
-        (!current ||
-          current.nodeDid !== node.nodeDid ||
-          current.sessionId !== selectedSessionId)
-      )
-        throw new Error(
-          "The Goal state is unavailable for this chat. Refresh it before changing the Goal.",
-        );
       const result = await goalDelivery.submit(
         {
           clientDid: goalClientDid,
@@ -444,7 +402,7 @@ export function createChatActions({
           sessionId: selectedSessionId,
           sessionDocId: current?.sessionDocId ?? null,
           expected: current?.goal?.revision ?? null,
-          agentId: admission.agentId,
+          agentDid: admission.agentDid,
           action: { kind: "create", objective, tokenBudget: null },
           cwd: goalCwd,
         },
@@ -480,10 +438,13 @@ export function createChatActions({
       if (!nodeDid) throw new Error("no node holds this session");
       if (!goalClientDid)
         throw new Error("Connect this client before changing a Goal.");
-      const current = await api.fetchSessionGoal(nodeDid, sessionId);
-      if (current && (current.nodeDid !== nodeDid || current.sessionId !== sessionId))
-        throw new Error("The Goal observation belongs to another chat.");
-      if (!current?.goal) throw new Error("this session has no goal");
+      const current = observedGoal(
+        await api.fetchSessionGoal(nodeDid, sessionId),
+        nodeDid,
+        sessionId,
+        ["control_goal"],
+      );
+      if (!current.goal) throw new Error("this session has no goal");
       await goalDelivery.submit(
         {
           clientDid: goalClientDid,
@@ -491,7 +452,7 @@ export function createChatActions({
           sessionId,
           sessionDocId: current.sessionDocId,
           expected: current.goal.revision,
-          agentId: null,
+          agentDid: null,
           action: originalAction,
           cwd: null,
         },
@@ -745,18 +706,13 @@ export function createChatActions({
       return result;
     },
     dismissGoalChange: goalDelivery.dismiss,
-    async recoverChatMessage(
-      requestId: string,
-      resume = false,
-      acceptsView: () => boolean = () => true,
-    ) {
+    /** Resend a failed message under its original identity. */
+    async retryChatMessage(requestId: string, acceptsView: () => boolean = () => true) {
       const intent = selection.captureIntent(store);
-      const result = await chatDelivery.recover(requestId, resume, (result, draft) =>
+      const result = await chatDelivery.retry(requestId, (result, draft) =>
         applyChatResult(result, draft, intent, acceptsView),
       );
       if (
-        result &&
-        !result.outcome &&
         acceptsView() &&
         selection.acceptsIntent(store, intent) &&
         store.getState().sessionId === result.sessionId &&
@@ -775,7 +731,7 @@ export function createChatActions({
       }
       return result;
     },
-    dismissChatMessage: chatDelivery.dismiss,
+    discardChatMessage: chatDelivery.discard,
     interruptRequest,
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),

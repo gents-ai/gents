@@ -63,7 +63,7 @@ describe("the node's automations", () => {
       nodeDid: deployment.nodeDid,
       requesterDid: null,
       sessionId: `s-${requestId}`,
-      agentId: "default",
+      agentDid: "default",
       lifecycleState: "completed",
       executionOrigin: null,
       causedByTriggerId,

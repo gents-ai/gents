@@ -1,9 +1,5 @@
 use super::presentation::{diagnostic_replay_matches, terminal_diagnostic_presentation};
 use super::*;
-use crate::session::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
-    AGENT_OUTPUT_SEGMENT_FIELDS,
-};
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, published_background_bridge, published_spawn_parent,
@@ -12,8 +8,11 @@ use crate::tools::call::lifecycle::admission_fixture::{
 use crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+use gents_protocol::output::rows::{
+    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
+    AGENT_OUTPUT_SEGMENT_FIELDS,
+};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSource, SourceClose,
 };
@@ -83,24 +82,51 @@ fn admission(deadline_at: DateTime<Utc>) -> SpawnedBackgroundToolAdmission {
     }
 }
 
+/// The lifecycle's Agent owns its session's rows; ACP hides them from any
+/// other reader, so fixtures observe them through that Agent's access.
+struct Observed {
+    data: Option<serde_json::Value>,
+    errors: Option<serde_json::Value>,
+}
+
+impl Observed {
+    fn has_errors(&self) -> bool {
+        self.errors.is_some()
+    }
+}
+
+async fn observe(tool: &ToolCallLifecycle, query: &str) -> Observed {
+    match tool.access().unwrap().execute(query).await {
+        Ok(response) => Observed {
+            data: response.get("data").cloned(),
+            errors: None,
+        },
+        Err(error) => Observed {
+            data: None,
+            errors: Some(serde_json::Value::String(format!("{error:#}"))),
+        },
+    }
+}
+
 async fn tool_delivery_rows(
-    node: &EmbeddedNode,
-    session_id: &str,
-) -> Vec<crate::session::canonical_rows::TranscriptMessageRow> {
-    let session = crate::store::graphql::escape_graphql_string(session_id);
-    let response = node
-        .execute(&format!(
+    tool: &ToolCallLifecycle,
+) -> Vec<gents_protocol::output::rows::TranscriptMessageRow> {
+    let session = crate::store::graphql::escape_graphql_string(&tool.session_id);
+    let response = observe(
+        tool,
+        &format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ {} }} }}"#,
             AGENT_MESSAGE_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     response.data.as_ref().unwrap()["AgentMessage"]
         .as_array()
         .unwrap()
         .iter()
         .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
 }
 
@@ -112,23 +138,17 @@ async fn spawn_receipt_survives_modeled_publication_contention() {
         .expect("executable receipt contention witness");
     let (node, path, mut tool) = published_spawn_parent("receipt-contention").await;
     let doc_id = tool.doc_id().unwrap().to_owned();
-    let before = tool_delivery_rows(&node, &tool.session_id).await.len();
+    let before = tool_delivery_rows(&tool).await.len();
     for _ in 0..witness.numeric_bound {
         fail_next_terminal_for_test(&doc_id);
     }
     assert!(tool.complete_owned("receipt", None).await.unwrap());
     assert!(!terminal_failure_pending_for_test(&doc_id));
     assert_eq!(tool.state, ToolCallState::Completed);
-    assert_eq!(
-        tool_delivery_rows(&node, &tool.session_id).await.len(),
-        before + 1
-    );
+    assert_eq!(tool_delivery_rows(&tool).await.len(), before + 1);
     assert!(tool.complete_owned("receipt", None).await.is_err());
-    assert_eq!(
-        tool_delivery_rows(&node, &tool.session_id).await.len(),
-        before + 1
-    );
-    node.shutdown().await;
+    assert_eq!(tool_delivery_rows(&tool).await.len(), before + 1);
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -140,21 +160,22 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
     ] {
         let (node, path, mut tool) = published_spawn_parent(name).await;
         let doc_id = escape_graphql_string(tool.doc_id().unwrap());
-        let before = tool_delivery_rows(&node, &tool.session_id).await.len();
+        let before = tool_delivery_rows(&tool).await.len();
         let escaped_value = escape_graphql_string(changed_value);
-        crate::store::config_client::ConfigAccess::write_local(
-            &node,
-            "test.change_tool_compare",
-            &format!(
-                r#"mutation {{ update_AgentToolCall(docID: "{doc_id}", input: {{
+        tool.access()
+            .unwrap()
+            .write(
+                "test.change_tool_compare",
+                &format!(
+                    r#"mutation {{ update_AgentToolCall(docID: "{doc_id}", input: {{
                     {changed_field}: "{escaped_value}", started_at: "{}", deadline_at: "{}"
                 }}) {{ _docID }} }}"#,
-                tool.started_at.unwrap().to_rfc3339(),
-                tool.deadline_at.to_rfc3339(),
-            ),
-        )
-        .await
-        .unwrap();
+                    tool.started_at.unwrap().to_rfc3339(),
+                    tool.deadline_at.to_rfc3339(),
+                ),
+            )
+            .await
+            .unwrap();
 
         let result = tool
             .fail_owned("late failure", FailureClass::External, None)
@@ -163,7 +184,9 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
             !matches!(result, Ok(true)),
             "changed comparison must not publish"
         );
-        let row = crate::store::config_client::ConfigAccess::local(node.clone())
+        let row = tool
+            .access()
+            .unwrap()
             .execute(&format!(
                 r#"{{ AgentToolCall(docID: "{doc_id}") {{ lifecycle_state tool_name }} }}"#,
             ))
@@ -174,11 +197,8 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
             changed_value
         );
         assert_ne!(row["data"]["AgentToolCall"][0]["lifecycle_state"], "failed");
-        assert_eq!(
-            tool_delivery_rows(&node, &tool.session_id).await.len(),
-            before
-        );
-        node.shutdown().await;
+        assert_eq!(tool_delivery_rows(&tool).await.len(), before);
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -209,7 +229,7 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
         .await
         .unwrap());
 
-    let rows = tool_delivery_rows(&node, &tool.session_id).await;
+    let rows = tool_delivery_rows(&tool).await;
     let delivery = rows
         .iter()
         .find(|row| {
@@ -233,7 +253,7 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
         rendered
     );
     let observed = crate::tools::call::lifecycle::load_tool_call_presentation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &tool.access().unwrap(),
         &tool_doc_id,
         &tool.node_did,
         &tool.session_id,
@@ -243,20 +263,22 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
     .unwrap();
     assert_eq!(observed.result.unwrap().as_bytes(), rendered);
 
-    let segments = node
-        .execute(&format!(
+    let segments = observe(
+        &tool,
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&request_doc_id),
             AGENT_OUTPUT_SEGMENT_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!segments.has_errors(), "{:#?}", segments.errors);
     let rows = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let tool_rows = rows
         .iter()
@@ -282,7 +304,7 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
         1
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -298,8 +320,9 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
         append_tool_output(&binding, "stdout-before-terminal\n")
             .await
             .unwrap();
-        let mut replay = ToolCallLifecycle::load_by_doc_id(
+        let mut replay = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             &tool_doc_id,
             &tool.node_did,
             &tool.session_id,
@@ -308,12 +331,14 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
         .await
         .unwrap()
         .expect("running physical tool for same-state replay");
+        replay.inherit_signer(&tool).unwrap();
         let mut conflicting_cancel = if timeout {
             None
         } else {
             Some(
-                ToolCallLifecycle::load_by_doc_id(
+                ToolCallLifecycle::load_by_doc_id_as(
                     node.clone(),
+                    tool.actor().clone(),
                     &tool_doc_id,
                     &tool.node_did,
                     &tool.session_id,
@@ -324,6 +349,9 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
                 .expect("running physical tool for conflicting cause"),
             )
         };
+        if let Some(conflicting) = conflicting_cancel.as_mut() {
+            conflicting.inherit_signer(&tool).unwrap();
+        }
 
         if timeout {
             assert!(tool.timeout().await.unwrap());
@@ -334,8 +362,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
                 .unwrap());
         }
 
-        let segments = node
-            .execute(&format!(
+        let segments = observe(&tool, &format!(
                 r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                 escape_graphql_string(&request_doc_id),
                 AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -347,7 +374,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         let tool_rows = rows
             .iter()
@@ -372,8 +399,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
                 .count(),
             1
         );
-        let stored = node
-            .execute(&format!(
+        let stored = observe(&tool, &format!(
                 r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
                 escape_graphql_string(&tool_doc_id),
             ))
@@ -382,8 +408,8 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             stored.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
             if timeout { "timedOut" } else { "cancelled" }
         );
-        let raw = crate::tools::background::status::canonical_tool_output(
-            node.as_ref(),
+        let raw = crate::tools::background::status::observe_canonical_tool_output_with_access(
+            &tool.access().unwrap(),
             &tool_doc_id,
             &request_doc_id,
             &tool.session_id,
@@ -391,10 +417,11 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             tool.requester_did.as_deref(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .into_text();
         assert_eq!(raw, "stdout-before-terminal\n");
         let presentation = crate::tools::call::lifecycle::load_tool_call_presentation(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &tool.access().unwrap(),
             &tool_doc_id,
             &tool.node_did,
             &tool.session_id,
@@ -413,7 +440,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             assert!(presented.ends_with("tool call cancelled"));
         }
 
-        let mut before_messages = tool_delivery_rows(&node, &tool.session_id)
+        let mut before_messages = tool_delivery_rows(&tool)
             .await
             .into_iter()
             .map(|row| row.doc_id)
@@ -442,7 +469,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
                 Some(CancelCause::Interrupted)
             );
         }
-        let mut after_messages = tool_delivery_rows(&node, &tool.session_id)
+        let mut after_messages = tool_delivery_rows(&tool)
             .await
             .into_iter()
             .map(|row| row.doc_id)
@@ -452,8 +479,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             after_messages, before_messages,
             "terminal replay added a header"
         );
-        let after_segments = node
-            .execute(&format!(
+        let after_segments = observe(&tool, &format!(
                 r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                 escape_graphql_string(&request_doc_id),
                 AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -465,7 +491,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             .unwrap()
             .iter()
             .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .into_iter()
             .map(|row| row.doc_id)
@@ -476,20 +502,23 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             "terminal replay added raw output"
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
 
 async fn configure_bash_output_budget(
-    node: &std::sync::Arc<EmbeddedNode>,
+    author: &crate::store::config_client::ConfigAccess,
     owner: &str,
+    agent_did: &str,
     budget: i64,
 ) {
-    use crate::store::config_client::{
-        apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    let tools = serde_json::json!({"node_did": owner, "tools_id": "general:tools",
+    use crate::documents::apply_desired_state_plan;
+    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    // The request's Agent resolves its tools by the `{agent_did}:tools` id the
+    // fixture wrote; a differently named document is never read.
+    let tools_id = format!("{agent_did}:tools");
+    let tools = serde_json::json!({"node_did": owner, "tools_id": tools_id,
         "host": {"bash": {"mode": "ReadOnly", "max_output_chars": budget}}});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: crate::Collection::Tools,
@@ -497,20 +526,19 @@ async fn configure_bash_output_budget(
         update: tools,
     }])
     .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.output_budget", |txn| {
-        let plan = &plan;
-        Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-    })
-    .await
-    .unwrap();
+    // Tools are configuration: the owning User who wrote them signs the edit.
+    author
+        .transact_write("test.output_budget", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
 }
 
-async fn interrupted_presentation(
-    node: &std::sync::Arc<EmbeddedNode>,
-    tool: &ToolCallLifecycle,
-) -> String {
+async fn interrupted_presentation(tool: &ToolCallLifecycle) -> String {
     crate::tools::call::lifecycle::load_tool_call_presentation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &tool.access().unwrap(),
         tool.doc_id().unwrap(),
         &tool.node_did,
         &tool.session_id,
@@ -524,38 +552,42 @@ async fn interrupted_presentation(
 
 #[tokio::test]
 async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
-    use crate::tools::call::lifecycle::admission_fixture::{
-        published_admission, PublishedAdmission, PublishedAdmissionOptions,
-    };
+    use crate::tools::call::lifecycle::admission_fixture::PublishedAdmission;
     for (name, tool_name, configured, reload, bounded) in [
         ("budget-bash", "bash", true, false, true),
         ("budget-bash-restart", "bash", true, true, true),
         ("budget-remote", "mcp__search__query", true, false, false),
         ("budget-unresolved", "bash", false, false, false),
     ] {
-        let PublishedAdmission {
-            node,
-            path,
-            mut tool,
-            ..
-        } = published_admission(PublishedAdmissionOptions {
+        let (
+            PublishedAdmission {
+                node,
+                path,
+                mut tool,
+                client,
+                ..
+            },
+            request,
+        ) = published_admission_with_owner(PublishedAdmissionOptions {
             name: name.to_owned(),
             tool_name: Some(tool_name.to_owned()),
             ..Default::default()
         })
         .await
         .unwrap();
+        let agent_did = request.request().agent_did.clone();
         let binding = tool.tool_output_binding().expect("running output binding");
         append_tool_output(&binding, "0123456789abcdefghij")
             .await
             .unwrap();
         if configured {
-            crate::test_support::install_test_agent(&node, &tool.node_did, "general").await;
-            configure_bash_output_budget(&node, &tool.node_did, 5).await;
+            configure_bash_output_budget(&client, &tool.node_did, &agent_did, 5).await;
         }
         if reload {
-            tool = ToolCallLifecycle::load_by_doc_id(
+            let signer = tool.access().unwrap().managed_agent_signer();
+            tool = ToolCallLifecycle::load_by_doc_id_as(
                 node.clone(),
+                tool.actor().clone(),
                 tool.doc_id().unwrap(),
                 &tool.node_did,
                 &tool.session_id,
@@ -564,9 +596,11 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             .await
             .unwrap()
             .expect("reloaded running tool");
+            tool.bind_agent_signer(signer).unwrap();
         }
-        let mut replay = ToolCallLifecycle::load_by_doc_id(
+        let mut replay = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             tool.doc_id().unwrap(),
             &tool.node_did,
             &tool.session_id,
@@ -575,8 +609,9 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
         .await
         .unwrap()
         .expect("running tool for a later same-state replay");
+        replay.inherit_signer(&tool).unwrap();
         assert!(tool.timeout().await.unwrap(), "{name}");
-        let presented = interrupted_presentation(&node, &tool).await;
+        let presented = interrupted_presentation(&tool).await;
         if bounded {
             assert!(
                 presented.starts_with("fghij\n") && !presented.contains("0123456789abcde"),
@@ -594,11 +629,11 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
         );
 
         if bounded && !reload {
-            configure_bash_output_budget(&node, &tool.node_did, 12).await;
+            configure_bash_output_budget(&client, &tool.node_did, &agent_did, 12).await;
             assert!(!replay.timeout().await.unwrap(), "{name}: replay");
-            assert_eq!(interrupted_presentation(&node, &tool).await, presented);
+            assert_eq!(interrupted_presentation(&tool).await, presented);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -653,7 +688,7 @@ async fn completed_streaming_tool_still_rejects_a_non_extension() {
     );
     assert_eq!(tool.state, ToolCallState::Running);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -701,16 +736,18 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
             .is_err(),
         "a replay cannot change the child deadline"
     );
-    let mut replay_parent = ToolCallLifecycle::load_by_doc_id(
+    let mut replay_parent = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        parent.actor().clone(),
         &parent_doc_id,
-        "did:test:test",
+        &parent.node_did,
         &parent.session_id,
-        None,
+        parent.requester_did.as_deref(),
     )
     .await
     .unwrap()
     .unwrap();
+    replay_parent.inherit_signer(&parent).unwrap();
     let replay = replay_parent
         .admit_spawned_background(admission(deadline), receipt)
         .await
@@ -718,7 +755,7 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
     assert_eq!(replay.doc_id(), Some(child_doc_id.as_str()));
     assert_eq!(replay.state, ToolCallState::Completed);
 
-    let messages = tool_delivery_rows(&node, &parent.session_id).await;
+    let messages = tool_delivery_rows(&parent).await;
     let deliveries = messages.iter().filter(|row| matches!(
         row.message.publication,
         MessagePublication::ToolDelivery { ref tool_call_doc_id } if tool_call_doc_id == &parent_doc_id
@@ -732,20 +769,22 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
         MessagePublication::ToolDelivery { ref tool_call_doc_id } if tool_call_doc_id == &child_doc_id
     )), "spawned work must not invent a direct ToolResult header");
 
-    let segments = node
-        .execute(&format!(
+    let segments = observe(
+        &parent,
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(child.request_doc_id.as_deref().unwrap()),
             AGENT_OUTPUT_SEGMENT_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!segments.has_errors(), "{:#?}", segments.errors);
     let child_segments = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .into_iter()
         .filter(|row| {
@@ -766,8 +805,8 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
         "child raw source closes durably under its own physical identity"
     );
     assert_eq!(
-        crate::tools::background::status::canonical_tool_output(
-            node.as_ref(),
+        crate::tools::background::status::observe_canonical_tool_output_with_access(
+            &child.access().unwrap(),
             &child_doc_id,
             child.request_doc_id.as_deref().unwrap(),
             &child.session_id,
@@ -775,12 +814,13 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
             child.requester_did.as_deref(),
         )
         .await
-        .unwrap(),
+        .unwrap()
+        .into_text(),
         "child raw output",
         "spawned terminal output is read from its physical ToolOutput source, not a fabricated provider reply"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -789,17 +829,22 @@ async fn spawned_background_admission_rejects_a_stale_parent_generation() {
     let (node, path, mut parent) = published_spawn_parent("stale").await;
     let request_doc_id = parent.request_doc_id.clone().unwrap();
     let deadline = parent.deadline_at;
-    let changed = node.execute(&format!(
+    let changed = parent.access().unwrap().write("test.stale_parent_generation", &format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "stale-generation" }}) {{ _docID }} }}"#,
         crate::store::graphql::escape_graphql_string(&request_doc_id),
-    )).await;
-    assert!(!changed.has_errors(), "{:#?}", changed.errors);
+    )).await.unwrap();
+    assert_eq!(
+        changed["data"]["update_AgentRequest"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
     assert!(parent
         .admit_spawned_background(admission(deadline), "receipt")
         .await
         .is_err());
     let parent_doc_id = crate::store::graphql::escape_graphql_string(parent.doc_id().unwrap());
-    let children = node.execute(&format!(
+    let children = observe(&parent, &format!(
         r#"{{ AgentToolCall(filter: {{ spawned_by_tool_call_doc_id: {{ _eq: "{parent_doc_id}" }} }}) {{ _docID }} }}"#,
     )).await;
     assert!(!children.has_errors(), "{:#?}", children.errors);
@@ -807,7 +852,7 @@ async fn spawned_background_admission_rejects_a_stale_parent_generation() {
         .as_array()
         .unwrap()
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -822,7 +867,7 @@ async fn background_bridge_receipt_is_authored_once_and_keeps_bridge_running() {
         .publish_background_receipt("different")
         .await
         .is_err());
-    let rows = tool_delivery_rows(&node, &bridge.session_id).await;
+    let rows = tool_delivery_rows(&bridge).await;
     let receipts = rows
         .iter()
         .filter(|row| {
@@ -831,17 +876,19 @@ async fn background_bridge_receipt_is_authored_once_and_keeps_bridge_running() {
         })
         .count();
     assert_eq!(receipts, 1);
-    let response = node
-        .execute(&format!(
+    let response = observe(
+        &bridge,
+        &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
             crate::store::graphql::escape_graphql_string(&tool_doc_id)
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert_eq!(
         response.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
         "running"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -853,8 +900,9 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     let final_bytes = "child terminal bytes";
 
     assert!(bridge.publish_background_receipt("started").await.unwrap());
-    bridge = ToolCallLifecycle::load_by_doc_id(
+    let mut reloaded = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        bridge.actor().clone(),
         &tool_doc_id,
         &bridge.node_did,
         &bridge.session_id,
@@ -863,6 +911,8 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     .await
     .unwrap()
     .expect("rehydrated background bridge");
+    reloaded.inherit_signer(&bridge).unwrap();
+    bridge = reloaded;
     assert!(bridge
         .settle_session_message(
             &crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
@@ -876,6 +926,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
 
     crate::tools::background::completion::append_background_tool_completion(
         &node,
+        &bridge.access().unwrap(),
         &bridge.session_id,
         "request-receipt-completion",
         &tool_doc_id,
@@ -883,37 +934,41 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
         "completed",
         final_bytes,
         None,
-        crate::request::lifecycle::RequestHopCause::Continuation,
+        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();
 
-    let response = node
-        .execute(&format!(
+    let response = observe(
+        &bridge,
+        &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
             crate::store::graphql::escape_graphql_string(&tool_doc_id)
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     assert_eq!(
         response.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
         "completed"
     );
 
-    let segments = node
-        .execute(&format!(
+    let segments = observe(
+        &bridge,
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(bridge.request_doc_id.as_deref().unwrap()),
             AGENT_OUTPUT_SEGMENT_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!segments.has_errors(), "{:#?}", segments.errors);
     let tool_segments = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .into_iter()
         .filter(|row| {
@@ -936,7 +991,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
         })
         .expect("terminal bridge source closure");
 
-    let rows = tool_delivery_rows(&node, &bridge.session_id).await;
+    let rows = tool_delivery_rows(&bridge).await;
     let native_results = rows
         .iter()
         .flat_map(|row| row.message.blocks.iter())
@@ -977,7 +1032,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
         .unwrap()
         .contains(final_bytes));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -987,8 +1042,9 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
     let tool_doc_id = bridge.doc_id().unwrap().to_owned();
     assert!(bridge.publish_background_receipt("started").await.unwrap());
     let load = || {
-        ToolCallLifecycle::load_by_doc_id(
+        ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            bridge.actor().clone(),
             &tool_doc_id,
             &bridge.node_did,
             &bridge.session_id,
@@ -997,6 +1053,8 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
     };
     let mut first = load().await.unwrap().expect("first admitted bridge");
     let mut second = load().await.unwrap().expect("second admitted bridge");
+    first.inherit_signer(&bridge).unwrap();
+    second.inherit_signer(&bridge).unwrap();
     let one_result = crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
         output: "one result".into(),
     };
@@ -1009,6 +1067,7 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
     assert_ne!(left, right, "exactly one projector must commit");
 
     let mut replay = load().await.unwrap().expect("terminal admitted bridge");
+    replay.inherit_signer(&bridge).unwrap();
     assert!(!replay
         .settle_session_message(
             &crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
@@ -1029,20 +1088,22 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
         .is_err());
 
     let request_doc_id = bridge.request_doc_id.as_deref().unwrap();
-    let response = node
-        .execute(&format!(
+    let response = observe(
+        &bridge,
+        &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(request_doc_id),
             AGENT_OUTPUT_SEGMENT_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     let closures = response.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap()
         .iter()
         .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .into_iter()
         .filter(|row| {
@@ -1054,6 +1115,6 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
         })
         .count();
     assert_eq!(closures, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }

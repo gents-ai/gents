@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::{P2POperations, P2pDocumentRequest, ReplicationFilter, TransportPeerId};
 use gents_protocol::enrollment::{
     decode_offer, derive_enrollment_id, enrollment_schema_fingerprint, EnrollmentOfferRecord,
@@ -29,7 +29,7 @@ use super::enrollment_store::RequestRow;
 /// cannot keep the request or its replicator cleanup waiting indefinitely.
 pub const ENROLLMENT_P2P_TIMEOUT: Duration = Duration::from_secs(10);
 
-const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_agent profile client_nonce issued_at expires_at candidate_sig";
+const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_node_did profile client_nonce issued_at expires_at candidate_sig";
 
 /// Author (or reuse) this node's request for `offer_token` and deliver it to
 /// the offering server, whose operator then decides it.
@@ -212,7 +212,7 @@ pub async fn sign_enrollment_request(
         candidate_did: identity.did().to_string(),
         candidate_peer,
         candidate_ticket,
-        owner_agent: offer.owner_agent.clone(),
+        owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
         client_nonce,
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -229,7 +229,10 @@ pub async fn sign_enrollment_request(
 
 #[derive(Deserialize)]
 struct AdminPinRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     admin_did: String,
+    parent_linked: Option<bool>,
 }
 
 /// Pin the offer's admin as the only admin this candidate accepts for its
@@ -238,15 +241,48 @@ pub async fn confirm_network_admin_pin(
     node: &Arc<EmbeddedNode>,
     offer: &EnrollmentOfferRecord,
 ) -> Result<()> {
+    let runtime = identity::Did::new(
+        node.node_identity_did()
+            .context("network admin pin requires the configured runtime identity")?,
+    )?;
+    let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     let (network_id, admin_did) = (&offer.network_id, &offer.admin_did);
     let network_id_escaped = escape_graphql_string(network_id);
     let query = format!(
-        r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{network_id_escaped}" }} }}) {{ admin_did }} }}"#
+        r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{network_id_escaped}" }} }}) {{ _docID admin_did parent_linked }} }}"#
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "loading local enrollment admin pin").await?;
-    match rows::<AdminPinRow>(&response, "NetworkAdminPin")?.as_slice() {
-        [pin] if &pin.admin_did == admin_did => return Ok(()),
+    let response = access.execute(&query).await?;
+    let pins: Vec<AdminPinRow> = serde_json::from_value(
+        response
+            .pointer("/data/NetworkAdminPin")
+            .cloned()
+            .context("network admin pin query omitted rows")?,
+    )?;
+    match pins.as_slice() {
+        [pin] if &pin.admin_did == admin_did => {
+            if !pin
+                .parent_linked
+                .context("network admin pin has no publication marker")?
+            {
+                access
+                    .transact_write("enrollment.publish_admin_pin", |txn| {
+                        let runtime = &runtime;
+                        let doc = &pin.doc_id;
+                        Box::pin(async move {
+                            crate::store::config_client::maybe_link_deferred_operation_in_txn(
+                                txn,
+                                "NetworkAdminPin",
+                                doc,
+                                runtime,
+                            )
+                            .await?;
+                            Ok::<_, anyhow::Error>(())
+                        })
+                    })
+                    .await?;
+            }
+            return Ok(());
+        }
         [pin] => anyhow::bail!(
             "network {network_id} is pinned to admin {}; refusing conflicting admin {admin_did}",
             pin.admin_did
@@ -268,7 +304,8 @@ pub async fn confirm_network_admin_pin(
                 network_id: "{network_id_escaped}",
                 admin_did: "{}",
                 offer_id: "{}",
-                confirmed_at: "{}"
+                confirmed_at: "{}",
+                parent_linked: false
             }}) {{ _docID }}
         }}"#,
         escape_graphql_string(&pin_key),
@@ -276,14 +313,35 @@ pub async fn confirm_network_admin_pin(
         escape_graphql_string(&offer.offer_id),
         Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
     );
-    if let Err(commit_error) =
-        ConfigAccess::write_local(node, "enrollment.create_admin_pin", &mutation).await
-    {
-        let response =
-            graphql_with_transaction_retry(node, &query, "recovering local enrollment admin pin")
+    if let Err(commit_error) = access
+        .transact_write("enrollment.create_admin_pin", |txn| {
+            let mutation = &mutation;
+            let runtime = &runtime;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc =
+                    gents_protocol::graphql::extract_mutation_doc_id(&response, "NetworkAdminPin")?;
+                crate::store::config_client::maybe_link_deferred_operation_in_txn(
+                    txn,
+                    "NetworkAdminPin",
+                    &doc,
+                    runtime,
+                )
                 .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+    {
+        let response = access.execute(&query).await?;
+        let pins: Vec<AdminPinRow> = serde_json::from_value(
+            response
+                .pointer("/data/NetworkAdminPin")
+                .cloned()
+                .context("network admin pin recovery omitted rows")?,
+        )?;
         anyhow::ensure!(
-            matches!(rows::<AdminPinRow>(&response, "NetworkAdminPin")?.as_slice(), [pin] if &pin.admin_did == admin_did),
+            matches!(pins.as_slice(), [pin] if &pin.admin_did == admin_did),
             "admin pin commit was not observably recovered after: {commit_error:#}"
         );
     }
@@ -336,16 +394,72 @@ async fn persisted_request(
     Ok(Some((request, row.doc_id.clone())))
 }
 
+/// Publish a request authored by the local Node or thin client after the caller
+/// verifies the offer's signature and authenticated server identity.
 pub async fn write_enrollment_request(
     node: &Arc<EmbeddedNode>,
     request: &EnrollmentRequestRecord,
 ) -> Result<String> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(request.candidate_did.as_str()),
+        "enrollment request author must be the local peer identity"
+    );
+    let runtime = identity::Did::new(&request.candidate_did)?;
+    let admin = identity::Did::new(&request.admin_did)?;
+    let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     let input = enrollment_request_input(request);
     let mutation =
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
-    let response = ConfigAccess::write_local(node, "enrollment.create_request", &mutation).await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, "NetworkEnrollmentRequest")
-        .context("enrollment request mutation returned no document ID")
+    access
+        .transact_write("enrollment.create_request", |txn| {
+            let runtime = &runtime;
+            let admin = &admin;
+            let mutation = &mutation;
+            Box::pin(async move {
+                txn.validate_runtime_actor(runtime)?;
+                let query = format!(
+                    r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                    escape_graphql_string(runtime.as_str())
+                );
+                let nodes = txn.execute(&query).await?;
+                let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
+                let parent = match nodes.as_slice() {
+                    [] => None,
+                    [node] => {
+                        let parent = node["_docID"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                            .context("enrollment request Node has no document ID")?;
+                        let owners = txn.document_owners("Node", &[parent.to_owned()]).await?;
+                        anyhow::ensure!(
+                            owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
+                            "enrollment request Node has no visible native owner"
+                        );
+                        Some(parent)
+                    }
+                    _ => anyhow::bail!("enrollment request has multiple visible local Nodes"),
+                };
+                let response = txn.execute(mutation).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "NetworkEnrollmentRequest",
+                )?;
+                if let Some(parent) = parent {
+                    txn.add_resource_relationship(
+                        "NetworkEnrollmentRequest",
+                        &doc,
+                        "parent",
+                        "nodes",
+                        parent,
+                    )
+                    .await?;
+                }
+                txn.add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", admin)
+                    .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
 }
 
 pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
@@ -365,7 +479,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
             candidate_did: "{}",
             candidate_peer: "{}",
             candidate_ticket: "{}",
-            owner_agent: "{}",
+            owner_node_did: "{}",
             profile: "{}",
             client_nonce: "{}",
             issued_at: "{}",
@@ -384,7 +498,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
         field(&request.candidate_did),
         field(&request.candidate_peer),
         field(&request.candidate_ticket),
-        field(&request.owner_agent),
+        field(&request.owner_node_did),
         field(&request.profile),
         field(&request.client_nonce),
         field(&request.issued_at),

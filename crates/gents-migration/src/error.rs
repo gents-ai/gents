@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("collection {collection} still has branchable storage; DefraDB cannot change this property in place. Use a separate fresh runtime home for this build; the existing store has not been changed")]
+    RuntimeLocalityMismatch { collection: String },
+
     #[error("baseline schema registration failed for {collection}: {source}")]
     BaselineRegister {
         collection: String,
@@ -73,6 +76,20 @@ pub enum Error {
         "defra node error: retained file image collection has an incompatible document policy"
     )]
     IncompatibleFileImagePolicy,
+
+    #[error("defra node error: {collection} has an incompatible identity policy")]
+    IncompatibleIdentityPolicy { collection: String },
+
+    #[error("defra node error: identity policy does not match its schema binding")]
+    IdentityPolicyMismatch,
+
+    #[error("defra node error: invalid identity collection owner DID: {error}")]
+    InvalidIdentityCollectionOwner { error: identity::Error },
+
+    #[error(
+        "defra node error: branchable identity collection {collection} belongs to a different node"
+    )]
+    ForeignIdentityCollectionOwner { collection: String },
 
     #[error("defra node error: invalid image owner DID: {error}")]
     InvalidImageOwner { error: identity::Error },

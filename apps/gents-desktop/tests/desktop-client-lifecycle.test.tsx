@@ -216,7 +216,6 @@ describe("desktop client restart selection ordering", () => {
         p2pHealth: {
           status: "wedged",
           connectedPeerCount: 0,
-          replicatorCount: 0,
           consecutiveFailures: 3,
           lastError: "dial timeout",
           lastOkAt: null,
@@ -245,7 +244,6 @@ describe("desktop client restart selection ordering", () => {
         p2pHealth: {
           status,
           connectedPeerCount: 0,
-          replicatorCount: 0,
           consecutiveFailures: status === "wedged" ? 3 : 0,
           lastError: null,
           lastOkAt: null,

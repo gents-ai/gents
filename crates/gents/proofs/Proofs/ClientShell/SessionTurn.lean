@@ -306,19 +306,19 @@ def turnState (row : Row) : ClientTurnState :=
   | .active    => .running
   | .terminal  => if row.foldedInto.isSome then .superseded else .completed
 
-def observe (sid : SessionId) (node : NodeDid) (agent : Option AgentId)
+def observe (sid : SessionId) (node : NodeDid) (agent : Option AgentDid)
     (rows : List Row) (newest : Row) : SessionObservation :=
   let turn := displayTurn rows newest
   { sessionId := sid
   , nodeDid := node
-  , agentId := agent
+  , agentDid := agent
   , latestObservedRequest := some turn.request
   , latestTurn := some (turnState turn)
   , queuedRequests := (queuedBehind rows turn).map (·.request)
   , foldedRequests := (foldedIn rows newest.requester).map (·.request) }
 
 theorem active_owner_remains_observable (sid : SessionId) (node : NodeDid)
-    (agent : Option AgentId) (rows : List Row) (selected owner : Row)
+    (agent : Option AgentDid) (rows : List Row) (selected owner : Row)
     (hterminal : (turnOf rows (replacementOf rows selected)).state = .terminal)
     (howner : ((displayCandidates rows selected).reverse.find?
       (fun row => (row.requester == selected.requester && row.publicInput) &&

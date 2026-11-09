@@ -20,7 +20,7 @@ function usePeerRoute(
     shellStores({
       selection: {
         nodeDid: "node-a",
-        agentId: "ops",
+        agentDid: "ops",
         sessionId: "session-a",
       },
     }),
@@ -41,7 +41,7 @@ function usePeerRoute(
   return {
     actions,
     node: current.nodeDid,
-    agent: current.agentId,
+    agent: current.agentDid,
     route,
     sessionId: current.sessionId,
   };

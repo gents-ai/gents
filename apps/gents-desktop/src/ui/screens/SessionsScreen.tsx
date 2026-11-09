@@ -768,7 +768,7 @@ const SessionRow = memo(function SessionRow({
         <span className="relative z-10 flex min-w-12 justify-end">
           <NodeAgentStack
             nodeDid={nodeOfSession(session)}
-            agentId={session.agentId}
+            agentDid={session.agentDid}
             size={condensed ? "sm" : "md"}
           />
         </span>

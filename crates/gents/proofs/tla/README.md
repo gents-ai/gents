@@ -6,48 +6,212 @@ See `../README.md` for how this fits the broader formal-verification model.
 
 ## Specs
 
-- `ReversePairing` — control-plane convergence of subscription/replicator reverse-pairing between two peers.
-- `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer *below* `ReversePairing`. `ReversePairing` and the Lean `PairingReconcile` model both assume the transport carries the install RPC / that `connect` succeeds; neither models *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
+- `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer below the reconciler. The Lean `PairingReconcile` model assumes the transport carries the install RPC / that `connect` succeeds; it does not model *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
 - `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630, not a multi-wave flood-safety proof. `PairingTransport` proves a single edge can connect/install; this model starts after that. Its one-wave necessity obligations say outbound timeouts release push-worker slots and inbound success acks are backed by modeled pending registration or merge. The pinned DefraDB implementation has since added bounded queue admission before worker execution, per-peer scheduling/coalescing, persisted retry handoff on overflow, and durable push-originated pending-DAG recovery. Those multi-wave and restart properties, plus Bitswap stalls, rate limits, gossip-loop health, multi-slow-peer fill, and peer-vs-CID pending, remain outside this model. Receiver-side pending-DAG slot starvation and acknowledged-DAG TTL loss belong to the defradb.rs receiver dispatch model (`proofs/tla/SyncOwnership.tla`, `MC_SyncOwnership_Dispatch` configs), not here. See `boundary.p2p-backpressure.obligation-model`. Green/red configs (`MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`) are **modeled, not yet TLC-checked**.
-- `ReplicatedRequestConvergence` — owner-only terminal convergence for
-  party-scoped replicated `AgentRequest` documents (#664/#661/#683). Replica
-  holders are authorized request parties, never unrelated fleet pairings. The
-  owner re-drives only while a party peer has not acknowledged its current
-  heads (DefraDB replication acknowledgement), and a persisted per-request
-  `Cap` bounds those writes across owner restarts; each write fans out only to
-  online party replicators. A party peer unavailable through the entire cap
-  converges when pairing recovery reinstalls the configured replicator and
-  performs one full replay of current owner-authored DAG heads; an
-  acknowledged peer skips the replay. Replay authors no request field, so
-  partitions do not create unbounded CRDT history. `AckedImpliesConverged`
-  ties acknowledgement to convergence. `SingleClaimer` fences
-  passive foreign replicas; `TerminalConverges` depends on fair peer recovery
-  and replay. The `Stuck` diagnostic disables replay to prove that recovery is
-  load-bearing; `PeerClaim` arms an illegal foreign claim to prove the safety
-  invariant is falsifiable. Rust bindings cover persistent cap/window behavior,
-  retirement of acknowledged requests, real P2P replay after cap exhaustion,
-  and reconnect-triggered replicator reinstall skipped once acknowledged.
-  With `ModelDelivery`, the request party `Desktop` also writes the request:
-  its client-to-runtime pairing, which may change any number of times,
-  carries it to the owner, which claims only what it holds and creates the
-  canonical `AgentSession` row as it claims; the claim and the row return over
-  the party replicator. Store events (the local write, each returned leg) and
-  pairing-health events are the only things that read the desktop's selected
-  session. A read takes the signals when it starts and publishes
-  `Classify` (the Lean `deriveSessionDelivery`) when it finishes; an event
-  raised meanwhile queues the next read. `ProjectionCurrent` says that once
-  every event is read and no read is in flight the projection equals the
-  classification, with no timer; and `NoTerminalErrorWhileDeliverable` says a
-  written request shows no terminal error before its row arrives.
-  `DesktopEventuallyVisible` holds under `DeliverySpec` (the owner eventually
-  claims, each leg and read eventually runs) for every behavior whose pairing
-  is eventually up for good. `HealthRereads` names the rule for which
-  pairing-health events re-read the session: the shipped `unresolved` (the
-  desktop shows no session yet), the first fix's `awaiting` (only a delivery
-  state already shown) and the old `never`. The `UntypedRead`, `HealthIgnored`
-  and `HealthAwaitingOnly` diagnostics restore the old read failure, the old
-  health handling, and the rule that missed a pairing change during the first
-  read.
+- `BackgroundAdmissionContention` — concurrent writers of one request's
+  `AgentRequest` document and session documents during a turn (#3592). Each
+  accepted `spawn_process` call runs a dispatch start (reads the request to
+  fence on its lease, moves its own row to running), an admission
+  transaction (reads the request's `AgentToolCall` rows and fence, bumps
+  `AgentRequest.background_admission_sequence`, creates the child) and a
+  receipt transaction (rereads the tool rows and request, takes the next
+  `AgentMessage` sequence, refreshes the `AgentSession` observation); running
+  children write those session-scoped documents when they finish, and the
+  execution lease renewal task CASes the request's deadline at each due
+  poll beside the turn. Commits follow DefraDB's optimistic rule: a commit
+  aborts when a document it read or wrote changed after its snapshot (writers
+  of different fields of one request document conflict, as the
+  `request_row_writers` tests show), and a transaction whose bounded attempts
+  all abort is lost. `BudgetBound`, `NoConflictLoss`, `ReceiptOnce`,
+  `LeaseLive` and `EveryCallSettles` hold in the owned loop's order, where
+  `run_batch` runs a turn's calls one at a time, under the renewal cadence
+  premise (Lean `consecutive_renewals_obey_cadence`: at most one renewal lands
+  in one call's attempt series), and with the renewal owner re-driving a poll
+  whose attempts all abort. The renewal guarantee is the weaker one: a poll
+  can be exhausted by admission bumps (`RenewalWitness`), and only the
+  re-drive keeps the lease live. `LeaseLapse` is the found race: waiting for
+  the next poll, as the code did, leaves a lease period no due poll with
+  margin, and sequential admissions lapse the lease while the turn runs.
+  `Concurrent` admits every sibling at once and loses a call to conflicts
+  (the #3592 regression schedule); `Unfenced` drops the sequence bump and
+  overfills the budget; `ShortBudget` gives `Max` attempts and loses a call to
+  its running children; `RenewalBudget` gives `Max + 1` and loses an
+  admission to the children plus one renewal, so the second extra attempt of
+  the Lean `receiptContentionAttempts` bound is the renewal's; `Unspaced`
+  drops the cadence premise and loses an admission to back-to-back renewals;
+  `StartWitness` reproduces the traced renewal/dispatch-start conflict that
+  green absorbs.
+- `ClientSubmissionContention` — a User's optimistic chat send (Lean
+  `ClientOptimisticSend`) racing writes to the documents it reads. The client
+  picks the request identity, shows the message pending, keeps its payload
+  and sends; a reply confirms it, and a refusal or the client's deadline
+  shows it failed with Retry, which resends under the same identity. Each
+  send is the reservation (`request.client.reserve_session`) and the
+  submission (`request.client.submit`), whose commits abort when the working
+  Agent refreshes the session observation; both are signed-conflict rebuilds
+  (Lean `clientSignedWriteMayRetry`). The runtime's create is idempotent on
+  the request identity (`send_client_request`: the key derived from the
+  identity, the held lookup by `request_id`, the staging held check) and the
+  runtime refuses only an identity it does not hold; the transport may fail
+  any send. `Timeout` is the client deadline `CHAT_SEND_DEADLINE_MS`.
+  `NoConflictLoss`, `CreatedOnce`, `RetainedUntilConfirmed`,
+  `FailedOffersRetry` (Retry is enabled for every failed message below the
+  model's send bound), `PendingResolves` and `EverySendSettles` hold under
+  lost replies, refusals, transport failures and retries racing an earlier
+  send of the same identity. `SingleAttempt` is the found submission race
+  (the busy-session mailbox test); `ReserveSingleAttempt` is the found reservation race ("a
+  partial read lost to a newer merge" in the live backgrounding run);
+  `ShortBudget` shows the overlap premise is load-bearing; `RetryFreshId`
+  retries under a new identity and duplicates the turn; `NoPayload` drops the
+  payload of an unconfirmed message and leaves a failed message with no
+  Retry.
+- `PackUxWatch` — a pack page's live data watch (`desktop_ux_data_watch`)
+  racing runtime restarts, window node selection, unwatch, window
+  destruction and four runtime hazards (stopped for good, credentials
+  refused, a watcher that fails after every connect, malformed events). The
+  task re-acquires the endpoint at every connect, backs off on transient
+  failures, keeps its failure count across accepted connections, ends the
+  watch after `RetryBudget` consecutive failures, notifies the page of every
+  failed attempt and every end, and sends under the registry lock only while
+  its watch is registered; the selection change cancels before it writes the
+  selection. `NoCrossNodeDelivery`, `RegistryReleased`, `NotSilent`,
+  `TerminalNamed`, `EventualResume`, `NoLeakedWatch` and `EntryReleased` hold
+  with every guard. `Transient` is the observed defect (one read timeout ends
+  the watch); `StaleEndpoint` reuses the endpoint captured at start;
+  `NodeSwitch` drops the selection cancel; `SelectBeforeCancel` writes the
+  selection before cancelling; `UnlockedDeliver` checks the token and then
+  sends outside the lock; `NoDestroyCancel` keeps a destroyed window's
+  registry entry; `SilentBackoff` sends only snapshots and terminal errors;
+  `ResetOnAccept` resets the count on every accepted connection; `Unbounded`
+  retries forever. Lean `ClientShell.PackWatch` owns the per-task phases.
+- `SessionHeadObservation` — a session's observed request head and the
+  client that projects it on reopen (#3604). The runtime claims a session's
+  requests one at a time; each claim or admission refusal names the incoming
+  request as `AgentSession.observation.latest_request` only when it is the
+  canonical latest (Lean `AgentSession.advance`), and a completion refreshes
+  the head only when it already names it. Writers commit in a serial order
+  (DefraDB's optimistic validation re-reads aborted transactions). The
+  reopened client reads the runtime as its User in two snapshots: nonterminal
+  requests with the observed head, then the head row by document ID; a load
+  overlapping a change event is discarded and re-run. `created_at` is
+  whole-second and `request_id` random, so a successor admitted in the second
+  its predecessor finished has no order of its own. `HeadFollowsBoundary` and
+  `ReplyObserved` hold under the Lean `AgentSession.newer` order (live over
+  terminal, then later terminalization, then `request_id`).
+  `RequestIdTie`/`RequestIdTieLiveness` are the found race: the claim loses
+  the random tie, the head keeps naming the finished predecessor, and the
+  reopened client never shows the successor's reply. `NoLivePreference`,
+  `NoTerminalizationOrder` (a same-second refusal) and `NoHeadSeed` (a reader
+  without the head read) break each remaining guard. A refusal admitted while
+  another turn is live deliberately leaves the live turn as the head, so
+  neither property claims it.
+- `RuntimeConnectionTransport` — the desktop observer's authenticated SSE
+  connection to one runtime it reads as the User (`client/observe`). The
+  source task arms `K` subscriptions one at a time and then sends a ready
+  notice; every renewal period (weakly fair) it arms a replacement set while
+  the current set keeps streaming, swaps them and sends `renewed`
+  (make-before-break); a stream ends by a transport failure or a refusal,
+  and the task ends, always with an end notice. The observer applies only
+  notices of the current source generation, runs one snapshot at a time, and
+  reconnects an ended source after the Lean `reconnectDelayMs` of its
+  consecutive reconnect count (flat for `Flat` reconnects, then doubling to
+  `Cap`); the count restarts only after the source stayed connected for the
+  stable period (`Stabilize`, Lean `reconnectStableMs`), never at an arm or a
+  snapshot alone. A snapshot that failed for a transport reason keeps the
+  streams armed and is retried; it never reconnects. Reconcile replaces or
+  drops the source when the peer's endpoint changes or the peer is removed,
+  keeps a source whose task ended until its end notice schedules the
+  reconnect, and an aborted task may still enqueue one notice. Nothing
+  omitted or empty is shown as a refusal: native ACP hides what a reader may
+  not read. `Revocation` is how the runtime answers a revoked User:
+  `"served"` is the pinned served runtime (handshake accepted, streams
+  silent, reads omit the selected roots; observe test
+  `revoked_user_is_answered_with_omitted_roots`), read as an empty connected
+  view; `"handshake"` and `"envelope"` are the access owner's refusals,
+  which reconnect on the backoff and are shown as `refused` across every
+  reconnect. `Drops` adds a flapping runtime that drops an open stream at any
+  time. `ConnectedAfterArmedSnapshot`, `StaleNoticeInert`, `RemovalClears`,
+  `NoEndpointNamed`, `RenewalNeverDisconnects`, `NoCauselessReconnect` (a
+  quiet or empty view is never a reason to reconnect), `ReArmedWithinCap` (a
+  runtime that answers and accepts the client is re-armed within `Cap` ticks
+  of doing so, however many reconnects came before), `FlapBounded` (at most
+  `Flat` consecutive reconnects at the base delay without a stable
+  connection), `ReconnectsWaitTheBackoff`, `EventuallyConnected`,
+  `RecoveredEventuallyArmed`, `RefusalNamed` and `NoEndpointEventuallyNamed`
+  hold for all three (GREEN `Transport`, `TransportEnvelope`,
+  `TransportHandshake`, with `Flat = 1`, `Cap = 4`: two doublings before the
+  cap); GREEN `Flap` checks the safety properties against a flapping runtime.
+  RED: `OmittedRoot` and `OmittedRootLiveness` (an omitted root read as a
+  failure reconnects a revoked User's quiet runtime forever, the retry
+  storm), `UncappedBackoff` (without a cap, a runtime that recovers while the
+  source waits 8 ticks is re-armed more than `Cap` ticks later),
+  `ResetOnConnect` (a count reset by a connected snapshot redials a flapping
+  runtime at the base delay forever), `EarlyRestart` (a reconcile restarts an
+  ended source before its notice and skips the backoff), `BreakBeforeMake` (a
+  renewal that drops the armed set shows Connected with nothing armed),
+  `RenewalFlap` (a renewal reported as a transport failure), `NoEndpoint`,
+  `StaleGeneration` and `EarlyReady`. Lean `renewalStartMs` spaces renewals a
+  full period after each completed arm.
+- `WindowIndependence` — several desktop windows, each on its own node
+  (Lean `ClientWindowScope`). One node-scoped observer publishes into one
+  store whose change notice is broadcast to every window; each window owns
+  its selection, pack watch and view, reads its own node's slice and
+  publishes only within its view epoch. `NoCrossDelivery` (a window shows and
+  is delivered only its own node), `Converges` (each window converges for its
+  own node) and `WatchFollowsSelection` hold (GREEN `MCWindowIndependence`,
+  two windows on two nodes). RED: `SharedFallback` (the code before: a view
+  falls back to the client core's one selection, which names a node only
+  while one window is open) breaks `Converges`, and `NoCancelOnSwitch` (a
+  selection change keeps the old node's watch) breaks `NoCrossDelivery`.
+- `ObserverResync` — the desktop observer's delivery and resync loop for
+  runtime documents and the direct refresh beside it. A runtime write emits a
+  subscription event only after the stream is armed; the observer queues the
+  node, starts one load that captures the store fence, reads and publishes
+  through the fence; a direct refresh does the same once per user mutation.
+  `NoLostWrite`, `NoStaleCommit`, `NoReadWithoutReason`,
+  `EventualPublication` and `Convergence` hold when request events stay off
+  the reload fence, are scoped to their source node, a rejected load requeues
+  without back-off and a rejected refresh hands its node to the observer (Lean
+  `ClientDataPublication.acceptsReloadFor`, `ObserverResync`).
+  `NoReadWithoutReason` bounds hosted reads by batches of reasons to read, not
+  below them: with a lease renewal during every load the node is read back to
+  back. `Widen` adds loads whose first publication overwrites an unowned row
+  and moves every node's fence (Lean `reloadFootprint`,
+  `reload_converts_unowned_rows`); a widened load checks only its own node's
+  fence (`reloadCheck`). `PersistentWiden` is the footprint computed from the
+  raw snapshot: one node's steady widened publications reject every load of
+  another, with or without the 250 ms wait. `WidenedCheckAll` makes a widened
+  load check every scope, so another node's steady publications reject it
+  forever. `RejectDelay` restores the wait in the widened model and still
+  passes: the delay is a latency choice, not a guard.
+  `SustainedEvents` is the found livelock: one lease renewal during every
+  load, with `observe_request_event(None)` moving the fence every reload
+  checks, rejects every load forever and the node stays connecting with stale
+  rows. `CrossNode` is the same with another node's events. `ReconnectGap`
+  keeps the code before the fix without renewals as a regression guard for
+  arm-then-snapshot. `NodeScopeOnly`, `NoPublicationFence`, `NoEventQueue`,
+  `SnapshotBeforeArm` and `RefreshFallback` each break one remaining guard.
+- `DesktopUpdateListener` — the last leg of the desktop's event path: the
+  bridge emitter (`spawn_client_update_task`: coalesced watch wakes, one
+  `desktop://client-updated` event each), Tauri delivery (an event with no
+  registered handler is dropped, never replayed), the frontend's asynchronous
+  listener registration, the projection drain loop and the selected session's
+  load phases. A read sees the versions committed before it starts. A
+  selected request that has not reached its owner answers `pending`, and the
+  runtime may catch up with no store notice at all, since the desktop holds no
+  replica of a remote runtime's session. A waiting phase is `pending` or one
+  of the three delivery phases. `ViewConverges` and `NoStuckPending` hold
+  with five guards: a read without the listener once a registration rejects
+  or a deadline passes, a full read once the listener resolves, re-listening after a rejected registration,
+  bounded re-reads of a waiting phase followed by the retry action (Lean
+  `ClientSessionLoad.phase_has_exit`), and a visible failure for a reply for
+  another session. `MovedReadQueued` checks that a read whose selection moved
+  needs no guard of its own. `NoRegistration` drops registration fairness and
+  still settles the selection; `NoInitialRead` shows what the startup read
+  prevents there. `RegistrationGap` is the observed defect (a commit between
+  the read without a listener and registration is dropped and the view stays a version
+  behind); `ListenFailure`, `PendingNoEvent` and `SupersededMismatch` each
+  drop one remaining guard.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -63,16 +227,6 @@ Downloads `tla2tools.jar` into `.tools/` (gitignored). Requires Java 11+ on `PAT
 For Sanity (toolchain smoke test):
 ```bash
 ./scripts/run-tlc.sh Sanity
-```
-
-For ReversePairing (the real model):
-```bash
-./scripts/run-tlc.sh MCReversePairing
-```
-
-For the multi-collection ReversePairing sanity bound:
-```bash
-./scripts/run-tlc.sh MCReversePairingMulti
 ```
 
 For PairingTransport — the dialable model checks clean (all properties hold):
@@ -112,37 +266,161 @@ pending-DAG capacity without registering or merging the DAG:
 ./scripts/run-tlc.sh MCP2PBackpressureBadAck
 ```
 
-For ReplicatedRequestConvergence — the green model checks clean (both properties hold):
+For BackgroundAdmissionContention — the green model (the owned loop's
+order, two cadence-spaced lease renewals, re-driven renewal polls) checks
+clean, including `EveryCallSettles`:
 ```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergence
+./scripts/run-tlc.sh MCBackgroundAdmissionContention
 ```
 
-The `Stuck` config is a diagnostic and is EXPECTED to report a violation: it keeps a one-write cap but disables reconnect replay. A lost write or an offline peer therefore reaches the old stuck trace (owner terminal, peer non-terminal, budget exhausted, no enabled fixing action):
+Its eight diagnostics are EXPECTED to report violations. `LeaseLapse`
+reproduces the renewal race (`LeaseLive`), `Concurrent` reproduces #3592
+(`NoConflictLoss`: an admission loses every attempt to sibling commits),
+`Unfenced` violates `BudgetBound`, `ShortBudget` violates `NoConflictLoss`
+with only running children writing, `RenewalBudget` violates
+`NoConflictLoss` with the children and one renewal, `Unspaced` violates
+`NoConflictLoss` with back-to-back renewals, `RenewalWitness` violates
+`RenewalNeverLost`, and `StartWitness` violates `StartNeverConflicts`:
 ```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceStuck
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionLeaseLapse
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionConcurrent
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionUnfenced
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionShortBudget
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionRenewalBudget
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionUnspaced
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionRenewalWitness
+./scripts/run-tlc.sh MCBackgroundAdmissionContentionStartWitness
 ```
 
-The `PeerClaim` config is the safety diagnostic and is EXPECTED to report a violation: with the adversarial peer-claim action armed (`AllowPeerClaim = TRUE`), a peer drives itself into `Claimed`, reachably VIOLATING `INVARIANT SingleClaimer`. This proves `SingleClaimer` clause (1) is falsifiable — its green result in the two configs above is evidence the `node_did` watcher fence holds, not a type artifact:
+For SessionHeadObservation — the green model (Lean order, head-seeded
+reader, claim and refusal paths, both random id orders) checks clean,
+including `ReplyObserved`:
 ```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergencePeerClaim
+./scripts/run-tlc.sh MCSessionHeadObservation
 ```
 
-The desktop delivery extension checks clean with its liveness property and the original ones:
+Its five diagnostics are EXPECTED to report violations. `RequestIdTie`
+violates `HeadFollowsBoundary` and `RequestIdTieLiveness` violates
+`ReplyObserved` with the #3604 schedule (A claimed and completed, B claimed
+in the same second, the client reopens, B completes and never appears);
+`NoLivePreference`, `NoTerminalizationOrder` and `NoHeadSeed` violate
+`ReplyObserved`:
 ```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceDesktop
+./scripts/run-tlc.sh MCSessionHeadObservationRequestIdTie
+./scripts/run-tlc.sh MCSessionHeadObservationRequestIdTieLiveness
+./scripts/run-tlc.sh MCSessionHeadObservationNoLivePreference
+./scripts/run-tlc.sh MCSessionHeadObservationNoTerminalizationOrder
+./scripts/run-tlc.sh MCSessionHeadObservationNoHeadSeed
 ```
 
-Its three diagnostics are EXPECTED to report violations. `UntypedRead` reads a missing row as an error and violates `NoTerminalErrorWhileDeliverable` right after the first read of the desktop's write. `HealthIgnored` leaves a pairing change unread and violates `ProjectionCurrent` with the session still shown as not connected after the pairing returns. `HealthAwaitingOnly` re-reads on health only once a delivery state is shown, so a pairing change during the first read is lost: the read finishes with `NotConnected` while the pairing is up:
+For RuntimeConnectionTransport — the four green models check clean, the
+first three including the four liveness properties:
 ```bash
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceUntypedRead
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceHealthIgnored
-./scripts/run-tlc.sh MCReplicatedRequestConvergenceHealthAwaitingOnly
+./scripts/run-tlc.sh MCRuntimeConnectionTransport
+./scripts/run-tlc.sh MCRuntimeConnectionTransportEnvelope
+./scripts/run-tlc.sh MCRuntimeConnectionTransportHandshake
+./scripts/run-tlc.sh MCRuntimeConnectionFlap
+```
+
+Its ten diagnostics are EXPECTED to report violations. `OmittedRoot`
+violates `NoCauselessReconnect` and `OmittedRootLiveness` violates
+`EventuallyConnected` (the revoked-User retry storm), `UncappedBackoff`
+violates `ReArmedWithinCap`, `ResetOnConnect` violates `FlapBounded`,
+`EarlyRestart` violates `ReconnectsWaitTheBackoff`, `RenewalFlap` violates
+`RenewalNeverDisconnects`, `BreakBeforeMake` and `EarlyReady` violate
+`ConnectedAfterArmedSnapshot`, `NoEndpoint` violates `NoEndpointNamed` and
+`StaleGeneration` violates `StaleNoticeInert`:
+```bash
+./scripts/run-tlc.sh MCRuntimeConnectionOmittedRoot
+./scripts/run-tlc.sh MCRuntimeConnectionOmittedRootLiveness
+./scripts/run-tlc.sh MCRuntimeConnectionUncappedBackoff
+./scripts/run-tlc.sh MCRuntimeConnectionResetOnConnect
+./scripts/run-tlc.sh MCRuntimeConnectionEarlyRestart
+./scripts/run-tlc.sh MCRuntimeConnectionBreakBeforeMake
+./scripts/run-tlc.sh MCRuntimeConnectionRenewalFlap
+./scripts/run-tlc.sh MCRuntimeConnectionNoEndpoint
+./scripts/run-tlc.sh MCRuntimeConnectionStaleGeneration
+./scripts/run-tlc.sh MCRuntimeConnectionEarlyReady
+```
+
+For WindowIndependence — the green model (two windows, two nodes) checks
+clean; `SharedFallback` violates `Converges` and `NoCancelOnSwitch` violates
+`NoCrossDelivery`:
+```bash
+./scripts/run-tlc.sh MCWindowIndependence
+./scripts/run-tlc.sh MCWindowIndependenceSharedFallback
+./scripts/run-tlc.sh MCWindowIndependenceNoCancelOnSwitch
+```
+
+For ObserverResync — the green model (two nodes, a renewal during every
+load on both, a write, a drop and a direct refresh per node) and the widened
+green model check clean; `ReconnectGap` and `RejectDelay` are passing
+diagnostics:
+```bash
+./scripts/run-tlc.sh MCObserverResync
+./scripts/run-tlc.sh MCObserverResyncWiden
+./scripts/run-tlc.sh MCObserverResyncReconnectGap
+./scripts/run-tlc.sh MCObserverResyncRejectDelay
+```
+
+Its ten diagnostics are EXPECTED to report violations: `SustainedEvents`,
+`CrossNode`, `NodeScopeOnly`, `PersistentWiden` and `WidenedCheckAll`
+violate `EventualPublication` and `Convergence`; `NoPublicationFence`,
+`NoEventQueue` and `SnapshotBeforeArm` violate `NoLostWrite`;
+`StaleCommit` violates `NoStaleCommit`; `RefreshFallback` violates
+`NoReadWithoutReason`:
+```bash
+./scripts/run-tlc.sh MCObserverResyncSustainedEvents
+./scripts/run-tlc.sh MCObserverResyncCrossNode
+./scripts/run-tlc.sh MCObserverResyncNodeScopeOnly
+./scripts/run-tlc.sh MCObserverResyncPersistentWiden
+./scripts/run-tlc.sh MCObserverResyncWidenedCheckAll
+./scripts/run-tlc.sh MCObserverResyncNoPublicationFence
+./scripts/run-tlc.sh MCObserverResyncNoEventQueue
+./scripts/run-tlc.sh MCObserverResyncSnapshotBeforeArm
+./scripts/run-tlc.sh MCObserverResyncStaleCommit
+./scripts/run-tlc.sh MCObserverResyncRefreshFallback
+```
+
+For DesktopUpdateListener — the green model (every guard on, one rejected
+registration, one bridge mismatch, one selection change, silent and noticed
+arrival) checks clean, including both liveness properties, and so does
+`NoRegistration`, where registration may never resolve:
+```bash
+./scripts/run-tlc.sh MCDesktopUpdateListener
+./scripts/run-tlc.sh MCDesktopUpdateListenerNoRegistration
+```
+
+Its five diagnostics are EXPECTED to report violations. `RegistrationGap`
+and `ListenFailure` violate `ViewConverges`; `NoInitialRead`,
+`PendingNoEvent` and `SupersededMismatch` violate `NoStuckPending`:
+```bash
+./scripts/run-tlc.sh MCDesktopUpdateListenerNoInitialRead
+./scripts/run-tlc.sh MCDesktopUpdateListenerRegistrationGap
+./scripts/run-tlc.sh MCDesktopUpdateListenerListenFailure
+./scripts/run-tlc.sh MCDesktopUpdateListenerPendingNoEvent
+./scripts/run-tlc.sh MCDesktopUpdateListenerSupersededMismatch
+```
+
+For PackUxWatch — the green model checks clean; the nine diagnostics are
+EXPECTED to report the violation named in their config:
+```bash
+./scripts/run-tlc.sh MCPackUxWatch
+./scripts/run-tlc.sh MCPackUxWatchTransient
+./scripts/run-tlc.sh MCPackUxWatchStaleEndpoint
+./scripts/run-tlc.sh MCPackUxWatchNodeSwitch
+./scripts/run-tlc.sh MCPackUxWatchSelectBeforeCancel
+./scripts/run-tlc.sh MCPackUxWatchUnlockedDeliver
+./scripts/run-tlc.sh MCPackUxWatchNoDestroyCancel
+./scripts/run-tlc.sh MCPackUxWatchSilentBackoff
+./scripts/run-tlc.sh MCPackUxWatchResetOnAccept
+./scripts/run-tlc.sh MCPackUxWatchUnbounded
 ```
 
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
-  -config MCReplicatedRequestConvergenceDesktop.cfg MCReplicatedRequestConvergenceDesktop
+  -config MCBackgroundAdmissionContention.cfg MCBackgroundAdmissionContention
 ```
 Delete any `*_TTrace_*` files a failing diagnostic writes here.
 
@@ -150,46 +428,6 @@ The script runs TLC with parallel workers and writes state-graph artifacts to `s
 
 ## Bounded parameters
 
-Current parameters in `MCReversePairing.cfg`:
-
-| Parameter | Value | Effect of increasing |
-|-----------|-------|---------------------|
-| `Node` | `{A, B}` | State space grows as |Node|^|Node|; 3-node run is feasible but much slower |
-| `Collection` | `{c1}` | The default full crash-recovery bound is single-collection. Use `MCReversePairingMulti.cfg` for a two-collection sanity run |
-| `RPCId` | `{r1, r2, r3, r4, r5, r6}` | More ids give more headroom above StateBound; raising without also raising StateBound has little effect; both together increase exploration depth |
-| `MaxCrashes` | `2` | Each additional crash budget step multiplies the reachable crash-sequence count; +1 roughly doubles runtime |
-| `NoOf` | `NoOf` (sentinel) | Not a tunable — must remain a value disjoint from RPCId |
-| `StateBound` | `Cardinality(rpcIdsUsed) <= 4` | Bounds total RPCs ever issued in any trace; raising risks pool exhaustion before liveness converges (a bounded-model artifact, not a real bug) |
-
-Larger parameters increase state space exponentially. State-space-exhaustion artifacts can mask real bugs; benchmark before raising.
-
-`MCReversePairingMulti.cfg` raises only the collection axis and backs off crash interleavings:
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `Node` | `{A, B}` | Same peer-pair topology as the default model |
-| `Collection` | `{c1, c2}` | Exercises the collection-generic action and liveness quantification across two collections |
-| `RPCId` | `{r1, r2, r3, r4, r5, r6}` | Same bounded id pool/headroom as the default model |
-| `MaxCrashes` | `0` | Keeps the multi-collection liveness run tractable; crash recovery remains covered by the default single-collection bound |
-| `StateBound` | `Cardinality(rpcIdsUsed) <= 4` | Same total-issued-RPC bound as the default model |
-
-Current parameters in `MCReplicatedRequestConvergence.cfg` / `MCReplicatedRequestConvergenceStuck.cfg`:
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `Owner` | `o` | The owning node — the request's `node_did` holder and the only node that drives the lifecycle |
-| `ReplicaHolder` | `{p1}` | The one requesting coordinator authorized to hold the host-owned child request; unrelated fleet peers are excluded |
-| `DeltaId` | `{d1, d2, d3, d4, d5, d6}` | Bounded id pool for terminal re-emissions; `StateBound` caps consumption below the pool size |
-| `MaxDrops` | `1` | One terminal delta may drop before fair re-emission converges (green) / strands a peer (stuck) |
-| `MaxCrashes` | `1` | One total node crash (owner restart or a peer losing volatile inbound) |
-| `TerminalKind` | `{Completed, Failed}` | The peer must converge to the *specific* terminal the owner reached, not merely some terminal |
-| `Cap` | `3` (green) / `1` (stuck) | Persisted per-request budget = shipping `TERMINAL_REDRIVE_CAP`; each emission is one owner write fanned out only to online request-party replicators, and only while one has not acknowledged. The green config also enables reconnect replay, so a party peer offline beyond all three writes still converges. |
-| `ReplayOnRecovery` | `TRUE` (green/peer-claim) / `FALSE` (stuck) | Production recovery reinstalls a configured peer replicator once per reconnect, causing a bounded full replay. The stuck diagnostic removes that action and exposes the exhausted-cap liveness gap. |
-| `StateBound` | `Cardinality(deltaIdsUsed) <= Cap` | `emitCount` is persisted per request and caps same-value owner writes at `Cap`, independent of replica count. |
-| `Desktop` | `p1` | The request party that writes the request and reads its session. |
-| `ModelDelivery` | `FALSE` (the three configs above) / `TRUE` (`Desktop`, `UntypedRead`, `HealthIgnored`, `HealthAwaitingOnly`) | Off, the owner holds the request from the start and the delivery variables stay fixed, so the earlier state spaces are unchanged. |
-| `UntypedRead` | `FALSE` / `TRUE` (`UntypedRead`) | Restores the pre-fix read failure on a missing row. |
-| `HealthRereads` | `"unresolved"` / `"never"` (`HealthIgnored`) / `"awaiting"` (`HealthAwaitingOnly`) | Which pairing-health events re-read the selected session. |
 
 Current parameters in `MCP2PBackpressureGreen.cfg` / diagnostic configs:
 
@@ -204,16 +442,6 @@ Current parameters in `MCP2PBackpressureGreen.cfg` / diagnostic configs:
 | `AckWithoutPendingAllowed` | `FALSE` green / `TRUE` bad-ack diagnostic | Arms the forbidden success-ack path so `SuccessAckBacked` is falsifiable. |
 
 ## What TLC checks
-
-Active lines from `MCReversePairing.cfg`:
-
-- **`INVARIANT TypeOK`** — all seven state variables stay within their declared types throughout every reachable state.
-- **`INVARIANT RPCIdsTracked`** — every RPC in `messages`, `inFlight`, or `pendingInbound` has its id recorded in `rpcIdsUsed`; prevents id reuse.
-- **`INVARIANT RPCWellFormed`** — every Install/Teardown has `src # tgt` and `of = NoOf`; every Ack has `of \in rpcIdsUsed`; kind is always in the declared set.
-- **`PROPERTY Convergence`** — every desired/replicator disagreement either converges (replicator catches up) or the operator retracts the desired entry; see Convergence form below.
-- **`CONSTRAINT StateBound`** — not a checked property; truncates state-space exploration at `Cardinality(rpcIdsUsed) <= 4` to keep the bounded RPCId pool from exhausting before convergence completes.
-
-Note: `InFlightJustified` is defined in `ReversePairing.tla` as a documented model property but is not enforced by TLC due to a bounded-model artifact (pool-exhausted states cannot be excluded without parameter changes that explode the state space). See its block comment in the .tla file.
 
 Active lines from `MCPairingTransportDialable.cfg` (`Dialable = TRUE`, `ReplicatorInstallable = TRUE`, all hold):
 
@@ -245,82 +473,8 @@ The diagnostics are **designed** to reproduce one load-bearing failure each (cla
 - **`MCP2PBackpressureTimeoutStall.cfg`** (`TimeoutReleasesSlot = FALSE`) — intended counterexample: start `slow` first, fill the only worker slot, leave healthy peers queued forever so `HealthyPeersDeliver` fails. This encodes **necessity** of slot release in a one-worker toy: if timeout does not free the semaphore, healthy delivery can fail even under fairness. It is **not** a sufficiency claim that Amy hub saturation is solved when the green BOOLEAN holds (production can still fail via multi-slow-peer fill, re-queue storms, Bitswap stalls, or gossip-loop death after the permit is released).
 - **`MCP2PBackpressureBadAck.cfg`** (`AckWithoutPendingAllowed = TRUE`) — intended counterexample: fill the pending-DAG map and success-ack a second inbound PushLog without merging or registering it so `SuccessAckBacked` fails. Formal counterpart of the production invariant (defradb.rs #1089 / pinned hub admission) that pending-DAG capacity overflow must return the backpressure nack, not success.
 
-Active lines from `MCReplicatedRequestConvergence.cfg` (`Cap = 3`, reconnect replay enabled):
-
-- **`INVARIANT TypeOK`** — `reqState`, the gossip `messages`/`pendingInbound` sets, `deltaIdsUsed`, and the drop/crash counters stay in their declared domains.
-- **`INVARIANT SingleClaimer`** — every non-owner peer only ever holds `Pending` or the owner's terminal (delivered by an owner delta); it never sits in `Claimed`/`Processing`. A peer claiming/processing of its own volition would violate this — it is the model fence for the `node_did` watcher filter.
-- **`INVARIANT DeltaBackedByOwnerTerminal`** — every in-flight terminal delta carries the owner's (absorbing) terminal value; no peer can converge to a value the owner never reached.
-- **`INVARIANT DeltaIdsTracked`** — every in-flight delta's id is recorded in `deltaIdsUsed`; no id reuse.
-- **`INVARIANT AckedImpliesConverged`** — a peer the owner observes as acknowledged holds the owner's terminal, so skipping its re-drive and replay loses nothing.
-- **`INVARIANT ReplayBound`** — a peer recovery schedules at most one full replay in the modeled reconnect cycle.
-- **`PROPERTY TerminalConverges`** (`owner-terminal ~> every request-party peer reflects it`) — online party peers converge through bounded owner writes under bounded loss; a party peer offline beyond the entire cap converges through fair `RecoverPeer` and `ReplayTerminalSnapshot`. Replay consumes no delta id or request-write budget. Unrelated fleet peers are outside `ReplicaHolder` by the #683 scope contract.
-- **`CONSTRAINT StateBound`** — bounds total terminal re-emissions to keep TLC from exploring re-drive churn that is not meaningful with unbounded real delta ids.
-
-`MCReplicatedRequestConvergenceDesktop.cfg` (`SPECIFICATION DeliverySpec`) keeps every line above and adds:
-
-- **`INVARIANT ProjectionCurrent`** — with no event left unread and no read in flight, the desktop's selected-session projection is the classification of its local write, pairing, returned claim or lifecycle, and returned row. Reads happen only on events, so this is the no-poll, no-stale-state claim.
-- **`INVARIANT NoTerminalErrorWhileDeliverable`** — while the desktop's request is written and its row has not arrived, the projection is never the old terminal read error.
-- **`PROPERTY DesktopEventuallyVisible`** (`<>[]pairingUp => (desktopWrote ~> desktopView = "Visible")`) — when the pairing is eventually up for good and the owner eventually claims, the desktop shows the session. The pairing itself is unconstrained, so safety is checked across unlimited reconnects. Without `WF_vars(Claim)` the same model violates the property, so it is not vacuous.
-
-Two diagnostic configs reproduce the pre-fix convergence gap (liveness) and prove the safety property is falsifiable (safety):
-
-- **`MCReplicatedRequestConvergenceStuck.cfg`** (`Cap = 1`, `ReplayOnRecovery = FALSE`) — the invariants still hold while `PROPERTY TerminalConverges` is intentionally VIOLATED. One owner write can be lost or emitted while a peer is offline; `emitCount = Cap` then disables further writes and replay is unavailable, leaving owner-terminal/peer-nonterminal forever. This proves reconnect replay, rather than an unbounded rewrite loop, is the load-bearing repair for partitions beyond the cap.
-- **`MCReplicatedRequestConvergencePeerClaim.cfg`** (`AllowPeerClaim = TRUE`) — arms the `PeerClaimsForeign` action, which drives a peer from `Pending` into `Claimed` of its own volition (the exact thing the `node_did` watcher filter forbids, and what a peer-side write to a foreign replica would do). `INVARIANT SingleClaimer` is intentionally VIOLATED. Without this config, `SingleClaimer` clause (1) (`reqState[n] ∉ {Claimed, Processing}`) would be vacuously true — no other action can put a peer in those states — so its green result would prove nothing. With a config in which the property actually breaks, the green runs above are real evidence the fence holds. Mirrors the `Cap` red/green that makes `TerminalConverges` load-bearing.
-
 ## Fairness annotations
 
-The spec uses two fairness flavors:
-- **Weak fairness (WF)** on `Deliver`, `Process`, `ReceiveAck`, `Timeout`: action eventually fires if continuously enabled.
-- **Strong fairness (SF)** per-node on `Reconcile`: action eventually fires if enabled infinitely often.
-
-Notes:
-- WF on `Timeout` is essential — without it, dropped RPCs strand `inFlight` permanently and Reconcile cannot re-emit (its `~PendingInstallFor` precondition stays false). The plan originally said "no fairness on Timeout" — that guidance was wrong; this README is the correct reference.
-- SF (not WF) on `Reconcile` is required because `OperatorWrite` can transiently disable individual `(p, c)` reconcile preconditions, defeating WF's "continuously enabled" requirement. SF's "infinitely often enabled" matches a real periodic reconcile loop.
-- No fairness on `Drop`, `Crash`, or `OperatorWrite` — those are voluntary actions that the model can skip.
-
-`ReplicatedRequestConvergence` uses weak fairness on the bounded repair workers:
-
-- `EmitTerminalDelta` (one owner write fanned out to online replicators)
-- `DeliverDelta` and `PersistDeltaOnPeer`
-- per-peer `RecoverPeer`, `ReplayTerminalSnapshot`, and `SkipAcknowledgedReplay`
-
-It deliberately has no fairness on the owner lifecycle (`Claim`/`Process`/`Terminalize`), `DropDelta`, `CrashPeer`, or `CrashOwner` — those are voluntary. `DeliverySpec` adds weak fairness on `DeliverRequest`, `Claim`, `ReturnClaim`, `ReturnRow`, `DesktopReadStart` and `DesktopReadFinish` only for the desktop liveness claim; `PairingChange` and `DesktopWrite` stay voluntary, and the pairing's eventual stability is the property's premise, not a fairness assumption. `EmitTerminalDelta` is gated by persisted `emitCount < Cap` and by an unacknowledged party peer; an offline peer never acknowledges, so the cap still bounds writes. Fair reconnect and full replay are therefore the unbounded-partition liveness assumption. The `Stuck` config removes replay while retaining the bounded write budget and reaches the exhausted-cap disagreement.
-
-## Convergence form
-
-`InstallConverges` and `TeardownConverges` use a disjunctive leads-to form:
-
-```
-(c \in desired[n][p] /\ n # p) ~> (c \in replicator[p][n] \/ c \notin desired[n][p])
-```
-
-This says: every disagreement either converges OR the operator retracts. The strict form `P ~> Q` is provably violated by traces where the operator changes `desired` before `Reconcile` completes — which is allowed at any time in this model (`OperatorWrite` has no fairness). The disjunctive form is the standard "progress at every observed disagreement" pattern for systems with unconstrained operator input. The vacuity probe (Task 10 review) confirms it is non-trivial: TLC explores stable-`desired` traces and requires `Q` along them.
-
-## Expected output
-
-### Safety only (drop the PROPERTY line, keep INVARIANT lines)
-
-```
-Model checking completed. No error has been found.
-... N states generated, M distinct states found, 0 states left on queue.
-The depth of the complete state graph search is K.
-```
-
-For default parameters: ~M in the high hundreds of thousands, runtime under 60 seconds.
-
-### Full run with liveness (default)
-
-Same final line, plus a "Checking temporal properties" phase. Total runtime: completes in under 5 minutes on a 2024 laptop at default parameters.
-
-A failure looks like:
-
-```
-Error: Temporal property Convergence was violated.
-The behavior up to this violation:
-  State 1 ... State 2 ... ...
-```
-
-Read the trace from top to bottom; identify the action between each state pair. Look for the divergence point — the state where progress stalled.
 
 ## Recorded runs
 
@@ -328,73 +482,100 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 
 | Config | Bound | Result | State space | Depth | Runtime |
 |--------|-------|--------|-------------|-------|---------|
-| `MCReversePairing.cfg` | `Collection = {c1}`, `MaxCrashes = 2` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 322,560 distinct states | 19 | 3min 21s |
-| `MCReversePairingMulti.cfg` | `Collection = {c1, c2}`, `MaxCrashes = 0` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 2,164,720 distinct states; 28,085,121 generated | 18 | 36min 38s |
 | `MCPairingTransportDialable.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = TRUE` | Passes `TypeOK`, `PartialApplyHasProgress`, `ReplicationImpliesReplicator`, `ReplicatorLiveness`, `EndToEndLiveness` | 7 distinct states; 8 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportUndialable.cfg` | `Dialable = FALSE`, `ReplicatorInstallable = TRUE` | **MODE A diagnostic:** invariants hold (`PartialApplyHasProgress` vacuous); `ReplicatorLiveness` intentionally VIOLATED (never-`Connected` trace = connect-fails-first hang) | 3 distinct states; 4 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportReplicatorStuck.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = FALSE` | **MODE B/C diagnostic:** `TypeOK`/`ReplicationImpliesReplicator` hold; `PartialApplyHasProgress` intentionally VIOLATED at `Connected ∧ subscribed ∧ ¬installed` (the partial row); `ReplicatorLiveness`/`EndToEndLiveness` also violated | 5 distinct states; 6 generated | — | <1s (OpenJDK 25) |
-| `MCReplicatedRequestConvergence.cfg` | `Cap = 3`, `ReplayOnRecovery = TRUE`, one request-party replica | Passes `TypeOK`, `SingleClaimer`, delta/acknowledgement/replay invariants, and `TerminalConverges` | 246 distinct states; 548 generated | 12 | <1s |
-| `MCReplicatedRequestConvergenceStuck.cfg` | `Cap = 1`, `ReplayOnRecovery = FALSE` | Invariants hold; `TerminalConverges` intentionally VIOLATED with the requester offline and the persisted budget exhausted | 42 distinct states; 78 generated | 8 | <1s |
-| `MCReplicatedRequestConvergencePeerClaim.cfg` | `AllowPeerClaim = TRUE` | `SingleClaimer` intentionally VIOLATED by `PeerClaimsForeign` | 17 distinct states before counterexample; 18 generated | 4 | <1s |
-| `MCReplicatedRequestConvergence.cfg` (with the desktop constants, `ModelDelivery = FALSE`) | as above | Same result and state space as the row above it | 246 distinct states; 548 generated | 12 | <1s |
-| `MCReplicatedRequestConvergenceDesktop.cfg` | `ModelDelivery = TRUE`, unconstrained pairing, `Cap = 3` | Passes every invariant above plus `ProjectionCurrent` and `NoTerminalErrorWhileDeliverable`; passes `TerminalConverges` and `DesktopEventuallyVisible` | 39,168 distinct states; 193,620 generated | 22 | 4s |
-| `MCReplicatedRequestConvergenceUntypedRead.cfg` | `UntypedRead = TRUE` | `NoTerminalErrorWhileDeliverable` intentionally VIOLATED: write, then a read shows `Error` | 63 distinct states before counterexample; 137 generated | 4 | <1s |
-| `MCReplicatedRequestConvergenceHealthIgnored.cfg` | `HealthRereads = "never"` | `ProjectionCurrent` intentionally VIOLATED: the pairing returns unread and the view stays `NotConnected` | 79 distinct states before counterexample; 180 generated | 5 | <1s |
-| `MCReplicatedRequestConvergenceHealthAwaitingOnly.cfg` | `HealthRereads = "awaiting"` | `ProjectionCurrent` intentionally VIOLATED: the pairing comes up while the first read is in flight, and that read publishes `NotConnected` | 85 distinct states before counterexample; 184 generated | 5 | <1s |
+| `MCBackgroundAdmissionContention.cfg` | `N = 4`, `Max = 2`, `Attempts = 4`, `StartAttempts = RenewAttempts = 4`, `Renewals = 2`, `RenewTicks = 1`, sequential, sequence bump, re-driven polls, cadence-spaced renewals | Passes `TypeOK`, `BudgetBound`, `NoConflictLoss`, `ReceiptOnce`, `LeaseLive`, `EveryCallSettles` | 417,891 distinct states; 918,452 generated | 48 | 13s |
+| `MCBackgroundAdmissionContentionLeaseLapse.cfg` | as green, `Renewals = 1`, `RedriveLostPoll = FALSE` | `LeaseLive` intentionally VIOLATED: the admission bumps of calls 1 to 4 abort all 4 attempts of the one due poll while call 4's receipt is pending | 76,748 distinct states before counterexample; 154,916 generated | 33 | 1s |
+| `MCBackgroundAdmissionContentionConcurrent.cfg` | as green, concurrent admission, `Renewals = 0` | `NoConflictLoss` intentionally VIOLATED: call 1's admission aborts on all 4 attempts while siblings and their children commit | 6,698,408 distinct states before counterexample; 19,430,220 generated | 21 | 38s |
+| `MCBackgroundAdmissionContentionUnfenced.cfg` | concurrent, no sequence bump, `Attempts = 100`, `Renewals = 0` | `BudgetBound` intentionally VIOLATED: concurrent admissions all count one live row and commit | 26,480 distinct states before counterexample; 55,615 generated | 13 | <1s |
+| `MCBackgroundAdmissionContentionShortBudget.cfg` | sequential, `Attempts = 2`, `Renewals = 0` | `NoConflictLoss` intentionally VIOLATED: two running children finish during call 2's receipt | 230 distinct states before counterexample; 302 generated | 21 | <1s |
+| `MCBackgroundAdmissionContentionRenewalBudget.cfg` | as green, `Attempts = 3` (`Max + 1`), `Renewals = 1` | `NoConflictLoss` intentionally VIOLATED: two children finish and one renewal commits during call 2's receipt; with `Renewals = 0` the same bound passes | 4,382 distinct states before counterexample; 8,084 generated | 21 | <1s |
+| `MCBackgroundAdmissionContentionUnspaced.cfg` | as green, `RenewalSpaced = FALSE` | `NoConflictLoss` intentionally VIOLATED: two back-to-back renewals and two children exhaust call 2's 4 receipt attempts | 33,653 distinct states before counterexample; 68,174 generated | 25 | <1s |
+| `MCBackgroundAdmissionContentionRenewalWitness.cfg` | green constants | `RenewalNeverLost` intentionally VIOLATED: admission bumps exhaust a renewal poll, which green's re-drive recovers | 286,417 distinct states before counterexample; 580,008 generated | 33 | 1s |
+| `MCBackgroundAdmissionContentionStartWitness.cfg` | green constants | `StartNeverConflicts` intentionally VIOLATED: a renewal commits while call 1's dispatch start is open, the traced conflict | 46 distinct states before counterexample; 94 generated | 7 | <1s |
+| `MCClientSubmissionContention.cfg` | `Publications = 3`, `Attempts = 4`, `Redrive`, `ReserveRedrive`, `LostReply`, `Refusals`, `MaxSends = 3`, no `RetryFreshId`, no `PayloadLost` | Passes `TypeOK`, `NoConflictLoss`, `CreatedOnce`, `RetainedUntilConfirmed`, `FailedOffersRetry`, `PendingResolves`, `EverySendSettles` | 33,960 distinct states; 219,232 generated | 23 | 3s (OpenJDK 25, 4 workers) |
+| `MCClientSubmissionContentionSingleAttempt.cfg` | `Publications = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Compose, ReserveCommit, AgentPublish, SubmitCommit | 36 distinct states; 58 generated | 8 | <1s |
+| `MCClientSubmissionContentionReserveSingleAttempt.cfg` | `Publications = 1`, `ReserveRedrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Compose, AgentPublish, ReserveCommit | 36 distinct states; 58 generated | 8 | <1s |
+| `MCClientSubmissionContentionShortBudget.cfg` | `Publications = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four AgentPublish/ReserveCommit rounds | 237 distinct states; 513 generated | 12 | <1s |
+| `MCClientSubmissionContentionRetryFreshId.cfg` | `Publications = 0`, `LostReply`, `MaxSends = 2`, `RetryFreshId` | `CreatedOnce` intentionally VIOLATED: Compose, Timeout, ReserveCommit, SubmitCommit (reply not yet received), Retry under a new identity, ReserveCommit, SubmitCommit | 48 distinct states before counterexample; 75 generated | 9 | <1s |
+| `MCClientSubmissionContentionNoPayload.cfg` | `Publications = 0`, `LostReply`, `MaxSends = 2`, `PayloadLost` | `FailedOffersRetry` intentionally VIOLATED: Compose, DropPayload, Timeout leaves a failed message with no Retry | 32 distinct states before counterexample; 47 generated | 4 | <1s |
+| `MCSessionHeadObservation.cfg` | `Order = "lean"`, `HeadSeed = TRUE`, `Refusals = TRUE` | Passes `TypeOK`, `HeadFollowsBoundary`, `ReplyObserved` | 838 distinct states; 1,406 generated | 11 | <1s |
+| `MCSessionHeadObservationRequestIdTie.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `HeadFollowsBoundary` intentionally VIOLATED: ClaimA, CompleteA, AdmitB, ClaimB leaves the head on A | 77 distinct states before counterexample; 99 generated | 6 | <1s |
+| `MCSessionHeadObservationRequestIdTieLiveness.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: the #3604 schedule; after reopen B completes and every load omits it | 620 distinct states; 1,056 generated | 11 | <1s |
+| `MCSessionHeadObservationNoLivePreference.cfg` | `Order = "noLive"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: B's claim ranks below A's same-second terminalization | 620 distinct states; 1,056 generated | 11 | <1s |
+| `MCSessionHeadObservationNoTerminalizationOrder.cfg` | `Order = "noTerminal"`, `Refusals = TRUE` | `ReplyObserved` intentionally VIOLATED: B refused in A's second loses the random tie | 838 distinct states; 1,406 generated | 11 | <1s |
+| `MCSessionHeadObservationNoHeadSeed.cfg` | `Order = "lean"`, `HeadSeed = FALSE` | `ReplyObserved` intentionally VIOLATED: the head is B but the reader reads only nonterminal rows | 572 distinct states; 984 generated | 11 | <1s |
+| `MCRuntimeConnectionTransport.cfg` | `K = 2`, `MaxGen = 4`, `Flat = 1`, `Cap = 4`, `MaxAttempts = 4`, `MaxEnv = 3`, `MaxChan = 2`, `Revocation = "served"`, all guards | Passes `TypeOK`, `ConnectedAfterArmedSnapshot`, `RemovalClears`, `NoEndpointNamed`, `RenewalNeverDisconnects`, `NoCauselessReconnect`, `ReArmedWithinCap`, `FlapBounded`, `ReconnectsWaitTheBackoff`, `StaleNoticeInert`, `EventuallyConnected`, `RecoveredEventuallyArmed`, `RefusalNamed`, `NoEndpointEventuallyNamed` | 62,330 distinct states; 442,448 generated | 71 | 7s |
+| `MCRuntimeConnectionTransportEnvelope.cfg` | as green, `Revocation = "envelope"` | Passes every invariant and property of the green row | 165,696 distinct states; 1,026,416 generated | 91 | 16s |
+| `MCRuntimeConnectionTransportHandshake.cfg` | as green, `Revocation = "handshake"` | Passes every invariant and property of the green row | 91,646 distinct states; 585,810 generated | 71 | 10s |
+| `MCRuntimeConnectionFlap.cfg` | as green, `Drops = TRUE` | Passes `TypeOK`, `ConnectedAfterArmedSnapshot`, `RemovalClears`, `NoEndpointNamed`, `NoCauselessReconnect`, `ReArmedWithinCap`, `FlapBounded`, `ReconnectsWaitTheBackoff` | 458,350 distinct states; 3,657,390 generated | 93 | 5s |
+| `MCRuntimeConnectionOmittedRoot.cfg` | as green, `OmittedIsEmpty = FALSE` | `NoCauselessReconnect` intentionally VIOLATED: revoked grant, renewal resnapshot, the omitted root read as a failure reconnects a reachable runtime | 3,822 distinct states before counterexample; 16,713 generated | — | <1s |
+| `MCRuntimeConnectionOmittedRootLiveness.cfg` | as `OmittedRoot`, liveness only | `EventuallyConnected` intentionally VIOLATED: the revoked User loops through reconnects and never settles on connected | 117,606 distinct states; 755,888 generated | — | 7s |
+| `MCRuntimeConnectionUncappedBackoff.cfg` | as green, `Capped = FALSE` | `ReArmedWithinCap` intentionally VIOLATED: three failed reconnects to an unreachable runtime (1, 2, 4 ticks), the runtime recovers while the source waits 8 ticks, and 5 ticks pass with no re-arm | 37,400 distinct states before counterexample; 263,209 generated | — | <1s |
+| `MCRuntimeConnectionResetOnConnect.cfg` | as `Flap`, `ResetOnConnect = TRUE` | `FlapBounded` intentionally VIOLATED: arm, snapshot (count reset), drop, reconnect at the base delay, arm, snapshot, drop, a second base-delay reconnect | 22,318 distinct states before counterexample; 133,143 generated | — | <1s |
+| `MCRuntimeConnectionEarlyRestart.cfg` | as green, `KeepEnded = FALSE` | `ReconnectsWaitTheBackoff` intentionally VIOLATED: the handshake fails, an unrelated directory change reconciles before the end notice, and the source restarts at once | 1,053 distinct states before counterexample; 3,857 generated | — | <1s |
+| `MCRuntimeConnectionBreakBeforeMake.cfg` | as green, `MakeBeforeBreak = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: Connected while the renewal re-arm has no subscription armed | 3,854 distinct states before counterexample; 16,871 generated | — | <1s |
+| `MCRuntimeConnectionRenewalFlap.cfg` | as green, `RenewalAsFailure = TRUE` | `RenewalNeverDisconnects` intentionally VIOLATED: arm, ready, renewal, failure notice, Disconnected with the runtime reachable | 2,433 distinct states before counterexample; 9,253 generated | — | <1s |
+| `MCRuntimeConnectionNoEndpoint.cfg` | as green, `NamedNoEndpoint = FALSE` | `NoEndpointNamed` intentionally VIOLATED: the peer loses its endpoint and reconcile leaves no status | 46 distinct states before counterexample; 116 generated | — | <1s |
+| `MCRuntimeConnectionStaleGeneration.cfg` | as green, `GenerationCheck = FALSE` | `StaleNoticeInert` intentionally VIOLATED: the replaced source's queued notice moves the new source's status | 220 distinct states before counterexample; 603 generated | — | <1s |
+| `MCRuntimeConnectionEarlyReady.cfg` | as green, `ArmBeforeReady = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: ready before any subscription is armed, snapshot, Connected | 911 distinct states before counterexample; 2,844 generated | — | <1s |
+| `MCWindowIndependence.cfg` | `Windows = {w1, w2}`, `Nodes = {n1, n2}`, `MaxWrites = 2`, `MaxSwitch = 3`, per-window fallback, cancel on switch | Passes `TypeOK`, `NoCrossDelivery`, `Converges`, `WatchFollowsSelection` | 126,444 distinct states; 753,497 generated | 20 | 10s |
+| `MCWindowIndependenceSharedFallback.cfg` | as green, `SharedFallback = TRUE` | `Converges` intentionally VIOLATED: with both windows open the shared selection names no node, so neither window's view loads | 2,628 distinct states; 12,601 generated | 12 | <1s |
+| `MCWindowIndependenceNoCancelOnSwitch.cfg` | as green, `CancelOnSwitch = FALSE` | `NoCrossDelivery` intentionally VIOLATED: the old node's watch delivers to the switched window | 979 distinct states before counterexample; 1,946 generated | 7 | <1s |
+| `MCObserverResync.cfg` | 2 nodes, `MaxWrites = 1`, `K = 1`, `MaxDrops = 1`, `MaxRefreshes = 1`, node-scoped events off the reload fence, immediate requeue, no refresh fallback, no widening | Passes `TypeOK`, `NoLostWrite`, `NoReadWithoutReason`, `NoStaleCommit`, `EventualPublication`, `Convergence` | 2,835,856 distinct states; 16,250,601 generated | 33 | 7min 5s |
+| `MCObserverResyncWiden.cfg` | 2 nodes, renewals during every load on both, each node's first publication widens (`MaxWidens = 1`), widened loads check their own node | Passes every invariant and property | 23,689 distinct states; 100,043 generated | 34 | 2s |
+| `MCObserverResyncRejectDelay.cfg` | `Widen` with the 250 ms wait after a rejected load | Passes every invariant and property: the wait is not a guard | 25,109 distinct states; 105,521 generated | 36 | 2s |
+| `MCObserverResyncSustainedEvents.cfg` | 1 node, renewals during every load, events touch every scope on the reload fence, 250 ms retry | `EventualPublication` and `Convergence` intentionally VIOLATED: Arm, Start, Write, Deliver, Read, Publish (rejected), Timer, then Start, Renew, Deliver, Read, Publish (rejected) forever | 118 distinct states; 229 generated | 17 | <1s |
+| `MCObserverResyncCrossNode.cfg` | 2 nodes, only `b` renews, events touch every scope | `EventualPublication` and `Convergence` intentionally VIOLATED for `a`: each of `b`'s events rejects `a`'s in-flight load | 10,322 distinct states; 33,989 generated | 38 | 1s |
+| `MCObserverResyncPersistentWiden.cfg` | 2 nodes, `a` renews and every publication of `a` widens, 250 ms retry | `EventualPublication` and `Convergence` intentionally VIOLATED for `b`: each of `a`'s widened publications rejects `b`'s in-flight load | 4,615 distinct states; 15,136 generated | 29 | <1s |
+| `MCObserverResyncWidenedCheckAll.cfg` | 2 nodes, `b` renews, `a`'s first publication widens, a widened load checks every scope | `EventualPublication` and `Convergence` intentionally VIOLATED for `a`: each of `b`'s publications rejects `a`'s widened load | 5,652 distinct states; 18,225 generated | 25 | <1s |
+| `MCObserverResyncReconnectGap.cfg` | 2 nodes, `MaxWrites = 2`, `MaxDrops = 2`, no renewals, the code before the fix | Passes every invariant and property: writes between a drop and its re-arm are read by the post-arm snapshot | 626,865 distinct states; 2,738,115 generated | 33 | 43s |
+| `MCObserverResyncNodeScopeOnly.cfg` | 1 node, node-scoped events still on the reload fence, immediate requeue | `EventualPublication` and `Convergence` intentionally VIOLATED: the node's own renewals reject each load | 112 distinct states; 220 generated | 17 | <1s |
+| `MCObserverResyncNoPublicationFence.cfg` | 1 node, publications do not fence reloads; `NoStaleCommit` unchecked | `NoLostWrite` intentionally VIOLATED: the observer publishes its newer read, then the older direct refresh publishes over it | 140 distinct states before counterexample; 253 generated | 11 | <1s |
+| `MCObserverResyncStaleCommit.cfg` | `NoPublicationFence` checking only `TypeOK` and `NoStaleCommit` | `NoStaleCommit` intentionally VIOLATED: the same older refresh replaces the newer published version | 118 distinct states before counterexample; 207 generated | 9 | <1s |
+| `MCObserverResyncNoEventQueue.cfg` | 1 node, a delivered event does not queue its node | `NoLostWrite` intentionally VIOLATED: a write after the snapshot read is delivered and never loaded | 21 distinct states before counterexample; 25 generated | 7 | <1s |
+| `MCObserverResyncSnapshotBeforeArm.cfg` | 1 node, the snapshot is queued before the streams arm | `NoLostWrite` intentionally VIOLATED: a write between the read and the arm has no event and no later load | 65 distinct states before counterexample; 102 generated | 7 | <1s |
+| `MCObserverResyncRefreshFallback.cfg` | 1 node, a rejected refresh reads again | `NoReadWithoutReason` intentionally VIOLATED: the observer's publication rejects the refresh, which reads its node a second time | 114 distinct states before counterexample; 176 generated | 9 | <1s |
+| `MCDesktopUpdateListener.cfg` | `MaxVersion = 2`, `ListenFailures = 1`, `Mismatches = 1`, `Selections = 1`, `RereadBudget = 2`, every guard on | Passes `TypeOK`, `MovedReadQueued`, `ViewConverges`, `NoStuckPending` | 10,819 distinct states; 46,787 generated | 18 | <1s |
+| `MCDesktopUpdateListenerNoRegistration.cfg` | as green, `SpecListenerUnfair` (registration may never resolve) | Passes `TypeOK`, `MovedReadQueued`, `NoStuckPending`: the read without a listener settles the selection with no event at all | 10,819 distinct states; 46,787 generated | 18 | <1s |
+| `MCDesktopUpdateListenerNoInitialRead.cfg` | as NoRegistration, `InitialRead = FALSE` | `NoStuckPending` intentionally VIOLATED: ListenRejects, Relistens, then the listener never resolves; 'Opening session' stays with no read and no action | 5,856 distinct states; 22,536 generated | 18 | <1s |
+| `MCDesktopUpdateListenerRegistrationGap.cfg` | as green, `FullAfterListen = FALSE` | `ViewConverges` intentionally VIOLATED: the read without a listener takes version 1, a commit before registration is dropped, the listener resolves and nothing reads version 2 | 12,735 distinct states; 54,745 generated | 19 | <1s |
+| `MCDesktopUpdateListenerListenFailure.cfg` | as green, `Relisten = FALSE` | `ViewConverges` intentionally VIOLATED: the read without a listener settles the session, registration rejects and is never retried, and the next commit is never read | 6,073 distinct states; 25,790 generated | 16 | <1s |
+| `MCDesktopUpdateListenerPendingNoEvent.cfg` | as green, `PendingReread = FALSE` | `NoStuckPending` intentionally VIOLATED: a read answers a waiting phase (`accepted` in the trace), then a silent arrival; the waiting status stays with no action | 5,093 distinct states; 18,904 generated | 15 | <1s |
+| `MCDesktopUpdateListenerSupersededMismatch.cfg` | as green, `MismatchExit = FALSE` | `NoStuckPending` intentionally VIOLATED: a reply for another session (FinishMismatch) is dropped and the load stays `loading` with no read behind it | 10,903 distinct states; 46,605 generated | 17 | <1s |
+| `MCPackUxWatch.cfg` | all guards, all four hazards, `RetryBudget = 4`, `OutageAttempts = MaxRestarts = MaxFaults = MaxRev = 1`, `MaxSelects = 2` | Passes `TypeOK`, `NoCrossNodeDelivery`, `RegistryReleased`, `NotSilent`, `TerminalNamed`, `EventualResume`, `NoLeakedWatch`, `EntryReleased` | 380,360 distinct states; 1,781,565 generated | 34 | 29s (OpenJDK 25, 4 workers) |
+| `MCPackUxWatchTransient.cfg` | `RetryTransient = FALSE`, no hazards, `MaxRestarts = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: Start, Connect, Write, SendAtomic, ReadTimeout, Notify, Release ends a healthy runtime's watch | 139 distinct states; 311 generated | 10 | <1s |
+| `MCPackUxWatchStaleEndpoint.cfg` | `Reacquire = FALSE`, no hazards, `MaxSelects = 0` | `EventualResume` intentionally VIOLATED: after Restart every Connect uses the old endpoint until the budget ends the watch | 2,487 distinct states; 6,550 generated | 23 | <1s |
+| `MCPackUxWatchNodeSwitch.cfg` | `CancelOnSelect = FALSE`, no hazards | `NoCrossNodeDelivery` intentionally VIOLATED: Start, BeginSelect("B"), EndSelect, Connect, SendAtomic | 128 distinct states before counterexample; 221 generated | 6 | <1s |
+| `MCPackUxWatchSelectBeforeCancel.cfg` | `CancelBeforeSelect = FALSE`, no hazards | `NoCrossNodeDelivery` intentionally VIOLATED: Start, BeginSelect("B") writes the selection, Connect, SendAtomic before the cancellation | 71 distinct states before counterexample; 106 generated | 5 | <1s |
+| `MCPackUxWatchUnlockedDeliver.cfg` | `AtomicDeliver = FALSE`, no hazards | `NoCrossNodeDelivery` intentionally VIOLATED: Connect, Check, BeginSelect("B"), EndSelect, SendChecked | 454 distinct states before counterexample; 1,085 generated | 8 | <1s |
+| `MCPackUxWatchNoDestroyCancel.cfg` | `CancelOnDestroy = FALSE`, no hazards | `RegistryReleased` intentionally VIOLATED: Start, Destroy | 30 distinct states before counterexample; 37 generated | 4 | <1s |
+| `MCPackUxWatchSilentBackoff.cfg` | `NotifyStall = FALSE`, no hazards, `MaxSelects = 0` | `NotSilent` intentionally VIOLATED: Start, Restart, Connect backs off with nothing shown | 45 distinct states before counterexample; 67 generated | 5 | <1s |
+| `MCPackUxWatchResetOnAccept.cfg` | `KeepFailuresOnAccept = FALSE`, hazard `broken`, `MaxRestarts = MaxFaults = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: Connect, SendAtomic, StreamBroken, Notify, Retry cycles forever | 297 distinct states; 749 generated | 13 | <1s |
+| `MCPackUxWatchUnbounded.cfg` | `BoundedRetry = FALSE`, hazard `stop`, `MaxRestarts = MaxFaults = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: a stopped runtime is retried forever and never reported | 536 distinct states; 1,257 generated | 20 | <1s |
 
-The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
+The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
+(rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
+`-workers 2`. The green run checked its temporal property over the complete
+state space. The counts before each counterexample vary with the worker
+count.
 
-The three ReplicatedRequestConvergence runs used TLC2
-`2026.10.15.145915` (rev `932d35e`) with Homebrew OpenJDK 27 on macOS
-arm64, `-workers auto` using 8 workers. The one-requester green run checked
-one temporal branch; the other two are deliberately failing diagnostics.
+The six SessionHeadObservation rows used TLC2 `2026.11.06.222357` (rev
+`d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
+liveness rows checked `ReplyObserved` over the complete state space.
 
-The five desktop delivery rows used TLC2 `2026.07.03.221739` (rev `227f61b`,
-the v1.8.0 cache jar) with Homebrew OpenJDK 17.0.20.1 on macOS arm64,
-`-workers 2`. The `Desktop` run checked two temporal branches over 78,336
-distinct states. With two workers, `Stuck` reproduced its recorded row and
-`PeerClaim` reached the same violation after 7 states at depth 2.
+The fourteen RuntimeConnectionTransport rows used TLC2 `2026.11.06.222357` (rev
+`d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
+green rows checked their temporal properties over the complete state space.
 
-Crash-enabled two-collection attempts were stopped for tractability, not property failure:
+The fourteen ObserverResync rows used TLC2 `2026.11.06.222357` (rev `d8fb231`)
+with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the liveness
+rows checked their temporal properties over the complete state space.
 
-- `Collection = {c1, c2}`, `MaxCrashes = 1`: stopped after 30min 51s while checking a temporal-property phase over 81,451,952 total distinct states. Last BFS progress before that phase was 4,825,260 distinct states, 38,397,144 generated, 2,273,059 queued, depth 13.
-- `Collection = {c1, c2}`, `MaxCrashes = 2`: stopped after 30min 24s while checking a temporal-property phase over 143,512,080 total distinct states. Last BFS progress before that phase was 8,706,840 distinct states, 66,727,226 generated, 4,367,182 queued, depth 14.
-
-## Known limitations and follow-ups
-
-- **ReplicatedRequestConvergence replay abstraction.** The model treats a
-  configured reconnect replay as one atomic application of the owner's current
-  terminal head. Rust binds this to delete+reinstall of the existing filtered
-  replicator; DefraDB transport authorization, filter validity, eventual
-  replay completion, and the accuracy of its replication acknowledgement
-  remain external assumptions. `acked` abstracts the owner's acknowledgement
-  read for the terminal value; the Rust retirement write (the cap, recorded
-  once a request is acknowledged) only removes it from the candidate scan and
-  is not modeled. The connection tracker covers
-  local dial, remote-first reconnect, and daemon startup, but permanent
-  disconnect or permanent reinstall failure is outside the liveness claim.
-- **Desktop delivery abstraction.** A read consumes every event raised
-  before it starts and publishes what it captured; the live-text read that
-  stands in for some reads, read pacing, and the session's other rows are
-  outside the model. One request is modeled, and only `pairingUp` changes
-  raise pairing-health events. That the bridge's native events fire on each
-  local write, replicated document and pairing change is the premise, not a
-  result. Sessions this client reads through the node's operator access hold
-  no local replica and raise no store events; the app reads those at the
-  session read gap, and the model does not cover them.
-- **Connection-event delivery.** `RecoverPeer` assumes every reconnect is
-  observed. Production records each DefraDB `PeerConnection` disconnect until a
-  sweep consumes it and sweeps on each connect, so a peer that drops and
-  reconnects between periodic sweeps still replays. A subscription overflow
-  marks every peer for replay; a closed subscription falls back to sweep-time
-  edge detection, which misses whole-flap partitions between samples.
-- **Crash-enabled multi-collection scope.** `MCReversePairingMulti.cfg` verifies `Collection = {c1, c2}` with `MaxCrashes = 0`. Attempts with one or two crashes did not fail, but crossed the reference runtime cutoff during liveness checking. The leads-to property is parametric in `(n, p, c)`, so the multi-collection no-crash run is a sanity check for collection-generic structure rather than a replacement for the default crash-recovery bound.
-- **Per-action SF on Reconcile.** Current `\A n \in Node : SF_vars(Reconcile(n))` enforces fairness on each node's reconcile loop but treats the disjunction over `(p, c)` as one action. Multi-collection liveness may need per-(p, c) fairness: `\A n, p \in Node, c \in Collection : SF_vars(ReconcileInstall(n, p, c) \/ ReconcileTeardown(n, p, c))`. **Follow-up:** add when multi-collection runs are needed.
-- **StateBound constraint.** `Cardinality(rpcIdsUsed) <= 4` bounds total RPCs ever issued in any trace. This avoids the bounded-pool artifact but limits exploration depth in long-running traces. **Follow-up:** lift the bound or replace with a different bound (e.g., per-cycle limits) once the model is stable.
-- **InFlightJustified not TLC-checked.** The supporting invariant is defined as a documented model property but commented out in the .cfg because it fails in pool-exhausted states (a bounded-model artifact, not a real bug). **Follow-up:** TLAPS proof, or a parameter regime that avoids the artifact.
-- **Provenance.** Not modeled here. The structural-safety invariants check actions are well-formed, but a full provenance proof — every replicator entry traces back to a prior `desired`-then-`Process` chain — is a future TLAPS effort.
-- **Set semantics for `messages`.** Assumes RPC ids are unique (which the model enforces). Real network duplicates can be modeled via `Send` re-emitting under different ids.
-- **N > 2 nodes, data-plane convergence, authorization correctness.** Explicit non-goals per the spec.
+The seven DesktopUpdateListener rows used TLC2 `2026.11.06.222357` (rev
+`d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
+green runs checked their temporal properties over the complete state space.
 
 ## PairingTransport derived requirements
 

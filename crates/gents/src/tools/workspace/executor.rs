@@ -38,6 +38,8 @@ pub struct HostExecutorContext<'a> {
     pub integrator_principal: String,
     pub caused_by_invocation_id: String,
     pub caused_by_correlation: String,
+    /// The creating invocation's route, stamped on the workspace it creates.
+    pub route: gents_protocol::trigger_delivery::HandoffRoute,
     pub documents: &'a mut dyn WorkspaceDocuments,
 }
 

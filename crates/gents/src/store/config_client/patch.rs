@@ -21,7 +21,7 @@ pub enum SelfConfigTarget {
     DatastoreToolSurface,
     Skill,
 }
-pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
+pub const SELF_CONFIG_CATEGORIES: [&str; 8] = [
     "agent",
     "tools",
     "profile",
@@ -29,6 +29,7 @@ pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
     "mcp_service",
     "automation",
     "node",
+    "policy",
 ];
 pub const DEFAULT_SELF_CONFIG_CATEGORIES: [&str; 3] = ["agent", "tools", "profile"];
 pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 17] = [
@@ -108,7 +109,8 @@ impl SelfConfigTarget {
             .copied()
             .filter(|field| {
                 *field != self.unique_field()
-                    && !(self == Self::Task && *field == "agent_id")
+                    && !(self == Self::Task && *field == "agent_did")
+                    && !(self == Self::Agent && *field == "creation_nonce")
                     && ![
                         "node_did",
                         "created_at",
@@ -162,8 +164,8 @@ pub fn ensure_admissible(
     for (field, _) in patch {
         if !target.is_writable(field) {
             if target.all_fields().contains(&field.as_str()) {
-                let recovery = if target == SelfConfigTarget::Task && field == "agent_id" {
-                    "; choose the task owner with options.agent when creating it, not set.agent_id. To run a different agent, create a separate Task and Trigger; keep the current workflow until the replacement is valid"
+                let recovery = if target == SelfConfigTarget::Task && field == "agent_did" {
+                    "; choose the task owner with options.agent when creating it, not set.agent_did. To run a different agent, create a separate Task and Trigger; keep the current workflow until the replacement is valid"
                 } else if field == target.unique_field() {
                     "; put the document ID in target_id, not set. IDs cannot be changed by update"
                 } else {
@@ -270,7 +272,7 @@ mod tests {
     #[test]
     fn merge_sets_clears_and_contains() {
         let doc = json!({
-            "agent_id": "beh-1",
+            "agent_did": "beh-1",
             "node_did": "did:key:z6M",
             "display_name": "old",
             "description": "m-small",

@@ -1,8 +1,6 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
-use defra_node::EmbeddedNode;
 use gents_loop::provider_audit::{
     AuxiliaryObserve, AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation,
     AuxiliaryOutputSink,
@@ -16,19 +14,22 @@ use tokio::sync::Mutex;
 use super::{canonical::ProviderAttemptClose, DefraStreamWriter, StreamWriter};
 
 impl DefraStreamWriter {
+    /// Auxiliary output never publishes a transcript header. A separate writer
+    /// tail prevents nested compaction from replacing the main inference
+    /// attempt's uncommitted prefix.
     pub(crate) fn auxiliary_output_sink(
         &self,
-        request: crate::request::watcher::AgentRequest,
+        request: gents_protocol::row::AgentRequest,
         generation: String,
         profile: gents_loop::provider_input::ProviderInputProfile,
     ) -> AuxiliaryOutputSink {
-        sink(
+        let mut writer = DefraStreamWriter::new(
             Arc::clone(&self.node),
-            request,
-            generation,
-            profile,
+            &request.agent_did,
             self.batch_interval,
-        )
+        );
+        writer.agent_signer = self.agent_signer.clone();
+        sink_with_writer(Arc::new(writer), request, generation, profile)
     }
 }
 
@@ -38,24 +39,6 @@ struct State {
     closed: Option<((CaptureScope, usize, u32), ProviderAttemptClose)>,
     content: AssistantTurnAccumulator,
     audit_seen: bool,
-}
-
-/// Auxiliary output never publishes a transcript header. A separate writer
-/// tail prevents nested compaction from replacing the main inference attempt's
-/// uncommitted prefix.
-pub(crate) fn sink(
-    node: Arc<EmbeddedNode>,
-    request: crate::request::watcher::AgentRequest,
-    generation: String,
-    profile: gents_loop::provider_input::ProviderInputProfile,
-    batch_interval: Duration,
-) -> AuxiliaryOutputSink {
-    let writer = Arc::new(DefraStreamWriter::new(
-        node,
-        &request.node_did,
-        batch_interval,
-    ));
-    sink_with_writer(writer, request, generation, profile)
 }
 
 /// The loop receives this runtime's sink failures with their original chain.
@@ -69,7 +52,7 @@ async fn sink_result<T>(
 
 pub(crate) fn sink_with_writer(
     writer: Arc<DefraStreamWriter>,
-    request: crate::request::watcher::AgentRequest,
+    request: gents_protocol::row::AgentRequest,
     generation: String,
     profile: gents_loop::provider_input::ProviderInputProfile,
 ) -> AuxiliaryOutputSink {

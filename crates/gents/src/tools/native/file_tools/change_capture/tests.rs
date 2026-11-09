@@ -94,6 +94,8 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     })
     .await
     .unwrap();
+    admission.grant_agent_collection_get().await.unwrap();
+    admission.grant_runtime_session_reader().await.unwrap();
     let mut call = admission.tool;
     let doc_id = call.doc_id().unwrap().to_owned();
     let root = tempfile::tempdir().unwrap();
@@ -115,31 +117,32 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         !output.contains("file_changes") && !output.contains("AP+A"),
         "{output}"
     );
-    let access = ConfigAccess::local(admission.node.clone());
+    let access = call.access().unwrap();
     let request_doc_id = call.request_doc_id().unwrap().to_owned();
     let session_id = call.session_id().to_owned();
     let requester_did = call.requester_did().map(str::to_owned);
+    let actor = call.actor().clone();
     let inventory_admission = ConfigAccess::transact_local_readonly(
         &admission.node,
-        None,
+        Some(actor),
         "test.inventory.session",
         |txn| {
             let (session_id, requester_did, node_did) =
                 (&session_id, &requester_did, &admission.node_did);
             Box::pin(async move {
-                let session = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    node_did,
-                    session_id,
-                    requester_did.as_deref(),
-                )
-                .await?
-                .unwrap();
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        node_did,
+                        session_id,
+                        requester_did.as_deref(),
+                    )
+                    .await?
+                    .unwrap();
                 Ok::<_, anyhow::Error>(gents_protocol::file_inventory::FileInventoryAdmission {
                     session_doc_id: session.doc_id,
-                    request: gents_protocol::session_hydration::HydrationRequest {
+                    request: gents_protocol::file_inventory::FileInventoryRequest {
                         request_key: "native-inventory".into(),
-                        peer_id: "native-peer".into(),
                         requester_did: requester_did.clone().unwrap(),
                         node_did: node_did.clone(),
                         session_id: session_id.clone(),
@@ -198,7 +201,9 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     crate::tools::call::lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
     crate::tools::call::lifecycle::file_inventory::fail_next_publication(&doc_id);
     call.complete(&output).await.unwrap();
-    let row = ConfigAccess::local(admission.node.clone())
+    let row = call
+        .access()
+        .unwrap()
         .execute(&format!(
             "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state }} ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID file_changes }} ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID observation_doc_id tool_call_doc_id request_doc_id node_did session_id requester_did changes }} }}",
             escape_graphql_string(&doc_id), escape_graphql_string(&doc_id), escape_graphql_string(&doc_id)
@@ -255,6 +260,13 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
             "after": {"kind": "file", "content_hash": change["after"]["content_hash"]},
         })
     );
+    crate::tools::call::lifecycle::admission_fixture::grant_runtime_projection_readers(
+        &access,
+        &admission.node_did,
+        &session_id,
+    )
+    .await
+    .unwrap();
     let inventory =
         crate::file_inventory::FileInventorySnapshot::load(&admission.node, &inventory_admission)
             .await
@@ -294,9 +306,10 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     )
     .await
     .unwrap();
+    // The selected Agent signs the projection; the runtime only reads it.
     assert_eq!(
         owners[0].owner.as_ref().map(|owner| owner.as_str()),
-        Some(admission.node_did.as_str())
+        Some(call.actor().as_str())
     );
     let reader = requester_did.as_ref().unwrap().parse().unwrap();
     let denied = ConfigAccess::transact_local_readonly(
@@ -408,7 +421,11 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     ] {
         assert!(load(request, node, session, requester).await.is_err());
     }
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -423,6 +440,7 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     })
     .await
     .unwrap();
+    admission.grant_agent_collection_get().await.unwrap();
     let mut call = admission.tool;
     let doc_id = call.doc_id().unwrap().to_owned();
     let root = tempfile::tempdir().unwrap();
@@ -445,7 +463,7 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     call.complete(&output).await.unwrap();
     let retained = crate::tools::call::lifecycle::load_tool_call_file_changes(
-        &ConfigAccess::local(admission.node.clone()),
+        &call.access().unwrap(),
         &doc_id,
         call.request_doc_id().unwrap(),
         &admission.node_did,
@@ -460,7 +478,11 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     assert_eq!(decoded_image(&images["before"]), before.as_bytes());
     assert_eq!(decoded_image(&images["after"]), after.as_bytes());
     assert_eq!(std::fs::read(&path).unwrap(), after.as_bytes());
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -566,6 +588,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     })
     .await
     .unwrap();
+    admission.grant_agent_collection_get().await.unwrap();
     let mut call = admission.tool;
     let doc_id = call.doc_id().unwrap().to_owned();
     let root = tempfile::tempdir().unwrap();
@@ -613,7 +636,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
         "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state }} ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ file_changes }} ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID observation_doc_id changes }} }}",
         escape_graphql_string(&doc_id), escape_graphql_string(&doc_id), escape_graphql_string(&doc_id)
     );
-    let access = ConfigAccess::local(admission.node.clone());
+    let access = call.access().unwrap();
     let row = access.execute(&query).await.unwrap()["data"].clone();
     assert_eq!(row["AgentToolCall"][0]["lifecycle_state"], "running");
     assert_eq!(row["ToolFileChange"].as_array().unwrap().len(), 0);
@@ -655,7 +678,11 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     competing.complete("write failed").await.unwrap();
     assert_eq!(access.execute(&query).await.unwrap()["data"], row);
     assert_eq!(std::fs::read(&path).unwrap(), b"later user edit");
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -787,8 +814,9 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     };
     assert!(!output.contains("verified_unchanged"));
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
-    let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         admission.node.clone(),
+        call.actor().clone(),
         &doc_id,
         &admission.node_did,
         call.session_id(),
@@ -797,12 +825,16 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     .await
     .unwrap()
     .unwrap();
+    // A rehydrated row terminates through its owning Agent's signer.
+    replay
+        .bind_agent_signer(call.access().unwrap().managed_agent_signer())
+        .unwrap();
     replay.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     crate::tools::call::lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
     crate::tools::call::lifecycle::file_inventory::fail_next_publication(&doc_id);
     call.complete(&output).await.unwrap();
     replay.complete(&output).await.unwrap();
-    let row = ConfigAccess::local(admission.node.clone()).execute(&format!(
+    let row = call.access().unwrap().execute(&format!(
         "{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID }} ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID observation_doc_id request_doc_id verified_unchanged changes }} }}",
         escape_graphql_string(&doc_id), escape_graphql_string(&doc_id),
     )).await.unwrap()["data"].clone();

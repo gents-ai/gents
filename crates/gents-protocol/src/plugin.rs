@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+pub const WRITE_TOOL_NAME: &str = "write";
+
+/// Bounds guest memory even when a pack requests a larger resource budget.
+pub const MAX_DECLARED_MEMORY_MIB: u32 = 4096;
+/// Bounds the time a guest may hold runtime resources for one invocation.
+pub const MAX_DECLARED_WALL_CLOCK_SECS: u32 = 900;
+/// The compiled WASI runner's stdout capture holds at most 4 MiB.
+pub const MAX_DECLARED_OUTPUT_MIB: u32 = 4;
+
 /// Host-authored evidence for an installed plugin attempt. The enclosing tool
 /// record supplies request identity and generation; guests cannot supply it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

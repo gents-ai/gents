@@ -82,7 +82,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                     "lost authority must stop the loop"
                 );
                 assert!(collected.tool_results.is_empty());
-                let rows = crate::store::config_client::ConfigAccess::local(node.clone())
+                let rows = lifecycle.access().unwrap()
                     .execute("query { AgentToolCall { lifecycle_state } }")
                     .await
                     .unwrap();
@@ -93,7 +93,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                     "receipt loss must not roll back the committed dispatch"
                 );
             }
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
         }
     }
 }
@@ -127,7 +127,7 @@ impl PolicyDeniedOwner {
 
     fn denied_call(
         &self,
-        node: &Arc<defra_node::EmbeddedNode>,
+        node: &Arc<defra_node::Node>,
         root: &std::path::Path,
     ) -> PolicyDeniedCall {
         match self {
@@ -164,12 +164,15 @@ impl PolicyDeniedOwner {
                 }),
                 tools: vec![Box::new(crate::tools::mcp::meta::CallToolTool::new(
                     crate::tools::mcp::meta::MetaToolContext {
+                        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+                        actor: identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
                         node: node.clone(),
-                        mcp_pool: crate::tools::mcp::pool::McpPool::new().for_agent("did:test:test"),
+                        mcp_pool: crate::tools::mcp::pool::McpPool::new()
+                            .for_agent(node.node_identity_did().expect("fixture node has an identity")),
                         health: crate::tools::mcp::health::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
-                        node_did: "did:test:test".into(),
+                        node_did: node.node_identity_did().expect("fixture node has an identity").into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
                         remote_tools: crate::documents::RemoteTools {
                             services: vec![crate::documents::RemoteServiceTools {
@@ -241,7 +244,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
 
-                let rows = crate::store::config_client::ConfigAccess::local(node.clone())
+                let rows = lifecycle.access().unwrap()
                     .execute(
                         "query { AgentToolCall { lifecycle_state started_at tool_failure_class } }",
                     )
@@ -293,7 +296,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                     case.name,
                     owner.owner(),
                 );
-                node.shutdown().await;
+                node.shutdown().await.expect("node shutdown");
             }
         }
     }
@@ -301,7 +304,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
 
 #[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
 
     let model = ScriptedModel::new_turns(vec![
@@ -359,8 +362,8 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         "fresh result must reach the next dispatch intact below threshold"
     );
 
-    let persisted = crate::session::load_history(
-        &node,
+    let persisted = crate::session::load_history_with_access(
+        &lifecycle.access().unwrap(),
         &lifecycle.request().session_id,
         &lifecycle.request().node_did,
         lifecycle.request().requester_did.as_deref(),
@@ -391,9 +394,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     assert!(durable_stub.contains("\"call_id\":\"call-1\""));
     assert!(!durable_stub.contains("ECHOED"));
 
-    let resp = node
-        .execute("query { AgentToolCall { _docID tool_name lifecycle_state } }")
-        .await;
+    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { _docID tool_name lifecycle_state } }").await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -418,16 +419,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         .find(|row| row["tool_name"] == "echo")
         .and_then(|row| row["_docID"].as_str())
         .unwrap();
-    let output = crate::tools::background::status::canonical_tool_output(
-        &node,
-        tool_doc_id,
-        &lifecycle.request().doc_id,
-        &lifecycle.request().session_id,
-        "did:test:test",
-        None,
-    )
-    .await
-    .unwrap();
+    let output = agent_tool_output(&lifecycle, tool_doc_id).await;
     assert!(output.contains("ECHOED"));
 }
 
@@ -586,7 +578,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     );
     assert!(bounded_len > 0, "bounded result should be non-empty");
     assert_eq!(collected.final_text.as_deref(), Some("ok"));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>) {
@@ -639,11 +631,12 @@ async fn plugin_image_result_seen_by(
     let tools: Vec<Box<dyn ToolDyn>> = vec![tool];
     let model = ScriptedModel::new_turns(plugin_call_then_text_turns()).without_capture();
     let mut config = config(4);
-    config.provider_input_counter = Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
-        provider,
-        crate::OpenAiWireApi::ChatCompletions,
-        "test-model",
-    ));
+    config.provider_input_counter =
+        Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
+            provider,
+            crate::OpenAiWireApi::ChatCompletions,
+            "test-model",
+        ));
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
@@ -729,7 +722,12 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
     assert_eq!(collected.final_text.as_deref(), Some("seen"));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
+    let history = crate::session::load_history_with_access(
+        &lifecycle.access().unwrap(),
+        &session_id,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
         .await
         .unwrap();
     let replayed: Vec<String> = history
@@ -754,7 +752,7 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
         )],
         "image of {image_bytes} bytes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -882,7 +880,7 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         }
     }
 
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     let model = ScriptedModel::new_turns(vec![
         vec![
@@ -932,9 +930,7 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         "the internal marker must never leak to the model, got: {tool_results:?}"
     );
 
-    let resp = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
-        .await;
+    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }").await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -1006,9 +1002,12 @@ async fn completed_terminalization_scans_request_output_once_for_many_tools() {
         None,
     ))
     .await;
-    assert_eq!(result.unwrap(), crate::request::lifecycle::TerminalizeResult::Won);
+    assert_eq!(
+        result.unwrap(),
+        crate::request::lifecycle::TerminalizeResult::Won
+    );
     assert_eq!(scans, 1, "request output scanned once per accepted tool");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn terminalization_with_principal_output(
@@ -1058,29 +1057,25 @@ async fn terminalization_with_principal_output(
     let finished_at = chrono::Utc::now();
     let generation = lifecycle.execution_generation().unwrap().to_owned();
     let request_doc_id = lifecycle.request().doc_id.clone();
-    let segments = node
-        .execute(&format!(
+    let segments = agent_response(&lifecycle.access().unwrap(), &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
-        ))
-        .await;
+            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS
+        )).await;
     let segments = segments.data.as_ref().unwrap()["AgentOutputSegment"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| crate::session::canonical_rows::decode_output_segment_row(row).unwrap())
+        .map(|row| gents_protocol::output::rows::decode_output_segment_row(row).unwrap())
         .collect::<Vec<_>>();
-    let messages = node
-        .execute(&format!(
+    let messages = agent_response(&lifecycle.access().unwrap(), &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {} }} }}"#,
-            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS
-        ))
-        .await;
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS
+        )).await;
     let messages = messages.data.as_ref().unwrap()["AgentMessage"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| crate::session::canonical_rows::decode_transcript_message_row(row).unwrap())
+        .map(|row| gents_protocol::output::rows::decode_transcript_message_row(row).unwrap())
         .collect::<Vec<_>>();
     for replica in 0..noise {
         let other_request = format!("bae-noise-request-{replica}");
@@ -1092,10 +1087,10 @@ async fn terminalization_with_principal_output(
             let response = node
                 .execute_request(
                     defra_node::QueryRequest::new(
-                        crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
                     )
                     .with_variables(
-                        crate::session::canonical_rows::output_segment_create_variables(&segment)
+                        gents_protocol::output::rows::output_segment_create_variables(&segment)
                             .unwrap(),
                     ),
                 )
@@ -1110,13 +1105,11 @@ async fn terminalization_with_principal_output(
             let response = node
                 .execute_request(
                     defra_node::QueryRequest::new(
-                        crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION,
                     )
                     .with_variables(
-                        crate::session::canonical_rows::transcript_message_create_variables(
-                            &message,
-                        )
-                        .unwrap(),
+                        gents_protocol::output::rows::transcript_message_create_variables(&message)
+                            .unwrap(),
                     ),
                 )
                 .await;
@@ -1125,8 +1118,8 @@ async fn terminalization_with_principal_output(
     }
     let selection = writer.terminal_output(&request_doc_id).await;
     let started = std::time::Instant::now();
-    let result = crate::request::lifecycle::terminalize_owned_at(
-        &node,
+    let result = crate::request::lifecycle::terminalize_owned_at_with_access(
+        &lifecycle.access().unwrap(),
         &request_doc_id,
         &generation,
         crate::request::lifecycle::RequestTerminalOutcome::Completed,
@@ -1135,7 +1128,10 @@ async fn terminalization_with_principal_output(
     )
     .await;
     let elapsed = started.elapsed();
-    assert_eq!(result.unwrap(), crate::request::lifecycle::TerminalizeResult::Won);
+    assert_eq!(
+        result.unwrap(),
+        crate::request::lifecycle::TerminalizeResult::Won
+    );
     drop(lifecycle);
     eprintln!(
         "terminalization turns={turns} bytes={output_bytes} noise={noise} segments={} messages={} terminalize_ms={}",
@@ -1143,7 +1139,7 @@ async fn terminalization_with_principal_output(
         messages.len(),
         elapsed.as_millis()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     elapsed
 }
 
@@ -1172,7 +1168,7 @@ async fn terminalization_scale_grid() {
 
 #[tokio::test]
 async fn background_output_query_work_is_independent_of_principal_history() {
-    use crate::session::canonical_rows::{
+    use gents_protocol::output::rows::{
         output_segment_create_variables, request_output_segments_query,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
@@ -1180,7 +1176,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     let (node, _hook, _writer, lifecycle) = owned_test_hook().await;
     let request_id = lifecycle.request().doc_id.clone();
     let template = gents_protocol::output::OutputSegment {
-        node_did: "did:test:owner".into(),
+        node_did: lifecycle.request().node_did.clone(),
         requester_did: None,
         session_id: "session".into(),
         request_doc_id: request_id.clone(),
@@ -1209,7 +1205,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         created_at: "2026-10-02T00:00:00Z".into(),
     };
     async fn create(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         segment: &gents_protocol::output::OutputSegment,
     ) {
         let response = node
@@ -1289,7 +1285,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             "tool-doc",
             &request_id,
             "session",
-            "did:test:owner",
+            &lifecycle.request().node_did,
             None,
         )
         .await
@@ -1301,7 +1297,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 "tool-doc",
                 &request_id,
                 "session",
-                "did:test:owner",
+                &lifecycle.request().node_did,
                 None,
             )
             .await
@@ -1315,7 +1311,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     );
     assert!(work[0] > 0);
     drop(lifecycle);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 struct ComposedChild {
@@ -1414,14 +1410,12 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.final_text.as_deref(), Some("seen"));
     let output: serde_json::Value = serde_json::from_str(&collected.tool_results[0]).unwrap();
-    assert_eq!(output["tool_results"]["slow"]["result"], "slow done");
+    assert_eq!(output["tool_results"]["slow"]["result"], "slow done", "{output}");
     assert_eq!(
         output["tool_results"]["late"]["error"],
         "late timed out after 50ms"
     );
-    let rows = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
-        .await;
+    let rows = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { tool_name lifecycle_state } }").await;
     let rows = rows.data.unwrap()["AgentToolCall"].clone();
     for (name, state) in [
         ("plugin", "completed"),
@@ -1436,7 +1430,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
             "{name} {state}: {rows}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 struct ComposingParent {
@@ -1531,7 +1525,8 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         ["child_admission"]
         .as_array()
         .unwrap();
-    let hook_owned = crate::tools::call::hook::persistence::HookOwnedTool::ROUTES.map(|(name, _)| name);
+    let hook_owned =
+        crate::tools::call::hook::persistence::HookOwnedTool::ROUTES.map(|(name, _)| name);
     for selected in [false, true] {
         let mut children = Vec::new();
         let mut expected = std::collections::BTreeMap::new();
@@ -1587,7 +1582,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         let completed = completed.lock().unwrap().clone();
         let invoked = invoked.lock().unwrap().clone();
         assert_eq!(completed.len(), expected.len());
-        let rows = crate::store::config_client::ConfigAccess::local(node.clone())
+        let rows = lifecycle.access().unwrap()
             .execute("query { AgentToolCall { plugin_effect_ordinal lifecycle_state } }")
             .await
             .unwrap();
@@ -1616,7 +1611,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
                 "durable child {case}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -1799,7 +1794,7 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
     )
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
-    let rows = crate::ConfigAccess::local(node.clone()).execute("{ AgentToolCall { _docID tool_name lifecycle_state } ToolFileInventory { tool_call_doc_id request_doc_id verified_unchanged } }").await.unwrap();
+    let rows = lifecycle.access().unwrap().execute("{ AgentToolCall { _docID tool_name lifecycle_state } ToolFileInventory { tool_call_doc_id request_doc_id verified_unchanged } }").await.unwrap();
     let calls: Vec<_> = rows["data"]["AgentToolCall"]
         .as_array()
         .unwrap()
@@ -1818,7 +1813,7 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
         assert_eq!(matches[0]["request_doc_id"], lifecycle.request().doc_id);
         assert_eq!(matches[0]["verified_unchanged"], true);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 struct SerialReadMeasurement(Box<dyn ToolDyn>);

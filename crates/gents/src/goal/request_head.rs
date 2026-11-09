@@ -1,9 +1,9 @@
 use super::*;
-use crate::request::admission::{
+use crate::request::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
+use crate::store::identity::request_receipt::{
     verify_request_receipt_signature, verify_runtime_local_control_receipt,
 };
-use crate::request::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
-use gents_protocol::request_admission::RequestPurpose;
+use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::row::AgentRequestRow;
 
 pub(crate) fn verify_goal_continuation_edge(
@@ -26,12 +26,26 @@ pub(crate) fn verify_goal_continuation_edge(
         .doc_id
         .as_deref()
         .context("continuation predecessor has no document ID")?;
-    verify_runtime_local_control_receipt(
-        child,
-        node_did,
-        &parent_row.request_id,
-        parent_row.requester_did.as_deref().unwrap_or(node_did),
-    )?;
+    let requester = parent_row
+        .requester_did
+        .as_deref()
+        .or(parent_row.agent_did.as_deref())
+        .context("continuation parent lacks requester and agent")?;
+    if child.admission_kind.as_deref() == Some("client") {
+        verify_request_receipt_signature(child)?;
+        anyhow::ensure!(
+            child.node_did.as_deref() == Some(node_did)
+                && child.requester_did.as_deref() == Some(requester)
+                && child.agent_did == parent_row.agent_did
+                && child.caused_by_parent_request_id.as_deref()
+                    == Some(parent_row.request_id.as_str())
+                && child.caused_by_parent_tool_call_id.is_none()
+                && child.caused_by_parent_tool_call_doc_id.is_none(),
+            "client continuation receipt does not match its session predecessor"
+        );
+    } else {
+        verify_runtime_local_control_receipt(child, node_did, &parent_row.request_id, requester)?;
+    }
     anyhow::ensure!(
         child.caused_by_parent_request_doc_id.as_deref() == Some(parent_doc)
             && (parent_row.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND)
@@ -84,11 +98,11 @@ pub(super) fn verify_goal_continuation_receipt(
         parent_row,
         child,
     )?;
-    let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
-    let agent_id = parent.agent_id.clone();
+    let parent = gents_protocol::row::AgentRequest::try_from(parent_row.clone())?;
+    let agent_did = parent.agent_did.clone();
     let mut expected = prepare_goal_continuation(
         &parent,
-        agent_id,
+        agent_did,
         &goal.goal_id,
         child
             .content
@@ -105,6 +119,16 @@ pub(super) fn verify_goal_continuation_receipt(
             .and_then(|hop| u32::try_from(hop).ok())
             .context("continuation receipt lacks its hop")?,
     )?;
+    expected.session_doc_id = parent_row.session_doc_id.clone();
+    expected.agent_doc_id = parent_row.agent_doc_id.clone();
+    if child.admission_kind.as_deref() == Some("client") {
+        expected.admission = AgentRequestAdmissionRecord::client(
+            child
+                .admission_signer_did
+                .as_deref()
+                .context("client continuation has no signer")?,
+        );
+    }
     expected.input.goal_assignment = Some(continuation_assignment(
         goal,
         &parent,
@@ -122,7 +146,7 @@ pub(super) fn verify_goal_continuation_receipt(
 pub(crate) fn request_selection_fields() -> String {
     format!(
         "{} failure_reason superseded_by_request superseded_by_request_doc_id",
-        crate::request::admission::SIGNED_REQUEST_FIELDS
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
     )
 }
 
@@ -421,7 +445,11 @@ fn authenticated_physical_entry<'a>(
                 row,
                 node_did,
                 &parent.request_id,
-                parent.requester_did.as_deref().unwrap_or(node_did),
+                parent
+                    .requester_did
+                    .as_deref()
+                    .or(parent.agent_did.as_deref())
+                    .context("background parent lacks requester and agent")?,
             )?;
             row = parent;
             continue;
@@ -500,7 +528,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
     let session = escape_graphql_string(&goal.session_id);
     let response = txn.execute_local_response(&format!(
         r#"{{AgentRequest(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{{}}}}}"#,
-        crate::request::admission::SIGNED_REQUEST_FIELDS
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
     )).await?;
     let requests: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     let pending = requests

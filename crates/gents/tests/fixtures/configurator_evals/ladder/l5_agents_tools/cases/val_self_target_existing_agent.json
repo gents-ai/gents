@@ -39,11 +39,11 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "delegates": {
                     "targets": "targets",
                     "agents": [
-                      "engineer"
+                      "gents:agent-slot:engineer"
                     ]
                   }
                 }
@@ -65,7 +65,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -118,7 +118,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         }
       ]
@@ -175,8 +175,8 @@
             "links": [
               {
                 "capture": "helper-request",
-                "key": "agent_id",
-                "id": "engineer",
+                "key": "agent_did",
+                "id": "gents:agent-slot:engineer",
                 "field": "caused_by_parent_tool_call_doc_id",
                 "target_capture": "delegation_calls",
                 "target_key": "_docID",
@@ -188,6 +188,22 @@
                   {
                     "field": "completion_notification_delivered_at",
                     "matches": "^[0-9]{4}-"
+                  }
+                ],
+                "exact": true
+              },
+              {
+                "capture": "helper-request",
+                "key": "agent_did",
+                "id": "gents:agent-slot:engineer",
+                "field": "session_id",
+                "target_capture": "trial-sessions",
+                "target_key": "session_id",
+                "exact": true,
+                "expect": [
+                  {
+                    "field": "agent_did",
+                    "equals": "gents:agent-slot:engineer"
                   }
                 ]
               }
@@ -219,7 +235,7 @@
           },
           "fields": [
             "session_id",
-            "agent_id",
+            "agent_did",
             "node_did"
           ]
         },
@@ -245,8 +261,9 @@
             "content",
             "lifecycle_state",
             "terminal_output",
-            "agent_id",
-            "caused_by_parent_tool_call_doc_id"
+            "agent_did",
+            "caused_by_parent_tool_call_doc_id",
+            "session_id"
           ]
         },
         {
@@ -262,6 +279,9 @@
                 "agent_new",
                 "agent_message"
               ]
+            },
+            "request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [

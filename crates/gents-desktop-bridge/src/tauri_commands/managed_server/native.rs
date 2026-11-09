@@ -1,4 +1,4 @@
-use super::port::{observe_port_readiness, PortReadiness};
+use super::port::{observe_port_readiness, user_status_signer, PortReadiness};
 use super::status::emit_status;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
@@ -121,7 +121,9 @@ where
     if preserve {
         return Ok(());
     }
-    let PortReadiness::Outdated { version } = observe_port_readiness(&node_home).await? else {
+    let PortReadiness::Outdated { version } =
+        observe_port_readiness(&node_home, user_status_signer(state).await.as_ref()).await?
+    else {
         return Ok(());
     };
     if !run_native(native_service(app, state)?, |service| service.status())

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::pack::archive::read_pack;
-use crate::pack::{load_pack_config, PackInstallOptions, PackManifest};
+use crate::pack::{load_pack_authoring_config, PackInstallOptions, PackManifest};
 
 pub const PREVIEW_OWNER: &str = "did:key:zPackShowPlaceholder";
 
@@ -21,7 +21,7 @@ pub fn preview_config(
     manifest: &PackManifest,
     asset: &dyn Fn(&str) -> Result<Vec<u8>>,
 ) -> Result<serde_json::Value> {
-    let config = load_pack_config(
+    let config = load_pack_authoring_config(
         manifest,
         &PackInstallOptions {
             node_did: PREVIEW_OWNER.into(),
@@ -45,7 +45,7 @@ pub fn preview_config(
             serde_json::from_str(&expanded).context("parsing experiment.json")
         })
         .transpose()?;
-    Ok(json!({ "config": config, "scenario": scenario }))
+    Ok(json!({ "config": config.value, "scenario": scenario }))
 }
 
 #[cfg(test)]
@@ -142,7 +142,7 @@ mod tests {
         let asset = |path: &str| -> Result<Vec<u8>> { Ok(std::fs::read(root.join(path))?) };
         let report = preview_config(&manifest, &asset).unwrap();
         assert_eq!(
-            report["config"]["agents"][0]["agent_id"],
+            report["config"]["agents"][0]["agent_slot"],
             "review-toolkit-worker"
         );
         assert_eq!(report["scenario"], serde_json::Value::Null);

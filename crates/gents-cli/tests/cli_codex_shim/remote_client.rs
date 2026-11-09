@@ -182,7 +182,7 @@ async fn stock_codex_remote_pty_smoke_uses_existing_client_codex_home_with_real_
         "expected PTY transcript to contain an echoed prompt and assistant response for {prompt_token}\nstdout:\n{stdout}\nstderr:\n{stderr}\ntranscript:\n{transcript}"
     );
     let prompt = smoke_prompt(prompt_token);
-    let (_request_id, _session_id, _agent_id) =
+    let (_request_id, _session_id, _agent_did) =
         wait_for_request(&smoke.graphql, &smoke.node_did, &prompt).await?;
     assert_shim_trace_methods(
         &smoke.shim_trace,
@@ -253,9 +253,9 @@ async fn stock_codex_remote_tmux_multiturn_uses_existing_client_codex_home_with_
             token_occurrences(&token_search_text, transformed_token) >= 1,
             "expected tmux transcript to contain transformed multi-turn response {transformed_token}, got:\n{transcript}"
         );
-        let (_request_id, first_session_id, _agent_id) =
+        let (_request_id, first_session_id, _agent_did) =
             wait_for_request(&smoke.graphql, &smoke.node_did, &first_prompt).await?;
-        let (_request_id, second_session_id, _agent_id) =
+        let (_request_id, second_session_id, _agent_did) =
             wait_for_request(&smoke.graphql, &smoke.node_did, second_prompt).await?;
         assert_eq!(first_session_id, second_session_id);
         assert_shim_trace_methods(&smoke.shim_trace, &["initialize", "thread/start"])?;

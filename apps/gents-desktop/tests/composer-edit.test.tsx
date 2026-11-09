@@ -54,7 +54,7 @@ const session = (queue: PendingQueueEntryView[]) =>
   ({
     sessionId: "session",
     nodeDid: NODE,
-    agentId: "default",
+    agentDid: "default",
     title: "Session",
     turnState: "running",
     timelineItems: [],

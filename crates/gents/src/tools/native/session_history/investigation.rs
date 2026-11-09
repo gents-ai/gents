@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use super::inference::{
@@ -12,10 +11,11 @@ use super::{
     InvestigationEnvelope, SessionCompactionEvent, SessionInvestigationSnapshot,
     SessionRequestEvent, SessionToolCallStats,
 };
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::config_client::ConfigRead;
+use crate::store::graphql::escape_graphql_string;
 
 pub async fn load_session_investigation(
-    node: &EmbeddedNode,
+    access: &dyn ConfigRead,
     node_did: &str,
     session_id: &str,
 ) -> Result<SessionInvestigationSnapshot> {
@@ -25,13 +25,10 @@ pub async fn load_session_investigation(
         bail!("sessions get requires a running node DID and non-empty session_id");
     }
 
-    let response = graphql_with_transaction_retry(
-        node,
-        &session_investigation_query(node_did, session_id),
-        "loading session investigation",
-    )
-    .await?;
-    let envelope: InvestigationEnvelope = decode(response.data.as_ref(), "session investigation")?;
+    let response = access
+        .execute_read(&session_investigation_query(node_did, session_id))
+        .await?;
+    let envelope: InvestigationEnvelope = decode(response.get("data"), "session investigation")?;
     if envelope.requests.is_empty() {
         bail!("session '{session_id}' has no requests owned by this agent");
     }
@@ -44,28 +41,29 @@ pub async fn load_session_investigation(
     if request_doc_ids.len() != envelope.requests.len() {
         bail!("session investigation contains a request without a physical document ID");
     }
-    let response = graphql_with_transaction_retry(
-        node,
-        &session_investigation_calls_query(node_did, &request_doc_ids),
-        "loading session investigation calls",
-    )
-    .await?;
+    let response = access
+        .execute_read(&session_investigation_calls_query(
+            node_did,
+            &request_doc_ids,
+        ))
+        .await?;
     let calls: InvestigationCallsEnvelope =
-        decode(response.data.as_ref(), "session investigation calls")?;
+        decode(response.get("data"), "session investigation calls")?;
 
     let mut audit_usage = Vec::with_capacity(envelope.requests.len());
     for request in &envelope.requests {
-        let observation =
-            match super::super::title_audit_usage::load_parent_inclusive_audit_usage(node, request)
-                .await
-            {
-                Ok(usage) => super::super::ParentAuditUsageObservation::Available { usage },
-                Err(error) => super::super::ParentAuditUsageObservation::Unavailable {
-                    parent_request_doc_id: request.doc_id.clone(),
-                    parent_request_id: request.request_id.clone(),
-                    error: format!("{error:#}"),
-                },
-            };
+        let observation = match super::super::title_audit_usage::load_parent_inclusive_audit_usage(
+            access, request,
+        )
+        .await
+        {
+            Ok(usage) => super::super::ParentAuditUsageObservation::Available { usage },
+            Err(error) => super::super::ParentAuditUsageObservation::Unavailable {
+                parent_request_doc_id: request.doc_id.clone(),
+                parent_request_id: request.request_id.clone(),
+                error: format!("{error:#}"),
+            },
+        };
         audit_usage.push(observation);
     }
     let mut snapshot = build_session_investigation(node_did, session_id, envelope, calls)?;
@@ -101,7 +99,7 @@ pub(super) fn session_investigation_scoped_query(
                 {{ session_id: {{ _eq: "{session_id}" }} }}
             ] }}) {{
                 session_id
-                agent_id
+                agent_did
             }}
             AgentRequest(
                 filter: {{ _and: [
@@ -117,7 +115,7 @@ pub(super) fn session_investigation_scoped_query(
                 purpose
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 lifecycle_state
                 created_at
@@ -169,7 +167,7 @@ pub(super) fn session_investigation_scoped_query(
                 compacted_tokens
             }}
             Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
-                agent_id
+                agent_did
                 inference_profile_id
                 context_id
             }}
@@ -248,13 +246,13 @@ pub(super) fn build_session_investigation(
         envelope.sessions.len() == 1,
         "session investigation requires one canonical AgentSession"
     );
-    let agent_id = clean(envelope.sessions[0].agent_id.as_ref())
-        .context("canonical AgentSession is missing agent_id")?;
+    let agent_did = clean(envelope.sessions[0].agent_did.as_ref())
+        .context("canonical AgentSession is missing agent_did")?;
     let agent = {
         envelope
             .agents
             .iter()
-            .find(|agent| agent.agent_id == agent_id)
+            .find(|agent| agent.agent_did == agent_did)
     };
     let context = agent
         .and_then(|agent| agent.context_id.as_deref())
@@ -400,7 +398,7 @@ pub(super) struct ToolCallDetailRow {
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct AgentDetailRow {
     #[serde(default)]
-    agent_id: String,
+    agent_did: String,
     #[serde(default)]
     inference_profile_id: Option<String>,
     #[serde(default)]

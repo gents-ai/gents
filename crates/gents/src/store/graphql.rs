@@ -1,6 +1,6 @@
 //! Raw GraphQL fragments require validation; string escaping and identifier validation do not cover them.
 
-use defra_node::{EmbeddedNode, QueryResponse};
+use defra_node::{Node as EmbeddedNode, QueryResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
@@ -86,6 +86,29 @@ impl From<ConfigClientError> for GraphqlResponseError {
 }
 
 type Result<T, E = GraphqlResponseError> = std::result::Result<T, E>;
+
+pub(crate) fn selection_filter(
+    filter: Option<&str>,
+    equality: Option<(&str, &str)>,
+) -> Result<String, gents_protocol::graphql::GraphqlError> {
+    let mut clauses = Vec::new();
+    if let Some(filter) = filter.map(str::trim).filter(|s| !s.is_empty()) {
+        validate_graphql_filter_fragment(filter)?;
+        clauses.push(filter.to_owned());
+    }
+    if let Some((field, value)) = equality {
+        validate_graphql_name(field)?;
+        clauses.push(format!(
+            "{{ {field}: {{_eq:\"{}\"}} }}",
+            escape_graphql_string(value)
+        ));
+    }
+    Ok(match clauses.as_slice() {
+        [] => "{}".into(),
+        [only] => only.clone(),
+        _ => format!("{{_and:[{}]}}", clauses.join(",")),
+    })
+}
 
 /// Render a GraphQL string-list literal, emitting `null` for an empty list
 /// (never `[]`, which types as `JsonArray` and corrupts nillable array columns).
@@ -199,9 +222,8 @@ where
     })
 }
 
-/// DefraDB can return successful `data: {}` for a node-read denial. An absent
-/// root cannot certify an empty authorized inventory; only an explicit array
-/// supplies that observation.
+/// A complete inventory requires an explicit row array; an omitted root does
+/// not establish whether the inventory was fully observed.
 pub fn required_rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
@@ -461,7 +483,10 @@ fn response_composite_commits(
     )
 }
 
-fn composite_commits_at(value: Option<&Value>, field: &str) -> Result<Vec<CompositeCommit>> {
+pub(crate) fn composite_commits_at(
+    value: Option<&Value>,
+    field: &str,
+) -> Result<Vec<CompositeCommit>> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -500,7 +525,7 @@ pub fn document_composite_version(
     unique_newest_composite_commit(commits, operation)
 }
 
-fn unique_newest_composite_commit(
+pub(crate) fn unique_newest_composite_commit(
     mut commits: Vec<CompositeCommit>,
     operation: &str,
 ) -> Result<Option<CompositeCommit>> {
@@ -549,7 +574,7 @@ pub async fn newest_document_composite_commit_in_txn(
     unique_newest_composite_commit(commits, operation)
 }
 
-fn newest_composite_query(doc_id: &str) -> String {
+pub(crate) fn newest_composite_query(doc_id: &str) -> String {
     format!(
         r#"query {{
             _commits(

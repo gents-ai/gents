@@ -29,6 +29,48 @@ structure State where
   observation : Option Observation
   deriving DecidableEq, Repr
 
+/-- A direct authenticated database read supplies the documents visible to the
+caller. Hidden and missing rows are indistinguishable; enrollment and requester
+labels do not grant or restrict visibility beyond native ACP. Both the session
+and active request must be uniquely visible for live activity to be exposed. -/
+def sourceVisible (sessions requests : Nat) (active : Bool) : Bool :=
+  sessions == 1 && requests == 1 && active
+
+theorem invisible_session_hides_activity (requests : Nat) (active : Bool) :
+    sourceVisible 0 requests active = false := by rfl
+
+theorem inactive_request_hides_activity (sessions requests : Nat) :
+    sourceVisible sessions requests false = false := by simp [sourceVisible]
+
+inductive ActivityResponse where
+  | forbidden
+  | unavailable
+  | visible
+  deriving DecidableEq, Repr
+
+/-- The activity route's native node gate. DefraDB's HTTP layer requires
+`read-document` for every route it does not list, but routes Gents merges into
+the server sit outside that layer, so the read owner applies the same native
+node permission, as the caller holds it, before consulting documents. A caller
+holding no node read, such as a member whose enrollment grant was revoked, is
+refused distinguishably from unavailable activity; holding it grants no
+document visibility. -/
+def activityResponse (holdsNodeRead : Bool) (sessions requests : Nat) (active : Bool) :
+    ActivityResponse :=
+  if !holdsNodeRead then .forbidden
+  else if sourceVisible sessions requests active then .visible
+  else .unavailable
+
+theorem without_node_read_activity_is_forbidden (sessions requests : Nat) (active : Bool) :
+    activityResponse false sessions requests active = .forbidden := by
+  simp [activityResponse]
+
+theorem node_read_grants_no_document_visibility (sessions requests : Nat) (active : Bool) :
+    activityResponse true sessions requests active = .visible ↔
+      sourceVisible sessions requests active = true := by
+  unfold activityResponse
+  cases sourceVisible sessions requests active <;> simp
+
 /-- Epochs fence asynchronous reads across selection and reconnect. The target
 is supplied by the authorized session and request owner; an activity update is
 never evidence that a request remains active. Sequence numbers belong to one

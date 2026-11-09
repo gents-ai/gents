@@ -157,10 +157,14 @@ async fn console_interrupt_releases_the_native_installation() -> Result<()> {
             .await?,
     );
     let peer = seed.local_peer_id().to_owned();
+    let seed_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
     let mut command = Command::new(env!("CARGO_BIN_EXE_gents-client-host"));
-    command.args(["--serve", "--home"]).arg(paths.root());
+    command
+        .envs(super::support::homes::ProcessHomes::under(temp.path()).env())
+        .args(["--serve", "--home"])
+        .arg(paths.root());
     let log = temp.path().join("console.log");
     let mut child = ConsoleChild::spawn(&command, &log)?;
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -178,7 +182,7 @@ async fn console_interrupt_releases_the_native_installation() -> Result<()> {
     })
     .await??;
     let mut attachment = super::support::Attachment::start(&paths).await;
-    anyhow::ensure!(attachment.snapshot(1).await["client"]["localPeerId"] == peer);
+    anyhow::ensure!(attachment.snapshot(1).await["client"]["clientDid"] == seed_did);
     attachment.close().await;
     child.interrupt()?;
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await??;

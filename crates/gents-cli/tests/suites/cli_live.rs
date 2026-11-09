@@ -12,7 +12,7 @@ struct LiveFileAgents<'a> {
     tools_id: &'a str,
     host: Value,
     system_prompt: &'a std::path::Path,
-    agent_ids: &'a [&'a str],
+    agent_dids: &'a [&'a str],
     target: Option<&'a InferenceTarget>,
 }
 
@@ -27,7 +27,7 @@ fn apply_live_file_agent_config(
         tools_id,
         host,
         system_prompt,
-        agent_ids,
+        agent_dids,
         target,
     } = agents;
     run_cli_text(
@@ -97,20 +97,20 @@ fn apply_live_file_agent_config(
     let prompt = fs::read_to_string(system_prompt)?;
     let base_agent = config["agents"][0].clone();
     let base_context = config["contexts"][0].clone();
-    for agent_id in agent_ids {
+    for agent_did in agent_dids {
         let existing_context_id = config["agents"]
             .as_array()
             .context("agents is not an array")?
             .iter()
-            .find(|agent| agent["agent_id"] == *agent_id)
+            .find(|agent| agent["agent_did"] == *agent_did)
             .and_then(|agent| agent["context_id"].as_str())
             .map(ToOwned::to_owned);
         let context_id = if let Some(context_id) = existing_context_id {
             context_id
         } else {
-            let context_id = format!("{agent_id}:context");
+            let context_id = format!("{agent_did}:context");
             let mut agent = base_agent.clone();
-            agent["agent_id"] = Value::String((*agent_id).to_string());
+            agent["agent_did"] = Value::String((*agent_did).to_string());
             agent["context_id"] = Value::String(context_id.clone());
             config["agents"]
                 .as_array_mut()
@@ -221,10 +221,10 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
     let node_did = node_did_from_init(&init)?;
-    let agent_id = init
-        .pointer("/init/default_agent_id")
+    let agent_did = init
+        .pointer("/init/default_agent_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing default_agent_did: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -305,7 +305,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             tools_id: &tools_id,
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
-            agent_ids: &[&agent_id],
+            agent_dids: &[&agent_did],
             target: target.as_ref(),
         },
     )?;
@@ -437,10 +437,10 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
     let node_did = node_did_from_init(&init)?;
-    let agent_id = init
-        .pointer("/init/default_agent_id")
+    let agent_did = init
+        .pointer("/init/default_agent_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing default_agent_did: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -461,7 +461,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             tools_id: &tools_id,
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
-            agent_ids: &[&agent_id],
+            agent_dids: &[&agent_did],
             target: None,
         },
     )?;
@@ -484,8 +484,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             &node_did,
             "--session-id",
             &session_id,
-            "--agent-id",
-            &agent_id,
+            "--agent-did",
+            &agent_did,
             "--content",
             &prompt,
             "--timeout-secs",
@@ -787,7 +787,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     struct LiveRequestSpec {
-        agent_id: String,
+        agent_did: String,
         prompt: String,
         tokens: Vec<String>,
     }
@@ -814,7 +814,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             paths.join(", ")
         );
         request_specs.push(LiveRequestSpec {
-            agent_id: format!("live-{request_index}"),
+            agent_did: format!("live-{request_index}"),
             prompt,
             tokens,
         });
@@ -867,9 +867,9 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    let agent_ids = request_specs
+    let agent_dids = request_specs
         .iter()
-        .map(|spec| spec.agent_id.as_str())
+        .map(|spec| spec.agent_did.as_str())
         .collect::<Vec<_>>();
     apply_live_file_agent_config(
         &home_dir,
@@ -880,7 +880,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             tools_id: &tools_id,
             host: read_only_files(&home_dir)?,
             system_prompt: &system_prompt,
-            agent_ids: &agent_ids,
+            agent_dids: &agent_dids,
             target: None,
         },
     )?;
@@ -899,8 +899,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
                 &graphql,
                 "--node-did",
                 &node_did,
-                "--agent-id",
-                &spec.agent_id,
+                "--agent-did",
+                &spec.agent_did,
                 "--content",
                 &spec.prompt,
                 "--timeout-secs",
@@ -917,7 +917,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     for (spec, child) in children {
         match child.wait_with_output() {
             Ok(output) => outputs.push((spec, output)),
-            Err(error) => wait_errors.push(format!("{}: {error}", spec.agent_id)),
+            Err(error) => wait_errors.push(format!("{}: {error}", spec.agent_did)),
         }
     }
     if !wait_errors.is_empty() {
@@ -932,7 +932,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             let (server_stdout, server_stderr) = serve.captured_output()?;
             bail!(
                 "live request {} failed\nstdout:\n{}\nstderr:\n{}\nserver stdout:\n{}\nserver stderr:\n{}",
-                spec.agent_id,
+                spec.agent_did,
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr),
                 server_stdout,
@@ -940,10 +940,10 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             );
         }
         let result: Value = serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("parsing live request JSON for {}", spec.agent_id))?;
+            .with_context(|| format!("parsing live request JSON for {}", spec.agent_did))?;
         assert_eq!(
-            result.get("agent_id").and_then(Value::as_str),
-            Some(spec.agent_id.as_str())
+            result.get("agent_did").and_then(Value::as_str),
+            Some(spec.agent_did.as_str())
         );
         let response = result
             .pointer("/output/presentation/body_markdown")
@@ -955,7 +955,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             assert!(
                 response.contains(token),
                 "expected response for {} to contain token {token}, got {response}",
-                spec.agent_id
+                spec.agent_did
             );
         }
         let session_id = result
@@ -974,7 +974,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             assert!(
                 tool_results.contains(token),
                 "expected persisted read_file tool calls for {} to include token {token}: {tool_results}",
-                spec.agent_id
+                spec.agent_did
             );
         }
     }
@@ -984,7 +984,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         &backend_id,
         &request_specs
             .iter()
-            .map(|spec| spec.agent_id.as_str())
+            .map(|spec| spec.agent_did.as_str())
             .collect::<Vec<_>>(),
     )
     .await?;
@@ -1161,10 +1161,10 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         &init_args.iter().map(String::as_str).collect::<Vec<_>>(),
     )?;
     let node = node_did_from_init(&init)?;
-    let agent_id = init
-        .pointer("/init/default_agent_id")
+    let agent_did = init
+        .pointer("/init/default_agent_did")
         .and_then(Value::as_str)
-        .context("init output missing default_agent_id")?
+        .context("init output missing default_agent_did")?
         .to_owned();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -1193,7 +1193,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
                 "bash": {"mode": "Unrestricted"}
             }),
             system_prompt: &system_prompt,
-            agent_ids: &[&agent_id],
+            agent_dids: &[&agent_did],
             target: None,
         },
     )?;
