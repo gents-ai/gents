@@ -130,15 +130,11 @@ it("never retires an unconfirmed answer even when its question is closed", async
   expect(loadChatDrafts().chatDrafts[0].confirmed).toBeUndefined();
 });
 
-it("coalesces updates and waits for in-flight delivery before observing closure", async () => {
+it("coalesces updates into one closure observation", async () => {
   const f = fixture();
   const observed = deferred<MailboxItemObservation>();
   f.observe.mockReturnValue(observed.promise);
-  f.app.stores.chat.setState({ chatRequestsInFlight: new Set(["answer"]) });
   saveChatDraft(f.app.stores.chat, answer());
-  await flush();
-  expect(f.observe).not.toHaveBeenCalled();
-  f.app.stores.chat.setState({ chatRequestsInFlight: new Set() });
   await flush();
   for (let i = 0; i < 10; i++)
     publish(f.app, [node({ nodeDid: NODE, label: String(i) })]);

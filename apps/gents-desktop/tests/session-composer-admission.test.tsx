@@ -1124,9 +1124,7 @@ it("does not clear the replacement history draft when an earlier client's reply 
     finish();
     await pending;
   });
-  await waitFor(() =>
-    expect(app.stores.chat.getState().chatRequestsInFlight.size).toBe(0),
-  );
+  await waitFor(() => expect(app.stores.chat.getState().chatDrafts).toEqual([]));
   expect(composerText(screen.getByLabelText("Message"))).toBe(
     "same text in another history",
   );

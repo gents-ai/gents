@@ -6,6 +6,10 @@ import type {
 import type { ChatStore } from "./chatStore";
 
 const PREFIX = "gents.chat.sendDraft.v1:";
+/** The base client's list of sends with an unknown outcome and no kept
+ * payload. Nothing reads it: those sends are visible in their sessions if
+ * they landed, and no payload remains to resend. */
+const ABANDONED_UNRESOLVED = "gents.chat.unresolvedSubmissions.v1";
 
 export type ChatDraft = {
   clientDid: string;
@@ -19,8 +23,13 @@ export type ChatDraft = {
    * `ClientOptimisticSend.payload_retained`); a retry resends it as is. */
   requestJson: string;
   /** The runtime holds this request. Only a mailbox answer stays saved once
-   * confirmed, until its question is observed closed. */
+   * confirmed, until its question is observed closed. A draft saved by the
+   * base client with its receipt (`result`) was confirmed too. */
   confirmed?: true;
+  /** The deadline (epoch ms) of the send in flight (Lean `timeout`,
+   * `CHAT_SEND_DEADLINE_MS`). It is saved with the payload, so every window
+   * derives the same status: pending until it passes, failed after. */
+  pendingUntil?: number;
   /** Why the last send failed, shown with Retry: the cause and, when the
    * bridge classified it, its typed error (storage full names a recovery). */
   failure?: { message: string; error: BridgeErrorPayload | null };
@@ -73,7 +82,12 @@ function decode(value: unknown): ChatDraft {
       summary: value.mailbox.summary,
     };
   }
-  if (value.confirmed === true) draft.confirmed = true;
+  if (value.confirmed === true || object(value.result)) draft.confirmed = true;
+  else if (
+    typeof value.pendingUntil === "number" &&
+    Number.isFinite(value.pendingUntil)
+  )
+    draft.pendingUntil = value.pendingUntil;
   if (object(value.failure) && typeof value.failure.message === "string")
     draft.failure = {
       message: value.failure.message,
@@ -89,15 +103,21 @@ export function loadChatDrafts(): {
   chatDraftError: string | null;
 } {
   try {
+    localStorage.removeItem(ABANDONED_UNRESOLVED);
     const chatDrafts: ChatDraft[] = [];
+    const released: string[] = [];
     for (let index = 0; index < localStorage.length; index++) {
       const key = localStorage.key(index);
       if (!key?.startsWith(PREFIX)) continue;
       const draft = decode(JSON.parse(localStorage.getItem(key) ?? "null"));
       if (chatDraftKey(draft) !== key)
         throw new Error("The saved message identity is inconsistent.");
-      chatDrafts.push(draft);
+      // A confirmed chat message keeps no payload (Lean `onReply`); only a
+      // confirmed answer waits for its question to close.
+      if (draft.confirmed && !draft.mailbox) released.push(key);
+      else chatDrafts.push(draft);
     }
+    for (const key of released) localStorage.removeItem(key);
     return { chatDrafts, chatDraftError: null };
   } catch (error) {
     return {
@@ -160,6 +180,15 @@ export function saveChatDraft(store: ChatStore, draft: ChatDraft) {
 export function removeChatDraft(store: ChatStore, draft: ChatDraft) {
   localStorage.removeItem(chatDraftKey(draft));
   store.setState(loadChatDrafts());
+}
+
+/** The saved form of `draft` as every window sees it now, or null once it is
+ * discarded or released. */
+export function savedChatDraft(draft: ChatDraft): ChatDraft | null {
+  const value = localStorage.getItem(chatDraftKey(draft));
+  if (value === null) return null;
+  const saved = decode(JSON.parse(value));
+  return saved.confirmed && !saved.mailbox ? null : saved;
 }
 
 export function chatDraftsFor(

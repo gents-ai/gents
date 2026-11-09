@@ -31,7 +31,7 @@ import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { heldFor, readSession } from "./sessionStore";
 import type { ShellProjection, ShellStores } from "./shellProjection";
-import { createChatDelivery } from "./chatDelivery";
+import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
 import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
@@ -333,8 +333,13 @@ export function createChatActions({
       );
       return result;
     } catch (error) {
-      if (!acceptsView() || !selection.acceptsIntent(store, intent)) return null;
+      if (!acceptsView() || !selection.acceptsIntent(store, intent))
+        return error instanceof ChatViewUpdateError ? error.result : null;
       chat.resetWorkflow(stores.chat);
+      if (error instanceof ChatViewUpdateError) {
+        reportFailure(error.message);
+        return error.result;
+      }
       reportSendFailure(actionFailure("send the message", error));
       return null;
     } finally {

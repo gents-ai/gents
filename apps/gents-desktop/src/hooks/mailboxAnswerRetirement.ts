@@ -111,12 +111,7 @@ export function observeMailboxAnswerRetirement({
     const state = stores.chat.getState();
     for (const draft of state.chatDrafts) {
       const binding = bindingOf(draft);
-      if (
-        !binding ||
-        binding.clientDid !== clientDid() ||
-        state.chatRequestsInFlight.has(draft.requestId)
-      )
-        continue;
+      if (!binding || binding.clientDid !== clientDid()) continue;
       if (
         stores.fleet
           .getState()
@@ -150,7 +145,6 @@ export function observeMailboxAnswerRetirement({
       if (disposed || generation !== epoch || clientDid() !== binding.clientDid)
         return false;
       const state = stores.chat.getState();
-      if (state.chatRequestsInFlight.has(draft.requestId)) return false;
       const matches = (row: ChatDraft) =>
         chatDraftKey(row) === chatDraftKey(draft) && JSON.stringify(row) === serialized;
       const saved = loadChatDrafts();
@@ -186,11 +180,7 @@ export function observeMailboxAnswerRetirement({
       }
     }),
     stores.chat.subscribe((state, previous) => {
-      if (
-        state.chatDrafts !== previous.chatDrafts ||
-        state.chatRequestsInFlight !== previous.chatRequestsInFlight
-      )
-        schedule();
+      if (state.chatDrafts !== previous.chatDrafts) schedule();
     }),
     stores.fleet.subscribe((state, previous) => {
       if (state.mailboxOf !== previous.mailboxOf) schedule();

@@ -46,19 +46,26 @@ function fixture(sending = false) {
     },
   }));
   app.drafts.setState({ drafts: { newer: "Keep this newer draft" } });
-  if (sending)
-    app.stores.chat.setState({ chatRequestsInFlight: new Set(["original-request"]) });
-  saveChatDraft(app.stores.chat, {
-    ...retainChatDraft(request, null),
-    failure: { message: "The runtime connection was lost", error: null },
-  });
+  saveChatDraft(
+    app.stores.chat,
+    sending
+      ? { ...retainChatDraft(request, null), pendingUntil: Date.now() + 60_000 }
+      : {
+          ...retainChatDraft(request, null),
+          failure: { message: "The runtime connection was lost", error: null },
+        },
+  );
   const view = render(<ChatDeliveryFeedback />, { wrapper: withApp(app) });
   return { app, request, control, view };
 }
 
-it("shows nothing while a message is being sent", () => {
+it("shows a message as sending from the moment it is sent, with no actions", () => {
   fixture(true);
-  expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull();
+  const shown = screen.getByRole("status", { name: "Saved message" });
+  expect(shown.textContent).toContain("Sending the message…");
+  expect(shown.textContent).toContain("Original message");
+  expect(screen.queryByRole("button", { name: "Retry message" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Discard message" })).toBeNull();
 });
 
 it("shows a failed message with its cause, and Retry resends the original while preserving newer text", async () => {

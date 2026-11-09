@@ -1,9 +1,10 @@
 import type { ChatDraft } from "./chatDrafts";
 
 /** One authored message's send state (Lean `ClientOptimisticSend.Status`).
- * A kept draft is pending while its send is in flight, confirmed once the
+ * A kept draft is pending until its saved send deadline, confirmed once the
  * runtime holds it, and failed otherwise: a refused send, or one whose reply
- * never arrived (a lost reply, a restart). */
+ * did not arrive by its deadline (a lost reply, a hung send, a restart, a
+ * closed window). Every window derives it from the shared saved draft. */
 export type SendStatus = "pending" | "confirmed" | "failed" | "discarded";
 
 export type DeliveryView = "sending" | "delivered" | "failed" | "hidden";
@@ -15,9 +16,28 @@ export type DeliveryAffordances = {
   blocksComposer: boolean;
 };
 
-export function sendStatus(draft: ChatDraft, inFlight: boolean): SendStatus {
-  if (inFlight) return "pending";
-  return draft.confirmed ? "confirmed" : "failed";
+export function sendStatus(draft: ChatDraft, now: number): SendStatus {
+  if (draft.confirmed) return "confirmed";
+  return draft.pendingUntil !== undefined && now < draft.pendingUntil
+    ? "pending"
+    : "failed";
+}
+
+/** The earliest saved deadline still ahead, when a view must re-derive. */
+export function nextSendDeadline(
+  drafts: readonly ChatDraft[],
+  now: number,
+): number | null {
+  let next: number | null = null;
+  for (const draft of drafts)
+    if (
+      !draft.confirmed &&
+      draft.pendingUntil !== undefined &&
+      draft.pendingUntil > now &&
+      (next === null || draft.pendingUntil < next)
+    )
+      next = draft.pendingUntil;
+  return next;
 }
 
 /** The view and actions for one message, bound to Lean `view`. */

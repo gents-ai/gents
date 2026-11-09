@@ -14,14 +14,12 @@ import {
   loadChatDrafts,
   type ChatDraft,
 } from "../../../hooks/chatDrafts";
-import { deliveryAffordances, sendStatus } from "../../../hooks/chatDeliveryView";
-
-/* a send in flight shows as pending in the session; a message the person
-   must act on (failed with Retry and Discard), or a confirmed answer waiting
-   for its question to close, stays in view until it settles */
-function needsAttention(draft: ChatDraft, inFlight: boolean) {
-  return !inFlight || draft.mailbox !== undefined;
-}
+import {
+  deliveryAffordances,
+  sendStatus,
+  type SendStatus,
+} from "../../../hooks/chatDeliveryView";
+import { useSendDeadlineClock } from "../../../hooks/useSendDeadlineClock";
 
 function description(draft: ChatDraft) {
   if (draft.mailbox) return draft.mailbox.summary;
@@ -55,8 +53,7 @@ export function ChatDeliveryFeedback({
   const entries = stores.chat.use.chatDrafts();
   const readError = stores.chat.use.chatDraftError();
   const sending = stores.chat.use.sending();
-  const requests = stores.chat.use.chatRequestsInFlight();
-  const shown = useRef(new Set<string>());
+  const now = useSendDeadlineClock(entries);
   useEffect(() => {
     const reload = () => stores.chat.setState(loadChatDrafts());
     window.addEventListener("storage", reload);
@@ -69,38 +66,38 @@ export function ChatDeliveryFeedback({
           {readError}
         </p>
       )}
+      {/* every kept message is in view from the moment it is sent: pending
+          while its send is in flight, failed with Retry and Discard, or a
+          confirmed answer waiting for its question to close */}
       {chatDraftsFor(
         entries,
         clientDid,
         nodeDid,
         sessionId,
         mailboxItem?.itemId ?? null,
-      )
-        .filter((draft) => {
-          if (needsAttention(draft, requests.has(draft.requestId)))
-            shown.current.add(draft.requestId);
-          return shown.current.has(draft.requestId);
-        })
-        .map((draft) => (
+      ).map((draft) => {
+        const status = sendStatus(draft, now);
+        return (
           <SavedMessage
             key={draft.requestId}
             draft={draft}
-            disabled={sending || requests.has(draft.requestId)}
-            submitting={requests.has(draft.requestId)}
+            status={status}
+            disabled={sending || status === "pending"}
           />
-        ))}
+        );
+      })}
     </>
   );
 }
 
 function SavedMessage({
   draft,
+  status,
   disabled,
-  submitting,
 }: {
   draft: ChatDraft;
+  status: SendStatus;
   disabled: boolean;
-  submitting: boolean;
 }) {
   const { actions, stores } = useApp();
   const mounted = useRef(true);
@@ -113,10 +110,7 @@ function SavedMessage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const noun = draft.mailbox ? "answer" : "message";
-  const shown = deliveryAffordances(
-    sendStatus(draft, submitting),
-    draft.mailbox !== undefined,
-  );
+  const shown = deliveryAffordances(status, draft.mailbox !== undefined);
   async function retry() {
     if (busy || disabled) return;
     const intent = actions.captureComposeIntent();

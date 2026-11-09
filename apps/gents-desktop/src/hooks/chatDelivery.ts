@@ -11,6 +11,7 @@ import {
   removeChatDraft,
   retainChatDraft,
   saveChatDraft,
+  savedChatDraft,
   validateChatResult,
   type ChatDraft,
 } from "./chatDrafts";
@@ -19,11 +20,41 @@ import type { ShellStores } from "./shellProjection";
 
 type Applied = (result: ChatSendResult, draft: ChatDraft) => Promise<boolean>;
 
+/** The client deadline of one send (Lean `ClientOptimisticSend.timeout`).
+ * Neither the bridge nor the runtime bounds a create, so a send with no reply
+ * by then shows failed with Retry; a reply that arrives later is still
+ * applied, because Retry resends the same identity. */
+export const CHAT_SEND_DEADLINE_MS = 30_000;
+
+/** The reply was a confirmation, but the chat view could not show it. The
+ * message stays confirmed; only the view update failed. */
+export class ChatViewUpdateError extends Error {
+  constructor(
+    readonly result: ChatSendResult,
+    cause: unknown,
+  ) {
+    super(
+      `The message was sent, but this chat could not show it yet: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+    this.name = "ChatViewUpdateError";
+  }
+}
+
+type Reply = { ok: true; result: ChatSendResult } | { ok: false; error: unknown };
+
 /** The optimistic send (Lean `ClientOptimisticSend`): the message gets its
- * request identity and a kept payload before dispatch, is pending while the
- * one signed create is in flight, and is confirmed by its reply or failed
- * with Retry, which resends the same payload under the same identity. */
-export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) {
+ * request identity and a kept payload before dispatch, is pending until its
+ * saved deadline while the one signed create is in flight, and is confirmed by
+ * its reply or failed with Retry, which resends the same payload under the
+ * same identity. The saved draft is the message's only state, shared by every
+ * window. */
+export function createChatDelivery(
+  api: DesktopApiAdapter,
+  stores: ShellStores,
+  now: () => number = Date.now,
+) {
   function clientDid() {
     const actor = stores.client.getState().snapshot?.client?.clientDid;
     if (!actor) throw new Error("Connect this client before sending a message.");
@@ -42,49 +73,84 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
     if (!draft) throw new Error("The original message is unavailable for this client.");
     return draft;
   }
-  function inFlight(requestId: string) {
-    return stores.chat.getState().chatRequestsInFlight.has(requestId);
-  }
-  function track(requestId: string, running: boolean) {
-    stores.chat.setState((state) => {
-      const chatRequestsInFlight = new Set(state.chatRequestsInFlight);
-      if (running) chatRequestsInFlight.add(requestId);
-      else chatRequestsInFlight.delete(requestId);
-      return { chatRequestsInFlight };
-    });
+  /** Lean `receive`: a confirmation confirms whatever the message shows
+   * unless it was discarded; a failure fails only a pending message. */
+  async function settle(draft: ChatDraft, reply: Reply, applied: Applied) {
+    const current = savedChatDraft(draft);
+    if (!reply.ok) {
+      if (current && sendStatus(current, now()) === "pending") {
+        const payload = asBridgeErrorPayload(reply.error);
+        saveChatDraft(stores.chat, {
+          ...current,
+          pendingUntil: undefined,
+          failure: {
+            message:
+              payload?.message ??
+              (reply.error instanceof Error
+                ? reply.error.message
+                : String(reply.error)),
+            error: payload,
+          },
+        });
+      } else stores.chat.setState(loadChatDrafts());
+      throw reply.error;
+    }
+    if (!current) {
+      stores.chat.setState(loadChatDrafts());
+      return reply.result;
+    }
+    // Confirmed before the view applies it: a view failure never shows a
+    // confirmed message as failed. A mailbox answer stays saved, confirmed,
+    // until its question is observed closed.
+    if (current.mailbox)
+      saveChatDraft(stores.chat, {
+        ...current,
+        confirmed: true,
+        pendingUntil: undefined,
+        failure: undefined,
+      });
+    else removeChatDraft(stores.chat, current);
+    try {
+      await applied(reply.result, current);
+    } catch (error) {
+      throw new ChatViewUpdateError(reply.result, error);
+    }
+    return reply.result;
   }
   async function send(draft: ChatDraft, applied: Applied) {
     if (clientDid() !== draft.clientDid)
       throw new Error("The selected client changed before dispatch.");
-    track(draft.requestId, true);
-    try {
-      let result: ChatSendResult;
+    const attempt: ChatDraft = {
+      ...draft,
+      failure: undefined,
+      pendingUntil: now() + CHAT_SEND_DEADLINE_MS,
+    };
+    saveChatDraft(stores.chat, attempt);
+    const reply: Promise<Reply> = (async () => {
       try {
-        result = await api.sendChatMessage(chatDraftRequest(draft));
-        validateChatResult(draft, result);
+        const result = await api.sendChatMessage(chatDraftRequest(attempt));
+        validateChatResult(attempt, result);
+        return { ok: true as const, result };
       } catch (error) {
-        const payload = asBridgeErrorPayload(error);
-        saveChatDraft(stores.chat, {
-          ...draft,
-          failure: {
-            message:
-              payload?.message ??
-              (error instanceof Error ? error.message : String(error)),
-            error: payload,
-          },
-        });
-        throw error;
+        return { ok: false as const, error };
       }
-      await applied(result, draft);
-      // Confirmed: the payload is released. A mailbox answer stays saved,
-      // confirmed, until its question is observed closed.
-      if (draft.mailbox)
-        saveChatDraft(stores.chat, { ...draft, confirmed: true, failure: undefined });
-      else removeChatDraft(stores.chat, draft);
-      return result;
-    } finally {
-      track(draft.requestId, false);
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<"deadline">((resolve) => {
+      timer = setTimeout(() => resolve("deadline"), CHAT_SEND_DEADLINE_MS);
+    });
+    const first = await Promise.race([reply, deadline]);
+    clearTimeout(timer);
+    if (first === "deadline") {
+      // Lean `timeout`: the saved deadline has passed, so every window now
+      // shows the message failed. A later reply is still applied.
+      stores.chat.setState(loadChatDrafts());
+      void reply.then((late) => settle(attempt, late, applied)).catch(() => {});
+      throw new Error(
+        `No reply arrived within ${CHAT_SEND_DEADLINE_MS / 1000} seconds. Retry sends it again; it is never sent twice.`,
+      );
     }
+    return settle(attempt, first, applied);
   }
   return {
     async submit(
@@ -106,10 +172,8 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
           mailbox?.itemId,
         ).some(
           (draft) =>
-            deliveryAffordances(
-              sendStatus(draft, inFlight(draft.requestId)),
-              mailbox !== undefined,
-            ).blocksComposer,
+            deliveryAffordances(sendStatus(draft, now()), mailbox !== undefined)
+              .blocksComposer,
         )
       )
         throw new Error(
@@ -126,21 +190,23 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
         queued,
         mailbox,
       );
-      saveChatDraft(stores.chat, draft);
       return send(draft, applied);
     },
     /** Resend a failed message: the same payload under the same identity. */
     async retry(requestId: string, applied: Applied) {
       const draft = original(requestId);
-      if (inFlight(requestId)) throw new Error("This message is still being sent.");
-      if (draft.confirmed) throw new Error("This message was already delivered.");
-      return send({ ...draft, failure: undefined }, applied);
+      const status = sendStatus(draft, now());
+      if (status === "pending") throw new Error("This message is still being sent.");
+      if (status === "confirmed")
+        throw new Error("This message was already delivered.");
+      return send(draft, applied);
     },
     /** Discard a failed message. It sends nothing; if an earlier send of it
      * reached the runtime, it still appears in the session. */
     async discard(requestId: string) {
       const draft = original(requestId);
-      if (inFlight(requestId)) throw new Error("This message is still being sent.");
+      if (sendStatus(draft, now()) !== "failed")
+        throw new Error("Only a message that wasn't sent can be discarded.");
       removeChatDraft(stores.chat, draft);
     },
   };
