@@ -550,7 +550,10 @@ mod tests {
     #[tokio::test]
     async fn inference_metadata_requires_complete_scoped_configuration() {
         let node = "did:runtime";
-        let data = json!({ "nodes": [{"node_did": node}], "agents": [], "inference_profiles": [], "inference_backends": [] });
+        let data = json!({
+            "nodes": [{"node_did": node}], "agents": [], "inference_profiles": [],
+            "inference_backends": [], "backend_observations": []
+        });
         for (name, payload, accepted) in [
             ("complete", data.clone(), true),
             (

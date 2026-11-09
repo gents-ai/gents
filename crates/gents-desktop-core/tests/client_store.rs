@@ -160,6 +160,11 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     Ok(())
 }
 
+/// A terminal request re-reads its runtime's configuration before the selected
+/// request is published. When that publication is fenced by a concurrent
+/// invalidation, the scoped resync still converges on the runtime's current
+/// `Node`. The desktop's local replica of runtime configuration is deleted:
+/// both the starting value and the recovered value come only from the runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Result<()> {
     use wiremock::matchers::{method, path};
@@ -174,35 +179,6 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     )
     .await?;
 
-    let response = core
-        .node()
-        .execute(
-            r#"mutation {
-                create_Node(input: {
-                    node_did: "did:test:hosted-amy"
-                    display_name: "Amy"
-                    default_agent_did: "did:test:hosted-amy:default"
-                    enabled: true
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed local node: {:?}",
-        response.errors
-    );
-    core.refresh_store().await?;
-    assert_eq!(
-        core.store()
-            .snapshot()
-            .nodes
-            .iter()
-            .find(|node| node.node_did == NODE_DID)
-            .and_then(|node| node.default_agent_did.as_deref()),
-        Some("did:test:hosted-amy:default")
-    );
-
     let server = MockServer::start().await;
     let completed_request = serde_json::json!({
         "_docID": "remote-terminal-request-doc",
@@ -215,38 +191,45 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "content": "make research the default",
         "lifecycle_state": "completed"
     });
-    let mut operator_data = serde_json::json!({
-        "nodes": [{
-            "node_did": NODE_DID,
-            "display_name": "Amy",
-            "default_agent_did": "did:test:hosted-amy:research",
-            "enabled": true
-        }]
-    });
-    for key in [
-        "agents",
-        "runtimes",
-        "node_readiness",
-        "contexts",
-        "tools",
-        "inference_backends",
-        "inference_profiles",
-        "inference_sampling",
-        "inference_execution",
-        "tasks",
-        "schedules",
-        "triggers",
-        "skills",
-        "compactions",
-        "tool_service_registries",
-        "event_sources",
-        "agent_targets",
-        "datastore_tool_surfaces",
-        "sessions",
-        "requests",
-    ] {
-        operator_data[key] = serde_json::json!([]);
-    }
+    let snapshot_data = |default_agent_did: &str| {
+        let mut data = serde_json::json!({
+            "nodes": [{
+                "node_did": NODE_DID,
+                "display_name": "Amy",
+                "default_agent_did": default_agent_did,
+                "enabled": true
+            }]
+        });
+        for key in [
+            "agents",
+            "runtimes",
+            "node_readiness",
+            "requests",
+            "mailbox_items",
+            "goals",
+            "sessions",
+            "tools",
+            "contexts",
+            "compactions",
+            "triggers",
+            "tasks",
+            "schedules",
+            "skills",
+            "inference_backends",
+            "backend_observations",
+            "inference_profiles",
+            "inference_sampling",
+            "inference_execution",
+            "tool_service_registries",
+            "event_sources",
+            "agent_targets",
+            "datastore_tool_surfaces",
+        ] {
+            data[key] = serde_json::json!([]);
+        }
+        data
+    };
+    let runtime_default = Arc::new(std::sync::Mutex::new("did:test:hosted-amy:default"));
     let store = Arc::clone(core.store());
     let response_request = completed_request.clone();
     let response_session = serde_json::json!({
@@ -256,7 +239,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "agent_did": "did:test:hosted-amy:default",
         "created_at": "2026-07-24T00:00:00Z"
     });
-    let response_operator_data = operator_data.clone();
+    let served_default = Arc::clone(&runtime_default);
     Mock::given(method("POST"))
         .and(path("/api/v0/tx"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -286,8 +269,8 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
                 serde_json::json!({"r0": []})
             } else if body.contains("DesktopRequestSessionContext") {
                 serde_json::json!({"goals_0": []})
-            } else if body.contains("DesktopOperatorConfig") {
-                response_operator_data.clone()
+            } else if body.contains("DesktopSnapshot") {
+                snapshot_data(*served_default.lock().unwrap())
             } else {
                 serde_json::json!({})
             };
@@ -303,7 +286,20 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "/tmp/test-hosted-amy-home",
     )
     .await?;
+    core.refresh_store().await?;
+    assert_eq!(
+        core.store()
+            .snapshot()
+            .nodes
+            .iter()
+            .find(|node| node.node_did == NODE_DID)
+            .and_then(|node| node.default_agent_did.as_deref()),
+        Some("did:test:hosted-amy:default"),
+        "the starting configuration is the runtime's"
+    );
 
+    // The terminal request changed the runtime's default Agent.
+    *runtime_default.lock().unwrap() = "did:test:hosted-amy:research";
     let mut updates = core.store_updates();
     assert!(
         core.refresh_local_request(
@@ -340,7 +336,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         .await;
     assert!(
         !local_node.has_errors(),
-        "read local replica: {:?}",
+        "read local store: {:?}",
         local_node.errors
     );
     assert_eq!(
@@ -349,11 +345,9 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
             .as_ref()
             .and_then(|data| data.get("Node"))
             .and_then(serde_json::Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("default_agent_did"))
-            .and_then(serde_json::Value::as_str),
-        Some("did:test:hosted-amy:default"),
-        "the new projection value must come from operator overlay, not local DB mutation"
+            .map(Vec::len),
+        Some(0),
+        "the desktop holds no local replica of runtime configuration"
     );
 
     Arc::new(core).shutdown().await?;

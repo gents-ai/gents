@@ -1763,10 +1763,13 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
     .await
     .unwrap();
 
+    // The runtime-key operator observation (a co-hosted runtime read with its own node key,
+    // and an anonymous cold read) is deleted: every desktop read is signed as the User, and
+    // the runtime's node key is never presented, whether or not it can be loaded.
     for (case, enrollment, authenticated) in [
         ("enrolled", true, false),
         ("local-cold", false, false),
-        ("local-operator", false, true),
+        ("local-runtime-key", false, true),
     ] {
         let home = temp.path().join(case);
         std::fs::create_dir_all(&home).unwrap();
@@ -1800,7 +1803,7 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         record.local_node_home = Some(home.to_string_lossy().into_owned());
         core.sync_state.upsert_for_test(record).await.unwrap();
         let operator = core.operator_observation_endpoint(&did).await.unwrap();
-        assert_eq!(operator.is_anonymous(), !authenticated, "{case}");
+        assert!(!operator.is_anonymous(), "{case}");
         let key = gents::observe::inference_observation::InferenceKey {
             node: did.clone(),
             session: case.into(),
@@ -1816,35 +1819,31 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
             .mount(&server)
             .await;
         let activity = core.read_inference_activity(&key).await.unwrap();
-        let requests = server.received_requests().await.unwrap();
-        if !enrollment && !authenticated {
-            assert!(
-                requests.is_empty(),
-                "cold local operator must not contact the server"
-            );
-            assert!(activity.is_none());
-        } else {
-            assert_eq!(
-                activity,
-                Some(crate::client::InferenceActivity::Working),
-                "{case}"
-            );
-            assert_eq!(requests.len(), 1, "{case}");
-            let authorization = requests[0]
-                .headers
-                .get("authorization")
-                .unwrap()
-                .to_str()
-                .unwrap();
-            let token = authorization.strip_prefix("Bearer ").unwrap();
-            let signer = identity::from_token(token.as_bytes()).unwrap();
-            let expected = if authenticated {
-                did.as_str()
-            } else {
-                core.node_identity().did()
-            };
-            assert_eq!(signer.did().unwrap().to_string(), expected, "{case}");
-        }
+        // The connected route's own GraphQL subscriptions reach the same server.
+        let requests: Vec<_> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.url.path() == "/inference/activity")
+            .collect();
+        assert_eq!(
+            activity,
+            Some(crate::client::InferenceActivity::Working),
+            "{case}"
+        );
+        assert_eq!(requests.len(), 1, "{case}");
+        let authorization = requests[0]
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let token = authorization.strip_prefix("Bearer ").unwrap();
+        let signer = identity::from_token(token.as_bytes()).unwrap();
+        let signer = signer.did().unwrap().to_string();
+        assert_eq!(signer, core.node_identity().did(), "{case}");
+        assert_ne!(signer, did, "{case}: the runtime key is never presented");
     }
     std::sync::Arc::new(core).shutdown().await.unwrap();
 }

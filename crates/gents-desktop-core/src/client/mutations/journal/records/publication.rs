@@ -409,8 +409,9 @@ mod tests {
     async fn matching_attempt_id_cannot_replace_physical_grant_bindings() -> Result<()> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
+        let client = node.node_identity_did().context("client identity")?;
         let mut journal = ClientAgentJournal::new(
-            node.node_identity_did().context("client identity")?.into(),
+            client.into(),
             "agent".into(),
             "node".into(),
             "agent-doc".into(),
@@ -444,7 +445,7 @@ mod tests {
         }
         different.validate()?;
         assert!(reserve(&node, &[different]).await.is_err());
-        let retained = lookup(&node, "client", "node", "agent")
+        let retained = lookup(&node, client, "node", "agent")
             .await?
             .context("retained record")?;
         assert_eq!(
