@@ -355,8 +355,9 @@ export function runtimeConnectionBlocksAdmission(connection: string | null | und
 }
 
 /** `RuntimeConnectionObservation.presentation`: each status names its own
-    reason, so an outage never reads as a connection attempt. A null status
-    is a peer the observer has not reconciled yet; the bridge never withholds
+    reason, so an outage never reads as a connection attempt. There is no
+    denial status: the runtime hides what this client may not read. A null
+    status is a peer the observer has not reconciled yet; the bridge never withholds
     a reconciled status, since admission reads it. */
 export function projectRuntimeConnectionStatus(
   connection: string | null | undefined,
@@ -366,10 +367,6 @@ export function projectRuntimeConnectionStatus(
       return status({ kind: "ready", layer: "runtime", reason: "connected",
         label: "Runtime is connected", shortLabel: "Connected",
         detail: "The authenticated runtime connection is ready." });
-    case "denied":
-      return status({ kind: "blocked", layer: "runtime", reason: "permission_denied",
-        label: "Runtime access denied", shortLabel: "Access denied",
-        detail: "The runtime rejected this client's access." });
     case "noEndpoint":
       return status({ kind: "blocked", layer: "runtime", reason: "no_endpoint",
         label: "Runtime has no address", shortLabel: "No address",

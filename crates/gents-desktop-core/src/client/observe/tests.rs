@@ -58,7 +58,7 @@ enum ProxyMode {
     Online,
     Offline,
     /// Answers every request with the runtime's HTTP refusal.
-    Denied,
+    Refusing,
 }
 
 type ProxyCommands =
@@ -120,7 +120,7 @@ async fn interruptible_proxy(
                                 }
                             });
                         }
-                        ProxyMode::Denied => {
+                        ProxyMode::Refusing => {
                             connections.spawn(async move {
                                 use tokio::io::AsyncWriteExt;
                                 if read_request(&mut client).await.is_ok() {
@@ -555,8 +555,8 @@ fn generated_runtime_connection_observations_drive_the_owner() {
         let end = match case["end"].as_str().unwrap() {
             "renewalDue" => remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::RenewalDue),
             "completed" => remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::Completed),
-            "deniedFailure" => remote::StreamEnd::Failed { denied: true },
-            "transportFailure" => remote::StreamEnd::Failed { denied: false },
+            "refusedFailure" => remote::StreamEnd::Failed { refused: true },
+            "transportFailure" => remote::StreamEnd::Failed { refused: false },
             other => panic!("unexpected stream end {other}"),
         };
         let expected = case["event"].as_str().map(lean_event);
@@ -588,12 +588,11 @@ fn generated_runtime_connection_observations_drive_the_owner() {
         );
     }
     let outcomes = contract["snapshotOutcomes"].as_array().unwrap();
-    assert_eq!(outcomes.len(), 4);
+    assert_eq!(outcomes.len(), 3);
     for case in outcomes {
         let outcome = match case["outcome"].as_str().unwrap() {
             "succeeded" => remote::SnapshotOutcome::Succeeded,
             "refused" => remote::SnapshotOutcome::Refused,
-            "rootWithheld" => remote::SnapshotOutcome::RootWithheld,
             "unreachable" => remote::SnapshotOutcome::Unreachable,
             other => panic!("unexpected snapshot outcome {other}"),
         };
@@ -622,7 +621,6 @@ fn generated_runtime_connection_observations_drive_the_owner() {
     for (rust, lean) in [
         (gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD, "renewalPeriodMs"),
         (SNAPSHOT_RETRY_DELAY, "snapshotRetryDelayMs"),
-        (remote::TRANSPORT_RETRY_DELAY, "transportRetryDelayMs"),
     ] {
         assert_eq!(
             u64::try_from(rust.as_millis()).unwrap(),
@@ -632,26 +630,20 @@ fn generated_runtime_connection_observations_drive_the_owner() {
     }
 }
 
-/// The snapshot owner's failures map to `RuntimeConnectionObservation.SnapshotOutcome`.
+/// The snapshot owner's failures map to `RuntimeConnectionObservation.SnapshotOutcome`:
+/// only the access owner's classification is a refusal.
 #[test]
 fn snapshot_failures_classify_as_their_lean_outcome() {
-    let withheld = crate::client::SnapshotReadError::RootsWithheld { roots: vec!["nodes"] };
-    let refused = crate::client::SnapshotReadError::from(anyhow::Error::new(
-        gents::store::config_client::ConfigClientError::Database(
-            gents_protocol::database_error::GraphqlFailure::new(
-                "snapshot",
-                serde_json::json!([{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]),
-            ),
+    let refused = anyhow::Error::new(gents::store::config_client::ConfigClientError::Database(
+        gents_protocol::database_error::GraphqlFailure::new(
+            "snapshot",
+            serde_json::json!([{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]),
         ),
-    ).context("runtime desktop snapshot"));
-    let unreachable = crate::client::SnapshotReadError::from(anyhow::anyhow!("connection refused"));
-    assert_eq!(remote::snapshot_outcome(&withheld), remote::SnapshotOutcome::RootWithheld);
+    ))
+    .context("runtime desktop snapshot");
+    let unreachable = anyhow::anyhow!("connection refused");
     assert_eq!(remote::snapshot_outcome(&refused), remote::SnapshotOutcome::Refused);
     assert_eq!(remote::snapshot_outcome(&unreachable), remote::SnapshotOutcome::Unreachable);
-    let data = serde_json::json!({"nodes": [], "agents": []});
-    let withheld_roots = crate::client::query::withheld_snapshot_roots(&data);
-    assert_eq!(withheld_roots.len(), crate::client::query::SNAPSHOT_ROOTS.len() - 2);
-    assert!(!withheld_roots.contains(&"nodes"));
 }
 
 fn lean_status(name: &str) -> RuntimeConnectionStatus {
@@ -659,7 +651,6 @@ fn lean_status(name: &str) -> RuntimeConnectionStatus {
         "connecting" => RuntimeConnectionStatus::Connecting,
         "connected" => RuntimeConnectionStatus::Connected,
         "disconnected" => RuntimeConnectionStatus::Disconnected,
-        "denied" => RuntimeConnectionStatus::Denied,
         "noEndpoint" => RuntimeConnectionStatus::NoEndpoint,
         other => panic!("unexpected status {other}"),
     }
@@ -671,15 +662,19 @@ fn lean_event(name: &str) -> RuntimeConnectionEvent {
         "subscriptionsReady" => RuntimeConnectionEvent::SubscriptionsReady,
         "snapshotSucceeded" => RuntimeConnectionEvent::SnapshotSucceeded,
         "transportFailed" => RuntimeConnectionEvent::TransportFailed,
-        "permissionDenied" => RuntimeConnectionEvent::PermissionDenied,
+        "refused" => RuntimeConnectionEvent::Refused,
         "renewed" => RuntimeConnectionEvent::Renewed,
         "endpointMissing" => RuntimeConnectionEvent::EndpointMissing,
         other => panic!("unexpected event {other}"),
     }
 }
 
+/// A runtime that refuses the client (HTTP 403 at every request) is a
+/// reconnect, not a denial: the rows are dropped, the status reads
+/// connecting, and the source reconnects on the backoff until the runtime
+/// accepts the client again at the same endpoint.
 #[tokio::test]
-async fn denied_runtime_recovers_when_access_returns_at_the_same_endpoint() {
+async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() {
     let fixture = ObservedRuntime::start().await;
     let configured =
         ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
@@ -697,14 +692,16 @@ async fn denied_runtime_recovers_when_access_returns_at_the_same_endpoint() {
     )
     .await;
 
-    set_proxy_mode(&fixture.proxy_commands, ProxyMode::Denied).await;
+    set_proxy_mode(&fixture.proxy_commands, ProxyMode::Refusing).await;
+    wait_for_name(&store, None).await;
     wait_for_connection(
         &store,
         &fixture.runtime_did,
-        RuntimeConnectionStatus::Denied,
+        RuntimeConnectionStatus::Connecting,
     )
     .await;
     assert!(store.snapshot().nodes.is_empty());
+    assert!(handle.metrics_snapshot().reconnects >= 2, "a refusal reconnects");
     let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
     fixture
         .access
@@ -796,29 +793,84 @@ async fn stalled_runtime_snapshot_delays_neither_another_runtime_nor_shutdown() 
 }
 
 #[test]
-fn generated_denied_reprobe_schedule_drives_the_sources() {
+fn generated_reconnect_backoff_drives_the_sources() {
     let output = gents_lean_contract::run_prepared_generator(
         &gents_lean_contract::proofs_dir().unwrap(),
-        "Proofs.Conformance.RuntimeConnectionReprobe:olean",
-        "Proofs/Conformance/RuntimeConnectionReprobe.lean",
+        "Proofs.Conformance.RuntimeConnectionBackoff:olean",
+        "Proofs/Conformance/RuntimeConnectionBackoff.lean",
     )
     .unwrap();
     let cases: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
     assert!(!cases.is_empty());
     for case in cases {
-        let denials = u32::try_from(case["denials"].as_u64().unwrap()).unwrap();
+        let attempts = u32::try_from(case["attempts"].as_u64().unwrap()).unwrap();
         let event = lean_event(case["event"].as_str().unwrap());
+        assert_eq!(remote::reconnects(event), case["reconnects"].as_bool().unwrap(), "{case}");
         assert_eq!(
-            u64::from(remote::next_denials(denials, event)),
-            case["nextDenials"].as_u64().unwrap(),
+            u64::from(remote::next_attempts(attempts, event)),
+            case["nextAttempts"].as_u64().unwrap(),
             "{case}"
         );
         assert_eq!(
-            u64::try_from(remote::reprobe_delay(denials).as_millis()).unwrap(),
+            u64::try_from(remote::reconnect_delay(attempts).as_millis()).unwrap(),
             case["delayMs"].as_u64().unwrap(),
             "{case}"
         );
     }
+}
+
+/// Every reconnect, after a transport failure or a refusal, is scheduled by
+/// the one delay owner and counted until the source connects again.
+#[tokio::test]
+async fn every_reconnect_path_uses_the_backoff_and_a_connection_resets_it() {
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let metrics = ObserverMetrics::default();
+    let mut sources = remote::Sources::default();
+    let (notices, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut peer = PeerRecord::new("runtime", "", "did:test:backoff");
+    peer.graphql = Some("http://127.0.0.1:9/api/v0/graphql".into());
+    let directory = tempfile::tempdir().unwrap();
+    let client = tokio::task::spawn_blocking({
+        let path = directory.path().join("client.key");
+        move || KeyIdentity::load_or_create(path, None).unwrap()
+    })
+    .await
+    .unwrap();
+    let capability = client.client_signing_capability().unwrap();
+    let store = Arc::new(store);
+    let metrics = Arc::new(metrics);
+    let node = "did:test:backoff";
+    let base = Instant::now();
+    let mut waits = Vec::new();
+    for (step, event) in [
+        RuntimeConnectionEvent::TransportFailed,
+        RuntimeConnectionEvent::Refused,
+        RuntimeConnectionEvent::TransportFailed,
+        RuntimeConnectionEvent::Refused,
+        RuntimeConnectionEvent::TransportFailed,
+        RuntimeConnectionEvent::Refused,
+        RuntimeConnectionEvent::TransportFailed,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sources.reconcile(std::slice::from_ref(&peer), &capability, &notices, &store, &metrics);
+        let now = base + Duration::from_secs(60 * step as u64);
+        sources.observe(node, event, &store, now, &metrics);
+        let due = sources.next_reconnect().unwrap();
+        waits.push(u64::try_from(due.duration_since(now).as_millis()).unwrap());
+        assert!(!sources.take_due_reconnects(due - Duration::from_millis(1)));
+        assert!(sources.take_due_reconnects(due));
+    }
+    assert_eq!(waits, vec![250, 250, 250, 250, 250, 500, 1000]);
+    assert_eq!(metrics.snapshot().reconnects, 7);
+    sources.reconcile(std::slice::from_ref(&peer), &capability, &notices, &store, &metrics);
+    sources.observe(node, RuntimeConnectionEvent::SnapshotSucceeded, &store, base, &metrics);
+    sources.observe(node, RuntimeConnectionEvent::TransportFailed, &store, base, &metrics);
+    assert_eq!(
+        sources.next_reconnect().unwrap().duration_since(base),
+        remote::reconnect_delay(0)
+    );
 }
 
 /// The User's observer of a served runtime, with the runtime's Node
@@ -969,11 +1021,10 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
 /// revoked. The SSE handshake is accepted and the open and new streams stay
 /// silent, and a read answers without errors and without the selected roots,
 /// so neither surface the access owner classifies (HTTP 401/403, a
-/// `PERMISSION_DENIED` envelope) is produced. An authorized snapshot answers
-/// every root of `SNAPSHOT_ROOTS`, so the snapshot owner classifies the
-/// revoked answer as `rootWithheld`.
+/// `PERMISSION_DENIED` envelope) is produced. That is native ACP hiding what
+/// the User may not read: the snapshot owner reads it as an empty snapshot.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revoked_user_is_answered_with_withheld_roots() {
+async fn revoked_user_is_answered_with_omitted_roots() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let access = home.user_graphql_access();
     let query = crate::client::query::snapshot_query(Some(home.node_did())).unwrap();
@@ -987,7 +1038,10 @@ async fn revoked_user_is_answered_with_withheld_roots() {
         .collect();
     roots.sort();
     assert_eq!(answered, roots, "SNAPSHOT_ROOTS names every snapshot root");
-    assert!(crate::client::query::withheld_snapshot_roots(&authorized["data"]).is_empty());
+    let before = crate::client::load_node_snapshot_on(&access, home.node_did())
+        .await
+        .unwrap();
+    assert!(!before.nodes.is_empty());
 
     let subscription = "subscription { Node(showDeleted: true) { _docID _deleted } }";
     let mut open = access.subscribe(subscription).await.unwrap();
@@ -1010,38 +1064,31 @@ async fn revoked_user_is_answered_with_withheld_roots() {
             "the stream stays silent after revocation"
         );
     }
-    let error = crate::client::load_node_snapshot_on(&access, home.node_did())
+    let hidden = crate::client::load_node_snapshot_on(&access, home.node_did())
         .await
-        .unwrap_err();
-    assert!(
-        matches!(&error, crate::client::SnapshotReadError::RootsWithheld { roots } if !roots.is_empty()),
-        "{error:?}"
-    );
-    assert!(!error.refused());
-    assert!(error.permission_denied());
-    assert_eq!(
-        remote::snapshot_event(remote::snapshot_outcome(&error)),
-        RuntimeConnectionEvent::PermissionDenied
-    );
+        .expect("an omitted root is an empty read, not a failure");
+    assert_eq!(hidden.row_count(), 0, "nothing is visible to the revoked User");
     home.shutdown().await;
 }
 
-/// The served runtime reveals a revocation only to a read, so an observer
-/// learns of it at the resnapshot after its next renewal: it shows Denied,
-/// drops the rows, never shows an outage, and re-probes until the grant is
-/// restored.
+/// Regression for the revoked-User retry storm: the served runtime shows a
+/// revoked User an empty view at the resnapshot after its next renewal. The
+/// observer reads it as connected with nothing visible, never shows an
+/// outage or a denial, and never reconnects; a restored grant is read at the
+/// next renewal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revoked_user_is_shown_denied_and_recovers_when_regranted() {
+async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let (_directory, store, handle) = served_observer(&home).await;
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
     assert!(!store.snapshot().nodes.is_empty());
+    let before = handle.metrics_snapshot();
     let user = ::identity::Did::new(home.user().did()).unwrap();
     gents::store::identity::GrantSet::HouseholdOwner
         .revoke(&home.runtime_access(), &user)
         .await
         .unwrap();
-    let mut shown = Vec::new();
+    let mut shown = vec![RuntimeConnectionStatus::Connected];
     let mut changes = store.subscribe_changes();
     let renewal = gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD;
     tokio::time::timeout(renewal + Duration::from_secs(15), async {
@@ -1050,28 +1097,40 @@ async fn revoked_user_is_shown_denied_and_recovers_when_regranted() {
                 if shown.last() != Some(&status) {
                     shown.push(status);
                 }
-                if status == RuntimeConnectionStatus::Denied {
-                    break;
-                }
+            }
+            if store.snapshot().nodes.is_empty() {
+                break;
             }
             changes.changed().await.unwrap();
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("the renewal resnapshot observes the revocation; shown {shown:?}"));
-    assert!(
-        !shown.contains(&RuntimeConnectionStatus::Disconnected),
-        "a revocation is not an outage; shown {shown:?}"
+    .unwrap_or_else(|_| panic!("the renewal resnapshot shows the empty view; shown {shown:?}"));
+    let after = handle.metrics_snapshot();
+    assert_eq!(shown, vec![RuntimeConnectionStatus::Connected], "{shown:?}");
+    assert_eq!(
+        store.runtime_connection(home.node_did()),
+        Some(RuntimeConnectionStatus::Connected)
     );
-    assert!(store.snapshot().nodes.is_empty(), "denied rows are dropped");
-    assert_eq!(handle.metrics_snapshot().transport_failures, 0);
+    assert_eq!(after.reconnects, before.reconnects, "an empty view never reconnects");
+    assert_eq!(after.transport_failures, before.transport_failures);
 
     gents::store::identity::GrantSet::HouseholdOwner
         .grant(&home.runtime_access(), &user)
         .await
         .unwrap();
-    wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
-    assert!(!store.snapshot().nodes.is_empty());
+    tokio::time::timeout(renewal + Duration::from_secs(15), async {
+        while store.snapshot().nodes.is_empty() {
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the next renewal resnapshot shows the restored grant");
+    assert_eq!(
+        store.runtime_connection(home.node_did()),
+        Some(RuntimeConnectionStatus::Connected)
+    );
+    assert_eq!(handle.metrics_snapshot().reconnects, before.reconnects);
     handle.shutdown().await;
     home.shutdown().await;
 }
@@ -1124,7 +1183,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("tool_call_event", 0, ""),
         op("transcript_event", 0, ""),
         op("stream_failed", 0, ""),
-        op("stream_denied", 0, ""),
+        op("stream_refused", 0, ""),
         op("source_started", 0, ""),
         op("publish", 0, "foreign"),
         op("publish", 0, "shared"),
@@ -1133,7 +1192,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("finish", 0, "rows"),
         op("finish", 0, "shared"),
         op("finish", 0, "transport_failed"),
-        op("finish", 0, "denied"),
+        op("finish", 0, "refused"),
         op("finish", 1, "rows"),
     ];
     let prefix = [
@@ -1251,11 +1310,11 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     generation[node],
                     RuntimeConnectionEvent::TransportFailed,
                 ),
-                "stream_denied" => notice(
+                "stream_refused" => notice(
                     &mut queue,
                     &mut in_flight,
                     generation[node],
-                    RuntimeConnectionEvent::PermissionDenied,
+                    RuntimeConnectionEvent::Refused,
                 ),
                 "start" => {
                     if queue.startable(&node_did, generation[node], in_flight.contains_key(&node_did))
@@ -1304,9 +1363,9 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                             store.accepts_chat_patch_read(&captured, &snapshot(node, "rows"));
                         let settlement = match result {
                             "transport_failed" => Settlement::TransportFailed,
-                            "denied" => {
+                            "refused" => {
                                 clear_node(&store, &node_did);
-                                Settlement::Denied
+                                Settlement::Refused
                             }
                             rows => {
                                 if store.replace_reloaded_snapshot_at_read(
@@ -1328,7 +1387,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                             Settlement::Published => "published",
                             Settlement::Superseded => "superseded",
                             Settlement::TransportFailed => "transport_failed",
-                            Settlement::Denied => "denied",
+                            Settlement::Refused => "refused",
                         };
                         settlements.insert(name);
                         finished = serde_json::json!({
