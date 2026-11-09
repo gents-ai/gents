@@ -14,7 +14,7 @@ const background: Extract<RenderedTimelineItem, { kind: "automatedInput" }> = {
   requestId: "request",
   inputRequestId: null,
   sequence: 1,
-  origin: { kind: "backgroundCompletion" },
+  origin: { kind: "backgroundCompletion", notification: true },
   content: envelope,
   timestamp: null,
   reconstruction: { state: "ready" },
@@ -22,11 +22,11 @@ const background: Extract<RenderedTimelineItem, { kind: "automatedInput" }> = {
 
 it("renders background output as collapsed activity, not a user bubble", async () => {
   const { container } = render(<UserMessageItem item={background} />);
-  expect(screen.getByText("Background activity")).toBeTruthy();
+  expect(screen.getByText("Background action failed")).toBeTruthy();
   expect(screen.queryByText(envelope)).toBeNull();
   expect(container.querySelector(".user-card")).toBeNull();
-  fireEvent.click(screen.getByText("Background activity"));
-  expect(await screen.findByText(envelope)).toBeTruthy();
+  fireEvent.click(screen.getByText("Background action failed"));
+  expect(await screen.findByText("failure")).toBeTruthy();
 });
 
 it("does not expose stale output when reconstruction is denied", async () => {
@@ -54,10 +54,10 @@ it("keeps expanded background details open while they load", async () => {
   );
   expect(screen.queryByText("Background details are unavailable.")).toBeNull();
   view.rerender(<UserMessageItem item={background} />);
-  expect(await screen.findByText(envelope)).toBeTruthy();
-  expect(screen.getByText("Background activity").closest("details")?.open).toBe(
-    true,
-  );
+  expect(await screen.findByText("failure")).toBeTruthy();
+  expect(
+    screen.getByText("Background action failed").closest("details")?.open,
+  ).toBe(true);
 });
 
 it("omits internal Goal continuations but preserves user-authored lookalikes", () => {
@@ -102,7 +102,7 @@ it("omits internal Goal continuations but preserves user-authored lookalikes", (
     itemKey: "pending-wake",
     requestId: "pending-wake",
     content: "Internal background wake",
-    origin: { kind: "backgroundCompletion" },
+    origin: { kind: "backgroundCompletion", notification: false },
   };
   render(
     <MessageList
@@ -113,7 +113,7 @@ it("omits internal Goal continuations but preserves user-authored lookalikes", (
   expect(screen.queryByText("Internal background wake")).toBeNull();
   expect(screen.queryByText("Internal continuation instructions")).toBeNull();
   expect(screen.getAllByText(envelope)).toHaveLength(1);
-  expect(screen.getByText("Background activity")).toBeTruthy();
+  expect(screen.getByText("Background action failed")).toBeTruthy();
 });
 
 it("keeps internal pending input out of the chat through its durable handoff and remount", () => {
@@ -125,16 +125,33 @@ it("keeps internal pending input out of the chat through its durable handoff and
     selectedSkillIds: [],
     lifecycleState: "processing",
     foldedIntoRequestId: null,
-    origin: { kind: "backgroundCompletion" },
+    origin: { kind: "backgroundCompletion", notification: false },
     createdAt: null,
   };
   const view = render(<MessageList timelineItems={[pending]} />);
   expect(screen.queryByText("Review the background results")).toBeNull();
   view.rerender(<MessageList timelineItems={[background]} />);
   expect(screen.queryByText(envelope)).toBeNull();
-  expect(screen.getByText("Background activity")).toBeTruthy();
+  expect(screen.getByText("Background action failed")).toBeTruthy();
   view.unmount();
   render(<MessageList timelineItems={[background]} />);
   expect(screen.queryByText(envelope)).toBeNull();
-  expect(screen.getByText("Background activity")).toBeTruthy();
+  expect(screen.getByText("Background action failed")).toBeTruthy();
+});
+
+it("labels successful completions and suppresses persisted wake prompts", () => {
+  const completed = {
+    ...background,
+    content:
+      '<tool-completion status="completed"><result>done</result></tool-completion>',
+  };
+  const wake = {
+    ...background,
+    itemKey: "wake",
+    origin: { kind: "backgroundCompletion" as const, notification: false },
+    content: "Review the background results",
+  };
+  render(<MessageList timelineItems={[completed, wake]} />);
+  expect(screen.getByText("Background action completed")).toBeTruthy();
+  expect(screen.queryByText("Review the background results")).toBeNull();
 });
