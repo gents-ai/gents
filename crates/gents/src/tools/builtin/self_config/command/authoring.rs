@@ -31,6 +31,7 @@ enum AuthoringCall {
     },
     Test {
         dir: Option<String>,
+        case: Option<String>,
     },
 }
 
@@ -163,9 +164,18 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
             Ok(AuthoringCall::Add { dir: optional("dir")?, addition })
         }
         "build" | "test" => {
+            let case = if verb == "test" {
+                parsed.one("case")?.map(str::to_owned)
+            } else {
+                None
+            };
             anyhow::ensure!(
-                parsed.switches.is_empty() && parsed.options.is_empty(),
-                "pack {verb} takes only an optional DIR; it accepts no options"
+                parsed.switches.is_empty()
+                    && parsed
+                        .options
+                        .keys()
+                        .all(|name| verb == "test" && name == "case"),
+                "pack build takes only an optional DIR; pack test also takes options.case, one case file name"
             );
             anyhow::ensure!(
                 parsed.positionals.len() <= 1,
@@ -175,7 +185,7 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
             Ok(if verb == "build" {
                 AuthoringCall::Build { dir }
             } else {
-                AuthoringCall::Test { dir }
+                AuthoringCall::Test { dir, case }
             })
         }
         other => Err(CommandGuidance {
@@ -229,7 +239,7 @@ impl ConfigCommandTool {
             AuthoringCall::Verify { pack } => self.verify(&pack).await,
             AuthoringCall::Add { dir, addition } => self.add_part(dir.as_deref(), addition).await,
             AuthoringCall::Build { dir } => self.build(dir.as_deref()).await,
-            AuthoringCall::Test { dir } => self.test(dir.as_deref()).await,
+            AuthoringCall::Test { dir, case } => self.test(dir.as_deref(), case.as_deref()).await,
         }
     }
 
@@ -391,7 +401,7 @@ impl ConfigCommandTool {
         .pretty()
     }
 
-    async fn test(&self, dir: Option<&str>) -> Result<String> {
+    async fn test(&self, dir: Option<&str>, case: Option<&str>) -> Result<String> {
         let context = self.authoring_paths("test", true).await?;
         let dir = context.resolve_existing_dir(dir)?;
         let manifest = read_manifest(&dir)?;
@@ -410,21 +420,100 @@ impl ConfigCommandTool {
         self.ensure_compile_grant("test", &sources)?;
         self.execution.enter_mutation();
         let build = crate::tools::native::run_plugin_build(&context.root(), &dir, true).await?;
-        let plugins = build.output["cases"].clone();
+        let mut plugins = build.output["cases"].clone();
         let mut passed = 0;
         let mut failed = 0;
-        for plugin in plugins.as_array().into_iter().flatten() {
+        let mut shortened = Vec::new();
+        for plugin in plugins.as_array_mut().into_iter().flatten() {
             passed += plugin["passed"].as_u64().unwrap_or(0);
             failed += plugin["failures"]
                 .as_array()
                 .map_or(0, |list| list.len() as u64);
+            let name = plugin["plugin"].clone();
+            if let Some(Value::Array(cases)) = plugin
+                .as_object_mut()
+                .and_then(|fields| fields.remove("shortened"))
+            {
+                shortened.extend(cases.into_iter().map(|case| (name.clone(), case)));
+            }
         }
+        if let Some(case) = case {
+            let file = if case.ends_with(".json") {
+                case.to_owned()
+            } else {
+                format!("{case}.json")
+            };
+            let rerun = json!({"argv":["pack","test",relative]});
+            if let Some((plugin, whole)) = shortened
+                .iter()
+                .find(|(_, whole)| whole["case"] == file.as_str())
+            {
+                return ordered! {
+                    "case": file,
+                    "plugin": plugin,
+                    "passed": false,
+                    "returned": whole["returned"],
+                    "expect": whole["expect"],
+                    "sandbox": build.sandbox,
+                    "next_call": rerun,
+                }
+                .pretty();
+            }
+            let prefix = format!("{file}: ");
+            let failure = plugins.as_array().into_iter().flatten().find_map(|plugin| {
+                let text = plugin["failures"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .find(|text| text.starts_with(&prefix))?;
+                Some((plugin["plugin"].clone(), text.to_owned()))
+            });
+            if let Some((plugin, failure)) = failure {
+                return ordered! {
+                    "case": file,
+                    "plugin": plugin,
+                    "passed": false,
+                    "failure": failure,
+                    "sandbox": build.sandbox,
+                    "next_call": rerun,
+                }
+                .pretty();
+            }
+            let exists = manifest
+                .metadata
+                .plugins
+                .iter()
+                .filter_map(|plugin| plugin.source.as_ref())
+                .any(|source| dir.join(source).join("tests").join(&file).is_file());
+            if !exists {
+                return Err(CommandGuidance {
+                    message: format!("no plugin case {file:?} in this pack; cases are the tests/*.json files beside each plugin's source"),
+                    next_call: rerun,
+                }
+                .into());
+            }
+            return ordered! {
+                "case": file,
+                "passed": true,
+                "sandbox": build.sandbox,
+                "next_call": rerun,
+            }
+            .pretty();
+        }
+        let next_call = match shortened.first() {
+            Some((_, whole)) => {
+                json!({"argv":["pack","test",relative],"options":{"case":whole["case"]}})
+            }
+            None if failed == 0 => json!({"argv":["pack","build",relative]}),
+            None => json!({"argv":["help","pack"]}),
+        };
         ordered! {
             "passed": passed,
             "failed": failed,
             "plugins": plugins,
+            "note": (!shortened.is_empty()).then_some("A long mismatch names the paths that differ; options.case with the case file name returns that case's whole returned output and expect."),
             "sandbox": build.sandbox,
-            "next_call": if failed == 0 { json!({"argv":["pack","build",relative]}) } else { json!({"argv":["help","pack"]}) },
+            "next_call": next_call,
         }
         .pretty()
     }

@@ -327,10 +327,16 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
         .unwrap()
         .join("escaped");
     let builder = outside.path().join("builder.sh");
+    let whole = "isle ".repeat(1_000);
+    let report = json!({"cases":[{
+        "plugin":"tool_a","passed":2,
+        "failures":["deal.json: output differs from expect at 1 path(s): $.writes: returned [isle... instead of nothing","small.json: returned 1 instead of 2"],
+        "shortened":[{"case":"deal.json","returned":{"ok":true,"writes":[&whole]},"expect":{"ok":true}}],
+    }]});
     std::fs::write(
         &builder,
         format!(
-            "#!/bin/sh\nprintf stub > \"$2/plugins/tool_a.afb\"\nprintf x > {} 2>/dev/null\nprintf '{{\"cases\":[{{\"plugin\":\"tool_a\",\"passed\":2,\"failures\":[\"one\"]}}]}}'\n",
+            "#!/bin/sh\nprintf stub > \"$2/plugins/tool_a.afb\"\nprintf x > {} 2>/dev/null\ncat <<'REPORT'\n{report}\nREPORT\n",
             escaped.display()
         ),
     )
@@ -356,9 +362,53 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
         "the sandbox confines the builder's writes"
     );
 
-    let tested = config_json(&tools, &["pack", "test", "tool_a"]).await;
+    let text = config_call(&tools, &["pack", "test", "tool_a"])
+        .await
+        .unwrap();
+    let tested: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(tested["passed"], 2, "{tested}");
-    assert_eq!(tested["failed"], 1, "{tested}");
+    assert_eq!(tested["failed"], 2, "{tested}");
+    assert_eq!(
+        tested["next_call"],
+        json!({"argv":["pack","test","tool_a"],"options":{"case":"deal.json"}}),
+        "{tested}"
+    );
+    assert!(tested["note"].as_str().unwrap().contains("options.case"));
+    assert!(
+        !text.contains(&whole[..200]) && tested["plugins"][0].get("shortened").is_none(),
+        "the run's result stays short: {text}"
+    );
+    assert!(
+        text.len() <= 900,
+        "pack test is {} chars: {text}",
+        text.len()
+    );
+
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    let case: Value =
+        serde_json::from_str(&tool.call(tested["next_call"].to_string()).await.unwrap()).unwrap();
+    assert_eq!(case["case"], "deal.json", "{case}");
+    assert_eq!(case["passed"], false, "{case}");
+    assert_eq!(case["returned"]["writes"][0], whole.as_str(), "{case}");
+    assert_eq!(case["expect"], json!({"ok":true}), "{case}");
+
+    let small = config_json(&tools, &["pack", "test", "tool_a", "--case", "small"]).await;
+    assert_eq!(
+        small["failure"], "small.json: returned 1 instead of 2",
+        "{small}"
+    );
+    let unknown = config_call(&tools, &["pack", "test", "tool_a", "--case", "absent"])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        unknown.contains("no plugin case")
+            && unknown.contains(r#"{"argv":["pack","test","tool_a"]}"#),
+        "{unknown}"
+    );
 }
 
 #[tokio::test]
@@ -596,7 +646,7 @@ async fn page_help_discloses_detail_per_command_and_topic() {
         ("help page sdk".into(), sdk.len(), 4_800),
         ("help page sdk Table".into(), table.len(), 600),
         ("help page sdk tokens".into(), tokens.len(), 2_800),
-        ("help pack".into(), pack.len(), 4_300),
+        ("help pack".into(), pack.len(), 4_400),
         ("help page".into(), page.len(), 1_150),
     ]);
 

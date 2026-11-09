@@ -24,6 +24,17 @@ pub struct PluginCases {
     pub plugin: String,
     pub passed: usize,
     pub failures: Vec<String>,
+    /// The whole documents of every failure whose text names only the paths
+    /// that differ, so a caller can still read one case in full.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shortened: Vec<ShortenedCase>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ShortenedCase {
+    pub case: String,
+    pub returned: Value,
+    pub expect: Value,
 }
 
 pub async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
@@ -63,6 +74,7 @@ pub async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
             plugin: plugin.name.clone(),
             passed: 0,
             failures: Vec::new(),
+            shortened: Vec::new(),
         };
         for path in cases {
             let name = path
@@ -70,7 +82,18 @@ pub async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
             match run_case(&coordinate, &runner, budget, &path).await {
-                Ok(()) => report.passed += 1,
+                Ok(None) => report.passed += 1,
+                Ok(Some((returned, expect))) => {
+                    let (text, shortened) = describe_mismatch(&returned, &expect);
+                    report.failures.push(format!("{name}: {text}"));
+                    if shortened {
+                        report.shortened.push(ShortenedCase {
+                            case: name,
+                            returned,
+                            expect,
+                        });
+                    }
+                }
                 Err(error) => report.failures.push(format!("{name}: {error:#}")),
             }
         }
@@ -78,6 +101,9 @@ pub async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
     }
     Ok(results)
 }
+
+/// A case's returned output and its expectation when they differ.
+type Mismatch = (Value, Value);
 
 /// A mismatch is reported whole while it is small; a larger one names the
 /// paths that differ, each side cut to `MISMATCH_VALUE_CHARS`, because the
@@ -87,10 +113,11 @@ const MISMATCH_WHOLE_CHARS: usize = 2_000;
 const MISMATCH_VALUE_CHARS: usize = 400;
 const MISMATCH_PATHS: usize = 12;
 
-fn describe_mismatch(actual: &Value, expect: &Value) -> String {
+/// The failure text, and whether it stands in for the whole documents.
+fn describe_mismatch(actual: &Value, expect: &Value) -> (String, bool) {
     let whole = format!("returned {actual} instead of {expect}");
     if whole.len() <= MISMATCH_WHOLE_CHARS {
-        return whole;
+        return (whole, false);
     }
     let mut differences = Vec::new();
     collect_differences("$", Some(actual), Some(expect), &mut differences);
@@ -112,9 +139,12 @@ fn describe_mismatch(actual: &Value, expect: &Value) -> String {
     } else {
         format!("; and {more} more paths")
     };
-    format!(
-        "output differs from expect at {} path(s): {shown}{more}",
-        differences.len()
+    (
+        format!(
+            "output differs from expect at {} path(s): {shown}{more}",
+            differences.len()
+        ),
+        true,
     )
 }
 
@@ -168,7 +198,7 @@ async fn run_case(
     runner: &Arc<PluginRunner>,
     budget: PluginBudget,
     path: &Path,
-) -> Result<()> {
+) -> Result<Option<Mismatch>> {
     let case: PluginCase = serde_json::from_slice(&std::fs::read(path)?)
         .context("a case is {\"input\": ..., \"expect\": ..., \"bind\": ...}")?;
     let bound = match &case.bind {
@@ -191,14 +221,10 @@ async fn run_case(
         outcome.verdict,
         outcome.diagnostics
     );
-    if let Some(expect) = case.expect {
-        anyhow::ensure!(
-            outcome.output == expect,
-            "{}",
-            describe_mismatch(&outcome.output, &expect)
-        );
-    }
-    Ok(())
+    Ok(case
+        .expect
+        .filter(|expect| outcome.output != *expect)
+        .map(|expect| (outcome.output, expect)))
 }
 
 #[cfg(test)]
@@ -210,7 +236,10 @@ mod mismatch_tests {
     fn a_small_mismatch_is_reported_whole() {
         assert_eq!(
             describe_mismatch(&json!({"ok":false}), &json!({"ok":true})),
-            r#"returned {"ok":false} instead of {"ok":true}"#
+            (
+                r#"returned {"ok":false} instead of {"ok":true}"#.to_owned(),
+                false
+            )
         );
     }
 
@@ -221,7 +250,11 @@ mod mismatch_tests {
         let expect =
             json!({"ok":true,"deal":{"isles":&big,"order":[1,2,3]},"rows":[{"id":1},{"id":2}]});
         let actual = json!({"ok":true,"deal":{"isles":&big,"order":[1,2,4]},"rows":[{"id":1},{"id":3}],"writes":[&big]});
-        let text = describe_mismatch(&actual, &expect);
+        let (text, shortened) = describe_mismatch(&actual, &expect);
+        assert!(
+            shortened,
+            "the caller keeps the whole documents for one read"
+        );
         assert!(
             text.starts_with("output differs from expect at 3 path(s): "),
             "{text}"
