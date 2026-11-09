@@ -2296,3 +2296,7 @@ pub(crate) async fn render_transcript_rows_with_provenance(
 #[cfg(test)]
 #[path = "fork_input_tests.rs"]
 mod fork_input_tests;
+
+#[cfg(test)]
+#[path = "background_origin_tests.rs"]
+mod background_origin_tests;
