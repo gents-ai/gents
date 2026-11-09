@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::pack::authoring::{
-    check_dir, pack_built, plugins_with_source, read_manifest, scaffold, verify_pack_file,
-    CheckReport, Kind, PackAddition, PackEdit, ScaffoldInput, Template,
+    check_dir, pack_built, pack_name, plugins_with_source, read_manifest, scaffold,
+    verify_pack_file, CheckReport, Kind, PackAddition, PackEdit, ScaffoldInput, Template,
 };
 
 const PACK_PARTS: &str = "agent, task, trigger, schema, skill, plugin, page";
@@ -255,12 +255,19 @@ impl ConfigCommandTool {
 
     async fn scaffold(&self, name: &str, input: &ScaffoldInput) -> Result<String> {
         let context = self.authoring_paths("scaffold", true).await?;
-        let dir = admit_scaffold_dir(&context, name)?;
+        let dir = admit_scaffold_dir(&context, &pack_name(name))?;
         let report = scaffold(&dir, name, input)?;
         let relative = context.display_path(&report.dir);
+        let renamed = report.renamed_from.as_ref().map(|requested| {
+            format!(
+                "Pack names are snake_case: {requested:?} was created as {:?}.",
+                report.pack
+            )
+        });
         ordered! {
             "completed": true,
             "pack": report.pack,
+            "renamed": renamed,
             "namespace": report.namespace,
             "kind": report.kind,
             "template": report.template,

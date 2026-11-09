@@ -325,12 +325,18 @@ async fn authoring_paths_stay_inside_the_tool_root() {
     let elsewhere = tempfile::tempdir().unwrap();
     let (_node, _did, tools) =
         authoring_tool("pack-root", home.path(), root.path(), &["tools"], false).await;
-    config_json(
+    let scaffolded = config_json(
         &tools,
-        &["pack", "scaffold", "inside", "--template", "assets"],
+        &["pack", "scaffold", "in-side", "--template", "assets"],
     )
     .await;
     let outside = config_call(
+    assert_eq!(scaffolded["pack"], "in_side", "{scaffolded}");
+    assert_eq!(scaffolded["dir"], "in_side", "{scaffolded}");
+    assert!(
+        scaffolded["renamed"].as_str().unwrap().contains("in-side"),
+        "{scaffolded}"
+    );
         &tools,
         &[
             "pack",
@@ -356,7 +362,7 @@ async fn authoring_paths_stay_inside_the_tool_root() {
             "skill",
             "triage",
             "--dir",
-            "inside",
+            "in_side",
             "--from",
             "/etc/hosts",
         ],

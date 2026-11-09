@@ -19,7 +19,7 @@ pub use check::{
 };
 pub use edit::{PackAddition, PackEdit, PackPart};
 pub use inspect::{preview_config, verify_pack_file};
-pub use names::{to_snake_case, Names};
+pub use names::{pack_name, to_snake_case, Names};
 pub use scaffold::{scaffold, tool_markdown, write_plugin_source, ScaffoldInput, ScaffoldReport};
 pub use template::{Kind, Template};
 pub use test::{run_plugin_cases, PluginCase, PluginCases};
