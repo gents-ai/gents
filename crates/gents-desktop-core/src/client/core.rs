@@ -427,6 +427,17 @@ impl ClientCore {
         &self.p2p
     }
 
+    /// Stops the observer so only a test's direct reads publish into the
+    /// store; a subscription event landing mid-read would otherwise supersede
+    /// that read's publication.
+    #[cfg(feature = "test-fixtures")]
+    #[doc(hidden)]
+    pub async fn stop_observer_for_test(&self) {
+        if let Some(observer) = self.observer.lock().await.take() {
+            observer.shutdown().await;
+        }
+    }
+
     #[doc(hidden)]
     pub async fn add_local_standard_peer_for_test(&self, node_did: &str) -> Result<()> {
         anyhow::ensure!(
