@@ -61,6 +61,14 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                     .await?;
             }
         }
+        // A User holds `get-collection` (GrantSets.operatorUser), which
+        // native checks before a relationship change outside a transaction.
+        admin
+            .grant_node_permission(
+                &::identity::Did::new(user.did())?,
+                NodePermission::CollectionGet,
+            )
+            .await?;
         let endpoint =
             GraphqlEndpoint::as_principal(format!("http://{addr}/api/v0/graphql"), user.did())
                 .with_client_signing_capability(user.client_signing_capability()?)?;
