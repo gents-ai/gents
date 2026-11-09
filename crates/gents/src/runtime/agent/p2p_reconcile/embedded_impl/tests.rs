@@ -123,14 +123,12 @@ async fn protocol_allowlist_rejects_local_data_before_transport() {
             if allowed {
                 continue;
             }
-            for result in [admin
+            let result = admin
                 .add_replicator(&[], &[name.to_owned()], &PairingFilters::new())
-                .await]
-            {
-                assert!(
-                    matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(collection)) if collection == name)
-                );
-            }
+                .await;
+            assert!(
+                matches!(result, Err(RemoteP2pAdminError::RuntimeLocalCollection(collection)) if collection == name)
+            );
         }
     }
 }

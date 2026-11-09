@@ -25,7 +25,7 @@ pub use gents::goal::SessionGoalNextAction;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionGoalState {
     Observed {
-        observation: SessionGoalView,
+        observation: Box<SessionGoalView>,
         next: SessionGoalNextAction,
     },
     NoReadableSession {

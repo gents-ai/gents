@@ -429,7 +429,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
             request_id: request_id.clone(),
             node_did: runtime_did.clone(),
             requester_did: String::new(),
-            agent_did: access.actor_did().unwrap().into(),
+            agent_did: access.actor_did().unwrap(),
             session_id: session_id.clone(),
             model_name: "claude".into(),
             provider_family: None,

@@ -199,7 +199,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         "{writer:#?}"
     );
 
-    let writer_receipts = wait_receipts(&access, WORK_UNIT, "writer", 1).await;
+    let writer_receipts = wait_receipts(access, WORK_UNIT, "writer", 1).await;
     assert_eq!(writer_receipts.len(), 1, "{writer_receipts:#?}");
     let writer_receipt = &writer_receipts[0];
     assert_eq!(writer_receipt["work_unit_id"], WORK_UNIT);
@@ -209,7 +209,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     assert_ne!(writer_seal_hash, base_tree);
 
     let closure_rows = wait_rows(
-        &access,
+        access,
         "ChangeUnitClosure",
         WORK_UNIT,
         "_docID closure_id work_unit_id handoff_id reply_session_id attempt implementation_id review_id workspace_id writer_receipt_id writer_seal_hash status",
@@ -226,7 +226,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     assert_eq!(accepted["writer_seal_hash"], writer_receipt["seal_hash"]);
 
     let review_rows = query_rows(
-        &access,
+        access,
         "ChangeUnitReview",
         WORK_UNIT,
         "review_id work_unit_id implementation_id workspace_id writer_receipt_id writer_seal_hash verdict findings summary",
@@ -243,7 +243,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         writer_receipt["seal_hash"]
     );
 
-    let integration_receipts = wait_receipts(&access, WORK_UNIT, "integrator", 1).await;
+    let integration_receipts = wait_receipts(access, WORK_UNIT, "integrator", 1).await;
     assert_eq!(integration_receipts.len(), 1, "{integration_receipts:#?}");
     let integration_receipt = &integration_receipts[0];
     assert_eq!(integration_receipt["workspace_id"], workspace_id);
@@ -288,9 +288,9 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         integration_request["workspace_seal_hash"],
         writer_receipt["seal_hash"]
     );
-    wait_request_completed(&access, integration_request["request_id"].as_str().unwrap()).await;
+    wait_request_completed(access, integration_request["request_id"].as_str().unwrap()).await;
     let outcome = wait_integrator_outcome(
-        &access,
+        access,
         WORK_UNIT,
         accepted["_docID"].as_str().unwrap(),
         integration_request["request_id"].as_str().unwrap(),
@@ -360,7 +360,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         StreamResponse::completes(RECORD_PLAN, ["The host integration receipt is recorded."]),
     );
     let result_rows = wait_rows(
-        &access,
+        access,
         "ChangeUnitResult",
         WORK_UNIT,
         "result_id work_unit_id handoff_id reply_session_id attempt closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary",
@@ -388,7 +388,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     assert_eq!(result["attempt"], accepted["attempt"]);
     assert!(result_plan);
     wait_cycle_requests_completed(
-        &access,
+        access,
         WORK_UNIT,
         &cycle.agents(&[WRITER, REVIEWER, INTEGRATOR, RECORDER]),
     )
@@ -431,7 +431,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     const REJECTED_UNIT: &str = "change-unit:cycle-rejected";
     create_work_unit(access, REJECTED_UNIT, &base_sha, "rejected").await;
     let implementations = wait_rows(
-        &access,
+        access,
         "ChangeUnitImplementation",
         REJECTED_UNIT,
         "implementation_id work_unit_id workspace_id status changed_files",
@@ -440,10 +440,10 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     )
     .await;
     assert_eq!(implementations.len(), 1);
-    let writer_receipts = wait_receipts(&access, REJECTED_UNIT, "writer", 1).await;
+    let writer_receipts = wait_receipts(access, REJECTED_UNIT, "writer", 1).await;
     assert_eq!(writer_receipts.len(), 1);
     let rejected_reviews = wait_rows(
-        &access,
+        access,
         "ChangeUnitReview",
         REJECTED_UNIT,
         "review_id work_unit_id implementation_id workspace_id writer_receipt_id writer_seal_hash verdict findings summary",
@@ -453,7 +453,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     .await;
     assert_eq!(rejected_reviews.len(), 1);
     let closures = wait_rows(
-        &access,
+        access,
         "ChangeUnitClosure",
         REJECTED_UNIT,
         "closure_id work_unit_id handoff_id reply_session_id attempt implementation_id review_id workspace_id writer_receipt_id writer_seal_hash status",
@@ -492,14 +492,14 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
         REJECT_TASK_MARK,
         StreamResponse::completes(REJECT_TASK_MARK, ["The rejection result is durable."]),
     );
-    let results = wait_rejected_result(&access, REJECTED_UNIT).await;
+    let results = wait_rejected_result(access, REJECTED_UNIT).await;
     assert_eq!(
         results.len(),
         1,
         "rejected closure is terminal: {results:#?}"
     );
     wait_cycle_requests_completed(
-        &access,
+        access,
         REJECTED_UNIT,
         &cycle.agents(&[WRITER, REVIEWER, REJECTER]),
     )
@@ -604,9 +604,9 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
 
     create_work_unit(access, FAILURE_UNIT, &base_sha, "inbox").await;
-    let callback = wait_callback_result(&access, FAILURE_UNIT).await;
+    let callback = wait_callback_result(access, FAILURE_UNIT).await;
     assert_eq!(callback["work_unit_id"], FAILURE_UNIT);
-    let failed = wait_failure_outcome(&access, FAILURE_UNIT).await;
+    let failed = wait_failure_outcome(access, FAILURE_UNIT).await;
     assert_eq!(failed["source_collection"], "CallbackResult");
     assert_eq!(failed["source_doc_id"], callback["_docID"]);
     assert_eq!(failed["source_handoff_id"], FAILURE_UNIT);
@@ -615,7 +615,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     assert_eq!(failed["trigger_id"], "change-unit-test-failure");
     assert_eq!(failed["terminal_state"], "failed");
 
-    let inbox = wait_supervisor_inbox(&access, &backend, FAILURE_UNIT).await;
+    let inbox = wait_supervisor_inbox(access, &backend, FAILURE_UNIT).await;
     assert_eq!(inbox["session_id"], supervisor_session);
     assert_eq!(inbox["agent_did"], supervisor);
     assert_eq!(inbox["requester_did"], cycle.user.did());

@@ -360,7 +360,7 @@ impl std::fmt::Display for GraphqlEndpoint {
 #[derive(Clone)]
 pub enum ConfigAccess {
     Graphql(GraphqlEndpoint),
-    Local(LocalConfigAccess),
+    Local(Box<LocalConfigAccess>),
 }
 
 /// Reads use the existing owner; adapters add no retry or authorization decision.
@@ -394,13 +394,15 @@ impl ConfigAccess {
     }
 
     pub fn local(node: Arc<Node>) -> Self {
-        Self::Local(LocalConfigAccess::new(node))
+        Self::Local(Box::new(LocalConfigAccess::new(node)))
     }
 
     /// Bind document reads and writes to this actor across retries and transactions.
     /// A denied operation retains this identity; it never retries as the node.
     pub fn local_as(node: Arc<Node>, identity: identity::Did) -> Self {
-        Self::Local(LocalConfigAccess::new(node).with_identity(identity))
+        Self::Local(Box::new(
+            LocalConfigAccess::new(node).with_identity(identity),
+        ))
     }
 
     pub fn local_managed_agent(
@@ -428,7 +430,7 @@ impl ConfigAccess {
         let local = LocalConfigAccess::new(node)
             .with_identity(actor)
             .with_agent_signer(signer);
-        Ok(Self::Local(local))
+        Ok(Self::Local(Box::new(local)))
     }
 
     pub(crate) fn local_with_optional_agent_signer(
@@ -511,7 +513,9 @@ impl ConfigAccess {
         node: Arc<Node>,
         claim: crate::store::local::home::StoreLock,
     ) -> Result<Self> {
-        Ok(Self::Local(LocalConfigAccess::claimed(node, claim)?))
+        Ok(Self::Local(Box::new(LocalConfigAccess::claimed(
+            node, claim,
+        )?)))
     }
 
     pub fn claimed_local_as(
@@ -519,9 +523,9 @@ impl ConfigAccess {
         claim: crate::store::local::home::StoreLock,
         identity: identity::Did,
     ) -> Result<Self> {
-        Ok(Self::Local(
+        Ok(Self::Local(Box::new(
             LocalConfigAccess::claimed(node, claim)?.with_identity(identity),
-        ))
+        )))
     }
 
     pub fn local_node(&self) -> Option<&Arc<Node>> {

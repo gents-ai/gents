@@ -388,7 +388,7 @@ async fn generated_selection_cases_drive_the_native_request_head() {
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let case = case.clone();
-        let expected = case["selected"].get("request_id").map(&request_id);
+        let expected = case["selected"].get("request_id").map(request_id);
         let selected = ConfigAccess::transact_local_idempotent(
             &node, None, IdempotentTransactionRetry::Standard, "test.session.generated_selection",
             |txn| {

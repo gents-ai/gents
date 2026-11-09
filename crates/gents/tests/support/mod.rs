@@ -1279,7 +1279,7 @@ pub async fn complete_pending_request_with_canonical_output(
         )],
     )?;
     fixtures::bind_agent_backend(
-        &db,
+        db,
         &agent_did,
         &backend_id,
         backend.endpoint(),

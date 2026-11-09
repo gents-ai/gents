@@ -352,7 +352,7 @@ pub(crate) async fn process_command(
             }
             let working_agent = match crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &row.node_did, &row.session_id).await? {
                 Some(session) => session.session.agent_did,
-                None => match physical_session_agent(txn, &row).await? {
+                None => match physical_session_agent(txn, row).await? {
                     Some(agent) => agent,
                     None => return Ok(None),
                 },

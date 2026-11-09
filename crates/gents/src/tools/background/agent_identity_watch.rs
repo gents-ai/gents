@@ -10,6 +10,9 @@ use crate::store::identity::NodeIdentity;
 #[error("active agent identity watch closed")]
 pub(crate) struct AgentIdentityWatchClosed;
 
+/// Watched identities and the DIDs of the active Agents, from one snapshot.
+pub(crate) type WatchedAndActiveAgents = (Vec<Arc<dyn NodeIdentity>>, RapidHashSet<String>);
+
 /// The runtime's current Agent signers as background owners observe them.
 /// Each read observes one published snapshot; callers that need the watched
 /// identities and the active Agent set together read them in one call.
@@ -18,9 +21,7 @@ pub(crate) trait AgentIdentityWatch: Send + Sync {
 
     /// Watched identities and the DIDs of the active Agents, from the same
     /// snapshot.
-    fn watched_and_active_agents(
-        &self,
-    ) -> Result<(Vec<Arc<dyn NodeIdentity>>, RapidHashSet<String>)>;
+    fn watched_and_active_agents(&self) -> Result<WatchedAndActiveAgents>;
 
     fn changed(&mut self) -> BoxFuture<'_, Result<(), AgentIdentityWatchClosed>>;
 }

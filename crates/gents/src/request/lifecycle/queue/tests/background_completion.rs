@@ -437,7 +437,6 @@ async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
 async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) {
     db.agent_access
         .transact_write(operation, |txn| {
-            let mutation = mutation;
             Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(mutation).await?) })
         })
         .await

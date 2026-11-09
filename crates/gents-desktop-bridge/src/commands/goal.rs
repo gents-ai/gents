@@ -38,7 +38,7 @@ fn session_goal_state(
             reason: gents::goal::GoalInputRefused::from(cause).to_string(),
         },
         SessionGoalObservationState::Observed(observation) => SessionGoalState::Observed {
-            observation: view(*observation),
+            observation: Box::new(view(*observation)),
             next,
         },
     }

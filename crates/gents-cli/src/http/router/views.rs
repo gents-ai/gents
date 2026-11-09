@@ -182,7 +182,7 @@ pub(super) async fn fleet_slots_handler(
             .await
         {
             Ok(reader) => reader,
-            Err(refused) => return refused,
+            Err(refused) => return *refused,
         };
     crate::http::private_reader::private(fleet_slots_response(&reader).await)
 }

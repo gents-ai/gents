@@ -552,7 +552,7 @@ impl LiveUser {
         };
         let request = AgentRequestCreate::base(
             RequestPurpose::Normal,
-            &format!("{session_id}:reservation"),
+            format!("{session_id}:reservation"),
             &self.node_did,
             self.user.did(),
             agent_did,

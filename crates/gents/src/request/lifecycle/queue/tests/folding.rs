@@ -777,12 +777,12 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                 Step::CancelFirstPending => {
                     let access = &db.agent_access;
                     let snapshot =
-                        pending_user_queue(&access, db.node_did(), &session_id, db.agent_did())
+                        pending_user_queue(access, db.node_did(), &session_id, db.agent_did())
                             .await
                             .unwrap();
                     if let Some(first) = snapshot.entries.first() {
                         let result = replace_pending_user_messages(
-                            &access,
+                            access,
                             db.agent_identity.as_ref(),
                             gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
                                 db.agent_did(),
@@ -1034,7 +1034,7 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
         .unwrap();
     let rows = fold_rows(&db, session_id).await;
     let access = &db.agent_access;
-    let queue = pending_user_queue(&access, db.node_did(), session_id, db.node_did())
+    let queue = pending_user_queue(access, db.node_did(), session_id, db.node_did())
         .await
         .unwrap();
     assert_eq!(

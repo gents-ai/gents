@@ -61,7 +61,7 @@ pub(crate) async fn native_queue_image_with_access(
         .filter(|id| state(id) == Some(RequestLifecycleState::Pending))
         .collect::<Vec<_>>();
     let pending =
-        crate::request::lifecycle::pending_user_queue(&access, node_did, session_id, node_did)
+        crate::request::lifecycle::pending_user_queue(access, node_did, session_id, node_did)
             .await
             .unwrap()
             .entries

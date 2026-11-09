@@ -18,18 +18,18 @@ pub(crate) async fn authorize_private_reader(
     state: &RuntimeHttpState,
     identity: &ExtractIdentity,
     headers: &HeaderMap,
-) -> std::result::Result<GraphqlEndpoint, Response> {
+) -> std::result::Result<GraphqlEndpoint, Box<Response>> {
     let Some(actor) = identity.did() else {
-        return Err(failure(
+        return Err(Box::new(failure(
             StatusCode::UNAUTHORIZED,
             "Runtime operator authorization is required.",
-        ));
+        )));
     };
     let forbidden = || {
-        failure(
+        Box::new(failure(
             StatusCode::FORBIDDEN,
             "This identity does not own the runtime.",
-        )
+        ))
     };
     let Ok(actor) = identity::Did::new(actor.as_ref()) else {
         return Err(forbidden());

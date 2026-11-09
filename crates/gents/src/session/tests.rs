@@ -1643,10 +1643,6 @@ pub(crate) async fn import_history_observation(
     assert_eq!(reconstructed, expected);
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the shared history observation fixture's arguments"
-)]
 fn history_observation_segment(
     request_id: &str,
     session_id: &str,

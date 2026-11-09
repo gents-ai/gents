@@ -262,7 +262,6 @@ mod tests {
         let applied = PairingApplied {
             replicator_addresses: s(&["addr1"]),
             replicator_filter: pairing_filter,
-            ..Default::default()
         };
 
         assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
@@ -293,7 +292,6 @@ mod tests {
         let applied = PairingApplied {
             replicator_addresses: s(&["addr1"]),
             replicator_filter: pairing_filter,
-            ..Default::default()
         };
 
         assert_eq!(

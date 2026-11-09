@@ -1386,7 +1386,7 @@ mod tests {
         let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
         let queue_cases = contract["trigger_delivery"]["queues"].as_array().unwrap();
         let identity = |source_doc_id: &str| gents_protocol::trigger_delivery::FireIdentity {
-            owner_did: test_node_did().into(),
+            owner_did: test_node_did(),
             trigger_id: "serial-trigger".into(),
             source_collection: "Work".into(),
             source_doc_id: source_doc_id.into(),
@@ -1935,7 +1935,6 @@ mod tests {
     async fn create_fixture_request(access: &crate::ConfigAccess, mutation: &str) -> String {
         access
             .transact_write("test.fixture_signed_request", |txn| {
-                let mutation = mutation;
                 Box::pin(async move {
                     let response = txn.execute(mutation).await?;
                     let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;

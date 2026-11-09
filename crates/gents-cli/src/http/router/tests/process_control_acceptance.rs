@@ -312,7 +312,7 @@ async fn configure_background_bash(
     use gents::Collection;
 
     fn plan(docs: Vec<(Collection, Value)>) -> anyhow::Result<DesiredStateApplyPlan> {
-        Ok(DesiredStateApplyPlan::new(
+        DesiredStateApplyPlan::new(
             docs.into_iter()
                 .map(|(collection, value)| DesiredStateApplyDocument {
                     collection,
@@ -320,7 +320,7 @@ async fn configure_background_bash(
                     update: value,
                 })
                 .collect(),
-        )?)
+        )
     }
 
     let node_did = home.node_did().to_owned();

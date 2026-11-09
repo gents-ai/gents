@@ -14,7 +14,7 @@ use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
 use crate::store::identity::RuntimeNode;
 use crate::tools::background::agent_identity_watch::{
-    AgentIdentityWatch, AgentIdentityWatchClosed,
+    AgentIdentityWatch, AgentIdentityWatchClosed, WatchedAndActiveAgents,
 };
 use crate::tools::surface::ToolSurface;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
@@ -377,12 +377,7 @@ impl AgentIdentityWatch for ActiveSnapshotAgentIdentities {
         self.0.borrow().watcher_identities()
     }
 
-    fn watched_and_active_agents(
-        &self,
-    ) -> Result<(
-        Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
-        RapidHashSet<String>,
-    )> {
+    fn watched_and_active_agents(&self) -> Result<WatchedAndActiveAgents> {
         let snapshot = self.0.borrow();
         Ok((
             snapshot.watcher_identities()?,

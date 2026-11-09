@@ -1162,13 +1162,16 @@ pub(super) mod tests {
         provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
         title_calls: Arc<AtomicUsize>,
         title_shape_mismatches: Arc<AtomicUsize>,
-        successor: Option<(
-            Arc<defra_node::Node>,
-            String,
-            String,
-            crate::store::identity::ManagedAgentSigner,
-            Arc<dyn NodeIdentity>,
-        )>,
+        successor: Option<WakeSuccessor>,
+    }
+
+    #[derive(Clone)]
+    struct WakeSuccessor {
+        node: Arc<defra_node::Node>,
+        request_id: String,
+        did: String,
+        signer: crate::store::identity::ManagedAgentSigner,
+        runtime: Arc<dyn NodeIdentity>,
     }
 
     #[allow(refining_impl_trait)]
@@ -1218,7 +1221,7 @@ pub(super) mod tests {
                         inputs.len() == 1
                     };
                     if first {
-                        if let Some((node, request_id, did, signer, runtime)) = &self.successor {
+                        if let Some(WakeSuccessor { node, request_id, did, signer, runtime }) = &self.successor {
                             crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
                                 node,
                                 request_id,
@@ -1923,14 +1926,12 @@ pub(super) mod tests {
                 provider_inputs: provider_inputs.clone(),
                 title_calls: title_calls.clone(),
                 title_shape_mismatches: title_shape_mismatches.clone(),
-                successor: successor.map(|request| {
-                    (
-                        node.clone(),
-                        request,
-                        admission.node_did.clone(),
-                        signer.clone(),
-                        admission.runtime.clone(),
-                    )
+                successor: successor.map(|request_id| WakeSuccessor {
+                    node: node.clone(),
+                    request_id,
+                    did: admission.node_did.clone(),
+                    signer: signer.clone(),
+                    runtime: admission.runtime.clone(),
                 }),
             }),
             preamble,

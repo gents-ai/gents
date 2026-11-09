@@ -2841,7 +2841,7 @@ async fn rendered_requests_as(reader: &gents::ConfigAccess, request_id: &str) ->
                 parse_json(&row["provenance_json"])["assembly_trace"].clone()
             } else {
                 gents::inference::rendered_request::decode_capture_json(
-                    &reader, version, &stored, kind,
+                    reader, version, &stored, kind,
                 )
                 .await
                 .unwrap()

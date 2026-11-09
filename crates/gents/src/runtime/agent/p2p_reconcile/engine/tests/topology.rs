@@ -147,7 +147,6 @@ async fn matching_applied_repairs_restored_unfiltered_stale_address() {
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&[&desired_address]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let admin = MockAdmin {
         active: Mutex::new(vec![peer_id.to_string()]),
@@ -193,7 +192,6 @@ async fn omitted_live_filters_force_current_protocol_repair() {
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
         replicator_filter: filter,
-        ..Default::default()
     };
     let admin = MockAdmin::default();
     admin.replicators.lock().unwrap().insert(
@@ -227,7 +225,6 @@ async fn known_empty_live_filters_repair_a_scoped_route() {
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
         replicator_filter: filter,
-        ..Default::default()
     };
     let admin = MockAdmin::default();
     admin.replicators.lock().unwrap().insert(

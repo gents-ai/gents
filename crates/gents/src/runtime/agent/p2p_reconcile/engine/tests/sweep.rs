@@ -188,12 +188,10 @@ async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["agent-target-host"]),
-        ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: filter.clone(),
-        ..Default::default()
     };
     let installed = Arc::new(tokio::sync::Notify::new());
     let admin = MockAdmin {

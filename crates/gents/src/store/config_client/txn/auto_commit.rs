@@ -51,14 +51,14 @@ impl ConfigAccess {
     pub(crate) fn claimed_for_node(node: &EmbeddedNode) -> Option<Self> {
         let gate = existing_mutation_write_gate(node)?;
         let claim = gate.store_claim()?;
-        Some(Self::Local(LocalConfigAccess {
+        Some(Self::Local(Box::new(LocalConfigAccess {
             node: Arc::clone(&claim.node),
             gate,
             identity: None,
             agent_signer: None,
             client_signed_writes: false,
             client_endpoint: None,
-        }))
+        })))
     }
 
     pub(crate) async fn read_local_response_owned(
