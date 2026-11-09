@@ -58,7 +58,7 @@ pub(crate) struct InferenceCallDiagnostics {
     request_doc_id: String,
     node_did: String,
     backend_id: Option<String>,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     call_kind: String,
     call_state: String,
 }
@@ -116,7 +116,6 @@ pub(crate) async fn build_desktop_session_snapshot(
     session_id: &str,
     request_id: Option<&str>,
     timeline_limit: Option<usize>,
-    timeline_before_item_key: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
     let resolved_node_did = node_did.map(str::to_owned).or_else(|| {
@@ -130,14 +129,14 @@ pub(crate) async fn build_desktop_session_snapshot(
             .map(|session| session.node_did.clone())
     });
     let node_did = resolved_node_did.as_deref();
-    // Bypasses enrollment, so the transcript namespace is the node DID.
     let requester_scope = fixture.requester_scope(node_did, session_id, request_id);
-    let page = match gents_desktop_core::client::load_session_transcript_page(
-        fixture.remote_core().node(),
+    let access = fixture.desktop_core().operator_access(node_did?).ok()?;
+    let page = match gents_desktop_core::client::load_session_transcript_page_on(
+        &access,
         session_id,
         node_did,
         requester_scope.as_deref(),
-        timeline_before_item_key,
+        None,
         timeline_limit,
     )
     .await
@@ -152,31 +151,27 @@ pub(crate) async fn build_desktop_session_snapshot(
             return None;
         }
     };
-    let context_store = if timeline_before_item_key.is_none() {
-        match gents_desktop_core::client::load_session_context_store(
-            fixture.remote_core().node(),
-            session_id,
-            node_did,
-            requester_scope.as_deref(),
-        )
-        .await
-        {
-            Ok(store) => Some(store),
-            Err(error) => {
-                tracing::warn!(
-                    session_id,
-                    error = %error,
-                    "live bridge session context query failed; using bounded inexact totals"
-                );
-                None
-            }
+    let context_store = match gents_desktop_core::client::load_session_context_store_on(
+        &access,
+        session_id,
+        node_did,
+        requester_scope.as_deref(),
+    )
+    .await
+    {
+        Ok(store) => Some(store),
+        Err(error) => {
+            tracing::warn!(
+                session_id,
+                error = %error,
+                "live bridge session context query failed; using bounded inexact totals"
+            );
+            None
         }
-    } else {
-        None
     };
     let mut snapshot = build_session_snapshot_for_node_with_transcript(
         fixture.desktop_core().as_ref(),
-        &ConfigAccess::local(fixture.desktop_core().node_arc()),
+        &access,
         node_did,
         session_id,
         request_id,
@@ -184,18 +179,15 @@ pub(crate) async fn build_desktop_session_snapshot(
         Some(&page.canonical_dependencies),
         context_store.as_ref(),
         None,
-        None,
         context_store.is_some(),
-        timeline_before_item_key.is_none(),
+        true,
         None,
     )
-    .await?;
-    if let Err(error) = apply_session_timeline_page_with_query(
-        &mut snapshot,
-        timeline_before_item_key,
-        timeline_limit,
-        Some(&page),
-    ) {
+    .await
+    .ok()??;
+    if let Err(error) =
+        apply_session_timeline_page_with_query(&mut snapshot, timeline_limit, Some(&page))
+    {
         tracing::warn!(
             session_id,
             error,
@@ -211,24 +203,31 @@ pub(crate) async fn build_request_diagnostics_bundle(
     session_id: &str,
     request_id: &str,
 ) -> RequestDiagnosticsBundle {
+    let desktop_access = fixture
+        .desktop_core()
+        .operator_access(fixture.node_did())
+        .expect("live fixture runtime endpoint");
     let desktop = build_request_diagnostics(
-        "desktop",
+        DiagnosticSource::Desktop,
         fixture.desktop_core().as_ref(),
+        &desktop_access,
+        fixture.node_did(),
         session_id,
         request_id,
         fixture.requester_scope(Some(fixture.node_did()), session_id, Some(request_id)),
     )
     .await;
     let mut remote = build_request_diagnostics(
-        "remote",
+        DiagnosticSource::Remote,
         fixture.remote_core().as_ref(),
+        &desktop_access,
+        fixture.node_did(),
         session_id,
         request_id,
         fixture.requester_scope(Some(fixture.node_did()), session_id, Some(request_id)),
     )
     .await;
-    let access = ConfigAccess::local(fixture.remote_core().node_arc());
-    match load_run_timeline_rows(&access, request_id).await {
+    match load_run_timeline_rows(&desktop_access, request_id).await {
         Ok(rows)
             if rows.request.request_id == request_id
                 && rows.request.session_id.as_deref() == Some(session_id)
@@ -249,7 +248,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
                         request_doc_id: request_doc_id.to_string(),
                         node_did: fixture.node_did().to_string(),
                         backend_id: call.backend_id,
-                        agent_id: call.agent_id,
+                        agent_did: call.agent_did,
                         call_kind: call.call_kind,
                         call_state: call.call_state,
                     })
@@ -268,14 +267,32 @@ pub(crate) async fn build_request_diagnostics_bundle(
     RequestDiagnosticsBundle { desktop, remote }
 }
 
+enum DiagnosticSource {
+    Desktop,
+    Remote,
+}
+
 async fn build_request_diagnostics(
-    source: &str,
+    source: DiagnosticSource,
     core: &ClientCore,
+    access: &ConfigAccess,
+    node_did: &str,
     session_id: &str,
     request_id: &str,
     requester_scope: Option<String>,
 ) -> RequestDiagnostics {
-    let refresh_error = refresh_store_with_timeout(core).await;
+    let refresh_error = match source {
+        DiagnosticSource::Remote => {
+            match gents_desktop_core::client::load_node_snapshot_on(access, node_did).await {
+                Ok(snapshot) => {
+                    core.store().replace_snapshot(snapshot);
+                    None
+                }
+                Err(error) => Some(error.to_string()),
+            }
+        }
+        DiagnosticSource::Desktop => refresh_store_with_timeout(core).await,
+    };
     let snapshot = core.store().snapshot();
     let request = snapshot
         .requests
@@ -289,8 +306,8 @@ async fn build_request_diagnostics(
         .map(|session| session.node_did.clone());
     // Counts use a separate explicit diagnostic read, uncapped by the
     // interactive row budget.
-    let transcript_page = gents_desktop_core::client::load_session_transcript_page(
-        core.node(),
+    let transcript_page = gents_desktop_core::client::load_session_transcript_page_on(
+        access,
         session_id,
         resolved_node_did.as_deref(),
         requester_scope.as_deref(),
@@ -301,8 +318,8 @@ async fn build_request_diagnostics(
     .ok();
     let transcript_store = transcript_page.as_ref().map(|page| &page.store);
     let (diagnostics_store, transcript_diagnostics_error) =
-        match gents_desktop_core::client::load_session_diagnostics_store(
-            core.node(),
+        match gents_desktop_core::client::load_session_diagnostics_store_on(
+            access,
             session_id,
             resolved_node_did.as_deref(),
             requester_scope.as_deref(),
@@ -332,7 +349,7 @@ async fn build_request_diagnostics(
         .count();
     let session_snapshot = build_session_snapshot_for_node_with_transcript(
         core,
-        &ConfigAccess::local(core.node_arc()),
+        access,
         resolved_node_did.as_deref(),
         session_id,
         Some(request_id),
@@ -340,12 +357,13 @@ async fn build_request_diagnostics(
         None,
         None,
         None,
-        None,
         false,
         true,
         None,
     )
-    .await;
+    .await
+    .ok()
+    .flatten();
     let matching_responses = session_snapshot
         .as_ref()
         .into_iter()
@@ -396,7 +414,11 @@ async fn build_request_diagnostics(
         .collect::<Vec<_>>();
 
     RequestDiagnostics {
-        source: source.to_string(),
+        source: match source {
+            DiagnosticSource::Desktop => "desktop",
+            DiagnosticSource::Remote => "remote",
+        }
+        .to_string(),
         session_id: session_id.to_string(),
         request_id: request_id.to_string(),
         refresh_error,

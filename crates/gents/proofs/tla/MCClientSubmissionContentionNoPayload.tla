@@ -1,0 +1,4 @@
+---- MODULE MCClientSubmissionContentionNoPayload ----
+EXTENDS ClientSubmissionContention
+
+====

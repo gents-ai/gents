@@ -216,11 +216,11 @@ def projectThreadStatus (head : Option ClientHeadProjection) : ThreadPresentatio
   | some ⟨.interrupted, _⟩ => .idle
   | none => .idle
 
-def projectionAgentId (rootAgentId : String)
-    (threadAgentId : Option String) : String :=
-  match threadAgentId with
-  | some agentId => agentId
-  | none => rootAgentId
+def projectionAgentDid (rootAgentDid : String)
+    (threadAgentDid : Option String) : String :=
+  match threadAgentDid with
+  | some agentDid => agentDid
+  | none => rootAgentDid
 
 
 
@@ -272,10 +272,10 @@ theorem missing_request_observation_is_quiescent :
     projectThreadStatus none = .idle := rfl
 
 theorem child_agent_overrides_root_for_response_metadata :
-    projectionAgentId "root" (some "child") = "child" := rfl
+    projectionAgentDid "root" (some "child") = "child" := rfl
 
 theorem absent_child_agent_keeps_root_response_metadata :
-    projectionAgentId "root" none = "root" := rfl
+    projectionAgentDid "root" none = "root" := rfl
 
 theorem exact_binding_supplies_model :
     projectedThreadModel "child-owner" "child" "child-owner" "child"

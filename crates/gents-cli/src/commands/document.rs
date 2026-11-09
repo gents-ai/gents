@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use gents::store::graphql::validate_collection_identifier;
 use gents::tools::builtin::defra_query::{unknown_collection_message, CollectionScope};
-use gents_protocol::graphql::{extract_mutation_doc_id, graphql_input_literal};
 use serde_json::{json, Value};
 
 use crate::cli::args::{DocumentCommand, DocumentCreateArgs};
@@ -75,13 +74,6 @@ fn ensure_known_fields(collection: &str, fields: &Value, input_fields: &[String]
     }
 }
 
-fn create_mutation(collection: &str, fields: &Value) -> Result<String> {
-    let input = graphql_input_literal(fields)?;
-    Ok(format!(
-        "mutation {{ create_{collection}(input: {input}) {{ _docID }} }}"
-    ))
-}
-
 fn contains_empty_array(value: &Value) -> bool {
     match value {
         Value::Array(items) => items.is_empty() || items.iter().any(contains_empty_array),
@@ -92,7 +84,9 @@ fn contains_empty_array(value: &Value) -> bool {
 
 async fn create(args: DocumentCreateArgs) -> Result<()> {
     let fields = parse_fields(&args.collection, &args.json)?;
-    let mutation = create_mutation(&args.collection, &fields)?;
+    let authored_schema = tokio::fs::read_to_string(&args.schema)
+        .await
+        .with_context(|| format!("reading authored SDL {}", args.schema.display()))?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let input_type = gents::store::graphql::escape_graphql_string(&format!(
         "{}MutationInputArg",
@@ -114,7 +108,13 @@ async fn create(args: DocumentCreateArgs) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
     ensure_known_fields(&args.collection, &fields, &input_fields)?;
-    let response = access.write("cli.document.create", &mutation).await?;
-    let doc_id = extract_mutation_doc_id(&response, &args.collection)?;
+    let doc_id = gents::store::config_client::create_authored_document(
+        &access,
+        &args.collection,
+        &fields,
+        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        &authored_schema,
+    )
+    .await?;
     print_json(&json!({ "collection": args.collection, "doc_id": doc_id }))
 }

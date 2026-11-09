@@ -25,28 +25,6 @@ pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
 
 pub(super) const SET_ONCE_FIELDS: &[&str] = &["node_did", "account_ref", "connected_at", "label"];
 
-pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String {
-    let fields = oauth_credential_input_fields(credential);
-    let add_input = render_oauth_input(&fields, &[]);
-    // `node_did` is immutable, so the update branch must omit it on this DefraDB pin.
-    let update_input = render_oauth_input(&fields, SET_ONCE_FIELDS);
-    let credential_id = crate::store::graphql::escape_graphql_string(&credential.credential_id);
-    format!(
-        r#"mutation {{
-            upsert_OAuthCredential(
-                filter: {{ credential_id: {{ _eq: "{credential_id}" }} }},
-                add: {{
-                    credential_id: "{credential_id}",
-                    {add_input}
-                }},
-                update: {{
-                    {update_input}
-                }}
-            ) {{ _docID }}
-        }}"#
-    )
-}
-
 pub(super) fn enabled_oauth_credentials_query(
     node_did: &str,
     provider: &str,

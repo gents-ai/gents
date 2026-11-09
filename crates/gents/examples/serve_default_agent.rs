@@ -3,15 +3,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::defra_node::{EmbeddedNode, HttpConfig};
-use gents::documents::{BackendAuth, Node, PackConfig};
-use gents::store::config_client::{
-    apply_desired_state_plan, load_inference_backend_in_txn, read_desired_state_record_in_txn,
-    ConfigAccess, DesiredStateApplyPlan,
-};
+use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
 use gents::{
-    default_agent_id_for_node, ensure_runtime_schemas, Collection, DocumentRuntimeOptions, Gents,
-    InferenceBackend, KeyIdentity, McpPool, NodeIdentity, ToolCeiling, DEFAULT_MAX_TURNS,
+    ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity,
+    ToolCeiling,
 };
 use tokio::sync::watch;
 
@@ -26,24 +21,12 @@ fn env_or_u16(name: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
-fn env_or_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
     let data_dir = PathBuf::from(env_or("GENTS_DATA_DIR", "./var/defradb"));
     let http_port = env_or_u16("GENTS_HTTP_PORT", 9191);
     let node_name = env_or("GENTS_NAME", "demo");
-    let backend_id = env_or("GENTS_BACKEND_ID", "demo-backend");
-    let model_endpoint = env_or("GENTS_MODEL_ENDPOINT", "http://127.0.0.1:8000/v1");
-    let model_name = env_or("GENTS_MODEL_NAME", "default");
-    let system_prompt = std::env::var("GENTS_SYSTEM_PROMPT").unwrap_or_default();
-    let deadline_secs = env_or_u64("GENTS_DEADLINE_SECS", 900);
     let key_path = std::env::var("GENTS_KEY_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| data_dir.join("keys").join(format!("{node_name}.key")));
@@ -64,17 +47,6 @@ async fn main() -> Result<()> {
             .context("building embedded DefraDB node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
-    seed_demo_documents(
-        &node,
-        identity.did(),
-        &backend_id,
-        &model_endpoint,
-        &model_name,
-        &system_prompt,
-        deadline_secs,
-    )
-    .await?;
-
     let agent = Gents::from_default_agent_documents(
         node,
         identity.clone(),
@@ -98,180 +70,8 @@ async fn main() -> Result<()> {
         node_name,
         node_did = agent.node_did(),
         graphql = %format!("http://127.0.0.1:{http_port}/api/v0/graphql"),
-        backend_id,
         "serving default behavior"
     );
 
     agent.run(shutdown_rx).await
-}
-
-async fn seed_demo_documents(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    backend_id: &str,
-    model_endpoint: &str,
-    model_name: &str,
-    system_prompt: &str,
-    deadline_secs: u64,
-) -> Result<()> {
-    let deadline_secs = i64::try_from(deadline_secs).context("deadline exceeds supported range")?;
-    ConfigAccess::transact_local_write(node, None, "example.default_config", |txn| {
-        Box::pin(async move {
-            let mut principal: Node = match read_desired_state_record_in_txn(
-                txn, Collection::Node, node_did, node_did,
-            ).await? {
-                Some((_, value)) => serde_json::from_value(value)?,
-                None => serde_json::from_value(serde_json::json!({"node_did":node_did}))?,
-            };
-            let agent_id = principal.default_agent_id.clone()
-                .unwrap_or_else(|| default_agent_id_for_node(node_did));
-            principal.default_agent_id = Some(agent_id.clone());
-            let profile_id = format!("{agent_id}:demo-profile");
-            let tools_id = format!("{agent_id}:demo-tools");
-            let context_id = format!("{agent_id}:demo-context");
-            let execution_id = format!("{agent_id}:demo-execution");
-            let compaction_id = format!("{agent_id}:demo-compaction");
-            let created_at = read_desired_state_record_in_txn(
-                txn, Collection::Agent, node_did, &agent_id,
-            ).await?.and_then(|(_, value)| value.get("created_at").cloned());
-            let mut backend = match load_inference_backend_in_txn(txn, node_did, backend_id).await? {
-                Some(existing) => existing,
-                None => serde_json::from_value::<InferenceBackend>(serde_json::json!({
-                    "node_did":node_did,"backend_id":backend_id,"name":backend_id,
-                    "provider_kind":"OpenAiCompatible","endpoint":model_endpoint,
-                    "auth":BackendAuth::Unauthenticated,"max_concurrent":2,"max_queue_depth":100
-                }))?,
-            };
-            backend.name = backend_id.to_owned();
-            backend.endpoint = model_endpoint.to_owned();
-            backend.enabled = true;
-            let config: PackConfig = serde_json::from_value(serde_json::json!({
-                "node":principal,
-                "agents":[{"node_did":node_did,"agent_id":agent_id,
-                    "display_name":"Default","context_id":context_id,"inference_profile_id":profile_id,"created_at":created_at}],
-                "contexts":[{"node_did":node_did,"context_id":context_id,
-                    "system_prompt":system_prompt,"tools_id":tools_id,"compaction_id":compaction_id}],
-                "compactions":[{"node_did":node_did,"compaction_id":compaction_id,
-                    "strategy":"StripThenSummarize","threshold":0.75}],
-                "tools":[{"node_did":node_did,"tools_id":tools_id,"display_name":"Demo Tools",
-                    "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"ReadOnly"}},
-                    "built_ins":{"enable_goal_tools":true,"enable_goal_creation":false}}],
-                "inference_backends":[backend],
-                "inference_profiles":[{"node_did":node_did,"profile_id":profile_id,"display_name":"Demo",
-                    "backend_id":backend_id,"model_name":model_name,"context_window":131072,
-                    "max_output_tokens":32768,"execution_id":execution_id}],
-                "inference_execution":[{"node_did":node_did,"execution_id":execution_id,
-                    "max_turns":DEFAULT_MAX_TURNS,"stream_batch_ms":1000,
-                    "stream_liveness_timeout_secs":60.min(deadline_secs.saturating_sub(1)),"deadline_duration_secs":deadline_secs}]
-            }))?;
-            let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-            apply_desired_state_plan(txn, &plan).await?;
-            Ok(())
-        })
-    }).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gents::store::config_client::write_inference_backend_document;
-    use serde_json::json;
-
-    #[tokio::test]
-    async fn example_uses_scoped_config_preserving_auth_and_capacity() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let identity = KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await?,
-        );
-        ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node.clone());
-        for owner in ["did:test:demo-a", "did:test:demo-b"] {
-            seed_demo_documents(
-                &node,
-                owner,
-                "backend",
-                "http://localhost:8000/v1",
-                "model",
-                "literal {{ task }}",
-                900,
-            )
-            .await?;
-        }
-        let backend: InferenceBackend = serde_json::from_value(json!({
-            "node_did":"did:test:demo-a","backend_id":"backend","name":"Backend",
-            "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
-            "auth":{"kind":"api_key","key":"preserved-key"},"max_concurrent":7,"max_queue_depth":17
-        }))?;
-        write_inference_backend_document(&access, &backend).await?;
-        seed_demo_documents(
-            &node,
-            "did:test:demo-a",
-            "backend",
-            "http://localhost:9000/v1",
-            "second-model",
-            "literal {{ task }}",
-            123,
-        )
-        .await?;
-        access
-            .transact_write("example.verify", |txn| {
-                Box::pin(async move {
-                    let backend = load_inference_backend_in_txn(txn, "did:test:demo-a", "backend")
-                        .await?
-                        .unwrap();
-                    assert!(
-                        matches!(backend.auth, BackendAuth::ApiKey {key} if key=="preserved-key")
-                    );
-                    assert_eq!(
-                        (backend.max_concurrent, backend.max_queue_depth),
-                        (Some(7), Some(17))
-                    );
-                    assert_eq!(backend.endpoint, "http://localhost:9000/v1");
-                    let other = load_inference_backend_in_txn(txn, "did:test:demo-b", "backend")
-                        .await?
-                        .unwrap();
-                    assert_eq!(other.endpoint, "http://localhost:8000/v1");
-                    let id = default_agent_id_for_node("did:test:demo-a");
-                    let (_, tools) = read_desired_state_record_in_txn(
-                        txn,
-                        Collection::Tools,
-                        "did:test:demo-a",
-                        &format!("{id}:demo-tools"),
-                    )
-                    .await?
-                    .unwrap();
-                    assert_eq!(tools["host"]["files"]["mode"], "ReadOnly");
-                    assert_eq!(tools["host"]["bash"]["mode"], "ReadOnly");
-                    let (_, context) = read_desired_state_record_in_txn(
-                        txn,
-                        Collection::AgentContext,
-                        "did:test:demo-a",
-                        &format!("{id}:demo-context"),
-                    )
-                    .await?
-                    .unwrap();
-                    assert_eq!(context["system_prompt"], "literal {{ task }}");
-                    Ok::<(), anyhow::Error>(())
-                })
-            })
-            .await?;
-        assert!(seed_demo_documents(
-            &node,
-            "did:test:demo-a",
-            "backend",
-            "http://localhost:9000/v1",
-            "model",
-            "",
-            u64::MAX
-        )
-        .await
-        .is_err());
-        drop(access);
-        node.shutdown().await;
-        Ok(())
-    }
 }

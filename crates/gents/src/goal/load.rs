@@ -34,27 +34,6 @@ pub async fn load_canonical_goal(
         .next())
 }
 
-pub async fn load_goal_by_id(
-    node: &EmbeddedNode,
-    node_did: &str,
-    goal_id: &str,
-) -> Result<Option<GoalDocument>> {
-    let node_did = escape_graphql_string(node_did);
-    let goal_id = escape_graphql_string(goal_id);
-    let query = format!(
-        r#"{{
-            Goal(
-                filter: {{ node_did: {{ _eq: "{node_did}" }}, goal_id: {{ _eq: "{goal_id}" }} }},
-                showDeleted: true,
-                order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
-            ) {{ {GOAL_FIELDS} }}
-        }}"#
-    );
-    let mut goals = decode_goal_rows(node, &query).await?;
-    sort_goals_canonical(&mut goals);
-    Ok(goals.into_iter().next())
-}
-
 pub(crate) fn sort_goals_canonical(goals: &mut [GoalDocument]) {
     goals.sort_by(|left, right| {
         left.created_at
@@ -74,12 +53,22 @@ pub async fn load_canonical_goal_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
+    let Some(session) =
+        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+            txn, node_did, session_id,
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+    let session_doc_id = escape_graphql_string(&session.doc_id);
     let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let response = txn
         .execute(&format!(
             r#"{{ Goal(filter: {{
-        node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}
+        node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }},
+        session_doc_id: {{ _eq: "{session_doc_id}" }}
     }}) {{ {GOAL_FIELDS} }} }}"#
         ))
         .await?;

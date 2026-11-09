@@ -4,11 +4,10 @@ use super::launch::{fail_managed_start, launch_managed_server, LaunchFailure, Na
 use super::native::{
     ensure_launchable_here, launchable_native_service, native_service, run_native,
 };
-use super::pairing::{
-    pairing_is_ready, pairing_target, start_managed_runtime_pairing, start_running_managed_pairing,
-};
+use super::pairing::{pairing_is_ready, pairing_target, start_running_managed_pairing};
 use super::port::{
-    ensure_default_port_identity, matching_external_server, observe_port_readiness, PortReadiness,
+    ensure_default_port_identity, matching_external_server, observe_port_readiness,
+    user_status_signer, PortReadiness,
 };
 use super::preference::{
     load_bound_preference, refuse_renaming_home, save_confirmed_preference, start_authority,
@@ -21,9 +20,7 @@ use super::status::{emit_status, project_external_status, status_from};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{ManagedServerStartRequest, ManagedServerStatus};
-use gents_desktop_core::local_runtime::{
-    init_standard_local_runtime, DesktopInitOptions, OperatorIdentityInteraction,
-};
+use gents_desktop_core::local_runtime::{init_standard_local_runtime, DesktopInitOptions};
 use gents_desktop_core::preference::StoredManagedServer;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
 use tauri::{AppHandle, Runtime};
@@ -72,11 +69,17 @@ where
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
     let (ready, initial_enabled, _lifecycle) =
-        match matching_external_server(&node_home, OperatorIdentityInteraction::Allow).await? {
+        match matching_external_server(&node_home, user_status_signer(state).await.as_ref()).await?
+        {
             Some(external) => (Some(external), false, lifecycle),
             None => {
                 ensure_launchable_here(app, state)?;
-                let outdated = match observe_port_readiness(&node_home).await? {
+                let outdated = match observe_port_readiness(
+                    &node_home,
+                    user_status_signer(state).await.as_ref(),
+                )
+                .await?
+                {
                     PortReadiness::Outdated { version } => Some(version),
                     _ => None,
                 };
@@ -141,7 +144,6 @@ where
             core.refresh_local_standard_peer(&node_home, &target.node_name)
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
-            start_managed_runtime_pairing(state, core, node_home, target).await;
         }
         external.pairing_ready = pairing_is_ready(state, external.node_did.as_deref()).await;
         return Ok(external);
@@ -162,7 +164,8 @@ where
             run_native(native_service(app, state)?, |service| service.stop(false)).await?;
         }
         if gents_server::server_host::initialized_home(&node_home) {
-            ensure_default_port_identity(&node_home).await?;
+            ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref())
+                .await?;
         }
         gents_server::server_host::ensure_standard_home(
             tauri::async_runtime::handle().inner(),
@@ -187,7 +190,7 @@ where
             },
         )
         .await?;
-        ensure_default_port_identity(&node_home).await?;
+        ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref()).await?;
         run_native(launchable_native_service(app, state)?, |service| {
             service.install()
         })
@@ -262,7 +265,7 @@ where
     let stored = load_bound_preference(state).await?;
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
     let mut status = if let Some(external) =
-        matching_external_server(&node_home, OperatorIdentityInteraction::Allow).await?
+        matching_external_server(&node_home, user_status_signer(state).await.as_ref()).await?
     {
         project_external_status(external, &native)
     } else {

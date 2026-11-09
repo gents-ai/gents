@@ -100,7 +100,7 @@ private def taskCaseJson (policy : ToolPolicy.AccessReview.TaskPolicy)
   ("node", toJson "node"), ("taskId", toJson "review"), ("agent", toJson "agent"),
   ("document", Json.mkObj [
     ("node_did", toJson policy.node), ("task_id", toJson policy.task),
-    ("agent_id", toJson policy.agent), ("prompt_template", toJson policy.prompt),
+    ("agent_did", toJson policy.agent), ("prompt_template", toJson policy.prompt),
     ("enabled", toJson policy.enabled), ("emit_outcome", toJson policy.outcome),
     ("hooks", if policy.hooks then toJson [Json.mkObj [
       ("hook_id", toJson "setup"), ("phase", toJson "before"),

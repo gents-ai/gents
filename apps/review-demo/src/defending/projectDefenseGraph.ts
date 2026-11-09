@@ -65,7 +65,7 @@ function verifierRequestFor(
 ): AgentRequestRow | undefined {
   return requests
     .filter((request) => {
-      if (request.agent_id !== "defend-verifier") {
+      if (request.agent_did !== "defend-verifier") {
         return false;
       }
       if (

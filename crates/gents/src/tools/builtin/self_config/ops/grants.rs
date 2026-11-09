@@ -1,7 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
-use anyhow::{bail, Context, Result};
-use gents_protocol::job::PluginJobSettings;
+use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
 use super::{read_owned_doc, SelfConfigCore};
@@ -15,9 +14,8 @@ use crate::store::config_client::ConfigApplyTxn;
 pub struct OperatorGrants {
     /// `self_config.enable_pack_install`.
     pub pack_install: bool,
-    /// `integrations.plugins[].job` by plugin coordinate. A plugin with no
-    /// entry has the empty ceiling.
-    pub plugin_jobs: BTreeMap<String, PluginJobSettings>,
+    /// The `policy` self-config category.
+    pub policy: bool,
 }
 
 impl OperatorGrants {
@@ -33,62 +31,43 @@ impl OperatorGrants {
                 "Tools.integrations does not decode; its operator grants cannot be read",
             )?,
         };
-        let mut plugin_jobs = BTreeMap::new();
+        let mut plugin_jobs = BTreeSet::new();
         for plugin in integrations.plugins.into_iter().flatten() {
-            let Some(job) = plugin.job else { continue };
+            if plugin.job.is_none() {
+                continue;
+            }
             anyhow::ensure!(
-                plugin_jobs.insert(plugin.plugin.clone(), job).is_none(),
+                plugin_jobs.insert(plugin.plugin.clone()),
                 "Tools.integrations.plugins names {:?} twice; its job grant cannot be read",
                 plugin.plugin
             );
         }
         Ok(Self {
             pack_install: config.enable_pack_install.unwrap_or(false),
-            plugin_jobs,
+            policy: config
+                .self_config_categories
+                .iter()
+                .flatten()
+                .any(|category| category == "policy"),
         })
     }
 
-    /// Lean `Grants.boundedBy` and `keepsJobGrants`: pack installation is
-    /// held-bounded: carried by `stored` or held by `held`. Job blocks are
-    /// bounded by `stored` alone ([`Self::job_refusal`]).
+    /// The operator grants this candidate carries that neither the stored Tools
+    /// nor the holder has. Each grant is bounded on its own.
+    pub fn unheld_by(&self, stored: &Self, held: &Self) -> Vec<&'static str> {
+        let mut unheld = Vec::new();
+        if self.pack_install && !stored.pack_install && !held.pack_install {
+            unheld.push("enable_pack_install");
+        }
+        if self.policy && !stored.policy && !held.policy {
+            unheld.push("the policy category");
+        }
+        unheld
+    }
+
+    /// Lean `Grants.boundedBy`: every grant is kept from the stored Tools or the holder.
     pub fn bounded_by(&self, stored: &Self, held: &Self) -> bool {
-        (!self.pack_install || stored.pack_install || held.pack_install)
-            && self.job_refusal(stored).is_none()
-    }
-
-    /// Lean `JobGrant.narrows` over every job block `self` carries: the first
-    /// block that adds to, widens or edits the policy of the block `stored`
-    /// carries for the same plugin, as a refusal naming the field. An absent
-    /// block is the empty ceiling, so a block with no stored counterpart is
-    /// an addition.
-    fn job_refusal(&self, stored: &Self) -> Option<String> {
-        self.plugin_jobs.iter().find_map(|(plugin, job)| {
-            let Some(base) = stored.plugin_jobs.get(plugin) else {
-                return Some(format!(
-                    "integrations.plugins[{plugin}].job is not in the stored Tools; only the operator may add a job block"
-                ));
-            };
-            let field = if !job.agent_targets.iter().all(|t| base.agent_targets.contains(t)) {
-                "agent_targets"
-            } else if job.max_live > base.max_live {
-                "max_live"
-            } else if job.max_spawns > base.max_spawns {
-                "max_spawns"
-            } else if job.max_messages_per_slot > base.max_messages_per_slot {
-                "max_messages_per_slot"
-            } else if job.result_bytes > base.result_bytes {
-                "result_bytes"
-            } else if job.max_wall_secs > base.max_wall_secs {
-                "max_wall_secs"
-            } else if job.policy != base.policy {
-                "policy"
-            } else {
-                return None;
-            };
-            Some(format!(
-                "integrations.plugins[{plugin}].job.{field} differs from the stored block beyond narrowing; only the operator may widen a job grant or edit its policy"
-            ))
-        })
+        self.unheld_by(stored, held).is_empty()
     }
 }
 
@@ -105,12 +84,12 @@ pub fn guard_tools_keep_grants(
         .map(OperatorGrants::from_tools_json)
         .transpose()?
         .unwrap_or_default();
-    if let Some(refusal) = candidate.job_refusal(&stored) {
-        bail!(refusal);
-    }
+    let unheld = candidate.unheld_by(&stored, held);
     anyhow::ensure!(
-        candidate.bounded_by(&stored, held),
-        "pack installation is operator-managed and cannot be self-granted"
+        unheld.is_empty(),
+        "operator-managed {} cannot be self-granted; this agent does not hold {}. Select Tools without it or ask the operator to grant it",
+        unheld.join(", "),
+        if unheld.len() == 1 { "it" } else { "them" }
     );
     Ok(())
 }
@@ -205,5 +184,44 @@ async fn context_tools_in_txn(
     match context.get("tools_id").and_then(Value::as_str) {
         Some(tools_id) if !tools_id.is_empty() => tools_by_id_in_txn(txn, owner, tools_id).await,
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod lean_bound_tests {
+    use super::*;
+
+    #[test]
+    fn modeled_grant_bound_matches_the_owner() {
+        for case in &crate::lean_vocab_test::lean_contract_snapshot().policy_grant_bound_cases {
+            let grants = |field: &str| OperatorGrants {
+                pack_install: false,
+                policy: case[field].as_bool().unwrap(),
+            };
+            assert_eq!(
+                grants("candidate_policy")
+                    .bounded_by(&grants("stored_policy"), &grants("held_policy")),
+                case["accepted"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_holder_cannot_select_the_policy_category() {
+        let tools = serde_json::json!({"self_config": {
+            "enable_self_config": true,
+            "self_config_categories": ["agent", "tools", "profile", "policy"],
+        }});
+        let tools = tools.as_object().unwrap();
+        let refused = guard_tools_keep_grants(&OperatorGrants::default(), None, tools)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("the policy category"), "{refused}");
+        let holder = OperatorGrants {
+            pack_install: false,
+            policy: true,
+        };
+        guard_tools_keep_grants(&holder, None, tools).unwrap();
     }
 }

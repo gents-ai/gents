@@ -3,24 +3,39 @@ use super::*;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::AwaitMode;
+use gents_protocol::tool_call::AwaitMode;
 
-pub(super) fn cause(
+/// The accepted tool row does not carry its calling request's id; the id is
+/// read from the calling request document, as the owning lifecycle does.
+pub(super) async fn cause(
     message: &crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage,
     caller_hop: u32,
 ) -> SessionMessageCause {
+    let tool = &message.admission.tool;
     SessionMessageCause {
         caller_node_did: message.admission.node_did.clone(),
-        caller_agent_id: "caller-agent".to_owned(),
-        caller_session_id: "caller-session".to_owned(),
-        caller_requester_did: None,
-        caller_request_id: "caller-request".to_owned(),
-        caller_request_doc_id: message.admission.tool.request_doc_id().unwrap().to_owned(),
+        caller_agent_did: tool.actor().to_string(),
+        caller_session_id: tool.session_id().to_owned(),
+        caller_requester_did: tool.requester_did().map(str::to_owned),
+        caller_request_id: tool.calling_request_id().await.unwrap(),
+        caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
         caller_hop,
-        tool_call_id: "hop-tool".to_owned(),
-        tool_call_doc_id: "hop-tool-doc".to_owned(),
+        tool_call_id: tool.tool_call_id().to_owned(),
+        tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
         correlation: None,
     }
+}
+
+pub(super) fn signer(
+    message: &crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage,
+) -> crate::store::identity::ManagedAgentSigner {
+    message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap()
 }
 
 #[tokio::test]
@@ -34,8 +49,8 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await
@@ -43,7 +58,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     let cases = &crate::lean_vocab_test::lean_contract_snapshot()
@@ -59,14 +74,21 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
         } else {
             "processing"
         };
-        let response = node
-            .execute(&format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&message.caused_request_doc_id)
-            ))
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let cause = cause(&message, case.caller_hop);
+        message
+            .admission
+            .tool
+            .access()
+            .unwrap()
+            .write(
+                "test.set_hop_state",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&message.caused_request_doc_id)
+                ),
+            )
+            .await
+            .unwrap();
+        let cause = cause(&message, case.caller_hop).await;
         let body = RenderedBody {
             content: "again".to_owned(),
             goal: None,
@@ -82,6 +104,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             } else {
                 AgentMessageDelivery::Queue
             },
+            &signer(&message),
         )
         .await
         .unwrap()
@@ -98,7 +121,8 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             "{name}"
         );
         assert_eq!(
-            create.caused_by_parent_tool_call_doc_id.as_deref() == Some("hop-tool-doc"),
+            create.caused_by_parent_tool_call_doc_id.as_deref()
+                == Some(cause.tool_call_doc_id.as_str()),
             case.names_caller_tool_call,
             "{name}"
         );
@@ -113,7 +137,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             "{name}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -130,8 +154,8 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     let node = message.admission.node.clone();
     let tool = &message.admission.tool;
     let tool_doc_id = tool.doc_id().unwrap().to_owned();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await
@@ -139,21 +163,22 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
-    let cause = cause(&message, 0);
+    let cause = cause(&message, 0).await;
     let body = RenderedBody {
         content: "staged".to_owned(),
         goal: None,
     };
-    let planned = plan(&node, &cause, &target, body, None, false)
+    let planned = plan(&node, &cause, &target, body, None, false, &signer(&message))
         .await
         .unwrap()
         .unwrap();
     let load_tool = || {
-        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             &tool_doc_id,
             tool.node_did(),
             tool.session_id(),
@@ -161,8 +186,8 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         )
     };
     let before = load_tool().await.unwrap().unwrap();
-    let receipt_before = load_receipt(
-        &node,
+    let receipt_before = load_receipt::<crate::tools::call::lifecycle::ToolCallLifecycle>(
+        &crate::store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
         &tool_doc_id,
         tool.node_did(),
         tool.session_id(),
@@ -171,25 +196,30 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     .await
     .unwrap();
     let (cause, planned) = (&cause, &planned);
-    let enqueued = crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "session_message.test_stage",
-        move |txn| Box::pin(async move { stage_planned_write_in_txn(txn, cause, planned).await }),
+    let enqueued = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_stage", move |txn| {
+            Box::pin(async move { stage_planned_write_in_txn(txn, cause, planned).await })
+        })
+        .await
+        .unwrap();
+    let staged = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &enqueued.doc_id,
     )
     .await
+    .unwrap()
     .unwrap();
-    let staged = crate::request::binding::load_agent_request_by_doc_id(&node, &enqueued.doc_id)
-        .await
-        .unwrap()
-        .unwrap();
     assert_eq!(staged.request_id, enqueued.request_id);
     assert_eq!(staged.session_id, target.session_id);
     let after = load_tool().await.unwrap().unwrap();
     assert_eq!(after.state(), before.state());
     assert_eq!(after.is_running(), before.is_running());
-    let receipt_after = load_receipt(
-        &node,
+    let receipt_after = load_receipt::<crate::tools::call::lifecycle::ToolCallLifecycle>(
+        &crate::store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
         &tool_doc_id,
         tool.node_did(),
         tool.session_id(),
@@ -201,7 +231,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         serde_json::to_value(&receipt_after).unwrap(),
         serde_json::to_value(&receipt_before).unwrap()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -216,8 +246,8 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await
@@ -225,19 +255,27 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
-    let stale_cause = cause(&message, 0);
+    let stale_cause = cause(&message, 0).await;
     let body = RenderedBody {
         content: "stale".to_owned(),
         goal: None,
     };
-    let planned = plan(&node, &stale_cause, &target, body, None, false)
-        .await
-        .unwrap()
-        .unwrap();
-    let ahead_cause = cause(&message, 10);
+    let planned = plan(
+        &node,
+        &stale_cause,
+        &target,
+        body,
+        None,
+        false,
+        &signer(&message),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let ahead_cause = cause(&message, 10).await;
     let ahead = plan(
         &node,
         &ahead_cause,
@@ -248,33 +286,34 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         },
         None,
         false,
+        &signer(&message),
     )
     .await
     .unwrap()
     .unwrap();
     assert!(ahead.hop() > planned.hop());
     let (ahead_cause, ahead) = (&ahead_cause, &ahead);
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "session_message.test_ahead_stage",
-        move |txn| {
+    message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_ahead_stage", move |txn| {
             Box::pin(async move { stage_planned_write_in_txn(txn, ahead_cause, ahead).await })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
     let (stale_cause, planned) = (&stale_cause, &planned);
-    let error = crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "session_message.test_stale_stage",
-        move |txn| {
+    let error = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_stale_stage", move |txn| {
             Box::pin(async move { stage_planned_write_in_txn(txn, stale_cause, planned).await })
-        },
-    )
-    .await
-    .unwrap_err();
+        })
+        .await
+        .unwrap_err();
     assert!(
         error.to_string().contains("moved to hop"),
         "unexpected error: {error:#}"
@@ -291,7 +330,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();
     assert!(data["AgentRequest"].as_array().unwrap().is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -305,7 +344,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
     })
     .await
     .unwrap();
-    let cause = cause(&message, 0);
+    let cause = cause(&message, 0).await;
     let parent = gents_protocol::request_input::RequestInput {
         cwd: Some("/workspace/project".into()),
         ..Default::default()
@@ -317,7 +356,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             } else {
                 "did:key:remote".into()
             },
-            agent_id: "worker".into(),
+            agent_did: "worker".into(),
             session_id: uuid::Uuid::new_v4().to_string(),
         };
         let create = crate::request::lifecycle::build_session_message_request(
@@ -330,6 +369,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             1,
             None,
             None,
+            &signer(&message),
         )
         .await
         .unwrap();
@@ -352,7 +392,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             interrupt_before_publish: false,
             write,
         };
-        plan.sign_agent_creation(&cause.caller_node_did, &parent)
+        plan.sign_agent_creation(&cause.caller_node_did, &parent, &signer(&message))
             .await
             .unwrap();
         let create = match &plan.write {
@@ -383,6 +423,11 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             Ok(true)
         ));
     }
-    message.admission.node.shutdown().await;
+    message
+        .admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

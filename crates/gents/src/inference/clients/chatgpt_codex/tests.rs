@@ -293,7 +293,7 @@ async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized()
             request_id: "req-1".to_string(),
             node_did: "did:key:agent".to_string(),
             requester_did: String::new(),
-            agent_id: "behavior".to_string(),
+            agent_did: "behavior".to_string(),
             session_id: "session".to_string(),
             model_name: "configured-model".to_string(),
             provider_family: None,

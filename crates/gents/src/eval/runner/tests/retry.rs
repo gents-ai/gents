@@ -109,7 +109,7 @@ async fn not_evidence_retries_up_to_the_cap_then_the_slot_is_left_as_not_evidenc
     .await
     .unwrap();
     assert_eq!((outcome.completed, outcome.not_evidence), (3, 0));
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(
@@ -148,7 +148,7 @@ async fn not_evidence_retries_up_to_the_cap_then_the_slot_is_left_as_not_evidenc
     .await
     .unwrap();
     assert_eq!((outcome.completed, outcome.not_evidence), (4, 1));
-    let trials = load_trials(&launching.access, OWNER, "run-2")
+    let trials = load_trials(&launching.access, launching.owner(), "run-2")
         .await
         .unwrap();
     assert_eq!(
@@ -194,7 +194,7 @@ async fn a_stage_that_failed_on_the_harness_re_plans_the_slot() {
     .unwrap();
 
     assert_eq!((outcome.completed, outcome.not_evidence), (2, 0));
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(
@@ -207,7 +207,7 @@ async fn a_stage_that_failed_on_the_harness_re_plans_the_slot() {
     );
     assert!(completion_is_not_evidence(&completion_of(&trials, 1)));
 
-    let verdicts = load_verdicts(&launching.access, OWNER, "run-1")
+    let verdicts = load_verdicts(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     let first = trials
@@ -253,7 +253,7 @@ async fn the_breaker_trips_on_consecutive_not_evidence_and_resume_continues() {
         ("run-1", 2)
     );
     assert!(down.outcome.breaker_tripped);
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(trials.len(), 2);
@@ -265,7 +265,7 @@ async fn the_breaker_trips_on_consecutive_not_evidence_and_resume_continues() {
     let recovered = ScriptedExecutor::new().with_default(passed());
     let outcome = resume(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-1",
         &launching.runs_dir(),
         &recovered,
@@ -276,7 +276,7 @@ async fn the_breaker_trips_on_consecutive_not_evidence_and_resume_continues() {
     .await
     .unwrap();
     assert_eq!(outcome.completed, 2);
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(
@@ -307,7 +307,7 @@ async fn resume_refuses_an_embedded_executor_for_a_pack_that_grants_host_bash() 
 
     let error = resume(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-1",
         &launching.runs_dir(),
         &ScriptedExecutor::new().with_default(passed()),
@@ -363,7 +363,7 @@ async fn the_breaker_reports_the_count_it_tripped_on_not_the_one_it_ended_with()
         "the trials already in flight at the trip are recorded like any other"
     );
     assert!(format!("{down}").contains("2 trials in a row"), "{down}");
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(
@@ -381,13 +381,19 @@ async fn an_invalidated_run_refuses_resume() {
     freeze(&launching.access, &request, Isolation::Embedded)
         .await
         .unwrap();
-    invalidate_run(&launching.access, OWNER, "run-1", OWNER, "grader bug")
-        .await
-        .unwrap();
+    invalidate_run(
+        &launching.access,
+        launching.owner(),
+        "run-1",
+        &launching.evaluator_did(),
+        "grader bug",
+    )
+    .await
+    .unwrap();
 
     let error = resume(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-1",
         &launching.runs_dir(),
         &ScriptedExecutor::new().with_default(passed()),

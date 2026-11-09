@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gents_desktop_core::client::ClientCore;
 use tauri::State;
 
-use crate::commands::{dismiss_mailbox, list_mailbox, observe_mailbox_item, start_mailbox_request};
+use crate::commands::{dismiss_mailbox, observe_mailbox_item, start_mailbox_request};
 use crate::error::BridgeError;
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
@@ -12,13 +12,6 @@ use crate::types::{
 
 fn running_core(state: &State<'_, DesktopAppState>) -> Result<Arc<ClientCore>, BridgeError> {
     current_core(state).ok_or_else(|| BridgeError::untyped("desktop client is not running"))
-}
-
-#[tauri::command]
-pub fn desktop_mailbox_list(
-    state: State<'_, DesktopAppState>,
-) -> Result<Vec<MailboxItemView>, BridgeError> {
-    Ok(list_mailbox(running_core(&state)?.as_ref()))
 }
 
 #[tauri::command]

@@ -81,6 +81,26 @@ fn post(url: &str) -> Request<Bytes> {
 }
 
 #[tokio::test]
+async fn credential_client_does_not_follow_redirects() {
+    let url = one_shot_server("302 Found", &[("location", "/other")], "").await;
+    let request = Request::builder()
+        .method("GET")
+        .uri(&url)
+        .header("authorization", "Bearer test-credential")
+        .body(Bytes::new())
+        .unwrap();
+    let client = ProviderHttpClient::new(ProviderHttpClient::credential_client().unwrap());
+    let error = client
+        .send::<Bytes, Bytes>(request)
+        .await
+        .err()
+        .expect("redirect rejected");
+    assert!(
+        matches!(error, http_client::Error::InvalidStatusCodeWithMessage(status, _) if status == StatusCode::FOUND)
+    );
+}
+
+#[tokio::test]
 async fn streaming_429_keeps_anthropic_unified_reset() {
     let url = one_shot_server(
         "429 Too Many Requests",
@@ -281,11 +301,12 @@ async fn openrouter_in_flight_402_waits_for_retry_after() {
     }
 }
 
-const USAGE_DID: &str = "did:key:z6MkUsageA";
-
-fn usage_account(backend_id: &str) -> crate::inference::usage_observation::UsageAccount {
+fn usage_account(
+    node_did: &str,
+    backend_id: &str,
+) -> crate::inference::usage_observation::UsageAccount {
     crate::inference::usage_observation::UsageAccount::Backend {
-        node_did: USAGE_DID.to_string(),
+        node_did: node_did.to_string(),
         provider: "ChatGptCodex".to_string(),
         backend_id: backend_id.to_string(),
         connection: backend_id.to_string(),
@@ -295,22 +316,28 @@ fn usage_account(backend_id: &str) -> crate::inference::usage_observation::Usage
 async fn usage_client(
     cache: &std::sync::Arc<crate::inference::usage_observation::UsageCache>,
     backend_id: &str,
-) -> (std::sync::Arc<defra_node::EmbeddedNode>, ProviderHttpClient) {
-    let node = crate::inference::auth::credential::test_support::test_node().await;
+) -> (
+    crate::support::TestDb,
+    crate::inference::usage_observation::UsageAccount,
+    ProviderHttpClient,
+) {
+    let db = crate::support::test_db("provider-http-usage").await;
+    let account = usage_account(db.node_identity.did(), backend_id);
     let reporter = crate::inference::usage_observation::UsageReporter::new(
         cache.clone(),
-        node.clone(),
-        usage_account(backend_id),
+        db.node.clone(),
+        account.clone(),
     );
     (
-        node,
+        db,
+        account,
         ProviderHttpClient::with_usage(ReqwestClient::new(), reporter),
     )
 }
 
 pub(crate) async fn stored_usage_eventually(
     cache: &crate::inference::usage_observation::UsageCache,
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     account: &crate::inference::usage_observation::UsageAccount,
 ) -> Option<crate::inference::usage_observation::UsageObservation> {
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
@@ -335,11 +362,11 @@ const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
 async fn usage_capture_success_send_records_header_windows() {
     let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
         std::sync::Arc::default();
-    let (node, client) = usage_client(&cache, "backend-usage-send").await;
+    let (db, account, client) = usage_client(&cache, "backend-usage-send").await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
     client.send::<Bytes, Bytes>(post(&url)).await.expect("200");
 
-    let stored = stored_usage_eventually(&cache, &node, &usage_account("backend-usage-send"))
+    let stored = stored_usage_eventually(&cache, &db.node, &account)
         .await
         .expect("usage recorded");
     let window = &stored.report.windows[0];
@@ -354,13 +381,13 @@ async fn usage_capture_success_send_records_header_windows() {
 async fn usage_capture_streaming_success_records_header_windows() {
     let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
         std::sync::Arc::default();
-    let (node, client) = usage_client(&cache, "backend-usage-stream").await;
+    let (db, account, client) = usage_client(&cache, "backend-usage-stream").await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, "data: {}\n\n").await;
     let response = client.send_streaming(post(&url)).await.expect("200");
     let mut body = response.into_body();
     while body.next().await.is_some() {}
 
-    let stored = stored_usage_eventually(&cache, &node, &usage_account("backend-usage-stream"))
+    let stored = stored_usage_eventually(&cache, &db.node, &account)
         .await
         .expect("usage recorded");
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
@@ -370,7 +397,7 @@ async fn usage_capture_streaming_success_records_header_windows() {
 async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
     let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
         std::sync::Arc::default();
-    let (node, client) = usage_client(&cache, "backend-usage-rejected").await;
+    let (db, account, client) = usage_client(&cache, "backend-usage-rejected").await;
     let url = one_shot_server(
         "429 Too Many Requests",
         &[
@@ -388,7 +415,7 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
         "{error}"
     );
 
-    let stored = stored_usage_eventually(&cache, &node, &usage_account("backend-usage-rejected"))
+    let stored = stored_usage_eventually(&cache, &db.node, &account)
         .await
         .expect("usage recorded");
     let window = &stored.report.windows[0];
@@ -398,16 +425,26 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
 
 #[tokio::test]
 async fn usage_capture_requires_no_persistent_schema() {
+    use crate::NodeIdentity;
+    let identity = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("provider-no-schema")
+    })
+    .await
+    .unwrap();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .expect("node without schemas"),
     );
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
+    let account = usage_account(identity.did(), "backend-usage-failure");
     let reporter = crate::inference::usage_observation::UsageReporter::new(
-        std::sync::Arc::default(),
-        node,
-        usage_account("backend-usage-failure"),
+        cache.clone(),
+        node.clone(),
+        account.clone(),
     );
     let client = ProviderHttpClient::with_usage(ReqwestClient::new(), reporter);
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
@@ -419,4 +456,8 @@ async fn usage_capture_requires_no_persistent_schema() {
         response.into_body().await.expect("body"),
         Bytes::from_static(br#"{"ok":true}"#)
     );
+    let stored = stored_usage_eventually(&cache, &node, &account)
+        .await
+        .expect("usage recorded without schemas");
+    assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }

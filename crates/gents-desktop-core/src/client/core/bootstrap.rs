@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, HttpConfig, P2PConfig};
+use defra_node::{HttpConfig, Node as EmbeddedNode, P2PConfig};
 #[cfg(test)]
 use defra_node::{NodeBuilder, StorageBackend};
 use defra_p2p_adapter::P2POperations as P2POps;
@@ -10,11 +10,10 @@ use p2p::iroh::parse_public_peer_addr;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Instant};
 
-use super::super::observe::{spawn_observer_with_selection, ObservedStore};
+use super::super::observe::{spawn_observer, ObservedStore};
 use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
-use super::super::query::load_full_snapshot_with_peer_records;
 use super::super::schema::subscribe_all_collections;
 use super::p2p_ops::{
     p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
@@ -78,10 +77,18 @@ impl ClientCore {
 
         let node_identity = PrincipalIdentity::load_or_create(&paths).await?;
         checkpoint("paths_and_identity");
+        let projection = gents::store::local::document_projector(
+            Arc::new(node_identity.clone()),
+            std::sync::Arc::new(gents::tools::surface::ToolCeiling::meta_only()),
+        )?;
         let mut node_builder =
             gents::store::local::store_key::persistent_builder(paths.node_data_dir(), &store_key)?
                 .with_p2p(desktop_p2p_config(&paths, &options))
-                .with_node_identity_did(node_identity.did());
+                .with_signing_key(defra_node::SigningKey::Ed25519(
+                    node_identity.private_key_bytes().to_vec(),
+                ))
+                .with_document_projector(projection)
+                .with_node_acp_enabled();
         if let Some(http_addr) = options.http_addr {
             node_builder = node_builder.with_http(HttpConfig::with_addr(http_addr));
         }
@@ -91,13 +98,19 @@ impl ClientCore {
                 .await
                 .context("starting embedded desktop node")?,
         );
+        if node.node_identity_did() != Some(node_identity.did()) {
+            let _ = node.shutdown().await;
+            anyhow::bail!("embedded client signer does not match its held peer identity");
+        }
         let store_access = match gents::store::config_client::ConfigAccess::claimed_local(
             node.clone(),
             store_lock,
         ) {
             Ok(access) => access,
             Err(error) => {
-                node.shutdown().await;
+                if let Err(shutdown_error) = node.shutdown().await {
+                    tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&shutdown_error), "failed to shut down embedded node after startup failure");
+                }
                 return Err(error.into());
             }
         };
@@ -129,25 +142,14 @@ impl ClientCore {
             subscribe_all_collections(node.as_ref()).await?;
             checkpoint("collection_subscriptions");
 
-            let observer_subscription = node.subscribe_document_changes();
-
             let observation_scope = super::observation_scope::ObservationScope::new();
 
-            let initial_snapshot = {
-                load_full_snapshot_with_peer_records(
-                    node.as_ref(),
-                    &records,
-                    node_identity.did(),
-                    options.operator_identity_interaction,
-                )
-                .await?
-            };
+            let initial_snapshot = Default::default();
             let (store, _store_updates) = ObservedStore::new(initial_snapshot);
             checkpoint("initial_snapshot");
 
-            let p2p = node
-                .p2p_arc()
-                .context("desktop node started without P2P support")?;
+            let p2p = gents::store::identity::node_p2p(&node)
+                .context("desktop node started without identity-bound P2P support")?;
             let local_peer_id = p2p_local_peer_id(&p2p)
                 .await
                 .context("reading desktop P2P peer id")?;
@@ -172,8 +174,8 @@ impl ClientCore {
                 &mut || checkpoint("saved_peer"),
             )
             .await;
-            let (initial_health, initial_database_sync, initial_database_sync_error) =
-                super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
+            let initial_health =
+                super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
             checkpoint("bootstrap_and_health");
             for status in peer_statuses {
                 if let Some(expected) = records
@@ -183,19 +185,13 @@ impl ClientCore {
                     sync_state.replace_peer(expected, status);
                 }
             }
-            sync_state.replace_database_observation(
-                initial_health,
-                initial_database_sync,
-                initial_database_sync_error,
-            );
-            let observer = spawn_observer_with_selection(
-                Arc::clone(&node),
+            sync_state.replace_transport_observation(initial_health);
+            let observer = spawn_observer(
                 Arc::clone(&store),
                 sync_state.clone(),
-                node_identity.did().to_string(),
-                observer_subscription,
-                observation_scope.subscribe(),
-                options.operator_identity_interaction,
+                gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                    node_identity.private_key_bytes(),
+                )?,
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
             let p2p_supervisor = spawn_p2p_supervisor_task(
@@ -244,7 +240,9 @@ impl ClientCore {
                 Ok(core)
             }
             Err(error) => {
-                node.shutdown().await;
+                if let Err(shutdown_error) = node.shutdown().await {
+                    tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&shutdown_error), "failed to shut down embedded node after startup failure");
+                }
                 Err(error)
             }
         }
@@ -253,20 +251,24 @@ impl ClientCore {
 
 fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PConfig {
     P2PConfig {
-        port: options.port,
+        port: Some(options.port),
         bind_addr: options.bind_addr,
         relay_mode: options.relay_mode.clone(),
         discovery: options.discovery.clone(),
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(paths.iroh_secret_key_path().to_path_buf()),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: options.load_persisted_collections,
-        max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,
-        max_concurrent_push_tasks: options.max_concurrent_push_tasks,
-        rate_limit_burst: options.rate_limit_burst,
-        rate_limit_rate: options.rate_limit_rate,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: options.max_pending_dags,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,
+            max_concurrent_push_tasks: options.max_concurrent_push_tasks,
+            rate_limit_burst: options.rate_limit_burst,
+            rate_limit_rate: options.rate_limit_rate,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            max_pending_dags: options.max_pending_dags,
+            replicator_retry_intervals: None,
+        },
         // DefraDB forwards merges to explicit downstream replicators itself.
         rebroadcast_on_merge: false,
     }
@@ -662,11 +664,12 @@ mod tests {
         first.with_secret(|left| reopened.with_secret(|right| assert!(left == right)));
     }
 
-    /// `Node` replicates runtime→client (#3389), and both sides must hold the same version of
-    /// every client-route collection or they refuse to sync. A desktop client store, opened the
-    /// way the app opens it, and a node store, migrated the way the runtime migrates it, must
-    /// advertise identical identities, on the canonical lineage (the rc0 root plus the same
-    /// patches), never a version a direct registration of the current SDL produces.
+    /// Both sides must hold the same version of every client-route collection or they refuse
+    /// to sync, and the client reads configuration such as `Node` over authenticated GraphQL
+    /// against the same canonical SDL. A desktop client store, opened the way the app opens it,
+    /// and a node store, migrated the way the runtime migrates it, must advertise identical
+    /// identities, on the canonical lineage (the rc0 root plus the same patches), never a
+    /// version a direct registration of the current SDL produces.
     #[tokio::test]
     async fn desktop_client_and_node_stores_advertise_the_same_canonical_schema() {
         use gents::runtime::agent::p2p_reconcile::templates::read_client_replicated_schema;
@@ -712,7 +715,12 @@ mod tests {
             "desktop and node advertise different client-route schemas"
         );
         let canonical = canonical_versions().unwrap();
-        assert!(client.contains_key(gents_protocol::schemas::NODE_NAME));
+        // `Node` no longer replicates runtime→client; P2P carries only discovery.
+        assert_eq!(
+            client.keys().map(String::as_str).collect::<Vec<_>>(),
+            gents::runtime::agent::p2p_reconcile::CLIENT_COLLECTIONS,
+            "the client route carries only discovery"
+        );
         for name in [
             gents_protocol::schemas::NODE_NAME,
             gents_protocol::schemas::INFERENCE_BACKEND_NAME,
@@ -724,12 +732,11 @@ mod tests {
             assert!(!is_known_off_lineage(name, &on_client), "{name}");
         }
         core.shutdown().await.unwrap();
-        runtime.shutdown().await;
+        runtime.shutdown().await.expect("shutdown node");
     }
 
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {
-        use gents::runtime::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
         use gents::store::config_client::ConfigAccess;
         use gents::store::graphql::escape_graphql_string;
 
@@ -751,17 +758,11 @@ mod tests {
         let baseline = gents_migration::DEFAULT_BASELINE
             .iter()
             .copied()
-            .filter(|entry| {
-                ![
-                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-                    gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
-                ]
-                .contains(&entry.name)
-            })
+            .filter(|entry| entry.name != gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
             .collect::<Vec<_>>();
         let registry = gents_migration::Registry {
             baseline: &baseline,
-            ..gents_migration::DEFAULT_REGISTRY
+            ..*gents_migration::DEFAULT_REGISTRY
         };
         gents_migration::ensure_migrations_with_registry(&plain, &registry)
             .await
@@ -795,7 +796,7 @@ mod tests {
                 "test.client_upgrade.session",
                 &format!(
                     r#"mutation {{ create_AgentSession(input: {{
-                session_id: "upgrade-session", node_did: "{}", agent_id: "default",
+                session_id: "upgrade-session", node_did: "{}", agent_did: "default",
                 title: {{ text: "before upgrade", source: "user" }},
                 created_at: "2026-09-30T00:00:00Z"
             }}) {{ _docID }} }}"#,
@@ -837,19 +838,19 @@ mod tests {
                 >= 2
         );
 
-        let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&plain));
         let sensitive = [
             "InferenceBackend".to_string(),
             "OAuthCredential".to_string(),
         ];
-        admin.add_p2p_collections(&sensitive).await.unwrap();
-        let old_subscriptions = admin.list_p2p_collections().await.unwrap();
+        let p2p = gents::store::identity::node_p2p(&plain).expect("plain node P2P");
+        p2p.add_collections(sensitive.to_vec()).await.unwrap();
+        let old_subscriptions = p2p.get_collections().await.unwrap();
         assert!(sensitive
             .iter()
             .all(|name| old_subscriptions.contains(name)));
-        drop(admin);
+        drop(p2p);
         drop(access);
-        plain.shutdown().await;
+        plain.shutdown().await.expect("shutdown node");
         drop(plain);
         assert!(!paths.store_encryption_path().exists());
 
@@ -874,20 +875,17 @@ mod tests {
                 .await
                 .unwrap()
                 .is_some());
-            assert!(access
-                .collection_version(gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME)
-                .await
-                .unwrap()
-                .is_some());
             assert_eq!(access.execute(query).await.unwrap(), expected_document);
             assert_eq!(
                 access.execute(&history_query).await.unwrap(),
                 expected_history
             );
-            let admin = EmbeddedRemoteP2pAdmin::new(core.node_arc());
-            let subscriptions = admin.list_p2p_collections().await.unwrap();
+            let subscriptions = gents::store::identity::node_p2p(&core.node_arc())
+                .expect("client P2P")
+                .get_collections()
+                .await
+                .unwrap();
             assert!(sensitive.iter().all(|name| subscriptions.contains(name)));
-            drop(admin);
             drop(access);
             let core = Arc::new(core);
             core.shutdown().await.unwrap();

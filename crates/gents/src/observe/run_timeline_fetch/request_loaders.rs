@@ -24,7 +24,7 @@ pub(super) async fn load_timeline_request_by_id(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 content
                 max_total_tokens
@@ -69,7 +69,7 @@ pub(super) async fn load_timeline_requests_for_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineRequestRow>> {
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentRequest(
@@ -80,7 +80,7 @@ pub(super) async fn load_timeline_requests_for_session(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 content
                 max_total_tokens
@@ -125,7 +125,7 @@ pub(super) async fn load_timeline_child_requests(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 content
                 max_total_tokens

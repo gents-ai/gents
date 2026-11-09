@@ -133,12 +133,12 @@ describe("first-run inference gate", () => {
   });
 
   it("replaces only init's generated default when another provider exists", () => {
-    const defaultAgentId = deployment.node.defaultAgentId;
+    const defaultAgentDid = deployment.node.defaultAgentDid;
     const generatedBackendId = `${deployment.nodeDid}:backend`;
     const generated = {
       ...deployment,
       agents: deployment.agents.map((agent) =>
-        agent.agentId === defaultAgentId
+        agent.agentDid === defaultAgentDid
           ? { ...agent, inferenceProfileId: "profile-generated" }
           : agent,
       ),

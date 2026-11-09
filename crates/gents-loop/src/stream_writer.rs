@@ -139,8 +139,10 @@ pub trait StreamWriter: Send + Sync {
 
     /// When the next batch of buffered tokens is due, if any; a driver waits
     /// on this instead of polling so a quiet stream still lands its tokens.
-    /// `None` means nothing is pending (the default: only a batching writer
-    /// has anything due).
+    /// After a successful `flush_pending`, this must return `None` until new
+    /// provider output arrives. The owned loop publishes and flushes a turn
+    /// before tool admission, so this keeps admission under the driver's
+    /// interrupt, shutdown, deadline and lease selection.
     fn next_flush_deadline(
         &self,
         doc_id: &str,

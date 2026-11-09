@@ -95,7 +95,7 @@ async fn insert_inference_call_row(
                 request_id: "{request_id}",
                 call_seq: 1,
                 backend_id: "{backend_id}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 node_did: "{NODE_DID}",
                 call_kind: "inference",
                 attempt: 1,

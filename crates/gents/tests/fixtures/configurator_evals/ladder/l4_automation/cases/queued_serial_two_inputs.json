@@ -66,8 +66,8 @@
                 "target_key": "task_id",
                 "expect": [
                   {
-                    "field": "agent_id",
-                    "matches": "(^|:)engineer$"
+                    "field": "agent_did",
+                    "equals": "gents:agent-slot:engineer"
                   },
                   {
                     "field": "emit_outcome",
@@ -158,7 +158,7 @@
           },
           "fields": [
             "task_id",
-            "agent_id",
+            "agent_did",
             "prompt_template",
             "emit_outcome",
             "enabled"

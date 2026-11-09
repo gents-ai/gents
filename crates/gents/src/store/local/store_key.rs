@@ -395,7 +395,7 @@ pub async fn open_home_store_key_with_custody(
 pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node::NodeBuilder> {
     crate::store::local::storage_backend::reject_legacy_store(data_path)?;
     Ok(key.encrypt(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(data_path)
             .with_storage_backend(defra_node::StorageBackend::Regolith)
             .with_regolith_options(crate::store::local::storage_backend::regolith_options()),
@@ -443,8 +443,12 @@ mod keychain {
     use super::{Result, StoreKeyError};
     use k256::elliptic_curve::zeroize::Zeroizing;
 
-    #[cfg(target_os = "macos")]
+    /// Test builds address their own service so no test can read or delete
+    /// an operator's store key; see the identity service.
+    #[cfg(all(target_os = "macos", not(any(test, feature = "test-home-guard"))))]
     const SERVICE: &str = "com.source-inc.gents.store-key";
+    #[cfg(all(target_os = "macos", any(test, feature = "test-home-guard")))]
+    const SERVICE: &str = "com.source-inc.gents.test.store-key";
 
     #[cfg(target_os = "macos")]
     pub(super) fn store(label: &str, bytes: &[u8]) -> Result<()> {

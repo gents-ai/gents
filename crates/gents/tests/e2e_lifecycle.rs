@@ -14,5 +14,5 @@ mod lifecycle_terminal;
 mod merge_parked_unique_boot_e2e;
 #[path = "e2e_lifecycle/p2p_admission_backpressure_e2e.rs"]
 mod p2p_admission_backpressure_e2e;
-#[path = "e2e_lifecycle/replicated_request_convergence_p2p_e2e.rs"]
-mod replicated_request_convergence_p2p_e2e;
+#[path = "e2e_lifecycle/request_runtime_locality_p2p_e2e.rs"]
+mod request_runtime_locality_p2p_e2e;
