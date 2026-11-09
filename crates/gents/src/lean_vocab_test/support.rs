@@ -281,6 +281,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_callback_selection_cases: Vec<serde_json::Value>,
     pub(crate) pack_placement_reader_cases: Vec<serde_json::Value>,
     pub(crate) agent_target_access_cases: Vec<serde_json::Value>,
+    pub(crate) owner_staged_relation_cases: Vec<serde_json::Value>,
     pub(crate) native_route_cases: Vec<serde_json::Value>,
     pub(crate) workspace_datastore_write_cases: Vec<serde_json::Value>,
     pub(crate) workspace_root_access_cases: Vec<serde_json::Value>,

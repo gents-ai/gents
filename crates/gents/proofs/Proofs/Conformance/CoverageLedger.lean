@@ -1535,6 +1535,11 @@ def caseCoverage : List CoverageEntry :=
       "store::config_client::desired_state::workspace_selection::tests::selected_callback_agents_follow_native_visibility")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
+      "owner_staged_relation_cases"
+      "OwnerStagedRelationCases"
+      "store::config_client::txn::owner_staged::tests::owner_staged_relationships_follow_the_document_owner")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
       "pack_placement_reader_cases"
       "PackPlacementReaderCases"
       "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers")

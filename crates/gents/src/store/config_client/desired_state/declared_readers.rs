@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{plan::document_identity, read::read_record, ConfigApplyTxn, DesiredStateApplyPlan};
+use crate::store::config_client::OwnerStagedAuthority;
 use crate::Collection;
 
 const COLLECTION: Collection = Collection::RepositoryPlacement;
@@ -35,13 +36,15 @@ async fn change(
 ) -> Result<()> {
     for reader in readers {
         let reader = identity::Did::new(reader)?;
-        if add {
-            txn.add_actor_relationship(COLLECTION.graphql_type(), doc, "reader", &reader)
-                .await?;
-        } else {
-            txn.delete_actor_relationship(COLLECTION.graphql_type(), doc, "reader", &reader)
-                .await?;
-        }
+        txn.change_owner_staged_actor_relationship(
+            COLLECTION.graphql_type(),
+            doc,
+            "reader",
+            &reader,
+            !add,
+            OwnerStagedAuthority::DocumentUpdate,
+        )
+        .await?;
     }
     Ok(())
 }

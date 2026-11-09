@@ -178,6 +178,10 @@ pub enum ConfigClientError {
     TransactionAuthorizationUnsupported,
     #[error("invalid resource relationship target")]
     InvalidResourceRelationshipTarget,
+    #[error("{collection} {doc_id} is not owned by this runtime or one of its Agents")]
+    OwnerStagedRelationshipUnmanaged { collection: String, doc_id: String },
+    #[error("the requesting actor may not change relationships of {collection} {doc_id}")]
+    OwnerStagedRelationshipDenied { collection: String, doc_id: String },
     #[error("document relationship request failed ({status}): {body}")]
     DocumentRelationshipStatus {
         status: reqwest::StatusCode,

@@ -23,6 +23,7 @@ import Proofs.Identity.DelegatedFinality
 import Proofs.Identity.AutomationConformance
 import Proofs.Identity.OperationsConformance
 import Proofs.Identity.EvalRecords
+import Proofs.Identity.OwnerStaged
 import Proofs.Identity.OptimizationPromotion
 import Proofs.Identity.DirectoryPublication
 import Proofs.Identity.StartupReadiness
@@ -651,6 +652,7 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_callback_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
     ++ "\"agent_target_access_cases\":" ++ Identity.AgentTargetAccess.casesJson ++ ","
+    ++ "\"owner_staged_relation_cases\":" ++ Identity.OwnerStaged.casesJson ++ ","
     ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
     ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","

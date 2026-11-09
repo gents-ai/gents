@@ -8,6 +8,7 @@ mod fault_injection;
 mod finalize;
 mod gate;
 mod native;
+mod owner_staged;
 mod pack_interpreter;
 mod rollback;
 mod runtime_hop_cap;
@@ -30,6 +31,7 @@ pub use apply_txn::ConfigApplyTxn;
 pub use cursor::ConfigCursor;
 pub use gate::LocalConfigAccess;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
+pub use owner_staged::OwnerStagedAuthority;
 #[cfg(test)]
 pub(super) use transact::client_signed_write_may_retry;
 pub use transact::IdempotentTransactionRetry;

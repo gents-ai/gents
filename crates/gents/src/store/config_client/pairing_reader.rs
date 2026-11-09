@@ -42,9 +42,11 @@ impl PairingReadReason {
 }
 
 impl ConfigApplyTxn<'_> {
-    /// Stage a reader change with other authorized configuration writes.
-    /// Native ACP authorizes the caller against the exact document; this does
-    /// not authorize enrollment or permit writing the pairing observation.
+    /// Stage a reader change with other authorized configuration writes
+    /// (`Identity.OwnerStaged`, pairing readers). The runtime that owns the
+    /// observation stages it for a caller that may update its Node; over HTTP
+    /// the caller's own change is sent and native ACP decides it. This does not
+    /// authorize enrollment or permit writing the pairing observation.
     pub async fn set_pairing_reader(
         &self,
         observation: PairingObservation,
@@ -53,24 +55,20 @@ impl ConfigApplyTxn<'_> {
         agent: &identity::Did,
         grant: bool,
     ) -> Result<(), ConfigClientError> {
-        if grant {
-            self.add_actor_relationship(observation.collection(), doc_id, reason.relation(), agent)
-                .await
-        } else {
-            self.delete_actor_relationship(
-                observation.collection(),
-                doc_id,
-                reason.relation(),
-                agent,
-            )
-            .await
-        }
+        self.change_owner_staged_actor_relationship(
+            observation.collection(),
+            doc_id,
+            reason.relation(),
+            agent,
+            !grant,
+            super::OwnerStagedAuthority::NodeUpdate,
+        )
+        .await
     }
 }
 
 impl ConfigAccess {
     /// Apply an explicit native grant or revocation in the caller's transaction.
-    /// The native owner or a reader manager is responsible for this operation.
     pub async fn set_pairing_reader(
         &self,
         observation: PairingObservation,

@@ -7,6 +7,7 @@ import Proofs.Identity.Automation
 import Proofs.Identity.DeclaredAccess
 import Proofs.Identity.PackPlacementReaders
 import Proofs.Identity.AgentTargetAccess
+import Proofs.Identity.OwnerStaged
 import Proofs.Identity.Configuration
 import Proofs.Identity.McpService
 import Proofs.Identity.Operations

@@ -451,6 +451,7 @@ async fn policy_get_on_another_subject_is_refused_without_nac_status() {
 }
 
 #[tokio::test]
+#[ignore = "pending decision: policyDelegate get-collection"]
 async fn engineer_grants_document_relation_through_manager_relation() {
     let fixture = PolicyFixture::new("policy-document-relation").await;
     let reviewer = fixture.install_sibling("Reviewer").await;

@@ -517,7 +517,7 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
-    async fn change_document_relationship(
+    pub(super) async fn change_document_relationship(
         &self,
         collection: &str,
         doc_id: &str,

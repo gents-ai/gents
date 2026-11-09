@@ -1,6 +1,6 @@
 use crate::store::config_client::{
     document_identity, read_desired_state_record_in_txn as read_record, ConfigApplyTxn,
-    DesiredStateApplyPlan,
+    DesiredStateApplyPlan, OwnerStagedAuthority,
 };
 use crate::Collection;
 use anyhow::{Context, Result};
@@ -256,11 +256,13 @@ async fn rebind_cursor(
         )
         .await?
         {
-            txn.delete_actor_relationship(
+            txn.change_owner_staged_actor_relationship(
                 "EventSourceCursor",
                 &cursor.doc_id,
                 "writer",
                 &identity::Did::new(agent)?,
+                true,
+                OwnerStagedAuthority::DocumentUpdate,
             )
             .await?;
         }
@@ -271,11 +273,13 @@ async fn rebind_cursor(
         )
         .await?
         {
-            txn.add_actor_relationship(
+            txn.change_owner_staged_actor_relationship(
                 "EventSourceCursor",
                 &cursor.doc_id,
                 "writer",
                 &identity::Did::new(agent)?,
+                false,
+                OwnerStagedAuthority::DocumentUpdate,
             )
             .await?;
         }

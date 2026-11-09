@@ -505,6 +505,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "AgentTargetAccessCases",
         ),
         (
+            !snapshot.owner_staged_relation_cases.is_empty(),
+            "owner_staged_relation_cases",
+            "OwnerStagedRelationCases",
+        ),
+        (
             !snapshot.native_route_cases.is_empty(),
             "native_route_cases",
             "NativeRouteCases",

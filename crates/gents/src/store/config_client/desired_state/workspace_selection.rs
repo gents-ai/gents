@@ -1,5 +1,6 @@
 use super::{plan::document_identity, read, ConfigApplyTxn, DesiredStateApplyPlan};
 use crate::documents::references_of;
+use crate::store::config_client::OwnerStagedAuthority;
 use crate::Collection;
 use anyhow::Result;
 use serde_json::Value;
@@ -80,24 +81,24 @@ pub(super) async fn apply(txn: &ConfigApplyTxn<'_>, before: Capture) -> Result<(
     for ((owner, id), old) in before.0 {
         let new = links(txn, &owner, &id, true).await?;
         for (agent, callback) in old.difference(&new) {
-            txn.delete_entity_set_relationship(
+            txn.change_owner_staged_entity_set_relationship(
                 "Agent",
                 agent,
                 "workspace_selected_by",
-                "configuration",
-                callback,
-                "reader",
+                ("configuration", callback, "reader"),
+                true,
+                OwnerStagedAuthority::DocumentUpdate,
             )
             .await?;
         }
         for (agent, callback) in new.difference(&old) {
-            txn.add_entity_set_relationship(
+            txn.change_owner_staged_entity_set_relationship(
                 "Agent",
                 agent,
                 "workspace_selected_by",
-                "configuration",
-                callback,
-                "reader",
+                ("configuration", callback, "reader"),
+                false,
+                OwnerStagedAuthority::DocumentUpdate,
             )
             .await?;
         }
