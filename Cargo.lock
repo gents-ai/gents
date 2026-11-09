@@ -4477,6 +4477,7 @@ version = "1.0.0-rc1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "blake3",
  "bytes",

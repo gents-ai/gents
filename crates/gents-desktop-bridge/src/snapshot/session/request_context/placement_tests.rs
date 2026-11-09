@@ -58,11 +58,8 @@ fn placement_messages(
 #[tokio::test]
 async fn a_start_of_request_compaction_reads_one_first_message_per_request() {
     let node = std::sync::Arc::new(crate::tests::support::node_builder().build().await.unwrap());
+    gents::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
-    access
-        .add_collection(gents_protocol::schemas::AGENT_MESSAGE)
-        .await
-        .unwrap();
     let mut messages = placement_messages("reader", "earlier", 1..3);
     /* another requester's copy of the request is outside the read's scope */
     messages.extend(placement_messages("other", "long", 3..4));
@@ -130,13 +127,8 @@ async fn compaction_placement_read_benchmark() {
     const MESSAGES_PER_REQUEST: i64 = 32;
     const COMPACTED_EVERY: i64 = 4;
     let node = std::sync::Arc::new(crate::tests::support::node_builder().build().await.unwrap());
+    gents::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
-    for sdl in [
-        gents_protocol::schemas::AGENT_MESSAGE,
-        gents_protocol::schemas::COMPACTION_ENTRY,
-    ] {
-        access.add_collection(sdl).await.unwrap();
-    }
     let messages = (0..REQUESTS)
         .flat_map(|request| {
             let first = request * MESSAGES_PER_REQUEST;
