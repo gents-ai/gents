@@ -131,6 +131,21 @@ impl ConfigApplyTxn<'_> {
                 ConfigClientError::OwnerStagedRelationshipDenied { collection, doc_id }
             });
         }
+        // An authorized requester need not observe the document itself: a
+        // Node operator asks for readers of a runtime-owned observation it
+        // cannot read yet. The runtime then classifies the owner.
+        let owner = match owner {
+            Some(owner) => Some(owner),
+            None => {
+                let runtime_did = identity::Did::new(runtime.clone())
+                    .map_err(ConfigClientError::RelationshipTargetIdentity)?;
+                self.document_owners_as(&runtime_did, collection, &[doc_id.to_owned()])
+                    .await?
+                    .into_iter()
+                    .find(|observation| observation.doc_id == doc_id)
+                    .and_then(|observation| observation.owner)
+            }
+        };
         let Some(owner) = owner else {
             return refused(unmanaged);
         };
