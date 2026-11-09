@@ -10,7 +10,6 @@ use crate::app::{App, Mode, Pane, Tab};
 use crate::keys::KeySet;
 use crate::layout::running_area;
 use crate::sample::{Opens, RunState, Running, Tone, SUBAGENT_MARK};
-use crate::source::Answer;
 
 const WORD: &str = "g e n t s";
 const HINT_SESSIONS_DOCKED: &str = "Pick a session on the left, or just start typing";
@@ -22,7 +21,6 @@ const SLASH_H: u16 = 13;
 const SLASH_FOOTER: &str = " tab complete · enter run · esc close";
 const RUNNING_STATUS_X: u16 = 32;
 const RUNNING_HINT_MIN_W: u16 = 64;
-const READ_ONLY: &str = "subagents take input from their parent";
 
 pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
     let focused = app.focus == Pane::Agent;
@@ -38,10 +36,10 @@ pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
         startup(area, sessions_docked, typing, buf);
     } else {
         let rows = app.visible_rows(Pane::Agent, app.conversation_rect(area));
-        conversation(app, rows, buf);
+        chat(&app.conversation_rows(rows.width), tab.scroll, rows, buf);
     }
     running_rows(app, tab, area, buf);
-    message_box(tab, message_box_area(area), focused, buf);
+    message_box(app, message_box_area(area), focused, buf);
     if let Some(selected) = app.slash {
         slash_list(app, selected, area, buf);
     }
@@ -67,16 +65,7 @@ fn chips_in(app: &App, room: u16) -> (Vec<String>, Vec<usize>, usize) {
         .tabs
         .iter()
         .enumerate()
-        .map(|(index, tab)| match &tab.parent {
-            Some(parent) => format!(
-                " {} {} · {} › {} ",
-                index + 1,
-                parent.name,
-                parent.agent,
-                tab.agent
-            ),
-            None => format!(" {} {} · {} ", index + 1, tab.name, tab.agent),
-        })
+        .map(|(index, tab)| format!(" {} {} · {} ", index + 1, tab.name, tab.agent))
         .collect();
     let widths: Vec<usize> = chips
         .iter()
@@ -150,10 +139,10 @@ pub fn first_line(total: usize, height: u16, scroll: usize) -> usize {
     total.saturating_sub(usize::from(height) + scroll)
 }
 
-fn conversation(app: &App, area: Rect, buf: &mut Buffer) {
-    let rows = app.conversation_rows(area.width);
-    let edges = bubble_edges(&rows);
-    let first = first_line(rows.len(), area.height, app.tabs[app.active].scroll);
+/// A conversation's rows, `scroll` rows up from its end, as the tab and the sidebar draw them.
+pub fn chat(rows: &[(String, Tone)], scroll: usize, area: Rect, buf: &mut Buffer) {
+    let edges = bubble_edges(rows);
+    let first = first_line(rows.len(), area.height, scroll);
     let shown = rows[first..].iter().zip(&edges[first..]);
     for (((text, tone), edge), y) in shown.zip(area.top()..area.bottom()) {
         draw_row(buf, area, y, text, *tone, *tone == Tone::Reply);
@@ -270,7 +259,8 @@ fn running_rows(app: &App, tab: &Tab, pane: Rect, buf: &mut Buffer) {
     }
 }
 
-fn message_box(tab: &Tab, area: Rect, focused: bool, buf: &mut Buffer) {
+fn message_box(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
+    let tab = &app.tabs[app.active];
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(theme::edge(focused))
@@ -292,19 +282,7 @@ fn message_box(tab: &Tab, area: Rect, focused: bool, buf: &mut Buffer) {
         }
         return;
     }
-    let answers = matches!(
-        tab.prompts.first().map(|prompt| &prompt.answer),
-        Some(Answer::Reply | Answer::Choose { .. })
-    );
-    if tab.parent.is_some() && !answers {
-        buf.set_stringn(text_x, y, READ_ONLY, room as usize, label);
-        return;
-    }
-    let placeholder = match answers {
-        true => "answer the prompt above".to_string(),
-        false => format!("Message {}", tab.agent),
-    };
-    buf.set_stringn(text_x, y, placeholder, room as usize, label);
+    buf.set_stringn(text_x, y, app.placeholder(), room as usize, label);
     if area.width > 40 {
         buf.set_string(area.right() - 12, y, "enter send", label);
     }

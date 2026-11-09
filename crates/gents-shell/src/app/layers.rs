@@ -304,6 +304,7 @@ impl App {
             return;
         }
         let width = self.size.0;
+        let answers = self.layer_answers();
         let Some(top) = self.layers.last_mut() else {
             return;
         };
@@ -314,6 +315,7 @@ impl App {
                     top.selected = 0;
                 }
             }
+            Action::Submit if answers => self.accept(),
             Action::Submit => self.submit_layer(),
             Action::Back => self.back(),
             Action::Interrupt => {
@@ -326,6 +328,11 @@ impl App {
             Action::MoveFocus(_) | Action::NextPane => self.layers.rotate_right(1),
             Action::Next => self.step_layer(true),
             Action::Prev => self.step_layer(false),
+            Action::PageUp | Action::PageDown if top.kind == LayerKind::Sidebar => {
+                self.scroll_subagent(action == Action::PageUp, true);
+            }
+            Action::SecondAct if answers => self.dismiss(),
+            Action::Stop if top.kind == LayerKind::Sidebar => self.act(action),
             Action::SecondAct | Action::More => {
                 if let LayerKind::Menu(id) = top.kind {
                     let selected = top.selected;

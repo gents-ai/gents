@@ -1474,16 +1474,16 @@ async fn a_spawn_on_the_open_session_relists_its_subagents() {
 }
 
 #[tokio::test]
-async fn stepping_into_a_subagent_resumes_it_and_streams_it() {
+async fn opening_a_subagent_resumes_it_and_streams_it() {
     let fake = FakeRuntime::start(agents_a_and_b(), |_, method, params| {
-        let mut stepped = child("c1", "s1", active());
-        stepped["turns"] = json!([turn(
+        let mut spawned = child("c1", "s1", active());
+        spawned["turns"] = json!([turn(
             "t1",
             "inProgress",
             json!([user_message("u1", "look into it")])
         )]);
         match method {
-            "thread/resume" => resumed(params, &[stepped]),
+            "thread/resume" => resumed(params, &[spawned]),
             _ => quiet(method),
         }
     })

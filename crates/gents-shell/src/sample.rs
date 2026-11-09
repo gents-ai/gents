@@ -63,6 +63,8 @@ pub enum View {
     Diff,
     Workflows,
     Agents,
+    /// The conversation of a subagent opened from the tab's running rows.
+    Subagent,
 }
 
 /// What the Diff view lists: this tab's session, or the folder its tools work in.
@@ -293,7 +295,8 @@ pub fn changes() -> Vec<ChatLine> {
     ]
 }
 
-/// Marks a subagent's reply. Its row in the running list uses the same glyph.
+/// Leads the sample subagents' replies, as the glyph of their running rows; a conversation
+/// accents it.
 pub const SUBAGENT_MARK: &str = " ◆";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

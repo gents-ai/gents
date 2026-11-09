@@ -167,7 +167,8 @@ fn pane_box(buf: &mut Buffer, area: Rect, title: &str, focused: bool) {
         } else {
             Style::new().fg(theme::TITLE)
         };
-        buf.set_string(area.x + 2, area.y, format!(" {title} "), style);
+        let room = usize::from(area.width.saturating_sub(3));
+        buf.set_stringn(area.x + 2, area.y, format!(" {title} "), room, style);
     }
 }
 
@@ -206,9 +207,9 @@ fn draw_no_matches(area: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{sample_chat, Mode};
+    use crate::app::{sample_chat, Mode, Tab};
     use crate::keys::KeySet::{Emacs, Vim};
-    use crate::sample::{note, MenuId, View};
+    use crate::sample::{approval, note, MenuId, View};
     use crate::source::{Doc, FormRef};
     use crate::testing::{
         buffer, find, press, rows, screen, type_text, with_right_pane, with_sample_session,
@@ -513,6 +514,14 @@ mod tests {
                     app.push_layer(kind);
                     assert!(find(&screen(&app), "sample data").is_some(), "{size}");
                 }
+
+                let mut shown = Tab::new_session();
+                shown.lines = sample_chat();
+                shown.prompts = vec![approval("Engineer")];
+                app.subagent = Some(shown);
+                app.view = View::Subagent;
+                app.tabs[0].sidebar = true;
+                assert!(find(&screen(&app), "sample data").is_some(), "{size}");
             }
         }
     }

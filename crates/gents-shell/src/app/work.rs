@@ -130,6 +130,7 @@ impl App {
                 self.job_open.as_deref(),
             ),
             View::Agents => background_rows(&self.background, session, &self.background_as_of),
+            View::Subagent => Vec::new(),
         }
     }
 

@@ -203,7 +203,6 @@ impl App {
     fn click_chip(&mut self, pane: Rect, at: Position) {
         match chip_at(self, pane, at.x) {
             Some(ChipHit::Tab(index)) if index != self.active => self.activate_tab(index),
-            Some(ChipHit::Tab(_)) if self.tabs[self.active].parent.is_some() => self.step_out(),
             Some(ChipHit::Tab(_)) => self.focus_pane(Pane::Agent),
             Some(ChipHit::New) => self.push_layer(LayerKind::Picker),
             None => {}
@@ -293,7 +292,10 @@ mod tests {
                 top(app) == Some(LayerKind::Menu(MenuId::AppSettings))
             }),
             (session, "", "Triage · inbox", |app| {
-                app.tabs[0].agent == "Triage" && app.ctx() == KeyCtx::Normal
+                let shown = app.subagent.as_ref().map(|shown| shown.agent.as_str());
+                (shown, app.tabs[0].agent.as_str()) == (Some("Triage"), "Engineer")
+                    && (app.view, app.focus, app.ctx())
+                        == (View::Subagent, Pane::Sidebar, KeyCtx::Normal)
             }),
             (session, "", "change unit", |app| {
                 let tab = &app.tabs[0];
@@ -340,20 +342,10 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_the_active_chip_steps_out_of_a_subagent() {
-        let mut app = session_app(132, 36);
-        click_text(&mut app, "Reviewer · auth");
-        assert_eq!(app.tabs[0].agent, "Reviewer");
-        click_text(&mut app, "Engineer › Reviewer");
-        assert_eq!(app.tabs[0].agent, "Engineer");
-    }
-
-    #[test]
     fn a_click_on_the_active_chip_of_a_plain_tab_keeps_it() {
         let mut app = session_app(132, 36);
         click_text(&mut app, "1 packs");
         assert_eq!(app.tabs[0].name, "packs");
-        assert_eq!(app.tabs[0].parent, None);
     }
 
     #[test]
@@ -543,7 +535,7 @@ mod tests {
             MouseEventKind::Moved,
         ] {
             mouse(&mut app, kind, column, row);
-            assert_eq!(app.tabs[0].agent, "Engineer");
+            assert_eq!(app.subagent, None);
         }
     }
 
@@ -587,8 +579,7 @@ mod tests {
         let mut app = App::new(Emacs, 132, 36);
         click_text(&mut app, "pack registry");
         click_text(&mut app, "Triage · inbox");
-        assert_eq!(app.tabs[0].agent, "Triage");
-        click_text(&mut app, "Engineer › Triage");
+        assert!(find(&screen(&app), "Subagent: Triage").is_some());
         assert_eq!(app.tabs[0].agent, "Engineer");
     }
 }

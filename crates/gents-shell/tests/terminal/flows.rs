@@ -38,12 +38,12 @@ fn clicks_reach_the_app() {
     s.wait_for_all(&["Reviewer · auth", "Triage · inbox", "NORMAL"]);
     click(&s, 29, 40);
     s.wait_for_all(&[
-        "subagents take input from their parent",
-        "packs · Engineer › Triage",
+        "Subagent: Triage",
+        "Done: 4 for the CLI",
+        "1 packs · Engineer",
     ]);
-    click(&s, 1, 35);
-    s.wait_for_all(&["Message Engineer", "AGENTS"]);
     s.send("\x1b");
+    s.wait_gone("Subagent: Triage");
     s.wait_for_all(&["NORMAL"]);
     s.send(":q\r");
     assert_restored(&s.finish());
@@ -320,15 +320,14 @@ fn capture_screens_for_review() {
     s.wait_for_all(&["AGENTS"]);
     shot(&s, "16-running-selected");
     s.send("\r");
-    s.wait_for_all(&[
-        "Engineer › Reviewer",
-        "subagents take input from their parent",
-    ]);
+    s.wait_for_all(&["Subagent: Reviewer", "Checking the new", "NORMAL"]);
     shot(&s, "17-subagent");
-    s.send("\x1b");
-    s.wait_for_all(&["AGENTS"]);
-    s.send("\x1b");
-    s.wait_for_all(&["NORMAL"]);
+    // Leaving the tab drops the subagent: back on it, the pane shows the Diff view.
+    s.send("gtgT");
+    s.wait_for_all(&["session   working tree"]);
+    s.wait_gone("Subagent: Reviewer");
+    s.send("]");
+    s.wait_gone("session   working tree");
 
     s.send("\x10\r");
     s.wait_for_all(&["Node settings", "UX Plugins"]);

@@ -7,7 +7,7 @@ use super::theme;
 use crate::app::layers::LayerKind;
 use crate::app::{App, Mode};
 use crate::keys::KeySet;
-use crate::sample::Tone;
+use crate::sample::{Tone, View};
 use crate::source::Connection;
 
 fn right(connection: &Connection, branch: Option<&str>, width: u16) -> String {
@@ -47,8 +47,16 @@ fn layer_hints(kind: LayerKind, set: KeySet) -> &'static str {
 }
 
 fn hints(app: &App) -> &'static str {
-    if let Some(top) = app.layers.last() {
-        return layer_hints(top.kind, app.keymap.set());
+    match app.layers.last() {
+        Some(top) if top.kind == LayerKind::Sidebar && app.view == View::Subagent => {
+            return match app.keymap.set() {
+                KeySet::Regular => "esc close · up/down scroll · pgup/pgdn page",
+                KeySet::Vim => "esc close · j/k scroll · pgup/pgdn page",
+                KeySet::Emacs => "ctrl-g close · ctrl-n/ctrl-p scroll · pgup/pgdn page",
+            };
+        }
+        Some(top) => return layer_hints(top.kind, app.keymap.set()),
+        None => {}
     }
     if let Some(search) = &app.search {
         return match (app.keymap.set(), search.committed) {
@@ -65,14 +73,6 @@ fn hints(app: &App) -> &'static str {
             KeySet::Emacs => "enter open · ctrl-n/ctrl-p move · ctrl-g back",
         };
     }
-    let stepped_in = app.tabs[app.active].parent.is_some();
-    if stepped_in && (app.mode == Mode::Normal || app.keymap.set() != KeySet::Vim) {
-        return match app.keymap.set() {
-            KeySet::Regular => "esc step out · ctrl-p jump · ? keys",
-            KeySet::Vim => "esc step out · : jump · ? keys",
-            KeySet::Emacs => "ctrl-g step out · ctrl-x x jump · ctrl-x ? keys",
-        };
-    }
     if app.slash.is_some() {
         return match app.keymap.set() {
             KeySet::Regular => "tab complete · enter run · esc close",
@@ -82,7 +82,6 @@ fn hints(app: &App) -> &'static str {
     }
     match (app.keymap.set(), app.mode) {
         (KeySet::Regular, _) => "ctrl-o next pane · ctrl-p jump · ? keys",
-        (KeySet::Vim, Mode::Input) if stepped_in => "esc normal mode · / commands",
         (KeySet::Vim, Mode::Input) => "esc normal mode · / commands · enter send",
         (KeySet::Vim, Mode::Normal) => "h/l move · [ ] sidebars · : jump · ? keys",
         (KeySet::Emacs, _) => "ctrl-x o next pane · ctrl-x x jump · ctrl-x ? keys",

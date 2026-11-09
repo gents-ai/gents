@@ -28,7 +28,7 @@ use crate::layout::{
 };
 use crate::sample::{
     answer, changes, note, row, MenuId, Opens, RowAction, Running, Scope, SidebarRow, Tone, View,
-    CHAT, START_SESSION, SUBAGENT_MARK,
+    CHAT, START_SESSION,
 };
 use crate::source::{
     Agent, BackgroundCall, Change, Connection, Day, Intent, Job, MenuRow, Prompt, Session,
@@ -47,7 +47,6 @@ const CONNECTING: &str = "still connecting to the runtime";
 const STOPPING: &str = "stopping the turn";
 const NOTHING_RUNNING: &str = "nothing is running";
 const STARTING: &str = "starting the session, try again in a moment";
-const READ_ONLY: &str = "a subagent takes input from its parent";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -105,7 +104,7 @@ fn blank() -> ChatLine {
 /// `scroll` counts lines up from the bottom. No `lines` means no messages yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tab {
-    /// Set by `App::push_tab`; a stepped-in subagent keeps its parent's.
+    /// Set by `App::push_tab`; the subagent the sidebar shows keeps its parent's.
     pub id: u64,
     /// The id of the session the tab shows.
     pub session: Option<String>,
@@ -125,8 +124,6 @@ pub struct Tab {
     pub starting: bool,
     /// Whether the right pane is wanted while this tab shows. Not saved across runs.
     pub sidebar: bool,
-    /// The tab to step back out to. Stepping in swaps the subagent's tab into this slot.
-    pub parent: Option<Box<Tab>>,
     /// The session's open mailbox questions and approvals, oldest first.
     pub prompts: Vec<Prompt>,
     /// The tab sent a turn it has not seen end. The endpoint streams that turn here, and no
@@ -180,7 +177,6 @@ impl Tab {
             turn: None,
             starting: false,
             sidebar: false,
-            parent: None,
             prompts: Vec::new(),
             following: false,
             wrapped: Wrapped::default(),
@@ -216,26 +212,8 @@ impl Tab {
         rows
     }
 
-    /// This tab or the parent it boxes that shows `session`.
-    fn showing(&mut self, session: &str) -> Option<&mut Tab> {
-        if self.session.as_deref() == Some(session) {
-            return Some(self);
-        }
-        self.parent.as_mut()?.showing(session)
-    }
-
-    /// A subagent's replies carry the mark its running row has.
-    fn marked(&self, mut line: ChatLine) -> ChatLine {
-        let reply = line.tone == Tone::Reply && !line.text.starts_with(SUBAGENT_MARK);
-        if reply && self.parent.is_some() {
-            line.text = format!("{SUBAGENT_MARK} {}", line.text);
-        }
-        line
-    }
-
     /// An unseen item appends its line and a blank, and a seen one replaces its line.
     fn put(&mut self, line: ChatLine) {
-        let line = self.marked(line);
         let seen = line.item.as_deref().and_then(|item| self.item_line(item));
         match seen {
             Some(index) => self.lines[index] = line,
@@ -386,10 +364,16 @@ pub struct App {
     pub view: View,
     pub scope: Scope,
     pub sessions_sel: usize,
-    pub view_sel: [usize; 3],
+    pub view_sel: [usize; 4],
     pub notice: Option<String>,
     pub tabs: Vec<Tab>,
     pub active: usize,
+    /// The subagent the Subagent view shows, from the active tab's running rows. Held only
+    /// while that view is the sidebar's.
+    pub subagent: Option<Tab>,
+    /// Whether the right pane was wanted, and its view, as the shown subagent opened, for esc
+    /// to put back.
+    before_subagent: (bool, View),
     pub diff: Option<usize>,
     pub diff_scroll: usize,
     pub layers: Vec<Layer>,
@@ -456,6 +440,20 @@ fn stepped(value: usize, increase: bool, max: usize) -> usize {
     }
 }
 
+/// `scroll`, counted up from the bottom of `total` rows, moved a row or with `page` a screenful
+/// of `height`, and kept where the top row still fills the screen.
+fn scrolled(scroll: usize, up: bool, page: bool, total: usize, height: u16) -> usize {
+    let height = usize::from(height);
+    let max = total.saturating_sub(height);
+    let by = if page { height } else { 1 };
+    let scroll = scroll.min(max);
+    if up {
+        (scroll + by).min(max)
+    } else {
+        scroll.saturating_sub(by)
+    }
+}
+
 fn step_row(rows: &[SidebarRow], from: usize, forward: bool) -> usize {
     let found = if forward {
         (from + 1..rows.len()).find(|&index| rows[index].selectable())
@@ -476,10 +474,12 @@ impl App {
             view: View::Diff,
             scope: Scope::Session,
             sessions_sel: START_SESSION,
-            view_sel: [0; 3],
+            view_sel: [0; 4],
             notice: None,
             tabs: Vec::new(),
             active: 0,
+            subagent: None,
+            before_subagent: (false, View::Diff),
             diff: None,
             diff_scroll: 0,
             layers: Vec::new(),
@@ -530,7 +530,7 @@ impl App {
     }
 
     fn start_view_rows(&mut self) {
-        self.view_sel = [View::Diff, View::Workflows, View::Agents]
+        self.view_sel = [View::Diff, View::Workflows, View::Agents, View::Subagent]
             .map(|view| first_selectable(&self.view_rows(view)));
     }
 
@@ -735,17 +735,17 @@ impl App {
         }
     }
 
-    /// The tab showing `session`, or the parent a tab boxes: a parent shows what came while a
-    /// subagent was stepped into.
+    /// The tab, or the subagent the sidebar shows, whose session is `session`.
     fn showing(&mut self, session: &str) -> Option<&mut Tab> {
-        self.tabs.iter_mut().find_map(|tab| tab.showing(session))
+        let mut shown = self.tabs.iter_mut().chain(self.subagent.as_mut());
+        shown.find(|tab| tab.session.as_deref() == Some(session))
     }
 
     fn opened(&mut self, session: &str, lines: Vec<ChatLine>) {
         let Some(tab) = self.showing(session) else {
             return;
         };
-        tab.lines = lines.into_iter().map(|line| tab.marked(line)).collect();
+        tab.lines = lines;
         // The source tells the prompts again after each open.
         tab.prompts.clear();
         // Opening left an empty tab in input mode; a user who has acted since keeps their mode.
@@ -906,29 +906,33 @@ impl App {
                 if self.says_lost() {
                     return;
                 }
-                let tab = &mut self.tabs[self.active];
-                let mut child = Tab::new_session();
-                child.id = tab.id;
-                child.session = Some(session.clone());
-                child.name = row.job;
-                child.agent = row.name;
-                child.agent_id = tab.agent_id.clone();
-                child.sidebar = tab.sidebar;
-                let agent = child.agent_id.clone();
-                let parent = std::mem::replace(tab, child);
-                tab.parent = Some(Box::new(parent));
-                self.diff = None;
-                self.activate_tab(self.active);
+                let tab = &self.tabs[self.active];
+                if self.subagent.is_none() {
+                    self.before_subagent = (tab.sidebar, self.view);
+                }
+                let shown = Tab {
+                    id: tab.id,
+                    session: Some(session.clone()),
+                    agent: row.name,
+                    agent_id: tab.agent_id.clone(),
+                    ..Tab::new_session()
+                };
+                let agent = shown.agent_id.clone();
+                self.subagent = Some(shown);
+                self.show_beside(View::Subagent);
                 self.emit(Intent::Open { session, agent });
             }
-            Opens::Workflow(address) => self.show_workflow(&address),
+            Opens::Workflow(address) => {
+                self.show_beside(View::Workflows);
+                self.select_job(&address);
+            }
         }
     }
 
-    fn show_workflow(&mut self, address: &str) {
+    /// The sidebar shows what a running row opens, and takes the keys where it docks.
+    fn show_beside(&mut self, view: View) {
         self.tabs[self.active].running_sel = None;
-        self.run_effect(Effect::ShowSidebar(View::Workflows));
-        self.select_job(address);
+        self.run_effect(Effect::ShowSidebar(view));
         if sidebar_can_dock(self.size.0) {
             self.focus_pane(Pane::Sidebar);
         }
@@ -947,16 +951,6 @@ impl App {
         {
             self.view_sel[View::Diff as usize] = row;
         }
-    }
-
-    /// A diff indexes the session's files, so it closes as the session changes.
-    pub(crate) fn step_out(&mut self) {
-        let tab = &mut self.tabs[self.active];
-        if let Some(parent) = tab.parent.take() {
-            *tab = *parent;
-        }
-        self.diff = None;
-        self.activate_tab(self.active);
     }
 
     pub fn conversation_rect(&self, pane: Rect) -> Rect {
@@ -1118,6 +1112,8 @@ impl App {
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::PageUp if self.focus == Pane::Agent => self.scroll_agent(true, true),
             Action::PageDown if self.focus == Pane::Agent => self.scroll_agent(false, true),
+            Action::PageUp if self.focus == Pane::Sidebar => self.scroll_subagent(true, true),
+            Action::PageDown if self.focus == Pane::Sidebar => self.scroll_subagent(false, true),
             Action::Next => self.step(true),
             Action::Prev => self.step(false),
             Action::Quit => self.quit = true,
@@ -1237,9 +1233,7 @@ impl App {
             Effect::OpenMenu(id) => self.push_layer(LayerKind::Menu(id)),
             Effect::ClearTab => {
                 let tab = &self.tabs[self.active];
-                if tab.parent.is_some() {
-                    self.notice = Some(READ_ONLY.to_string());
-                } else if tab.starting {
+                if tab.starting {
                     self.notice = Some(STARTING.to_string());
                 } else {
                     self.tabs[self.active] = Tab {
@@ -1250,6 +1244,9 @@ impl App {
                         sidebar: tab.sidebar,
                         ..Tab::new_session()
                     };
+                    if self.subagent.is_some() {
+                        self.set_view(View::Diff);
+                    }
                     self.activate_tab(self.active);
                 }
             }
@@ -1311,13 +1308,20 @@ impl App {
             self.back_from_search();
         } else if self.diff.is_some() && self.focus == Pane::Sidebar {
             self.diff = None;
-        } else if self.tabs[self.active].parent.is_some()
-            && (self.mode == Mode::Normal || self.keymap.set() != KeySet::Vim)
-        {
-            self.step_out();
+        } else if self.focus == Pane::Sidebar && self.subagent.is_some() {
+            self.close_subagent();
         } else {
             self.mode = Mode::Normal;
         }
+    }
+
+    /// The right pane goes back to how it was before the subagent opened, and the conversation
+    /// has the keys.
+    fn close_subagent(&mut self) {
+        let (wanted, view) = self.before_subagent;
+        self.tabs[self.active].sidebar = wanted;
+        self.set_view(view);
+        self.focus_pane(Pane::Agent);
     }
 
     fn send(&mut self) {
@@ -1325,11 +1329,12 @@ impl App {
         self.send_as(Sending::Text, text);
     }
 
-    /// The runtime refuses a turn on a subagent's thread. A refusal leaves the box as typed.
+    /// A refusal leaves the box as typed.
     fn send_as(&mut self, sending: Sending, text: String) {
         let message = matches!(sending, Sending::Text);
         let typed = !self.tabs[self.active].input.text().trim().is_empty();
-        // A reply to a prompt is a mailbox request, not a turn, so a subagent's tab takes it.
+        // A reply to a prompt is a mailbox request, not a turn, so it may answer a subagent's,
+        // whose thread the runtime refuses turns on.
         if let Some(reply) = self.prompt_reply().filter(|_| message && typed) {
             if self.says_lost() {
                 return;
@@ -1338,10 +1343,6 @@ impl App {
             tab.input.clear();
             tab.scroll = 0;
             return self.emit(reply);
-        }
-        if self.tabs[self.active].parent.is_some() {
-            self.notice = Some(READ_ONLY.to_string());
-            return;
         }
         if (message && !typed) || self.says_lost() {
             return;
@@ -1408,9 +1409,11 @@ impl App {
         }
     }
 
-    /// Stops the active tab's turn, if one runs.
+    /// Stops the running turn of the subagent the sidebar shows while it has the keys, else the
+    /// active tab's.
     fn stop(&mut self) -> bool {
-        let tab = &self.tabs[self.active];
+        let shown = self.subagent.as_ref().filter(|_| self.subagent_has_keys());
+        let tab = shown.unwrap_or(&self.tabs[self.active]);
         let (Some(session), Some(turn)) = (&tab.session, &tab.turn) else {
             return false;
         };
@@ -1528,11 +1531,16 @@ impl App {
         }
     }
 
+    /// A subagent shows only beside the tab it was opened from.
     pub fn activate_tab(&mut self, index: usize) {
         if index != self.active {
             self.diff = None;
         }
         self.active = index;
+        let left = self.subagent.as_ref().map(|shown| shown.id);
+        if left.is_some_and(|parent| parent != self.tabs[index].id) {
+            self.set_view(View::Diff);
+        }
         self.slash = None;
         self.search = None;
         self.focus = Pane::Agent;
@@ -1585,18 +1593,9 @@ impl App {
         let session = self.sessions[index].clone();
         let shown = self
             .tabs
-            .iter_mut()
-            .position(|tab| tab.showing(&session.id).is_some());
+            .iter()
+            .position(|tab| tab.session.as_ref() == Some(&session.id));
         if let Some(index) = shown {
-            // A parent boxed behind a subagent is stepped out to, so one tab shows the session.
-            let tab = &mut self.tabs[index];
-            while tab.session.as_ref() != Some(&session.id) {
-                let Some(parent) = tab.parent.take() else {
-                    break;
-                };
-                *tab = *parent;
-                self.diff = None;
-            }
             self.activate_tab(index);
             // Picking it again reads it again, for what other clients added. A resume under a
             // turn this tab streams could repeat or drop that turn's text, and the sample keeps
@@ -1677,18 +1676,35 @@ impl App {
         }
     }
 
-    /// A diff belongs to the Diff view, so it closes when the view changes. The source
-    /// rereads a work view, or the working tree, as it is shown.
+    /// A diff belongs to the Diff view, and a subagent to the Subagent view, so each closes when
+    /// the view changes. The source rereads a work view, or the working tree, as it is shown.
     pub fn set_view(&mut self, view: View) {
         self.view = view;
         self.diff = None;
+        if view != View::Subagent {
+            self.subagent = None;
+        }
         self.search.take_if(|search| search.pane == Pane::Sidebar);
         let lost = matches!(self.connection, Connection::Lost(_));
-        if view == View::Diff {
-            self.read_tree();
-        } else if !lost {
-            self.emit(Intent::Refresh);
+        match view {
+            View::Diff => self.read_tree(),
+            View::Workflows | View::Agents if !lost => self.emit(Intent::Refresh),
+            _ => {}
         }
+    }
+
+    /// The subagent, while the right pane shows it on screen.
+    pub(super) fn subagent_shown(&self) -> Option<&Tab> {
+        self.subagent.as_ref().filter(|_| self.right_pane_shown())
+    }
+
+    /// Whether the shown subagent's view has the keys: docked and focused, or the top layer.
+    pub(super) fn subagent_has_keys(&self) -> bool {
+        let sidebar = match self.layers.last() {
+            Some(top) => top.kind == LayerKind::Sidebar,
+            None => self.focus == Pane::Sidebar,
+        };
+        sidebar && self.subagent_shown().is_some()
     }
 
     /// Docked or as a layer: the rail shows only the session's totals.
@@ -1724,6 +1740,9 @@ impl App {
     }
 
     fn step_sidebar(&mut self, forward: bool) {
+        if self.view == View::Subagent {
+            return self.scroll_subagent(!forward, false);
+        }
         let Some(file) = self.diff else {
             let rows = self.view_rows(self.view);
             let selected = &mut self.view_sel[self.view as usize];
@@ -1757,14 +1776,21 @@ impl App {
         let area = self.visible_rows(Pane::Agent, self.conversation_rect(panes.agent));
         let lines = self.conversation_rows(area.width).len();
         let tab = &mut self.tabs[self.active];
-        let max = lines.saturating_sub(usize::from(area.height));
-        let by = if page { usize::from(area.height) } else { 1 };
-        let scroll = tab.scroll.min(max);
-        tab.scroll = if up {
-            (scroll + by).min(max)
-        } else {
-            scroll.saturating_sub(by)
+        tab.scroll = scrolled(tab.scroll, up, page, lines, area.height);
+    }
+
+    /// The sidebar's subagent, as `scroll_agent` scrolls the tab.
+    pub(super) fn scroll_subagent(&mut self, up: bool, page: bool) {
+        let Some(pane) = self.sidebar_pane() else {
+            return;
         };
+        let rows = self.visible_rows(Pane::Sidebar, sidebar_rows_area(pane, self.view));
+        let (_, area) = self.subagent_rows(rows);
+        let Some(shown) = &mut self.subagent else {
+            return;
+        };
+        let lines = shown.wrapped_rows(area.width).len();
+        shown.scroll = scrolled(shown.scroll, up, page, lines, area.height);
     }
 
     fn activate_session_row(&mut self) {
@@ -1800,11 +1826,11 @@ mod tests {
     use super::*;
     use crate::draw;
     use crate::draw::theme;
-    use crate::keys::KeySet::{Emacs, Vim};
+    use crate::keys::KeySet::{Emacs, Regular, Vim};
     use crate::sample::RunState;
     use crate::testing::{
-        buffer, find, keys, numbered, press, screen, sent, session_row, type_text, with_right_pane,
-        with_sample_session,
+        buffer, find, keys, kinds, numbered, press, right_pane, screen, sent, session_row,
+        type_text, with_right_pane, with_sample_session,
     };
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -2344,99 +2370,35 @@ mod tests {
         assert_eq!(app.tabs[0].running_sel, None);
     }
 
+    /// The sidebar shows the subagent and takes the keys where it docks; a narrow window opens it
+    /// as a layer. The tab, and its box, stay on the parent.
     #[test]
-    fn enter_steps_in_and_esc_restores_the_parent() {
+    fn enter_on_a_subagent_shows_it_in_the_sidebar() {
         let mut app = session_app();
         let before = app.tabs[0].clone();
-        press(&mut app, "j");
-        let selected = app.tabs[0].clone();
-        press(&mut app, "enter");
-        let s = screen(&app);
-        assert_eq!(app.tabs[0].agent, "Reviewer");
-        assert!(find(&s, "packs · Engineer › Reviewer").is_some());
-        assert!(find(&s, "subagents take input from their parent").is_some());
-        assert!(find(&s, "◆ Checking the new subcommands").is_some());
-        assert_eq!(app.ctx(), KeyCtx::Normal);
-        assert!(find(&s, "esc step out").is_some());
-        assert_eq!(find(&s, "message this agent"), None);
-        press(&mut app, "esc");
-        assert_eq!(app.tabs[0], selected);
-        press(&mut app, "esc");
-        assert_eq!(app.tabs[0], before);
-    }
-
-    #[test]
-    fn a_subagents_replies_carry_the_mark() {
-        let (mut app, _intents) = with_subagents();
-        press(&mut app, "up up enter");
-        app.apply(Update::Opened {
-            session: "c1".to_string(),
-            lines: vec![
-                said("looking", Tone::Reply, "r1"),
-                said("go on", Tone::You, "u1"),
-            ],
-        });
-        app.apply(Update::Delta {
-            session: "c1".to_string(),
-            item: "r2".to_string(),
-            text: "found".to_string(),
-            tone: Tone::Reply,
-        });
-        let texts = |app: &App| -> Vec<String> {
-            let lines = &app.tabs[0].lines;
-            lines.iter().map(|line| line.text.clone()).collect()
-        };
-        assert_eq!(texts(&app), [" ◆ looking", "go on", " ◆ found", ""]);
-        app.apply(item("c1", said("found it", Tone::Reply, "r2")));
-        assert_eq!(texts(&app)[2], " ◆ found it", "a completed reply keeps it");
-        let (row, column) = find(&screen(&app), "◆ looking").expect("the reply");
-        assert_eq!(buffer(&app)[(column, row)].fg, theme::ACCENT);
-
-        press(&mut app, "esc esc");
-        app.apply(item("s1", said("plain", Tone::Reply, "r9")));
-        assert_eq!(app.tabs[0].lines[0].text, "plain", "the parent's own");
-    }
-
-    #[test]
-    fn opening_a_boxed_parent_steps_out_to_it() {
-        let mut app = session_app();
         press(&mut app, "j enter");
-        app.open_session(session_row("pack registry"));
-        assert_eq!((app.tabs.len(), app.active), (1, 0));
-        assert_eq!(app.tabs[0].parent, None);
-        assert_eq!(app.tabs[0].agent, "Engineer");
+        let opened = Tab {
+            sidebar: true,
+            ..before
+        };
+        assert_eq!(app.tabs[0], opened, "the tab still shows the parent");
+        assert_eq!((app.focus, app.ctx()), (Pane::Sidebar, KeyCtx::Normal));
+        let pane = right_pane(&app);
+        for text in ["Subagent: Reviewer", "Checking the new"] {
+            assert!(find(&pane, text).is_some(), "{text}: {pane:#?}");
+        }
+        let s = screen(&app);
+        for text in ["1 packs · Engineer", "Moving them", "Message Engineer"] {
+            assert!(find(&s, text).is_some(), "{text}");
+        }
 
-        let (mut app, intents) = with_subagents();
-        let listed = Session {
-            agent: "local:default".to_string(),
-            ..listed("s1", Day::Today, SessionState::Idle)
-        };
-        app.apply(Update::Sessions(vec![listed]));
-        press(&mut app, "up up enter");
-        intents.try_recv().expect("the subagent's open");
-        let row = app
-            .session_rows()
-            .iter()
-            .position(|row| row.text.contains("s1"));
-        app.open_session(row.expect("the session's row"));
-        let reread = Intent::Open {
-            session: "s1".to_string(),
-            agent: "local:default".to_string(),
-        };
-        assert_eq!(
-            intents.try_recv(),
-            Ok(reread),
-            "picking it again rereads it"
-        );
-        assert_eq!(
-            (app.tabs.len(), app.tabs[0].session.as_deref()),
-            (1, Some("s1"))
-        );
-        app.apply(item("s1", said("later", Tone::Reply, "r9")));
-        assert_eq!(
-            app.tabs[0].lines,
-            [said("later", Tone::Reply, "r9"), blank()]
-        );
+        let mut narrow = App::new(Vim, 70, 24);
+        narrow.open_session(session_row("pack registry"));
+        press(&mut narrow, "j enter");
+        assert_eq!(kinds(&narrow), [LayerKind::Sidebar]);
+        assert!(find(&screen(&narrow), "Subagent: Reviewer").is_some());
+        press(&mut narrow, "esc");
+        assert!(narrow.layers.is_empty(), "esc closes it as other views");
     }
 
     /// Picking an open session again reads it again, unless its tab follows a turn it sent: a
@@ -2533,101 +2495,212 @@ mod tests {
         (app, intents)
     }
 
+    /// The subagent's session opens on the parent's connection. Its updates reach the sidebar,
+    /// drawn as the tab draws a conversation, and the parent's reach the tab, whose box still
+    /// messages the parent. Another subagent takes its place.
     #[test]
-    fn stepping_into_a_subagent_opens_its_session_on_the_parents_connection() {
+    fn a_subagent_streams_into_the_sidebar_beside_its_parent() {
         let (mut app, intents) = with_subagents();
         press(&mut app, "up up enter");
-        let open = Intent::Open {
-            session: "c1".to_string(),
+        let open = |session: &str| Intent::Open {
+            session: session.to_string(),
             agent: "local:default".to_string(),
         };
-        assert_eq!(intents.try_recv(), Ok(open));
-        assert_eq!(app.tabs[0].session.as_deref(), Some("c1"));
-        assert!(find(&screen(&app), "fix login · default › researcher").is_some());
+        assert_eq!(sent(&intents), [open("c1")]);
 
         app.apply(Update::Opened {
             session: "c1".to_string(),
             lines: vec![said("looking", Tone::Reply, "r1")],
         });
-        assert_eq!(app.tabs[0].lines, [said(" ◆ looking", Tone::Reply, "r1")]);
+        app.apply(item("c1", said("found it", Tone::Reply, "r2")));
+        app.apply(item("s1", said("still going", Tone::Reply, "p1")));
+        assert_eq!(
+            app.tabs[0].lines,
+            [said("still going", Tone::Reply, "p1"), blank()]
+        );
+        let pane = right_pane(&app);
+        for text in ["Subagent: researcher", "looking", "found it"] {
+            assert!(find(&pane, text).is_some(), "{text}: {pane:#?}");
+        }
+        assert_eq!(find(&pane, "still going"), None);
+        let (row, column) = find(&screen(&app), "found it").expect("the reply");
+        assert_eq!(buffer(&app)[(column, row)].bg, theme::SEL_BG);
+
+        press(&mut app, "i");
+        type_text(&mut app, "hi");
+        press(&mut app, "enter");
+        let send = Intent::Send {
+            tab: app.tabs[0].id,
+            session: Some("s1".to_string()),
+            agent: "local:default".to_string(),
+            text: "hi".to_string(),
+        };
+        assert_eq!(sent(&intents), [send]);
+
+        press(&mut app, "esc j j enter");
+        assert_eq!(sent(&intents), [open("c2")]);
+        let pane = right_pane(&app);
+        assert!(find(&pane, "Subagent: triage").is_some(), "{pane:#?}");
+        assert_eq!(find(&pane, "looking"), None);
     }
 
     #[test]
-    fn a_lost_connection_keeps_the_parent_in_front() {
+    fn a_lost_connection_opens_no_subagent() {
         let (mut app, intents) = with_subagents();
         app.apply(Update::Connection(Connection::Lost("gone".to_string())));
         press(&mut app, "up up enter");
         assert!(intents.try_recv().is_err());
-        assert_eq!(app.tabs[0].parent, None);
+        assert_eq!(app.subagent, None);
+        assert!(!right_is_shown(&app));
         assert_eq!(app.notice.as_deref(), Some("gone"));
     }
 
+    /// The sidebar that shows a subagent stops the subagent's turn while it has the keys, docked
+    /// or as a layer; elsewhere the tab's turn stops.
     #[test]
-    fn a_subagents_box_is_read_only() {
-        let (mut app, intents) = with_subagents();
-        press(&mut app, "up up enter");
-        intents.try_recv().expect("the open");
-        let s = screen(&app);
-        assert!(find(&s, "subagents take input from their parent").is_some());
-        assert_eq!(find(&s, "enter send"), None);
-
-        type_text(&mut app, "hi");
-        press(&mut app, "enter");
-        assert!(intents.try_recv().is_err(), "nothing is sent");
-        assert_eq!(app.tabs[0].input.text(), "hi");
-        assert_eq!(
-            app.notice.as_deref(),
-            Some("a subagent takes input from its parent")
-        );
-
-        app.apply(Update::Turn {
-            session: "c1".to_string(),
-            turn: "t1".to_string(),
-        });
-        press(&mut app, "ctrl-c ctrl-c");
-        let stop = Intent::Interrupt {
-            session: "c1".to_string(),
+    fn stopping_on_the_subagent_view_stops_the_subagent() {
+        let stop = |session: &str, turn: &str| Intent::Interrupt {
+            session: session.to_string(),
             agent: "local:default".to_string(),
-            turn: "t1".to_string(),
+            turn: turn.to_string(),
         };
-        assert_eq!(intents.try_recv(), Ok(stop));
+        let opened = |set, size: (u16, u16)| {
+            let (mut app, intents) = with_subagents();
+            app.keymap = Keymap::new(set);
+            app.handle(Event::Resize(size.0, size.1));
+            press(&mut app, "up up enter");
+            for (session, turn) in [("s1", "t0"), ("c1", "t1")] {
+                app.apply(Update::Turn {
+                    session: session.to_string(),
+                    turn: turn.to_string(),
+                });
+            }
+            sent(&intents);
+            (app, intents)
+        };
+        for (set, keys) in [
+            (Regular, "ctrl-c"),
+            (Emacs, "ctrl-c"),
+            (Vim, "ctrl-c"),
+            (Vim, "s"),
+        ] {
+            for size in [(132, 36), (70, 24)] {
+                let (mut app, intents) = opened(set, size);
+                press(&mut app, keys);
+                assert_eq!(
+                    sent(&intents),
+                    [stop("c1", "t1")],
+                    "{set:?} {keys} {size:?}"
+                );
+            }
+        }
+        let (mut app, intents) = opened(Vim, (132, 36));
+        press(&mut app, "h s");
+        assert_eq!(
+            sent(&intents),
+            [stop("s1", "t0")],
+            "the conversation's keys"
+        );
+    }
 
-        type_text(&mut app, "/jobs");
-        press(&mut app, "enter");
-        assert_eq!(app.view, View::Agents);
-        assert!(right_is_shown(&app));
+    /// Esc on the docked subagent view closes it and puts the right pane back as it was.
+    #[test]
+    fn esc_closes_the_docked_subagent_view() {
+        for (set, back, open) in [
+            (Regular, "esc", "up up enter"),
+            (Vim, "esc", "j enter"),
+            (Emacs, "ctrl-g", "up up enter"),
+        ] {
+            let (mut app, _intents) = with_subagents();
+            app.keymap = Keymap::new(set);
+            press(&mut app, "up up enter");
+            assert!(right_is_shown(&app), "{set:?}");
+            press(&mut app, back);
+            assert_eq!(app.subagent, None, "{set:?}");
+            assert!(!right_is_shown(&app), "{set:?}: hidden, as it was");
+            assert_eq!((app.view, app.focus), (View::Diff, Pane::Agent), "{set:?}");
+
+            app.run_effect(Effect::ShowSidebar(View::Workflows));
+            press(&mut app, open);
+            assert_eq!(app.view, View::Subagent, "{set:?}");
+            press(&mut app, back);
+            assert!(right_is_shown(&app), "{set:?}: shown, as it was");
+            let shown = (app.view, app.focus, app.subagent.as_ref());
+            assert_eq!(shown, (View::Workflows, Pane::Agent, None), "{set:?}");
+        }
     }
 
     #[test]
-    fn the_parent_keeps_its_updates_while_stepped_into() {
+    fn closing_the_parent_tab_drops_its_subagent() {
         let (mut app, _intents) = with_subagents();
-        press(&mut app, "up up enter");
-        app.apply(item("s1", said("still going", Tone::Reply, "r1")));
-        app.apply(running(
-            "s1",
-            vec![subagent("researcher", RunState::Done, "c1")],
-        ));
-        app.apply(Update::Prompts {
-            session: "s1".to_string(),
-            prompts: vec![crate::sample::approval("Engineer")],
-        });
-        assert!(app.tabs[0].lines.is_empty(), "the subagent shows its own");
-        assert!(app.tabs[0].prompts.is_empty());
-
-        press(&mut app, "esc esc");
-        let parent = &app.tabs[0];
-        assert_eq!(parent.session.as_deref(), Some("s1"));
-        assert_eq!(
-            parent.lines,
-            [said("still going", Tone::Reply, "r1"), blank()]
-        );
-        assert_eq!(parent.running[0].state, RunState::Done);
-        assert_eq!(parent.running_sel, Some(0));
-        assert_eq!(parent.prompts.len(), 1);
+        press(&mut app, "up up enter ctrl-w h ctrl-w q");
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].session, None, "a new tab in its place");
+        assert_eq!((app.view, app.subagent.as_ref()), (View::Diff, None));
     }
 
-    /// Rows change live, so a selection follows its row rather than its position, on the tab
-    /// and on a parent boxed behind a subagent.
+    /// From the bottom, as the tab scrolls its conversation, docked or as a layer.
+    #[test]
+    fn the_sidebar_scrolls_its_subagent() {
+        let scroll = |app: &App| app.subagent.as_ref().map(|shown| shown.scroll);
+        for (set, up, down) in [
+            (Regular, "up", "down"),
+            (Vim, "k", "j"),
+            (Emacs, "ctrl-p", "ctrl-n"),
+        ] {
+            let (mut app, _intents) = with_subagents();
+            app.keymap = Keymap::new(set);
+            press(&mut app, "up up enter");
+            app.apply(Update::Opened {
+                session: "c1".to_string(),
+                lines: numbered(100),
+            });
+            assert!(find(&right_pane(&app), "message 99").is_some(), "{set:?}");
+            press(&mut app, up);
+            assert_eq!(scroll(&app), Some(1), "{set:?}");
+            assert_eq!(find(&right_pane(&app), "message 99"), None, "{set:?}");
+            press(&mut app, down);
+            assert_eq!(scroll(&app), Some(0), "{set:?}");
+            press(&mut app, "pgup");
+            assert!(scroll(&app) > Some(1), "{set:?}");
+            press(&mut app, "pgdn");
+            assert_eq!(scroll(&app), Some(0), "{set:?}");
+        }
+
+        let (mut app, _intents) = with_subagents();
+        app.handle(Event::Resize(70, 24));
+        press(&mut app, "up up enter");
+        app.apply(Update::Opened {
+            session: "c1".to_string(),
+            lines: numbered(100),
+        });
+        press(&mut app, "k");
+        assert_eq!(scroll(&app), Some(1));
+        press(&mut app, "pgup");
+        assert!(scroll(&app) > Some(1));
+        assert!(find(&screen(&app), "esc close · j/k scroll").is_some());
+    }
+
+    /// A subagent shows only beside the tab it was opened from, while its parent is that tab's.
+    #[test]
+    fn leaving_or_clearing_the_tab_drops_its_subagent() {
+        let mut app = session_app();
+        press(&mut app, "j enter");
+        assert_eq!(app.view, View::Subagent);
+        enter_on_session(&mut app, "flaky");
+        assert_eq!((app.active, app.subagent.as_ref()), (1, None));
+        assert_eq!(app.view, View::Diff);
+
+        press(&mut app, "g T j enter");
+        assert_eq!(app.view, View::Subagent);
+        press(&mut app, "i");
+        type_text(&mut app, "/clear");
+        press(&mut app, "enter");
+        assert_eq!(app.subagent, None);
+        assert_eq!(app.view, View::Diff);
+    }
+
+    /// Rows change live, so a selection follows its row rather than its position.
     #[test]
     fn a_running_selection_follows_its_row() {
         let (mut app, _intents) = with_subagents();
@@ -2639,14 +2712,6 @@ mod tests {
         let rows = vec![scout.clone(), researcher.clone(), triage.clone()];
         app.apply(running("s1", rows));
         assert_eq!(app.tabs[0].running_sel, Some(2), "still triage");
-
-        press(&mut app, "up enter");
-        assert_eq!(app.tabs[0].session.as_deref(), Some("c1"));
-        let newest = subagent("newest", RunState::Working, "c9");
-        app.apply(running("s1", vec![newest, scout, researcher, triage]));
-        press(&mut app, "esc esc");
-        assert_eq!(app.tabs[0].session.as_deref(), Some("s1"));
-        assert_eq!(app.tabs[0].running_sel, Some(2), "still researcher");
     }
 
     #[test]
@@ -2780,10 +2845,6 @@ mod tests {
             Some(0),
             "emacs stays on the top row"
         );
-        press(&mut app, "enter");
-        assert_eq!(app.tabs[0].agent, "Reviewer");
-        press(&mut app, "ctrl-g");
-        assert_eq!(app.tabs[0].agent, "Engineer");
         press(&mut app, "ctrl-g");
         assert_eq!(app.tabs[0].running_sel, None);
         press(&mut app, "up ctrl-n");
@@ -2794,37 +2855,13 @@ mod tests {
     }
 
     #[test]
-    fn stepping_in_clears_a_search() {
+    fn opening_a_subagent_clears_a_search() {
         let mut app = session_app();
         press(&mut app, "/");
         type_text(&mut app, "Moving");
         press(&mut app, "enter ctrl-w j enter");
         assert!(app.search.is_none());
-        assert_eq!(app.tabs[0].agent, "Reviewer");
-    }
-
-    #[test]
-    fn clear_in_a_subagent_says_it_takes_input_from_its_parent() {
-        let mut app = session_app();
-        let lines = app.tabs[0].lines.clone();
-        press(&mut app, "j enter");
-        let stepped = app.tabs[0].lines.clone();
-        app.run_effect(Effect::ClearTab);
-        assert_eq!(app.tabs[0].lines, stepped);
-        assert_eq!(app.notice.as_deref(), Some(READ_ONLY));
-        press(&mut app, "esc esc");
-        assert_eq!(app.tabs[0].agent, "Engineer");
-        assert_eq!(app.tabs[0].lines, lines);
-    }
-
-    #[test]
-    fn closing_the_tab_inside_a_subagent_closes_the_tab() {
-        let mut app = session_app();
-        press(&mut app, "j enter ctrl-w q");
-        assert_eq!(app.tabs.len(), 1);
-        assert_eq!(app.tabs[0].parent, None);
-        assert_eq!(app.tabs[0].agent, "Engineer");
-        assert!(app.tabs[0].lines.is_empty());
+        assert_eq!(app.view, View::Subagent);
     }
 
     #[test]
@@ -2994,19 +3031,6 @@ mod tests {
         assert!(right_is_shown(&app), "the first tab kept it open");
         press(&mut app, "g t");
         assert!(!right_is_shown(&app), "the second tab kept it closed");
-    }
-
-    #[test]
-    fn a_subagent_starts_with_its_parents_right_pane() {
-        let mut app = session_app();
-        press(&mut app, "j enter");
-        assert!(!right_is_shown(&app));
-        press(&mut app, "esc esc ] j enter");
-        assert_eq!(app.tabs[0].agent, "Reviewer");
-        assert!(right_is_shown(&app));
-        press(&mut app, "] esc");
-        assert_eq!(app.tabs[0].agent, "Engineer");
-        assert!(right_is_shown(&app), "stepping out restores the parent's");
     }
 
     #[test]
@@ -4837,15 +4861,6 @@ mod tests {
     #[test]
     fn a_refused_goal_or_skill_keeps_its_text() {
         for text in ["/goal ship it", "/commit fix it"] {
-            let (mut app, intents) = with_subagents();
-            press(&mut app, "up up enter");
-            intents.try_recv().expect("the subagent's open");
-            type_slash(&mut app, text);
-            press(&mut app, "enter");
-            assert_eq!(app.notice.as_deref(), Some(READ_ONLY), "{text}");
-            assert_eq!(app.tabs[0].input.text(), text);
-            assert!(sent(&intents).is_empty(), "{text}");
-
             let (mut app, intents) = connected();
             app.tabs[0].starting = true;
             type_slash(&mut app, text);

@@ -12,6 +12,7 @@ use crate::app::session_rows;
 use crate::app::{App, ChatLine};
 use crate::draw;
 use crate::keys::KeySet;
+use crate::layout::{layout, Right, Screen};
 use crate::sample::{self, Tone};
 use crate::source::Intent;
 
@@ -117,6 +118,22 @@ pub fn rows(buffer: &Buffer) -> Vec<String> {
 
 pub fn screen(app: &App) -> Vec<String> {
     rows(&buffer(app))
+}
+
+/// The docked right pane's rows, cut from the screen at its left edge; none while it is not docked.
+pub fn right_pane(app: &App) -> Vec<String> {
+    let (width, height) = app.size;
+    let Screen::Shell(panes) = layout(width, height, app.wanted()) else {
+        return Vec::new();
+    };
+    let Right::Sidebar(pane) = panes.right else {
+        return Vec::new();
+    };
+    let left = usize::from(pane.x);
+    screen(app)
+        .iter()
+        .map(|row| row.chars().skip(left).collect())
+        .collect()
 }
 
 /// The first match, as (row, column), counting columns in cells.

@@ -649,33 +649,6 @@ mod tests {
         assert!(rows.contains(&row(" +    new", Tone::Add)), "{rows:#?}");
     }
 
-    #[test]
-    fn stepping_into_or_out_of_a_subagent_closes_a_diff() {
-        let mut app = sample_session();
-        click_text(&mut app, "M cli/mod.rs");
-        assert_eq!(app.diff, Some(1));
-        press(&mut app, "j enter");
-        assert_eq!(app.tabs[0].agent, "Reviewer");
-        assert_eq!(app.diff, None, "stepping in");
-
-        app.show_file(0);
-        press(&mut app, "esc");
-        assert_eq!(app.tabs[0].agent, "Engineer");
-        assert_eq!(app.diff, None, "stepping out");
-    }
-
-    #[test]
-    fn picking_the_parent_from_the_sessions_list_closes_a_subagents_diff() {
-        let mut app = sample_session();
-        press(&mut app, "j enter");
-        assert_eq!(app.tabs[0].agent, "Reviewer");
-        app.show_file(0);
-        assert_eq!(app.diff, Some(0));
-        click_text(&mut app, "pack registry");
-        assert_eq!(app.tabs[0].agent, "Engineer", "stepped out to the parent");
-        assert_eq!(app.diff, None);
-    }
-
     fn view(app: &App) -> Vec<String> {
         let rows = app.view_rows(View::Diff);
         rows.iter().map(|row| row.text.to_string()).collect()

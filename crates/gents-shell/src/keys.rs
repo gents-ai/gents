@@ -176,8 +176,12 @@ impl Keymap {
             KeyCode::Up if regular_search => Action::SearchPrev,
             KeyCode::Down => Action::Next,
             KeyCode::Up => Action::Prev,
-            KeyCode::PageUp if matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::PageUp,
-            KeyCode::PageDown if matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::PageDown,
+            KeyCode::PageUp if matches!(ctx, KeyCtx::Normal | KeyCtx::Input | KeyCtx::Menu) => {
+                Action::PageUp
+            }
+            KeyCode::PageDown if matches!(ctx, KeyCtx::Normal | KeyCtx::Input | KeyCtx::Menu) => {
+                Action::PageDown
+            }
             KeyCode::Char(c) => self.character(ctx, c),
             KeyCode::Tab if matches!(ctx, KeyCtx::Input | KeyCtx::Filter) => Action::Complete,
             KeyCode::BackTab if ctx == KeyCtx::Filter => Action::CompleteBack,
@@ -291,7 +295,7 @@ impl Keymap {
             (KeyCtx::Normal, 'n') => Action::SearchNext,
             (KeyCtx::Normal, 'N') => Action::SearchPrev,
             (KeyCtx::Normal, 'y') => Action::Accept,
-            (KeyCtx::Normal, 's') if self.set == KeySet::Vim => Action::Stop,
+            (KeyCtx::Normal | KeyCtx::Menu, 's') if self.set == KeySet::Vim => Action::Stop,
             (KeyCtx::Menu, 'd') => Action::SecondAct,
             (KeyCtx::Menu, '.') => Action::More,
             (KeyCtx::Normal, ':') => Action::OpenBar,
@@ -359,6 +363,7 @@ mod tests {
         (Input, "ctrl-u", A::DeleteToStart), (Filter, "ctrl-u", A::DeleteToStart), (SearchLine, "ctrl-u", A::DeleteToStart), (Filter, "ctrl-a", A::Home), (Filter, "ctrl-e", A::End), (SearchLine, "ctrl-a", A::Home), (SearchLine, "ctrl-e", A::End),
         (Input, "alt-b", A::WordLeft), (Input, "alt-f", A::WordRight), (Filter, "alt-b", A::WordLeft), (Filter, "alt-f", A::WordRight), (SearchLine, "alt-b", A::WordLeft), (SearchLine, "alt-f", A::WordRight),
         (Normal, "ctrl-u", A::None), (Normal, "ctrl-a", A::None), (Normal, "ctrl-e", A::None), (Menu, "ctrl-u", A::None), (Normal, "alt-b", A::None), (Menu, "alt-f", A::None),
+        (Menu, "pgup", A::PageUp), (Menu, "pgdn", A::PageDown), (Filter, "pgup", A::None), (Menu, "s", A::Stop),
     ];
 
     #[rustfmt::skip]
@@ -388,7 +393,7 @@ mod tests {
         (Input, "ctrl-t", A::NewTab), (Input, "ctrl-pgdn", A::NextTab), (Input, "ctrl-pgup", A::PrevTab), (Menu, "ctrl-pgdn", A::NextTab),
         (Input, "ctrl-b", A::ToggleSessions), (Input, "ctrl-r", A::ToggleSidebar), (Menu, "ctrl-b", A::ToggleSessions), (Menu, "ctrl-r", A::ToggleSidebar),
         (Input, "ctrl-q", A::Quit), (Menu, "ctrl-q", A::Quit), (Filter, "ctrl-q", A::Quit),
-        (Input, "up", A::Prev), (Input, "down", A::Next), (Input, "pgup", A::PageUp), (Input, "pgdn", A::PageDown),
+        (Input, "up", A::Prev), (Input, "down", A::Next), (Input, "pgup", A::PageUp), (Input, "pgdn", A::PageDown), (Menu, "pgup", A::PageUp),
         (Menu, "up", A::Prev), (Menu, "down", A::Next), (Menu, "enter", A::Submit), (Menu, "esc", A::Back), (Menu, "d", A::SecondAct), (Menu, ".", A::More), (Menu, ":", A::None), (Menu, "[", A::None),
         (Input, "ctrl-a", A::Home), (Input, "ctrl-e", A::End), (Input, "ctrl-u", A::DeleteToStart), (Input, "ctrl-w", A::DeleteWord), (SearchLine, "ctrl-w", A::DeleteWord), (Input, "alt-b", A::WordLeft), (Input, "alt-f", A::WordRight),
         (Filter, "ctrl-s", A::Save), (Filter, "shift-tab", A::CompleteBack), (Input, "ctrl-x", A::None), (Input, "alt-x", A::None), (Input, "ctrl-s", A::None),

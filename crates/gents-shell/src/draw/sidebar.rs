@@ -1,9 +1,9 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Margin, Rect};
 
-use super::{draw_rows, pane_box, theme};
+use super::{agent, draw_row, draw_rows, pane_box, theme};
 use crate::app::changes::rail_rows;
-use crate::app::{App, Pane};
+use crate::app::{App, Pane, Tab};
 use crate::layout::sidebar_rows_area;
 use crate::sample::{Scope, SidebarRow, View};
 
@@ -40,11 +40,18 @@ fn draw_chips(buf: &mut Buffer, area: Rect, y: u16, shown: Scope) {
 
 pub fn draw(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
     let title = match app.view {
-        View::Diff => "Diff",
-        View::Workflows => "Workflows",
-        View::Agents => "Background agents",
+        View::Diff => "Diff".to_string(),
+        View::Workflows => "Workflows".to_string(),
+        View::Agents => "Background agents".to_string(),
+        View::Subagent => {
+            let name = app
+                .subagent
+                .as_ref()
+                .map_or("", |shown| shown.agent.as_str());
+            format!("Subagent: {name}")
+        }
     };
-    pane_box(buf, area, title, focused);
+    pane_box(buf, area, &title, focused);
     if app.view == View::Diff {
         let inner = area.inner(Margin::new(1, 1));
         draw_chips(buf, area, inner.y, app.scope);
@@ -53,7 +60,9 @@ pub fn draw(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
     }
 
     let rows = sidebar_rows_area(area, app.view);
-    if let Some(file) = app.diff {
+    if let (View::Subagent, Some(shown)) = (app.view, &app.subagent) {
+        draw_subagent(app, shown, app.visible_rows(Pane::Sidebar, rows), buf);
+    } else if let Some(file) = app.diff {
         draw_diff(app, app.visible_rows(Pane::Sidebar, rows), file, buf);
     } else {
         let shown = app.view_rows(app.view);
@@ -85,6 +94,15 @@ fn draw_diff(app: &App, area: Rect, file: usize, buf: &mut Buffer) {
         let style = theme::tone(*tone);
         buf.set_stringn(area.x, y, text, usize::from(area.width), style);
     }
+}
+
+/// Its first prompt at the top, then its conversation, drawn as the tab draws one.
+fn draw_subagent(app: &App, shown: &Tab, area: Rect, buf: &mut Buffer) {
+    let (prompt, below) = app.subagent_rows(area);
+    for ((text, tone), y) in prompt.iter().zip(area.top()..below.top()) {
+        draw_row(buf, area, y, text, *tone, false);
+    }
+    agent::chat(&shown.wrapped_rows(below.width), shown.scroll, below, buf);
 }
 
 pub fn draw_rail(app: &App, area: Rect, buf: &mut Buffer) {
