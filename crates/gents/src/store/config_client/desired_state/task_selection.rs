@@ -11,7 +11,7 @@ fn selected_agent(node_did: &str, value: Option<&Value>) -> Result<Option<String
     };
     Ok(references_of(Collection::Task, value, node_did)?
         .into_iter()
-        .find(|reference| reference.collection == Collection::Agent)
+        .find(|reference| reference.collection == Collection::Agent && reference.field == "agent_did")
         .map(|reference| reference.id))
 }
 

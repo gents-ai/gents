@@ -335,6 +335,7 @@ async fn commit_success(
         work_unit_id: None,
         caused_by_correlation: correlation,
         created_at: None,
+        route: gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input),
     };
     let creates = documents
         .iter()

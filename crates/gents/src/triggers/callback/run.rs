@@ -804,6 +804,7 @@ async fn execute_running_invocation(
         let integrator = integrator_agent.to_owned();
         let invocation_id = invocation.invocation_id.clone();
         let correlation = correlation_from_source(source);
+        let route = gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input);
         let reservation = tokio::task::spawn_blocking(move || {
             crate::tools::workspace::prepare_workspace_reservation(
                 &action_for_reservation,
@@ -814,6 +815,7 @@ async fn execute_running_invocation(
                 &integrator,
                 &invocation_id,
                 &correlation,
+                &route,
             )
         })
         .await
@@ -851,6 +853,7 @@ async fn execute_running_invocation(
             integrator_principal: integrator_agent.to_owned(),
             caused_by_invocation_id: invocation.invocation_id.clone(),
             caused_by_correlation: correlation.clone(),
+            route: gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input),
             documents: &mut docs,
         };
         execute_create_workspace_plan(&plan, &mut journal, &mut ctx)
@@ -1003,6 +1006,7 @@ async fn succeed_then_emit_result(
             work_unit_id: Some(workspace.work_unit_id.clone()),
             caused_by_correlation: Some(correlation),
             created_at: Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            route: gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input),
         },
     )
     .await

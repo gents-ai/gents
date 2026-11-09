@@ -41,6 +41,9 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     lifecycle_state
     caused_by_invocation_id
     caused_by_correlation
+    handoff_id
+    reply_session_id
+    attempt
 "#;
 
 const PLACEMENT_FIELDS: &str = r#"
@@ -173,6 +176,10 @@ pub struct CallbackResultDoc {
     pub caused_by_correlation: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Stamped from the invocation's frozen input so a consumer Agent reads
+    /// the route from this result, not from the producer's invocation.
+    #[serde(flatten)]
+    pub route: gents_protocol::trigger_delivery::HandoffRoute,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -490,26 +497,6 @@ pub async fn load_invocation(
         "ambiguous node-scoped callback/workspace document"
     );
     Ok(first_row(&response, "CallbackInvocation")?)
-}
-
-pub(crate) async fn load_invocation_with_access(
-    access: &crate::ConfigAccess,
-    invocation_id: &str,
-    owner: &str,
-) -> Result<Option<CallbackInvocationDoc>> {
-    let query = format!(
-        r#"{{ CallbackInvocation(filter: {{ invocation_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}, limit: 2) {{ {INVOCATION_FIELDS} }} }}"#,
-        escape_graphql_string(invocation_id),
-        escape_graphql_string(owner),
-    );
-    let response: query::QueryResponse = serde_json::from_value(access.execute(&query).await?)?;
-    let mut found: Vec<CallbackInvocationDoc> =
-        crate::store::graphql::required_rows(&response, "CallbackInvocation")?;
-    anyhow::ensure!(
-        found.len() <= 1,
-        "ambiguous node-scoped callback/workspace document"
-    );
-    Ok(found.pop())
 }
 
 pub async fn load_invocation_by_key(
@@ -1153,6 +1140,7 @@ pub(super) fn create_callback_result_mutation(
                 {workspace}
                 {work_unit_id}
                 {correlation}
+                {route},
                 created_at: "{created_at}"
             }}) {{ _docID }}
         }}"#,
@@ -1169,6 +1157,7 @@ pub(super) fn create_callback_result_mutation(
             "caused_by_correlation",
             result.caused_by_correlation.as_deref()
         ),
+        route = crate::tools::workspace::handoff_route_fields(&result.route),
         created_at = escape_graphql_string(&now),
     )
 }

@@ -17,6 +17,7 @@ mod catalog;
 mod dependencies;
 mod documents;
 mod hosted;
+mod declared_access;
 pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
 mod removal;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
@@ -537,6 +538,8 @@ pub(crate) async fn install_in_txn(
             !keep.contains(&key(document.collection.graphql_type(), id))
         })
         .collect();
+    let installer = txn.actor_did();
+    declared_access::ensure_admissible(&applied, &pack.agent_bindings, installer)?;
     let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied)
         .await?
         .with_removals(removals)?;

@@ -355,7 +355,53 @@ pub(crate) async fn stage_outcome(
         &session.session.agent_did,
     )
     .await?;
+    for reader in declared_outcome_readers(txn, &fire.identity.owner_did, &fire.task_id).await? {
+        stage_outcome_reader(txn, &doc_id, &reader).await?;
+    }
     Ok(true)
+}
+
+/// The stage Task's declared `outcome_readers`, read in the publication
+/// transaction. An unavailable Task declares nothing, so nothing is granted.
+async fn declared_outcome_readers(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    task_id: &str,
+) -> Result<Vec<String>> {
+    let Some((_, task)) = crate::store::config_client::read_desired_state_record_in_txn(
+        txn,
+        crate::Collection::Task,
+        owner,
+        task_id,
+    )
+    .await?
+    else {
+        return Ok(Vec::new());
+    };
+    let task: crate::documents::Task =
+        serde_json::from_value(task).context("decoding the outcome's Task")?;
+    Ok(task
+        .outcome_readers
+        .into_iter()
+        .map(|reader| reader.agent_did)
+        .collect())
+}
+
+/// Lean `Identity.Automation.publishOutcome`: applies one declared `reader`
+/// tuple on this FireOutcome, staged in the transaction that creates it.
+pub(crate) async fn stage_outcome_reader(
+    txn: &ConfigApplyTxn<'_>,
+    outcome_doc_id: &str,
+    reader_did: &str,
+) -> Result<()> {
+    txn.add_actor_relationship(
+        "FireOutcome",
+        outcome_doc_id,
+        "reader",
+        &identity::Did::new(reader_did)?,
+    )
+    .await?;
+    Ok(())
 }
 
 const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";

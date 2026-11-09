@@ -607,6 +607,15 @@ pub(crate) fn references_of(
         Collection::Task => {
             let doc: Task = decode(value)?;
             push(Collection::Agent, &doc.agent_did, "agent_did");
+            for reader in &doc.outcome_readers {
+                push(Collection::Agent, &reader.agent_did, "outcome_readers.agent_did");
+            }
+        }
+        Collection::RepositoryPlacement => {
+            let doc: RepositoryPlacement = decode(value)?;
+            for reader in &doc.readers {
+                push(Collection::Agent, &reader.agent_did, "readers.agent_did");
+            }
         }
         Collection::Trigger => {
             let doc: Trigger = decode(value)?;
@@ -673,7 +682,6 @@ pub(crate) fn references_of(
         | Collection::Schedule
         | Collection::EventSource
         | Collection::ToolServiceRegistry
-        | Collection::RepositoryPlacement
         | Collection::EvalDefinition
         | Collection::Skill
         | Collection::CallbackModule => {}

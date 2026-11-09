@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::WorkspaceReaderSelection;
+
 /// Reusable task definition; the trigger engine renders templates into an
 /// AgentRequest before the owned loop executes it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -24,6 +26,17 @@ pub struct Task {
     )]
     #[schemars(transform = crate::documents::accepts_null)]
     pub emit_outcome: bool,
+    /// Declared access policy (Lean `Identity.Automation.publishOutcome`): the
+    /// Agents that read this stage's FireOutcomes. Core grants exactly these
+    /// readers on each outcome it publishes, and nothing undeclared.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<WorkspaceReaderSelection>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
+    pub outcome_readers: Vec<WorkspaceReaderSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub goal_objective_template: Option<String>,

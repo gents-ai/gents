@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::trigger_delivery::HandoffRoute;
 
 use super::action_plan::{CreationPolicy, WorkspaceAdapterKind};
 use super::executor::RepositoryPlacementRef;
@@ -41,6 +42,9 @@ pub struct IsolatedWorkspaceDoc {
     pub lifecycle_state: String,
     pub caused_by_invocation_id: String,
     pub caused_by_correlation: String,
+    /// Stamped from the creating invocation's input; each receipt copies it.
+    #[serde(flatten)]
+    pub route: HandoffRoute,
 }
 
 impl IsolatedWorkspaceDoc {
@@ -131,6 +135,9 @@ pub struct WorkspaceReceiptDoc {
     pub diff_artifact: Option<String>,
     pub unresolved_conflicts: Option<String>,
     pub integration_instructions: Option<String>,
+    /// Copied from the workspace when the receipt is written.
+    #[serde(flatten)]
+    pub route: HandoffRoute,
 }
 
 pub trait WorkspaceDocuments {
@@ -216,6 +223,7 @@ pub(crate) fn new_isolated_workspace(
     lifecycle_state: &str,
     instruction_manifest: String,
     seal_hash: Option<String>,
+    route: &HandoffRoute,
 ) -> IsolatedWorkspaceDoc {
     IsolatedWorkspaceDoc {
         path_capability: identity.path_capability.clone(),
@@ -234,6 +242,7 @@ pub(crate) fn new_isolated_workspace(
         lifecycle_state: lifecycle_state.to_string(),
         caused_by_invocation_id: caused_by_invocation_id.to_string(),
         caused_by_correlation: caused_by_correlation.to_string(),
+        route: route.clone(),
     }
 }
 
@@ -355,7 +364,8 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
                     seal_hash: {seal_hash},
                     lifecycle_state: "{lifecycle_state}",
                     caused_by_invocation_id: "{caused_by_invocation_id}",
-                    caused_by_correlation: "{caused_by_correlation}"
+                    caused_by_correlation: "{caused_by_correlation}",
+                    {route}
                 }},
                 update: {{
                     lifecycle_state: "{lifecycle_state}",
@@ -377,6 +387,20 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
         lifecycle_state = escape_graphql_string(&doc.lifecycle_state),
         caused_by_invocation_id = escape_graphql_string(&doc.caused_by_invocation_id),
         caused_by_correlation = escape_graphql_string(&doc.caused_by_correlation),
+        route = handoff_route_fields(&doc.route),
+    )
+}
+
+/// The immutable route columns of a created native workflow document; an
+/// absent route writes nulls.
+pub(crate) fn handoff_route_fields(route: &HandoffRoute) -> String {
+    format!(
+        "handoff_id: {}, reply_session_id: {}, attempt: {}",
+        graphql_nullable_string(route.handoff_id.as_deref()),
+        graphql_nullable_string(route.reply_session_id.as_deref()),
+        route
+            .attempt
+            .map_or_else(|| "null".to_owned(), |attempt| attempt.to_string()),
     )
 }
 
@@ -476,7 +500,8 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
                     changed_files: {changed_files},
                     diff_artifact: {diff_artifact},
                     unresolved_conflicts: {unresolved_conflicts},
-                    integration_instructions: {integration_instructions}
+                    integration_instructions: {integration_instructions},
+                    {route}
                 }},
                 update: {{
                     head_sha: {head_sha},
@@ -501,6 +526,7 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
         diff_artifact = graphql_nullable_string(doc.diff_artifact.as_deref()),
         unresolved_conflicts = graphql_nullable_string(doc.unresolved_conflicts.as_deref()),
         integration_instructions = graphql_nullable_string(doc.integration_instructions.as_deref()),
+        route = handoff_route_fields(&doc.route),
     )
 }
 

@@ -19,7 +19,6 @@ mod workers;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use documents::load_invocation_with_access;
 pub use documents::reject_secret_bearing_callback_fields;
 #[cfg(test)]
 pub(crate) use documents::strip_secret_fields;

@@ -155,128 +155,6 @@ pub(crate) struct SourceSchemaCache {
     by_collection: tokio::sync::Mutex<RapidHashMap<String, Vec<String>>>,
 }
 
-async fn enrich_native_outcome_provenance(
-    access: &crate::ConfigAccess,
-    collection: &str,
-    source: &mut serde_json::Value,
-    owner: &str,
-) -> anyhow::Result<()> {
-    let (work_unit_id, invocation_id) = match collection {
-        "CallbackResult" => {
-            let source_owner = required_source_string(source, "owner_node_did")?;
-            anyhow::ensure!(
-                source_owner == owner,
-                "CallbackResult owner does not match Task agent"
-            );
-            (
-                required_source_string(source, "work_unit_id")?,
-                required_source_string(source, "invocation_id")?,
-            )
-        }
-        "WorkspaceReceipt" => {
-            let workspace_id = required_source_string(source, "workspace_id")?;
-            let expected_work_unit = required_source_string(source, "work_unit_id")?;
-            let workspace =
-                crate::tools::workspace::overlay::load_isolated_workspace_record_with_access(
-                    access,
-                    &workspace_id,
-                    owner,
-                )
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("WorkspaceReceipt has no node-scoped IsolatedWorkspace")
-                })?;
-            anyhow::ensure!(
-                workspace.workspace_id == workspace_id,
-                "workspace identity changed during lookup"
-            );
-            anyhow::ensure!(
-                workspace.owner_node_did == owner,
-                "IsolatedWorkspace owner does not match Task agent"
-            );
-            anyhow::ensure!(
-                workspace.work_unit_id.as_deref() == Some(expected_work_unit.as_str()),
-                "WorkspaceReceipt work_unit_id does not match IsolatedWorkspace"
-            );
-            (
-                expected_work_unit,
-                workspace.caused_by_invocation_id.ok_or_else(|| {
-                    anyhow::anyhow!("IsolatedWorkspace has no originating CallbackInvocation")
-                })?,
-            )
-        }
-        _ => anyhow::bail!("unsupported native provenance source {collection}"),
-    };
-
-    let invocation =
-        crate::triggers::callback::load_invocation_with_access(access, &invocation_id, owner)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("native source has no node-scoped CallbackInvocation")
-            })?;
-    anyhow::ensure!(
-        invocation.invocation_id == invocation_id && invocation.owner_node_did == owner,
-        "CallbackInvocation identity changed during lookup"
-    );
-    let input = invocation
-        .input
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("CallbackInvocation input is not an object"))?;
-    anyhow::ensure!(
-        input
-            .get("work_unit_id")
-            .and_then(serde_json::Value::as_str)
-            == Some(work_unit_id.as_str()),
-        "CallbackInvocation work_unit_id does not match native source"
-    );
-    let handoff_id = input
-        .get("handoff_id")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("CallbackInvocation has no authored handoff_id"))?;
-    let source = source
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("native event source is not an object"))?;
-    let mut route_fields = vec![(
-        "handoff_id",
-        serde_json::Value::String(handoff_id.to_owned()),
-    )];
-    if let Some(reply_session_id) = input
-        .get("reply_session_id")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        route_fields.push((
-            "reply_session_id",
-            serde_json::Value::String(reply_session_id.to_owned()),
-        ));
-    }
-    if let Some(attempt) = input.get("attempt").and_then(serde_json::Value::as_i64) {
-        route_fields.push(("attempt", serde_json::Value::Number(attempt.into())));
-    }
-    for (field, value) in route_fields {
-        if let Some(existing) = source.get(field) {
-            anyhow::ensure!(
-                existing == &value,
-                "native source {field} conflicts with CallbackInvocation input"
-            );
-        } else {
-            source.insert(field.to_owned(), value);
-        }
-    }
-    Ok(())
-}
-
-fn required_source_string(source: &serde_json::Value, field: &str) -> anyhow::Result<String> {
-    source
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("native event source has no {field}"))
-}
-
 impl SourceSchemaCache {
     pub(crate) async fn fields_for(
         &self,
@@ -1853,78 +1731,6 @@ impl EventSource {
                     continue;
                 }
             };
-            let mut doc_vars = doc_vars;
-            if trigger.task.emit_outcome
-                && trigger.fire_mode
-                    == crate::documents::automation::EventTriggerFireMode::PerDocument
-                && matches!(
-                    trigger.source_collection.as_str(),
-                    "CallbackResult" | "WorkspaceReceipt"
-                )
-            {
-                let Some(agent) = snapshot.agent(&trigger.task.agent_did) else {
-                    build.correlation_pending = true;
-                    build.deferred.push((
-                        trigger.trigger_id.clone(),
-                        "native outcome provenance".to_owned(),
-                    ));
-                    continue;
-                };
-                let owner = agent.node_did();
-                let access = identity::Did::new(&trigger.task.agent_did)
-                    .map_err(anyhow::Error::from)
-                    .and_then(|actor| {
-                        crate::ConfigAccess::local_managed_agent(
-                            self.node.clone(),
-                            actor,
-                            agent.agent_identity.as_ref(),
-                        )
-                        .map_err(anyhow::Error::from)
-                    });
-                let access = match access {
-                    Ok(access) => access,
-                    Err(error) => {
-                        build.correlation_pending = true;
-                        build.deferred.push((
-                            trigger.trigger_id.clone(),
-                            "native outcome provenance".to_owned(),
-                        ));
-                        tracing::warn!(trigger_id = %trigger.trigger_id, %error, "event source selected Agent access is unavailable");
-                        continue;
-                    }
-                };
-                let Some(doc) = doc_vars.as_mut() else {
-                    build.correlation_pending = true;
-                    build.deferred.push((
-                        trigger.trigger_id.clone(),
-                        "native outcome provenance".to_owned(),
-                    ));
-                    continue;
-                };
-                if let Err(error) = enrich_native_outcome_provenance(
-                    &access,
-                    &trigger.source_collection,
-                    doc,
-                    owner,
-                )
-                .await
-                {
-                    build.correlation_pending = true;
-                    build.deferred.push((
-                        trigger.trigger_id.clone(),
-                        "native outcome provenance".to_owned(),
-                    ));
-                    tracing::warn!(
-                        trigger_id = %trigger.trigger_id,
-                        source_collection = %trigger.source_collection,
-                        %source_doc_id,
-                        %error,
-                        "event source could not resolve native outcome provenance; skipping fire",
-                    );
-                    continue;
-                }
-            }
-
             let correlation = match trigger.correlation_field.as_deref() {
                 None => None,
                 Some(field) => match doc_vars
@@ -2354,5 +2160,64 @@ mod mailbox_owner_capture_tests {
         assert!(captured_source_field(&blank, "requester_did").is_err());
         let malformed = serde_json::json!({"handoff_id": 1.5});
         assert!(captured_source_field(&malformed, "handoff_id").is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_route_tests {
+    use gents_protocol::trigger_delivery::HandoffRoute;
+
+    fn route_json(route: &HandoffRoute) -> serde_json::Value {
+        serde_json::json!({
+            "handoff_id": route.handoff_id,
+            "reply_session_id": route.reply_session_id,
+            "attempt": route.attempt,
+        })
+    }
+
+    /// Lean `Triggers.NativeRoute`: the producer stamps its invocation's
+    /// route on the native document it writes, and delivery derives the same
+    /// route from that observed document alone.
+    #[test]
+    fn native_documents_carry_the_modeled_route() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().native_route_cases;
+        assert_eq!(cases.len(), 6);
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let stamped = HandoffRoute::from_fields(&case["input"]);
+            assert_eq!(route_json(&stamped), case["stamped"], "{name}");
+            let receipt = crate::tools::workspace::WorkspaceReceiptDoc {
+                path_capability_digest: "digest".into(),
+                receipt_id: "receipt".into(),
+                workspace_id: "workspace".into(),
+                produced_by_request_id: "request".into(),
+                produced_by_request_doc_id: "request-doc".into(),
+                kind: "writer".into(),
+                base_sha: "base".into(),
+                seal_hash: "seal".into(),
+                work_unit_id: Some("unit".into()),
+                caused_by_correlation: Some("unit".into()),
+                head_sha: None,
+                changed_files: None,
+                diff_artifact: None,
+                unresolved_conflicts: None,
+                integration_instructions: None,
+                route: stamped.clone(),
+            };
+            let mutation = crate::tools::workspace::workspace_receipt_create_mutation(&receipt);
+            assert!(
+                mutation.contains(&crate::tools::workspace::handoff_route_fields(&stamped)),
+                "{name}: {mutation}"
+            );
+            let observed = route_json(&stamped);
+            let delivered = HandoffRoute::from_fields(&observed);
+            assert_eq!(route_json(&delivered), case["delivered"], "{name}");
+            let emit = case["emit_outcome"].as_bool().unwrap();
+            assert_eq!(
+                !emit || delivered.handoff_id.is_some(),
+                case["admitted"].as_bool().unwrap(),
+                "{name}"
+            );
+        }
     }
 }

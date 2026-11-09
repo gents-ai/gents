@@ -236,6 +236,7 @@ pub async fn provision_read_only_workspace(
                 &selection.integrator_agent_did,
                 &invocation,
                 &correlation,
+                &Default::default(),
             )?;
             reservation.seal_hash = Some(super::adapter::base_tree_hash(
                 &repository.host_path,
@@ -299,6 +300,7 @@ pub async fn provision_read_only_workspace(
                     integrator_principal: selection.integrator_agent_did,
                     caused_by_invocation_id: invocation,
                     caused_by_correlation: correlation,
+                    route: Default::default(),
                     documents: &mut documents,
                 };
                 execute_create_workspace_plan(
@@ -337,6 +339,7 @@ pub async fn provision_read_only_workspace(
                     integrator_principal: selection.integrator_agent_did,
                     caused_by_invocation_id: invocation,
                     caused_by_correlation: correlation,
+                    route: Default::default(),
                     documents: &mut documents,
                 };
                 execute_freeze_workspace_base_plan(

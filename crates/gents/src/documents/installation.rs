@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::WorkspaceReaderSelection;
+
 /// MCP connection configuration; discovered tools and health are observations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +75,17 @@ pub struct RepositoryPlacement {
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
+    /// Declared access policy (Lean `Identity.PackPlacementReaders`): the
+    /// Agents whose workspace effects read this placement. The publishing
+    /// actor grants exactly these readers, and nothing undeclared.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<WorkspaceReaderSelection>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
+    pub readers: Vec<WorkspaceReaderSelection>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",

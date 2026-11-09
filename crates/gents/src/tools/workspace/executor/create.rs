@@ -34,6 +34,7 @@ pub(crate) fn prepare_workspace_reservation(
     integrator: &str,
     invocation: &str,
     correlation: &str,
+    route: &gents_protocol::trigger_delivery::HandoffRoute,
 ) -> Result<super::super::documents::IsolatedWorkspaceDoc> {
     anyhow::ensure!(
         repository.enabled
@@ -62,6 +63,7 @@ pub(crate) fn prepare_workspace_reservation(
         "provisioning",
         manifest,
         None,
+        route,
     ))
 }
 
@@ -381,6 +383,7 @@ fn persist_docs(
         lifecycle_state,
         instruction_manifest,
         None,
+        &ctx.route,
     );
     let host_path = dest
         .to_str()

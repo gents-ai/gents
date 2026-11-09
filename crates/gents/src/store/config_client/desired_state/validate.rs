@@ -184,17 +184,7 @@ pub fn validate_event_trigger_document_fields(
             };
             let own_field =
                 |name: &String| !name.starts_with('_') && !is_aggregate_pseudo_field(name);
-            let resolved_native_route_field = task.emit_outcome
-                && source.group.is_none()
-                && matches!(
-                    source.source_collection.as_str(),
-                    "CallbackResult" | "WorkspaceReceipt"
-                )
-                && matches!(name.as_str(), "handoff_id" | "reply_session_id" | "attempt");
-            if name.starts_with('_')
-                || declared.contains_key(name) && own_field(name)
-                || resolved_native_route_field
-            {
+            if name.starts_with('_') || declared.contains_key(name) && own_field(name) {
                 continue;
             }
             anyhow::bail!(
@@ -259,7 +249,7 @@ pub(super) async fn validate_outcome_source_fields(
             written.insert((document.collection, id.to_owned()));
         }
     }
-    for (trigger_id, task_id, event_source_id, collection, per_document) in
+    for (trigger_id, task_id, event_source_id, collection, _) in
         references.outcome_event_deliveries()
     {
         if !written.contains(&(Collection::Trigger, trigger_id.clone()))
@@ -272,12 +262,6 @@ pub(super) async fn validate_outcome_source_fields(
             continue;
         };
         let declared = fields.get("handoff_id");
-        if declared.is_none()
-            && per_document
-            && matches!(collection.as_str(), "CallbackResult" | "WorkspaceReceipt")
-        {
-            continue;
-        }
         let message = match declared {
             Some(declared) if declared.named_type() == "String" => continue,
             Some(declared) => format!(
