@@ -1854,10 +1854,17 @@ theorem unlinked_agent_is_not_visible_to_runtime :
       relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩] }
       "runtime" "agents" "agent" "read" = false := by native_decide
 
-/-- The desktop User, its key custody, and its P2P identity belong to the
-client, independently of a managed runtime's Node identity. A runtime or
-binding reset can retire its local cache and binding; only an explicit full
-client reset retires the independent client identity. -/
+/-- The User key is the machine's one User identity, shared by the desktop,
+the CLI and the shims, and the owner `init` records on every local home it
+provisions (`NodeProvisioning.admitLocalHome`). The User key, its key custody
+and the desktop's P2P identity are independent of a runtime's Node identity:
+a runtime or binding reset retires only its local cache and binding.
+
+Decision (user, #3609): an explicit full desktop reset also retires the User
+key and its metadata. The user accepted the consequence: the next start
+creates a new User key, so the CLI and shims change identity with the desktop,
+and every home the retired key provisioned is refused as foreign-owned until
+it is started fresh (`NodeProvisioning.regenerated_key_refuses_prior_home`). -/
 inductive DesktopResetAsset where
   | cache | binding | upgrade | userKey | userMetadata | p2pKey | custody | peers
   deriving BEq, DecidableEq
@@ -1876,18 +1883,8 @@ theorem runtime_reset_retires_cache_and_binding :
      desktopResetRetires false .upgrade] = [true, true, true] := by
   decide
 
-/-- Managed client route approval follows a verified request and the owning
-User's document grant plus native node permissions. Route admission alone is
-not document authority, and the runtime cannot substitute for the User. -/
-def managedClientMayApprove (requestMatches ownerGrant nodeGrant : Bool) : Bool :=
-  requestMatches && ownerGrant && nodeGrant
-
-theorem managed_approval_requires_user_and_node_grants (requestMatches nodeGrant : Bool) :
-    managedClientMayApprove requestMatches false nodeGrant = false := by
-  cases requestMatches <;> cases nodeGrant <;> decide
-
-theorem managed_approval_requires_matching_request (ownerGrant nodeGrant : Bool) :
-    managedClientMayApprove false ownerGrant nodeGrant = false := by
-  simp [managedClientMayApprove]
+theorem full_reset_retires_user_key :
+    [desktopResetRetires true .userKey, desktopResetRetires true .userMetadata] = [true, true] := by
+  decide
 
 end Identity.Configuration

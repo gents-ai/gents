@@ -1,4 +1,5 @@
 import Proofs.Identity.State
+import Proofs.RuntimeReconcile.HttpAccess
 
 namespace Identity.NodeProvisioning
 
@@ -129,5 +130,126 @@ theorem runtime_refuses_without_enabled_nac (status : NacStatus)
 theorem disabled_nac_is_refused_at_startup :
     runtimeMayStart .disabledTemporarily = false ∧ runtimeMayStart .notConfigured = false ∧
       runtimeMayStart .enabled = true := by decide
+
+/-! Local home ownership and local startup (#3609, #3611). -/
+
+/-- A provisioned local home as its `init.json` records it: the home's Node
+DID and the DID `init` granted HouseholdOwner (`owner_did`). Homes written
+before one User key per machine carry no owner. -/
+structure HomeRecord where
+  node : DID
+  owner : Option DID
+  deriving DecidableEq, Repr
+
+/-- The owner a fresh bootstrap records: the machine's User DID, exactly when
+the bootstrap may grant (`bootstrapMayGrant`); a refused bootstrap records no
+owner. -/
+def provisionedOwner (user : DID) (o : BootstrapObservation) : Option DID :=
+  if bootstrapMayGrant o then some user else none
+
+inductive LocalHomeAdmission where
+  | serve
+  | refuseFreshStart
+  deriving DecidableEq, Repr
+
+/-- A machine has one User key (`<desktop root>/principal.ed25519.key`),
+shared by the desktop, the CLI and the shims; the desktop's embedded node
+already signs with it and remote enrollment presents its DID. `init` grants
+that DID HouseholdOwner, so the local home's admin is the User itself and the
+desktop reads the home over HTTP as its admin without enrolling into its own
+node. Decision (user, #3609): a separate client key that the desktop
+self-paired as admin is removed, and the client reaches its local home only
+when the home records this User as owner.
+
+A home without an owner (written under the two-key scheme) or with another
+owner is refused with a fresh-start remedy, never converted: granting the
+User admin on such a home would need an authority the client does not hold,
+and re-granting through the old self-pairing path is exactly what this removes
+(a failed grant could roll back the home's only admin). -/
+def admitLocalHome (user : DID) (h : HomeRecord) : LocalHomeAdmission :=
+  if h.owner = some user then .serve else .refuseFreshStart
+
+theorem admitted_iff_user_owns (user : DID) (h : HomeRecord) :
+    admitLocalHome user h = .serve ↔ h.owner = some user := by
+  unfold admitLocalHome
+  split <;> simp_all
+
+/-- A home provisioned before one User key per machine records no owner. -/
+theorem legacy_home_refused (user node : DID) :
+    admitLocalHome user ⟨node, none⟩ = .refuseFreshStart := by
+  simp [admitLocalHome]
+
+/-- A home owned by any other DID is refused. This includes every home the
+previous User key provisioned after a desktop full reset retired that key and
+a new one was created: such homes stay refused until started fresh. -/
+theorem foreign_owner_refused (user other node : DID) (foreign : other ≠ user) :
+    admitLocalHome user ⟨node, some other⟩ = .refuseFreshStart := by
+  simp [admitLocalHome, foreign]
+
+theorem provisioned_home_admitted (user node : DID) (o : BootstrapObservation)
+    (granted : bootstrapMayGrant o = true) :
+    admitLocalHome user ⟨node, provisionedOwner user o⟩ = .serve := by
+  simp [admitLocalHome, provisionedOwner, granted]
+
+theorem refused_bootstrap_home_refused (user node : DID) (o : BootstrapObservation)
+    (refused : bootstrapMayGrant o = false) :
+    admitLocalHome user ⟨node, provisionedOwner user o⟩ = .refuseFreshStart := by
+  simp [admitLocalHome, provisionedOwner, refused]
+
+/-- A key created after a full reset does not inherit the homes its
+predecessor provisioned (`foreign_owner_refused`). -/
+theorem regenerated_key_refuses_prior_home (previous current node : DID)
+    (o : BootstrapObservation) (regenerated : previous ≠ current) :
+    admitLocalHome current ⟨node, provisionedOwner previous o⟩ = .refuseFreshStart := by
+  unfold provisionedOwner
+  split
+  · exact foreign_owner_refused current previous node regenerated
+  · exact legacy_home_refused current node
+
+/-- Steps a native recorder reports while the client brings its local home
+up. `enroll` and `approve` name the removed self-pairing steps so a recorder
+can report them; local startup never produces them. -/
+inductive LocalStartupStep where
+  | provision
+  | launch
+  | statusRead (signer : DID)
+  | recordLocal
+  | clientStart
+  | enroll
+  | approve
+  deriving DecidableEq, Repr
+
+/-- Provision (a no-op on an initialized home), launch, read the private
+status as the User, record the local node over HTTP only, then start the
+client. The status read is local readiness. -/
+def localStartup (user : DID) : List LocalStartupStep :=
+  [.provision, .launch, .statusRead user, .recordLocal, .clientStart]
+
+/-- No enrollment or approval occurs during local startup, so none precedes
+local readiness. -/
+theorem local_startup_has_no_enrollment (user : DID) (step : LocalStartupStep)
+    (h : step ∈ localStartup user) : step ≠ .enroll ∧ step ≠ .approve := by
+  simp [localStartup] at h
+  rcases h with h | h | h | h | h <;> subst h <;> simp
+
+theorem local_status_read_signed_by_user (user signer : DID)
+    (h : LocalStartupStep.statusRead signer ∈ localStartup user) : signer = user := by
+  simp [localStartup] at h
+  exact h
+
+/-- Local readiness (the User's private status read) precedes recording the
+local node and starting the client. -/
+theorem local_readiness_precedes_client (user : DID) :
+    (localStartup user).take 3 = [.provision, .launch, .statusRead user] := by
+  rfl
+
+/-- The provisioned owner is classified `admin` by native NAC, and the private
+`/status` read is dispatched as that admin, never as the served node. -/
+theorem provisioned_user_reads_private_status (user node : DID) (o : BootstrapObservation)
+    (granted : bootstrapMayGrant o = true) :
+    admitLocalHome user ⟨node, provisionedOwner user o⟩ = .serve ∧
+      RuntimeReconcile.HttpAccess.decide true .bootstrap .admin = .operator ∧
+      RuntimeReconcile.HttpAccess.readsAs true .bootstrap .admin = some .admin := by
+  refine ⟨provisioned_home_admitted user node o granted, rfl, rfl⟩
 
 end Identity.NodeProvisioning

@@ -82,4 +82,43 @@ def runtimeNacCasesJson : String := (toJson ([NacStatus.notConfigured, .enabled,
     Json.mkObj [("status", toJson status.name),
       ("may_start", toJson (runtimeMayStart status))])).compress
 
+def localUser : DID := "did:key:user"
+def localNode : DID := "did:key:node"
+def previousUser : DID := "did:key:previous-user"
+
+def localStartupStepToken : LocalStartupStep → String
+  | .provision => "provision"
+  | .launch => "launch"
+  | .statusRead _ => "status_read"
+  | .recordLocal => "record_local"
+  | .clientStart => "client_start"
+  | .enroll => "enroll"
+  | .approve => "approve"
+
+def localStartupStepJson (step : LocalStartupStep) : Json :=
+  match step with
+  | .statusRead signer => Json.mkObj [("step", toJson (localStartupStepToken step)), ("signer", toJson signer)]
+  | _ => Json.mkObj [("step", toJson (localStartupStepToken step))]
+
+def localStartupCasesJson : String := (toJson ([("clean_home", localUser)].map fun (name, user) =>
+  Json.mkObj [("name", toJson name), ("user", toJson user),
+    ("steps", toJson ((localStartup user).map localStartupStepJson))])).compress
+
+def localHomeAdmissionToken : LocalHomeAdmission → String
+  | .serve => "serve"
+  | .refuseFreshStart => "refuse_fresh_start"
+
+def localHomeAdmissionCases : List (String × DID × HomeRecord) :=
+  [("provisioned_by_user", localUser, ⟨localNode, provisionedOwner localUser freshBootstrap⟩),
+   ("bootstrap_refused", localUser,
+     ⟨localNode, provisionedOwner localUser { freshBootstrap with exclusive := false }⟩),
+   ("legacy_two_key_home", localUser, ⟨localNode, none⟩),
+   ("foreign_owner", localUser, ⟨localNode, some "did:key:other"⟩),
+   ("regenerated_user_key", localUser, ⟨localNode, provisionedOwner previousUser freshBootstrap⟩)]
+
+def localHomeAdmissionCasesJson : String := (toJson (localHomeAdmissionCases.map fun (name, user, home) =>
+  Json.mkObj [("name", toJson name), ("user", toJson user), ("node", toJson home.node),
+    ("owner", toJson home.owner),
+    ("expected", toJson (localHomeAdmissionToken (admitLocalHome user home)))])).compress
+
 end Identity.NodeProvisioningConformance

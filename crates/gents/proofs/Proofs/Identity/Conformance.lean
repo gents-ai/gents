@@ -612,7 +612,6 @@ def taskCheckpointCases : List Json :=
 
 def json : Json := Json.mkObj
   [("name", toJson "user-node-agents-mixed-session-ownership-policy-followup"), ("policy_yaml", toJson policyYaml),
-   ("managed_client_handoff_cases", toJson ([] : List Json)),
    ("desktop_reset_cases", toJson ([] : List Json)),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
@@ -652,7 +651,6 @@ theorem detached_parent_grant_trace :
 
 def json : Json := Json.mkObj
   [("name", toJson "operations-parent-publication"), ("policy_yaml", toJson policyYaml),
-   ("managed_client_handoff_cases", toJson ([] : List Json)),
    ("desktop_reset_cases", toJson ([] : List Json)),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
@@ -1737,12 +1735,6 @@ def inferenceSelfConfigCase (phase actor document : String) : Json :=
 
 def json : Json := Json.mkObj
   [("name", toJson "configuration-explicit-grants"),
-   ("managed_client_handoff_cases", toJson (([false, true] : List Bool).flatMap fun request =>
-     ([false, true] : List Bool).flatMap fun owner =>
-     ([false, true] : List Bool).map fun node =>
-       Json.mkObj [("request", toJson request), ("owner", toJson owner),
-         ("node", toJson node),
-         ("approve", toJson (Configuration.managedClientMayApprove request owner node))])),
    ("desktop_reset_cases", toJson (([false, true] : List Bool).flatMap fun full =>
      ([("cache", Configuration.DesktopResetAsset.cache),
        ("binding", .binding), ("upgrade", .upgrade), ("user_key", .userKey),
@@ -2189,7 +2181,6 @@ theorem access_trace : HouseholdFixture.observed initial actions =
 
 def json : Json := Json.mkObj
   [("name", toJson "secret-configuration-publication"), ("policy_yaml", toJson policyYaml),
-   ("managed_client_handoff_cases", toJson ([] : List Json)),
    ("desktop_reset_cases", toJson ([] : List Json)),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),

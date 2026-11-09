@@ -8,7 +8,7 @@ abbrev AgentLabel := String
 abbrev CreationId := String
 abbrev NodeKey := String
 
-/-- User signing keys remain on clients; desktop and CLI have distinct client identities.
+/-- User signing keys remain on clients; a machine's desktop, CLI and shims share one User key.
 Users sign configuration and plugin installation. A user or an authorized Agent
 may create an Agent under its own identity; the runtime never signs as a user. The node key authenticates P2P
 pairing and peer admission, creates and updates schemas and indexes, registers policies,
