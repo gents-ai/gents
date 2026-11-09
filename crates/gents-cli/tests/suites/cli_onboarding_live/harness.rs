@@ -56,7 +56,7 @@ pub(super) struct LiveBox {
 pub(super) struct InitializedHome {
     pub(super) home: PathBuf,
     pub(super) node_did: String,
-    pub(super) default_agent_id: String,
+    pub(super) default_agent_did: String,
     pub(super) profile_id: String,
 }
 
@@ -205,7 +205,7 @@ impl LiveBox {
         Ok(InitializedHome {
             home,
             node_did: node_did_from_init(&init)?,
-            default_agent_id: init["default_agent_id"]
+            default_agent_did: init["default_agent_did"]
                 .as_str()
                 .context("init reports a default agent")?
                 .to_string(),
@@ -224,7 +224,13 @@ impl LiveBox {
     ) -> Result<String> {
         let output = self
             .gents()
-            .args(["config", "agent", "clone", &home.default_agent_id, "--home"])
+            .args([
+                "config",
+                "agent",
+                "clone",
+                &home.default_agent_did,
+                "--home",
+            ])
             .arg(&home.home)
             .args(["--graphql", &graphql_url(HTTP_PORT)])
             .args(["--display-name", display_name])
@@ -237,7 +243,7 @@ impl LiveBox {
             String::from_utf8_lossy(&output.stderr)
         );
         let cloned: Value = serde_json::from_slice(&output.stdout)?;
-        let agent = cloned["agent_id"]
+        let agent = cloned["agent_did"]
             .as_str()
             .context("clone reports its agent")?
             .to_string();

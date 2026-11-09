@@ -431,7 +431,7 @@ async fn no_agent_route_with_a_pinned_agent() -> Result<()> {
     let shim = AgentShim::start(
         |default_agent| {
             vec![
-                "--codex-shim-agent-id".to_string(),
+                "--codex-shim-agent-did".to_string(),
                 default_agent.to_string(),
             ]
         },

@@ -90,13 +90,12 @@ pub(crate) async fn launch_interface(
     install_hint: &str,
     notice_after_exit: Option<&str>,
 ) -> Result<()> {
-    let status = gents::tools::exec::native_spawn::spawn_tokio(
-        tokio::process::Command::new(bin).args(args),
-    )
-    .with_context(|| format!("launching `{bin}`: {install_hint}"))?
-    .wait()
-    .await
-    .with_context(|| format!("waiting for `{bin}`"))?;
+    let status =
+        gents::tools::exec::native_spawn::spawn_tokio(tokio::process::Command::new(bin).args(args))
+            .with_context(|| format!("launching `{bin}`: {install_hint}"))?
+            .wait()
+            .await
+            .with_context(|| format!("waiting for `{bin}`"))?;
     if let Some(notice) = notice_after_exit {
         eprintln!("{notice}");
     }
@@ -186,7 +185,7 @@ enum PreflightDecision {
 fn preflight_decision(identity: &RuntimeIdentity, agent: &str) -> PreflightDecision {
     let Some(runnable) = &identity.runnable_agents else {
         return PreflightDecision::Refuse(
-            "`--agent` needs a local runtime with no pinned agent, and this one runs with `--codex-shim-agent-id` or `--codex-shim-public-url`."
+            "`--agent` needs a local runtime with no pinned agent, and this one runs with `--codex-shim-agent-did` or `--codex-shim-public-url`."
                 .to_string(),
         );
     };

@@ -857,10 +857,10 @@ def codexShimBindingCasesJson : String :=
 structure CodexShimConnectionAdmissionCase where
   witness : String
   leanTheorems : List String
-  agent : AgentId
-  runnable : List AgentId
+  agent : AgentDid
+  runnable : List AgentDid
 
-def codexShimAdmissionSnapshot (runnable : List AgentId) : ActiveRuntimeSnapshot :=
+def codexShimAdmissionSnapshot (runnable : List AgentDid) : ActiveRuntimeSnapshot :=
   let published := runnable.foldr insert ∅
   { generation := 1
   , defaultAgent := 0

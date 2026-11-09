@@ -107,7 +107,14 @@ impl ServedHome {
             )?;
             run_cli_json(
                 &home,
-                &["config", "pack", "wire", "fixture/job_fixture", "--agent", &agent_did],
+                &[
+                    "config",
+                    "pack",
+                    "wire",
+                    "fixture/job_fixture",
+                    "--agent",
+                    &agent_did,
+                ],
             )?;
         }
         let mut serve = spawn_server(&home, port)?;

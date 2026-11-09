@@ -2,7 +2,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use super::{
-    parse_agent_id, parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg,
+    parse_agent_did, parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg,
     ToolCeilingArg,
 };
 
@@ -261,8 +261,8 @@ pub(crate) struct CodexArgs {
     pub(crate) remote_auth_token_env: Option<String>,
     #[arg(
         long,
-        value_name = "AGENT_ID",
-        value_parser = parse_agent_id,
+        value_name = "AGENT_DID",
+        value_parser = parse_agent_did,
         help = "Agent to open instead of the node's default; requires a local ws:// endpoint"
     )]
     pub(crate) agent: Option<String>,

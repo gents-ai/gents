@@ -139,7 +139,7 @@ fn parse_session_id(value: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
-fn parse_agent_id(value: &str) -> Result<String, String> {
+fn parse_agent_did(value: &str) -> Result<String, String> {
     crate::require_non_empty("agent", value)
         .map(str::to_string)
         .map_err(|error| error.to_string())
@@ -159,7 +159,7 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     /// Agent to open or message instead of the node's default. See `gents config agent list`.
-    #[arg(long, value_name = "AGENT_ID", value_parser = parse_agent_id)]
+    #[arg(long, value_name = "AGENT_DID", value_parser = parse_agent_did)]
     pub(crate) agent: Option<String>,
     /// Send MESSAGE to the agent, print its reply and exit, without opening an interface.
     #[arg(short = 'p', long = "print", value_name = "MESSAGE", value_parser = parse_message)]

@@ -1,11 +1,9 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
 use gents::store::config_client::GraphqlEndpoint;
 use gents::store::graphql::escape_graphql_string;
-use gents::tools::builtin::self_config::agent::derive_agent_id;
 use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
 use serde_json::Value;
@@ -22,10 +20,10 @@ You have the same tools as The Engineer: commands run as the user, and the tool 
 Do what you are asked, completely and without ceremony. Read before you change anything, keep changes \
 to what was asked, and ask before anything destructive or hard to undo.";
 
-/// Returns the yolo agent's ID and whether this call made it. The agent materializer derives
-/// an ID from the display name, so the first yolo agent gets this one and later runs find it
-/// rather than make another. It clones the home's default agent, The Engineer on a home that
-/// `gents` set up, so it runs with the same Tools document.
+/// Returns the yolo agent's DID and whether this call made it. An agent's DID is derived
+/// from a fresh creation nonce, so a later run finds the yolo agent by its display name and
+/// description rather than make another. It clones the node's default agent, The Engineer on
+/// a home that `gents` set up, so it runs with the same Tools document.
 pub(super) async fn ensure_agent(
     home: &Path,
     config: &StoredInitConfig,
@@ -33,41 +31,48 @@ pub(super) async fn ensure_agent(
 ) -> Result<(String, bool)> {
     let access = ConfigAccess::Graphql(graphql.clone());
     let node_did = config.node_did.as_str();
-    let yolo = derive_agent_id(node_did, DISPLAY_NAME, &BTreeMap::new());
-    let source = gents::default_agent_id_for_node(node_did);
+    let source = default_agent(&access, node_did).await?;
     let rows = crate::graphql_rows(
         &access,
         "Agent",
         &format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{node}"}}, agent_id: {{_in: ["{yolo}", "{source}"]}}}}) {{ agent_id enabled inference_profile_id }} }}"#,
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{node}"}}}}) {{ agent_did display_name description enabled inference_profile_id created_at }} }}"#,
             node = escape_graphql_string(node_did),
-            yolo = escape_graphql_string(&yolo),
-            source = escape_graphql_string(&source),
         ),
     )
     .await?;
-    let find = |id: &str| rows.iter().find(|row| row["agent_id"] == id);
-    if let Some(agent) = find(&yolo) {
-        if agent["enabled"] == Value::Bool(false) {
-            bail!(
-                "the yolo agent {yolo} is disabled. Remove it with `gents config agent rm {yolo} --home {home}`, then run `gents --yolo` again to make a new one.",
-                home = crate::shell_word(home)
-            );
-        }
-        return Ok((yolo, false));
+    let mut yolos: Vec<&Value> = rows
+        .iter()
+        .filter(|row| row["display_name"] == DISPLAY_NAME && row["description"] == DESCRIPTION)
+        .collect();
+    yolos.sort_by_key(|row| (row["created_at"].as_str(), row["agent_did"].as_str()));
+    if let Some(agent) = yolos.iter().find(|row| row["enabled"] == Value::Bool(true)) {
+        let yolo = agent["agent_did"]
+            .as_str()
+            .context("the yolo agent row has no agent_did")?;
+        return Ok((yolo.to_owned(), false));
     }
-    let profile_id = find(&source)
+    if let Some(disabled) = yolos.first().and_then(|row| row["agent_did"].as_str()) {
+        bail!(
+            "the yolo agent {disabled} is disabled. Remove it with `gents config agent rm {disabled} --home {home}`, then run `gents --yolo` again to make a new one.",
+            home = crate::shell_word(home)
+        );
+    }
+    let profile_id = rows
+        .iter()
+        .find(|row| row["agent_did"] == source.as_str())
         .and_then(|agent| agent["inference_profile_id"].as_str())
         .with_context(|| {
             format!("this home has no default agent {source} with a profile to give the yolo agent")
         })?
         .to_owned();
-    let identity = crate::load_initialized_home_identity(home, config)?;
+    let identity_binding = gents_desktop_core::agent_identity::provision(graphql, node_did).await?;
+    let yolo = identity_binding.agent_did.clone();
     let made = configure_agent(
         &access,
         node_did,
-        identity.as_ref(),
         &ConfigureAgentParams {
+            identity_binding: Some(identity_binding),
             action: "clone".into(),
             clone_from: Some(source.clone()),
             display_name: StringUpdate::Set(DISPLAY_NAME.into()),
@@ -81,24 +86,43 @@ pub(super) async fn ensure_agent(
     .await?;
     let made: Value = serde_json::from_str(&made).context("reading the made agent")?;
     ensure!(
-        made["agent_id"] == yolo.as_str(),
+        made["agent_did"] == yolo.as_str(),
         "the yolo agent was made as {}, not {yolo}",
-        made["agent_id"]
+        made["agent_did"]
     );
     eprintln!("Made the yolo agent {yolo}, with the tools of {source}.");
     wait_until_assigned(&access, node_did, &yolo).await?;
     Ok((yolo, true))
 }
 
+/// The node's default agent, as its Node document names it.
+pub(super) async fn default_agent(access: &ConfigAccess, node_did: &str) -> Result<String> {
+    let rows = crate::graphql_rows(
+        access,
+        "Node",
+        &format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 1) {{ default_agent_did }} }}"#,
+            escape_graphql_string(node_did)
+        ),
+    )
+    .await?;
+    rows.first()
+        .and_then(|row| row["default_agent_did"].as_str())
+        .map(str::trim)
+        .filter(|did| !did.is_empty())
+        .map(str::to_owned)
+        .with_context(|| format!("node {node_did} names no default agent"))
+}
+
 /// The runtime takes on a new agent when it next reconciles, and refuses a request for one it
 /// has not taken on. Only the NodeReadiness document it then publishes says so to another
 /// process, so this bounded wait reads that document again; it blocks no runtime thread.
-async fn wait_until_assigned(access: &ConfigAccess, node_did: &str, agent_id: &str) -> Result<()> {
+async fn wait_until_assigned(access: &ConfigAccess, node_did: &str, agent_did: &str) -> Result<()> {
     let deadline = Instant::now() + ASSIGN_WAIT;
-    while !assigned(access, node_did, agent_id).await? {
+    while !assigned(access, node_did, agent_did).await? {
         if Instant::now() >= deadline {
             bail!(
-                "this home's runtime has not taken on the yolo agent {agent_id} after {} s. Check `gents status`, then run `gents --yolo` again.",
+                "this home's runtime has not taken on the yolo agent {agent_did} after {} s. Check `gents status`, then run `gents --yolo` again.",
                 ASSIGN_WAIT.as_secs()
             );
         }
@@ -107,7 +131,7 @@ async fn wait_until_assigned(access: &ConfigAccess, node_did: &str, agent_id: &s
     Ok(())
 }
 
-async fn assigned(access: &ConfigAccess, node_did: &str, agent_id: &str) -> Result<bool> {
+async fn assigned(access: &ConfigAccess, node_did: &str, agent_did: &str) -> Result<bool> {
     let rows = crate::graphql_rows(
         access,
         "NodeReadiness",
@@ -127,7 +151,7 @@ async fn assigned(access: &ConfigAccess, node_did: &str, agent_id: &str) -> Resu
                 && snapshot
                     .agents
                     .iter()
-                    .any(|agent| agent.agent_id == agent_id)
+                    .any(|agent| agent.agent_did == agent_did)
         }),
     )
 }

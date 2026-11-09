@@ -101,7 +101,10 @@ fn plugin_rows(
         }
     };
     let owner = record.owner_pack_coordinate.as_deref();
-    let wire = format!("gents config pack wire {plugin} --agent {}", agent.agent_did);
+    let wire = format!(
+        "gents config pack wire {plugin} --agent {}",
+        agent.agent_did
+    );
     let Some(block) = &entry.job else {
         if record.declaration.job.0 {
             rows.push(row(

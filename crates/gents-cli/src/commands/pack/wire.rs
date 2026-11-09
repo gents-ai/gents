@@ -213,7 +213,8 @@ struct WirePlan<'a> {
 impl WirePlan<'_> {
     async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<gents::documents::WireReport> {
         let agent_did = &self.request.agent;
-        let missing = |link: &str| format!("{link}. Next: gents config tools explain --agent {agent_did}");
+        let missing =
+            |link: &str| format!("{link}. Next: gents config tools explain --agent {agent_did}");
         let (context, tools) = load_agent_context_and_tools_in_txn(txn, self.owner, agent_did)
             .await
             .with_context(|| missing(&format!("cannot read the Tools of {agent_did}")))?;

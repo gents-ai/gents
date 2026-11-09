@@ -9,7 +9,6 @@ use gents::store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
 use gents::store::local::home::INIT_PENDING_FILE_NAME;
-use gents_protocol::error_chain::ErrorChain;
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 use crate::{DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME};
@@ -25,6 +24,7 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
 #[cfg(not(test))]
 fn default_home_dir() -> PathBuf {
     use gents::store::local::home::HomeError;
+    use gents_protocol::error_chain::ErrorChain;
     match gents::store::local::home::default_home_dir() {
         Ok(home) => home,
         Err(HomeError::HomeDirUnresolved) => PathBuf::from(".gents"),

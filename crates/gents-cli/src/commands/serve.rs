@@ -1095,7 +1095,7 @@ async fn serve_foreground(
                 timeout_secs: args.codex_shim_timeout_secs,
                 poll_ms: args.codex_shim_poll_ms,
                 runnable: runnable_rx.clone(),
-                agent_routes: args.codex_shim_agent_id.is_none()
+                agent_routes: args.codex_shim_agent_did.is_none()
                     && args.codex_shim_public_url.is_none(),
                 has_public_url: args.codex_shim_public_url.is_some(),
                 grok_socket: grok_socket_held.clone(),

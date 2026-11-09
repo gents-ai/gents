@@ -111,7 +111,9 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
         "expected missing mcp_port error in row: {row}"
     );
 
-    let table_output = fixture.run(&["config", "mcp", "probe", &service_id]).await?;
+    let table_output = fixture
+        .run(&["config", "mcp", "probe", &service_id])
+        .await?;
     assert!(
         table_output.status.success(),
         "{}",
@@ -192,7 +194,9 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
     let node_home = tempdir.path().join("node-home");
 
     let fixture = McpFixture::new(tempdir.path(), &node_home, "mcp-probe-missing").await?;
-    let output = fixture.run(&["config", "mcp", "probe", "missing-service"]).await?;
+    let output = fixture
+        .run(&["config", "mcp", "probe", "missing-service"])
+        .await?;
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr)?;
     assert!(
