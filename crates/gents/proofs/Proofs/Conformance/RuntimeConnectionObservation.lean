@@ -7,7 +7,6 @@ def statusName : Status → String
   | .connecting => "connecting"
   | .connected => "connected"
   | .disconnected => "disconnected"
-  | .denied => "denied"
   | .noEndpoint => "noEndpoint"
 
 def eventName : Event → String
@@ -15,7 +14,7 @@ def eventName : Event → String
   | .subscriptionsReady => "subscriptionsReady"
   | .snapshotSucceeded => "snapshotSucceeded"
   | .transportFailed => "transportFailed"
-  | .permissionDenied => "permissionDenied"
+  | .refused => "refused"
   | .renewed => "renewed"
   | .endpointMissing => "endpointMissing"
 
@@ -28,23 +27,22 @@ def reasonName : Reason → String
   | .connected => "connected"
   | .connecting => "connecting"
   | .disconnected => "disconnected"
-  | .permissionDenied => "permission_denied"
   | .noEndpoint => "no_endpoint"
 
 def streamEndName : StreamEnd → String
   | .renewalDue => "renewalDue"
   | .completed => "completed"
-  | .failed true => "deniedFailure"
+  | .failed true => "refusedFailure"
   | .failed false => "transportFailure"
 
 def optionJson : Option String → String
   | none => "null"
   | some value => "\"" ++ value ++ "\""
 
-def statuses : List Status := [.connecting, .connected, .disconnected, .denied, .noEndpoint]
+def statuses : List Status := [.connecting, .connected, .disconnected, .noEndpoint]
 
 def events : List Event := [.sourceStarted, .subscriptionsReady, .snapshotSucceeded,
-  .transportFailed, .permissionDenied, .renewed, .endpointMissing]
+  .transportFailed, .refused, .renewed, .endpointMissing]
 
 def transitionsJson : String :=
   let cases := statuses.flatMap fun state => events.map fun event =>
@@ -71,7 +69,6 @@ def streamEndsJson : String :=
 def snapshotOutcomeName : SnapshotOutcome → String
   | .succeeded => "succeeded"
   | .refused => "refused"
-  | .rootWithheld => "rootWithheld"
   | .unreachable => "unreachable"
 
 def armedEventsJson : String :=
@@ -86,7 +83,7 @@ def armedJson : String :=
   "[" ++ String.intercalate "," cases ++ "]"
 
 def snapshotOutcomesJson : String :=
-  let outcomes : List SnapshotOutcome := [.succeeded, .refused, .rootWithheld, .unreachable]
+  let outcomes : List SnapshotOutcome := [.succeeded, .refused, .unreachable]
   let cases := outcomes.map fun outcome =>
     "{\"outcome\":\"" ++ snapshotOutcomeName outcome ++ "\",\"event\":\"" ++
     eventName (snapshotEvent outcome) ++ "\"}"
@@ -109,8 +106,7 @@ def casesJson : String :=
   ",\"snapshotOutcomes\":" ++ snapshotOutcomesJson ++
   ",\"renewalStarts\":" ++ renewalStartsJson ++
   ",\"renewalPeriodMs\":" ++ toString renewalPeriodMs ++
-  ",\"snapshotRetryDelayMs\":" ++ toString snapshotRetryDelayMs ++
-  ",\"transportRetryDelayMs\":" ++ toString transportRetryDelayMs ++ "}"
+  ",\"snapshotRetryDelayMs\":" ++ toString snapshotRetryDelayMs ++ "}"
 end Conformance.RuntimeConnectionObservation
 
 def main : IO Unit := IO.println Conformance.RuntimeConnectionObservation.casesJson

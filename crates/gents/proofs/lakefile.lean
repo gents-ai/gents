@@ -17,7 +17,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.ClientObservationOrdering,
   `Proofs.Conformance.ClientSessionLoad,
   `Proofs.Conformance.RuntimeConnectionObservation,
-  `Proofs.Conformance.RuntimeConnectionReprobe,
+  `Proofs.Conformance.RuntimeConnectionBackoff,
   `Proofs.Conformance.EnrollmentActivation,
   `Proofs.Conformance.DocumentPackUx,
   `Proofs.Conformance.PluginDelete,
