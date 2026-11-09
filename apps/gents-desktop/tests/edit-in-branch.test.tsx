@@ -166,10 +166,16 @@ describe("edit an earlier message in a new branch", () => {
     await waitFor(() => expect(branchButtons()[1]).toBeEnabled());
   });
 
-  it("isn't offered on a node this app joined, whose runtime it can't write through", () => {
+  it("isn't offered on a joined node whose operator endpoint this app doesn't hold", () => {
     screenApp(vi.fn(), { source: "enrollment", operatorAccess: false });
     expect(screen.getByText("second ask")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
+  });
+
+  it("is offered on a joined node that advertised its operator endpoint", () => {
+    screenApp(vi.fn(), { source: "enrollment", operatorAccess: true });
+    expect(screen.getByText("second ask")).toBeVisible();
+    expect(screen.queryAllByRole("button", { name: "Fork" }).length).toBeGreaterThan(0);
   });
 
   it("is offered only on sent messages, not on ones still waiting", () => {

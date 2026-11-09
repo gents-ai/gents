@@ -2304,7 +2304,7 @@ async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns()
             .map(|ended| (ended.node_did.as_str(), ended.reason))
             .collect::<Vec<_>>(),
         vec![(
-            authority.request.owner_agent.as_str(),
+            authority.request.owner_node_did.as_str(),
             crate::client::EndedAccessReason::Revoked
         )],
         "the desktop keeps why its access ended"

@@ -402,11 +402,15 @@ pub struct DeploymentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pairing_ready: Option<bool>,
-    /// When this desktop's authorization on a joined node runs out; none for
-    /// a node this desktop reaches without enrollment.
+    /// When this desktop's enrollment authorization on a joined node runs
+    /// out, after which reconciliation removes the node from this desktop;
+    /// none for a node this desktop reaches without enrollment. The node's
+    /// ACP grant carries no expiry of its own.
     pub lease_expires_at: Option<String>,
-    /// Whether this desktop can change the node's configuration directly,
-    /// which only its own runtime or a local node allows.
+    /// Whether this desktop holds the node's signed operator endpoint, the
+    /// only path for its writes and operator reads (a fork, account
+    /// recovery). A joined node offers it once it advertises one; the node's
+    /// ACP still decides each signed request.
     pub operator_access: bool,
     pub last_error: Option<String>,
     pub node: NodeView,

@@ -13,8 +13,9 @@ type SentUserMessage = Extract<RenderedTimelineItem, { kind: "userMessage" }>;
 
 /* Core forks only at a user turn of a session this client may write, and
    refuses while the session has a request in flight. The fork is written
-   through the node's own runtime, which a node this app joined doesn't
-   offer, so it isn't offered there. */
+   through the node's signed operator endpoint, so it isn't offered on a node
+   whose endpoint this app doesn't hold yet, such as a joined node that hasn't
+   advertised one. */
 export function useEditInBranch(item: SentUserMessage | null): Action | null {
   const { actions, drafts, stores } = useApp();
   const sessionId = stores.selection.use.sessionId();

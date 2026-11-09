@@ -78,7 +78,7 @@ afterEach(() => {
 });
 
 describe("provider account recovery", () => {
-  it("isn't read on a node this app joined, whose accounts only its own runtime reads", async () => {
+  it("isn't read on a node whose operator endpoint this app doesn't hold", async () => {
     fleet.operatorAccess = false;
     const { container } = mount();
     await act(async () => {});

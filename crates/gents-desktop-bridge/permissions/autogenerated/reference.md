@@ -3876,7 +3876,7 @@ Allow, change and remove plugin folders, and answer a plugin question
 </td>
 <td>
 
-Authenticated peer enrollment, removal and rename
+Authenticated peer enrollment, removal and rename, and ended access
 
 </td>
 </tr>

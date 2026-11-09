@@ -18,7 +18,8 @@ export function useProviderRecovery({
   requestId: string;
   turnState: string | null;
   /** whether this desktop can read the node's accounts, which takes the
-      node's own runtime; a node it joined doesn't offer it */
+      node's signed operator endpoint; a joined node that hasn't advertised
+      one doesn't offer it */
   readable?: boolean;
 }) {
   const { api } = useApp();
