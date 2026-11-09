@@ -12,7 +12,7 @@ fn sessions(links: &[LinkedSessionView]) -> Vec<&str> {
     ids
 }
 
-fn sorted<'a>(mut ids: Vec<&'a str>) -> Vec<&'a str> {
+fn sorted(mut ids: Vec<&str>) -> Vec<&str> {
     ids.sort_unstable();
     ids
 }
