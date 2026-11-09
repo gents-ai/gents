@@ -68,7 +68,7 @@ impl ConfigCommandTool {
         let report = preview::run(
             PreviewRequest {
                 home: home.to_owned(),
-                access: crate::store::config_client::ConfigAccess::local(self.node.clone()),
+                access: self.core.access()?,
                 node_did: self.node_did.clone(),
                 out: home.join("ux-preview").join(slug),
                 viewport,
