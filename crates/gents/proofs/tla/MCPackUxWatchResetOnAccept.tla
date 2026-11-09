@@ -1,0 +1,4 @@
+---- MODULE MCPackUxWatchResetOnAccept ----
+EXTENDS PackUxWatch
+
+====

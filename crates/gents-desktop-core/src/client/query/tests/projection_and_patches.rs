@@ -824,23 +824,24 @@ fn request_projection_retains_every_field_needed_to_verify_signed_ancestry() {
 
 #[tokio::test]
 async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
-    ensure_runtime_schemas(&node).await?;
+    let runtime = crate::test_fixtures::ServedRuntimeHome::start().await;
+    let node = runtime.node().clone();
     let backend: InferenceBackend = serde_json::from_value(serde_json::json!({
-        "node_did":"did:key:catalog-owner", "backend_id":"catalog-backend", "name":"Catalog",
+        "node_did":runtime.node_did(), "backend_id":"catalog-backend", "name":"Catalog",
         "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
         "auth":{"kind":"unauthenticated"}
     }))?;
-    gents::ensure_node(&node, &backend.node_did).await?;
-    let access = gents::ConfigAccess::local(node.clone());
+    let access = runtime.user_access();
     gents::documents::write_inference_backend_document(&access, &backend).await?;
+    // Catalog discovery is the runtime's own observation.
+    let observer = runtime.runtime_access();
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
         let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
                 "node_did":null, "observed_at":observed_at,
                 "models":[{"model_name":"retained-model"}]
             }))?;
-        access
+        observer
             .transact_write("test.catalog.refresh", |txn| {
                 let backend = &backend;
                 let catalog = catalog.clone();
@@ -894,6 +895,6 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
             [Some(backend.node_did.clone())]
         );
     }
-    node.shutdown().await.unwrap();
+    runtime.shutdown().await;
     Ok(())
 }

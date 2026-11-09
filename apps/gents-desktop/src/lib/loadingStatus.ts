@@ -190,7 +190,26 @@ export type SessionLoadState = {
   nodeDid: string | null;
   found: boolean | null;
   error: string | null;
+  /** a read of this target is running or scheduled; a waiting phase without
+      one offers its action instead of waiting on a notice that may never
+      come (Lean `ClientSessionLoad.phase_has_exit`) */
+  reread: boolean;
 };
+
+/** The selection match every session view shares: the same session, and the
+    same node unless either side names none (Lean
+    `ClientSessionLoad.matchesSelection`). */
+export function selectionMatches(
+  selectedSessionId: string | null,
+  selectedNodeDid: string | null,
+  target: { sessionId: string | null; nodeDid?: string | null } | null,
+): boolean {
+  return (
+    !!target &&
+    target.sessionId === selectedSessionId &&
+    (!selectedNodeDid || !target.nodeDid || target.nodeDid === selectedNodeDid)
+  );
+}
 
 export type SessionLoadingLayer =
   "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
@@ -223,14 +242,8 @@ export function projectSessionLoadingStatus({
 }: SessionLoadingInput): SessionLoadingStatus | null {
   if (!selectedSessionId) return null;
 
-  const sessionMatches =
-    session?.sessionId === selectedSessionId &&
-    (!selectedNodeDid || !session.nodeDid || session.nodeDid === selectedNodeDid);
-  const loadMatches =
-    sessionLoad.sessionId === selectedSessionId &&
-    (!selectedNodeDid ||
-      !sessionLoad.nodeDid ||
-      sessionLoad.nodeDid === selectedNodeDid);
+  const sessionMatches = selectionMatches(selectedSessionId, selectedNodeDid, session);
+  const loadMatches = selectionMatches(selectedSessionId, selectedNodeDid, sessionLoad);
 
   if (loadMatches && sessionLoad.phase === "pending" && !sessionMatches) {
     return {
@@ -238,12 +251,16 @@ export function projectSessionLoadingStatus({
       phase: "loading",
       title: "Waiting for session update",
       detail: "Waiting for the latest conversation update.",
-      action: null,
+      action: followUpAction(sessionLoad.reread),
     };
   }
 
   if (loadMatches && isSessionDeliveryPhase(sessionLoad.phase) && !sessionMatches) {
-    return sessionDeliveryStatus(sessionLoad.phase, sessionLoad.error);
+    return sessionDeliveryStatus(
+      sessionLoad.phase,
+      sessionLoad.error,
+      sessionLoad.reread,
+    );
   }
 
   if (loadMatches && sessionLoad.phase === "loading" && sessionLoad.error) {
@@ -288,6 +305,9 @@ export function projectSessionLoadingStatus({
     };
   }
 
+  /* the load names the selection and no read runs, yet nothing is shown: a
+     writer dropped the shown session without moving the selection, so no
+     read follows on its own */
   if (!sessionMatches) {
     if (loadMatches && sessionLoad.phase === "loaded" && sessionLoad.found === false)
       return null;
@@ -296,7 +316,7 @@ export function projectSessionLoadingStatus({
       phase: "loading",
       title: "Loading session",
       detail: "Reading the session from its runtime.",
-      action: null,
+      action: "retryLocal",
     };
   }
 
@@ -325,9 +345,18 @@ function sessionStatusFromOperational(
   };
 }
 
+/* With no read running or scheduled, a waiting phase offers a fresh read of
+   the selected session, the narrowest recovery the shell has. Its wording,
+   and whether it should reopen the session instead, are still a product
+   decision. */
+function followUpAction(reread: boolean): SessionLoadingAction | null {
+  return reread ? null : "retryLocal";
+}
+
 function sessionDeliveryStatus(
   phase: SessionDeliveryPhase,
   detail: string | null,
+  reread: boolean,
 ): SessionLoadingStatus {
   switch (phase) {
     case "delivering":
@@ -336,7 +365,7 @@ function sessionDeliveryStatus(
         phase: "loading",
         title: "Sending message",
         detail: detail ?? "Waiting for the node to pick up the message.",
-        action: null,
+        action: followUpAction(reread),
       };
     case "notConnected":
       return {
@@ -346,7 +375,7 @@ function sessionDeliveryStatus(
         detail:
           detail ??
           "The message is saved on this computer and sends when the connection returns.",
-        action: null,
+        action: followUpAction(reread),
       };
     case "accepted":
       return {
@@ -355,7 +384,7 @@ function sessionDeliveryStatus(
         title: "Message picked up",
         detail:
           detail ?? "The node accepted the message. Its session is on the way back.",
-        action: null,
+        action: followUpAction(reread),
       };
   }
 }

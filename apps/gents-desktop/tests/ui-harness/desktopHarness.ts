@@ -4301,6 +4301,7 @@ function createDeployment(): DeploymentView {
     dialSucceeded: true,
     runtimeConnection: "connected",
     chatSafe: true,
+    chatRefusal: null,
     nodeReadiness: {
       source: { state: "current" },
       activeGeneration: 1,

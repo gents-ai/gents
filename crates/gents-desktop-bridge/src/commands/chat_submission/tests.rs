@@ -95,7 +95,7 @@ async fn lost_send_reply_recovers_after_reopen_and_retains_its_result_after_ackn
     anyhow::ensure!(
         peers
             .iter()
-            .any(|peer| peer.node_did == node_did && peer.is_chat_ready_at(chrono::Utc::now())),
+            .any(|peer| peer.node_did == node_did && peer.is_chat_ready()),
         "fixture has no ready peer: {:?}",
         peers
             .iter()

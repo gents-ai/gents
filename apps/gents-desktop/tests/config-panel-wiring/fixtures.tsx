@@ -13,6 +13,7 @@ export const deployment: DeploymentView = {
   dialSucceeded: true,
   runtimeConnection: "connected",
   chatSafe: true,
+  chatRefusal: null,
   lastError: null,
   node: {
     nodeDid: "did:key:z6MkAgent",

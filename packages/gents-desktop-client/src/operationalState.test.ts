@@ -29,6 +29,7 @@ function deployment(
     dialSucceeded: true,
     runtimeConnection: "connected",
     chatSafe: true,
+    chatRefusal: null,
     pairingReady: true,
     lastError: null,
     nodeConfig: null,
@@ -128,6 +129,27 @@ describe("deployment operational state", () => {
     });
   });
 
+  it("blocks admission with the native chat refusal and its next action", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({
+        chatSafe: false,
+        chatRefusal: {
+          cause: "endpoint_not_advertised",
+          nextAction: "await_endpoint_advertisement",
+          detail: "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
+        },
+      }),
+    );
+
+    expect(state.admissionBlocker).toMatchObject({
+      layer: "route",
+      kind: "waiting",
+      reason: "endpoint_not_advertised",
+      detail: "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
+    });
+    expect(state.summary).toBe(state.admissionBlocker);
+  });
+
   it("does not wait for a gossiped Node after pairing", () => {
     const state = projectDeploymentOperationalState(
       deployment({
@@ -200,7 +222,21 @@ describe("deployment operational state", () => {
     expect(state.agent.kind).toBe("ready");
     expect(state.admissionBlocker).toBe(state.connection);
     expect(state.summary).toBe(state.connection);
-    expect(state.summary.shortLabel).toBe("Connecting");
+    expect(state.summary).toMatchObject({ reason: "disconnected", shortLabel: "Reconnecting" });
+    expect(state.summary.label).not.toBe("Connecting to runtime");
+  });
+
+  it("names a node without a runtime endpoint instead of connecting forever", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({ source: "enrollment", graphql: null, runtimeConnection: "noEndpoint" }),
+    );
+    expect(state.admissionBlocker).toBe(state.connection);
+    expect(state.connection).toMatchObject({
+      kind: "blocked",
+      reason: "no_endpoint",
+      shortLabel: "No address",
+      animated: false,
+    });
   });
 
   it("does not let unrelated database work block current signed readiness", () => {

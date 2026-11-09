@@ -368,17 +368,66 @@ it("keeps a delivered request identity while showing a cleanup denial", async ()
 it("shows a native rejection while preserving the earlier request identity", async () => {
   const f = fixture("session");
   rememberUnresolvedSubmission({
-    nodeDid: "node", sessionId: "session", selectedSessionId: "session",
-    requestId: "earlier", contentKey: contentKey("Original message"),
+    nodeDid: "node",
+    sessionId: "session",
+    selectedSessionId: "session",
+    requestId: "earlier",
+    contentKey: contentKey("Original message"),
   });
   f.send.mockResolvedValueOnce({
-    nodeDid: "node", sessionId: "session", requestId: "earlier", agentDid: "agent",
+    nodeDid: "node",
+    sessionId: "session",
+    requestId: "earlier",
+    agentDid: "agent",
     outcome: "notDelivered",
-    deliveryError: { code: "permissionDenied", message: "Access denied", retryable: false, endpoint: null },
+    deliveryError: {
+      code: "permissionDenied",
+      message: "Access denied",
+      retryable: false,
+      endpoint: null,
+    },
   });
   await f.actions().sendMessage("Original message");
   expect(f.send).toHaveBeenCalledTimes(1);
   expect(f.send.mock.calls[0][0].resolveRequestId).toBe("earlier");
   expect(f.report).toHaveBeenCalledWith(expect.stringContaining("Access denied"));
   expect(f.report.mock.calls[0][0]).not.toContain("cleanup failed");
+});
+
+it("lets an unprovable send be set aside without resending or claiming non-delivery", async () => {
+  const f = fixture("session");
+  await f.actions().sendMessage("Original message");
+  const request = f.send.mock.calls[0][0];
+  f.read.mockResolvedValueOnce(prepared(request, "deliveryUnknown"));
+  await f.actions().recoverChatMessage(request.requestId!);
+  // A retained preparation can still be proven: it is never set aside.
+  f.read.mockResolvedValueOnce(prepared(request, "deliveryUnknown"));
+  await expect(f.actions().setAsideChatMessage(request.requestId!)).rejects.toThrow(
+    "can still be confirmed",
+  );
+  expect(loadChatDrafts().chatDrafts).toHaveLength(1);
+  // The journal lost the signed preparation: the composer stays blocked,
+  // resume cannot resend it, and the person may set it aside.
+  f.read.mockResolvedValue({
+    kind: "unconfirmed",
+    nodeDid: "node",
+    requestId: request.requestId!,
+  });
+  await f.actions().recoverChatMessage(request.requestId!);
+  expect(loadChatDrafts().chatDrafts[0].unretained).toBe(true);
+  await expect(
+    f.actions().recoverChatMessage(request.requestId!, true),
+  ).rejects.toThrow("Set it aside");
+  await f.actions().sendMessage("A newer draft");
+  await expect(f.actions().dismissChatMessage(request.requestId!)).rejects.toThrow(
+    "non-delivery is not confirmed",
+  );
+  await f.actions().setAsideChatMessage(request.requestId!);
+  expect(loadChatDrafts().chatDrafts).toHaveLength(0);
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(f.ack).not.toHaveBeenCalled();
+  f.send.mockImplementationOnce(async (next) => acceptedChat(next));
+  await f.actions().sendMessage("Written after setting it aside");
+  expect(f.send).toHaveBeenCalledTimes(2);
+  expect(f.send.mock.calls[1][0].requestId).not.toBe(request.requestId);
 });

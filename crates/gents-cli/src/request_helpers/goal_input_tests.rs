@@ -282,9 +282,13 @@ async fn generated_cli_preparation_captures_goal_before_signing() -> Result<()> 
         )
         .await;
         if case["expected"]["kind"] == "pending" {
+            let error = actual.unwrap_err();
             assert!(
-                actual.unwrap_err().to_string().contains("still syncing"),
-                "{case}"
+                gents_protocol::error_chain::find_source::<gents::goal::GoalInputRefused>(
+                    error.as_ref()
+                )
+                .is_some(),
+                "{case}: {error:#}"
             );
         } else {
             let create = actual?.create;
@@ -325,9 +329,14 @@ async fn cli_preparation_rejects_tampered_and_foreign_goal_observations() -> Res
             },
         )
         .await;
-        assert!(
-            actual.unwrap_err().to_string().contains("still syncing"),
-            "{fault}"
+        let error = actual.unwrap_err();
+        assert_eq!(
+            gents_protocol::error_chain::find_source::<gents::goal::GoalInputRefused>(
+                error.as_ref()
+            )
+            .copied(),
+            Some(gents::goal::GoalInputRefused::ProjectionUnverified),
+            "{fault}: {error:#}"
         );
     }
     Ok(())

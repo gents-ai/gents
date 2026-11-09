@@ -716,18 +716,97 @@ pub async fn load_full_snapshot_with_peer_records(
     snapshots
 }
 
+/// The top-level aliases of [`snapshot_query`]; a served runtime that answers
+/// the query authorizes the reader exactly when every one is present.
+pub(crate) const SNAPSHOT_ROOTS: &[&str] = &[
+    "nodes",
+    "agents",
+    "runtimes",
+    "node_readiness",
+    "requests",
+    "mailbox_items",
+    "goals",
+    "sessions",
+    "tools",
+    "contexts",
+    "compactions",
+    "triggers",
+    "tasks",
+    "schedules",
+    "skills",
+    "inference_backends",
+    "backend_observations",
+    "inference_profiles",
+    "inference_sampling",
+    "inference_execution",
+    "tool_service_registries",
+    "event_sources",
+    "agent_targets",
+    "datastore_tool_surfaces",
+];
+
+/// How a runtime snapshot read failed
+/// (`RuntimeConnectionObservation.SnapshotOutcome`).
+#[derive(Debug, thiserror::Error)]
+pub enum SnapshotReadError {
+    /// The runtime answered without errors but omitted these selected roots.
+    /// The pinned served runtime answers a reader whose grant was revoked this
+    /// way (HTTP 200, no `errors`), while rows ACP filters for an authorized
+    /// reader come back as an empty list, so this is its refusal of the
+    /// collection (`SnapshotOutcome.rootWithheld`).
+    #[error("runtime snapshot withheld the roots {roots:?}")]
+    RootsWithheld { roots: Vec<&'static str> },
+    #[error("{0}")]
+    Read(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<anyhow::Error> for SnapshotReadError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Read(error.into())
+    }
+}
+
+impl SnapshotReadError {
+    /// The access owner refused the read (HTTP 401/403 or a
+    /// `PERMISSION_DENIED` envelope).
+    pub fn refused(&self) -> bool {
+        match self {
+            Self::RootsWithheld { .. } => false,
+            Self::Read(error) => error.permission_denied(),
+        }
+    }
+
+    /// The runtime denied this reader, by refusing the read or withholding a
+    /// selected root.
+    pub fn permission_denied(&self) -> bool {
+        matches!(self, Self::RootsWithheld { .. }) || self.refused()
+    }
+}
+
+pub(crate) fn withheld_snapshot_roots(data: &Value) -> Vec<&'static str> {
+    SNAPSHOT_ROOTS
+        .iter()
+        .copied()
+        .filter(|root| data.get(*root).is_none())
+        .collect()
+}
+
 pub async fn load_node_snapshot_on(
     access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
-) -> Result<ClientStore> {
+) -> std::result::Result<ClientStore, SnapshotReadError> {
     let query = snapshot_query(Some(node_did))?;
     let data = execute_access_graphql_query(access, &query, "runtime desktop snapshot").await?;
-    let requests = complete_access_snapshot_requests(access, &data, Some(node_did)).await?;
-    if access.actor_did().is_some() {
-        authenticated_node_snapshot_rows(&data, node_did, requests)
-    } else {
-        snapshot_rows_with_requests(&data, Some(node_did), requests)
+    let roots = withheld_snapshot_roots(&data);
+    if !roots.is_empty() {
+        return Err(SnapshotReadError::RootsWithheld { roots });
     }
+    let requests = complete_access_snapshot_requests(access, &data, Some(node_did)).await?;
+    Ok(if access.actor_did().is_some() {
+        authenticated_node_snapshot_rows(&data, node_did, requests)?
+    } else {
+        snapshot_rows_with_requests(&data, Some(node_did), requests)?
+    })
 }
 
 pub(super) fn authenticated_node_snapshot_rows(
@@ -883,11 +962,11 @@ pub async fn load_node_scoped_snapshot_with_peer_records(
         .find(|peer| peer.node_did == node_did)
         .and_then(|peer| crate::local_runtime::operator_endpoint(peer, capability))
         .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))?;
-    load_node_snapshot_on(
+    Ok(load_node_snapshot_on(
         &gents::store::config_client::ConfigAccess::Graphql(endpoint),
         node_did,
     )
-    .await
+    .await?)
 }
 
 #[cfg(test)]

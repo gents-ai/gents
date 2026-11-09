@@ -7,12 +7,14 @@ import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { href } from "@/lib/router";
 
 /** Why nothing typed here could be sent, for as long as that holds: the
-    node has no inference it can use, the node is offline, or the session
-    takes no messages from this app. States that clear by themselves
-    (sending, syncing, waiting to see a request) are none of these. */
+    node has no inference it can use, the node is offline, this app has no
+    endpoint for it, or the session takes no messages from this app. States
+    that clear by themselves (sending, syncing, waiting to see a request) are
+    none of these. */
 export type ComposerReason =
   | { kind: "inference"; nodeDid: string; name: string; title: string }
   | { kind: "offline"; name: string }
+  | { kind: "noEndpoint"; name: string }
   | { kind: "unsendable"; text: string };
 
 /* a backend that is down for now comes back by itself, so it isn't here */
@@ -38,6 +40,7 @@ export function composerReason(
   if (!deployment) return null;
   const name = deployment.node.displayName ?? deployment.label;
   if (deployment.runtimeConnection === "disconnected") return { kind: "offline", name };
+  if (deployment.runtimeConnection === "noEndpoint") return { kind: "noEndpoint", name };
   if (status.reason !== "agentUnavailable") return null;
   const decision = selectedNodeReadinessDecision(deployment, agentDid);
   if (decision.kind !== "unavailable") return null;
@@ -88,13 +91,17 @@ export function ComposerReasonBox({
       ? reason.title
       : reason.kind === "offline"
         ? `${reason.name} is offline`
-        : reason.text;
+        : reason.kind === "noEndpoint"
+          ? `${reason.name} has no address this app can reach`
+          : reason.text;
   const detail =
     reason.kind === "inference"
       ? "Sessions here need a model to answer."
       : reason.kind === "offline"
         ? "Messages can be sent once it's back, or from another node."
-        : null;
+        : reason.kind === "noEndpoint"
+          ? "Messages can be sent once it has a runtime endpoint, or from another node."
+          : null;
   return (
     <div className="[grid-area:1/1]" data-testid="composer-reason">
       <div

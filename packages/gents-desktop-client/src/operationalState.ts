@@ -332,24 +332,57 @@ export function projectRouteOperationalStatus(
   });
 }
 
+/** The native chat write fence's refusal, as the composer shows it: the
+ * cause and next action come from the desktop core, never from a UI-local
+ * reading of pairing or source. */
+export function projectChatRefusalStatus(
+  refusal: DeploymentView["chatRefusal"],
+): OperationalStatus | null {
+  if (!refusal) return null;
+  const waiting = refusal.nextAction === "await_endpoint_advertisement";
+  return status({
+    kind: waiting ? "waiting" : "blocked",
+    layer: "route",
+    reason: refusal.cause,
+    label: waiting ? "Waiting for the runtime endpoint" : "Runtime is not connected",
+    shortLabel: waiting ? "Waiting for endpoint" : "Not connected",
+    detail: refusal.detail,
+  });
+}
+
 export function runtimeConnectionBlocksAdmission(connection: string | null | undefined): boolean {
   return connection !== "connected";
 }
 
-function projectRuntimeConnectionStatus(connection: string | null | undefined): OperationalStatus {
-  if (connection === "connected") {
-    return status({ kind: "ready", layer: "runtime", reason: "connected",
-      label: "Runtime is connected", shortLabel: "Connected",
-      detail: "The authenticated runtime connection is ready." });
+/** `RuntimeConnectionObservation.presentation`: each status names its own
+    reason, so an outage never reads as a connection attempt. A null status
+    is a peer the observer has not reconciled yet; the bridge never withholds
+    a reconciled status, since admission reads it. */
+export function projectRuntimeConnectionStatus(
+  connection: string | null | undefined,
+): OperationalStatus {
+  switch (connection) {
+    case "connected":
+      return status({ kind: "ready", layer: "runtime", reason: "connected",
+        label: "Runtime is connected", shortLabel: "Connected",
+        detail: "The authenticated runtime connection is ready." });
+    case "denied":
+      return status({ kind: "blocked", layer: "runtime", reason: "permission_denied",
+        label: "Runtime access denied", shortLabel: "Access denied",
+        detail: "The runtime rejected this client's access." });
+    case "noEndpoint":
+      return status({ kind: "blocked", layer: "runtime", reason: "no_endpoint",
+        label: "Runtime has no address", shortLabel: "No address",
+        detail: "This node has no runtime endpoint this app can connect to." });
+    case "disconnected":
+      return status({ kind: "waiting", layer: "runtime", reason: "disconnected",
+        label: "Runtime unreachable", shortLabel: "Reconnecting",
+        detail: "The runtime connection was lost; reconnecting." });
+    default:
+      return status({ kind: "waiting", layer: "runtime", reason: "connecting",
+        label: "Connecting to runtime", shortLabel: "Connecting",
+        detail: "Waiting for the authenticated runtime connection." });
   }
-  if (connection === "denied") {
-    return status({ kind: "blocked", layer: "runtime", reason: "permission_denied",
-      label: "Runtime access denied", shortLabel: "Access denied",
-      detail: "The runtime rejected this client's access." });
-  }
-  return status({ kind: "waiting", layer: "runtime", reason: connection === "disconnected" ? "disconnected" : "connecting",
-    label: "Connecting to runtime", shortLabel: "Connecting",
-    detail: "Waiting for the authenticated runtime connection." });
 }
 
 export function projectDeploymentOperationalState(
@@ -392,9 +425,11 @@ export function projectDeploymentOperationalState(
         });
 
   const agentBlocker = agent.kind === "ready" ? null : agent;
-  const admissionBlocker = runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
-    ? connection
-    : agentBlocker;
+  const admissionBlocker =
+    projectChatRefusalStatus(deployment.chatRefusal) ??
+    (runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
+      ? connection
+      : agentBlocker);
 
   const error =
     deployment.runtime?.lastReconcileError ?? null;

@@ -15,6 +15,7 @@ async fn fragmented_subscription_preserves_utf8_and_completion() {
     let mut subscription = GraphqlSubscription {
         events: Some(Box::pin(futures::stream::iter(chunks).eventsource())),
         renew_at: None,
+        ended: None,
     };
     assert_eq!(
         subscription.recv().await.unwrap(),
@@ -31,6 +32,7 @@ async fn subscription_returns_explicit_denial_without_retrying_or_falling_back()
     let mut subscription = GraphqlSubscription {
         events: Some(Box::pin(futures::stream::iter(chunks).eventsource())),
         renew_at: None,
+        ended: None,
     };
     let error = subscription.recv().await.unwrap_err();
     assert!(error.is_permission_denied());
@@ -43,10 +45,79 @@ async fn subscription_closes_for_reauthentication_without_waiting_for_data() {
     let mut subscription = GraphqlSubscription {
         events: Some(Box::pin(futures::stream::pending())),
         renew_at: Some(Instant::now() + Duration::from_secs(1)),
+        ended: None,
     };
     tokio::time::advance(Duration::from_secs(1)).await;
     assert_eq!(subscription.recv().await.unwrap(), None);
     assert!(subscription.events.is_none());
+    assert_eq!(subscription.end(), Some(SubscriptionEnd::RenewalDue));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_taken_renewal_keeps_delivering_past_its_deadline() {
+    let wire = b"event: next\ndata: {\"data\":{\"Parcel\":[]}}\n\n";
+    let events = futures::stream::pending::<std::result::Result<Vec<u8>, reqwest::Error>>();
+    let late = futures::stream::once(async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        Ok::<_, reqwest::Error>(wire.to_vec())
+    });
+    let mut subscription = GraphqlSubscription {
+        events: Some(Box::pin(late.chain(events).eventsource())),
+        renew_at: Some(Instant::now() + Duration::from_secs(1)),
+        ended: None,
+    };
+    assert_eq!(
+        subscription.take_renewal(),
+        Some(SUBSCRIPTION_RENEWAL_PERIOD)
+    );
+    assert_eq!(
+        SUBSCRIPTION_RENEWAL_PERIOD * 2,
+        crate::store::identity::DEFRADB_BEARER_LIFETIME
+    );
+    assert_eq!(subscription.take_renewal(), None);
+    assert_eq!(
+        subscription.recv().await.unwrap(),
+        Some(json!({"data":{"Parcel":[]}}))
+    );
+    assert_eq!(subscription.end(), None);
+}
+
+#[tokio::test]
+async fn runtime_completion_is_not_a_planned_renewal() {
+    let wire = b"event: complete\ndata: {}\n\n";
+    let mut subscription = GraphqlSubscription {
+        events: Some(Box::pin(
+            futures::stream::iter(vec![Ok::<_, reqwest::Error>(wire.to_vec())]).eventsource(),
+        )),
+        renew_at: Some(Instant::now() + Duration::from_secs(3600)),
+        ended: None,
+    };
+    assert_eq!(subscription.recv().await.unwrap(), None);
+    assert_eq!(subscription.end(), Some(SubscriptionEnd::Completed));
+}
+
+/// `recv` rejects every envelope that carries GraphQL errors, so a caller
+/// never sees one as data.
+#[tokio::test]
+async fn subscription_never_yields_an_errors_envelope() {
+    for errors in [
+        r#"[{"message":"opaque"}]"#,
+        r#"{"message":"not a list"}"#,
+        r#""text""#,
+    ] {
+        let wire = format!("event: next\ndata: {{\"data\":null,\"errors\":{errors}}}\n\n");
+        let mut subscription = GraphqlSubscription {
+            events: Some(Box::pin(
+                futures::stream::iter(vec![Ok::<_, reqwest::Error>(wire.into_bytes())])
+                    .eventsource(),
+            )),
+            renew_at: None,
+            ended: None,
+        };
+        let error = subscription.recv().await.unwrap_err();
+        assert!(!error.is_permission_denied(), "{error}");
+        assert_eq!(subscription.end(), None);
+    }
 }
 
 #[tokio::test]

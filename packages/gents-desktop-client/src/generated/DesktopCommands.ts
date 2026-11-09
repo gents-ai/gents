@@ -124,7 +124,7 @@ import type { SessionContextDetails } from "./SessionContextDetails.js";
 import type { SessionContextDetailsRequest } from "./SessionContextDetailsRequest.js";
 import type { SessionForkBeforeRequest } from "./SessionForkBeforeRequest.js";
 import type { SessionForkResult } from "./SessionForkResult.js";
-import type { SessionGoalView } from "./SessionGoalView.js";
+import type { SessionGoalState } from "./SessionGoalState.js";
 import type { SessionLiveDeltaView } from "./SessionLiveDeltaView.js";
 import type { SessionProvenanceView } from "./SessionProvenanceView.js";
 import type { SessionRenameRequest } from "./SessionRenameRequest.js";
@@ -262,7 +262,7 @@ export type DesktopCommands = {
   desktop_session_archive: { args: { request: SessionArchiveRequest }; result: SessionArchiveReceipt };
   desktop_session_context_details: { args: { request: SessionContextDetailsRequest }; result: SessionContextDetails | null };
   desktop_session_fork_before_message: { args: { request: SessionForkBeforeRequest }; result: SessionForkResult };
-  desktop_session_goal: { args: { nodeDid: string; sessionId: string }; result: SessionGoalView | null };
+  desktop_session_goal: { args: { nodeDid: string; sessionId: string }; result: SessionGoalState | null };
   desktop_session_live_delta: { args: { sessionId: string; nodeDid?: string | null; requestId: string; baseLiveCursor: string; baseContentByteLen: number; baseContentHash: string; baseReasoningByteLen: number; baseReasoningHash: string }; result: SessionLiveDeltaView | null };
   desktop_session_provenance: { args: { request: DesktopSessionProvenanceRequest }; result: SessionProvenanceView };
   desktop_session_reload: { args: { sessionId: string; nodeDid?: string | null }; result: void };

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::store::identity::{KeyIdentity, NodeIdentity};
@@ -13,6 +14,9 @@ use super::*;
 struct Facts {
     root: tempfile::TempDir,
     nodes: BTreeMap<u64, KeyIdentity>,
+    node_dids: BTreeMap<u64, String>,
+    client_keys: BTreeMap<u64, KeyIdentity>,
+    bound_clients: BTreeMap<u64, String>,
     clients: BTreeMap<String, u64>,
     envelopes: BTreeMap<String, u64>,
     payloads: BTreeMap<String, u64>,
@@ -23,13 +27,34 @@ impl Facts {
         Ok(Self {
             root: tempfile::tempdir()?,
             nodes: BTreeMap::new(),
+            node_dids: BTreeMap::new(),
+            client_keys: BTreeMap::new(),
+            bound_clients: BTreeMap::new(),
             clients: BTreeMap::new(),
             envelopes: BTreeMap::new(),
             payloads: BTreeMap::new(),
         })
     }
 
+    /// Binds a modeled node or client to a served runtime's real identity.
+    fn bind_node(&mut self, value: u64, did: &str) {
+        self.node_dids.insert(value, did.to_owned());
+    }
+
+    fn bind_client(&mut self, value: u64, did: &str) {
+        self.bound_clients.insert(value, did.to_owned());
+        self.clients.insert(did.to_owned(), value);
+    }
+
+    fn bind_payload(&mut self, pending: &UnresolvedSubmission, value: u64) {
+        self.payloads
+            .insert(digest(pending.mutation.as_bytes()), value);
+    }
+
     fn node(&mut self, value: u64) -> Result<String> {
+        if let Some(did) = self.node_dids.get(&value) {
+            return Ok(did.clone());
+        }
         if !self.nodes.contains_key(&value) {
             self.nodes.insert(
                 value,
@@ -42,10 +67,31 @@ impl Facts {
         Ok(self.nodes[&value].did().to_owned())
     }
 
+    /// The modeled requester's client key: a desktop journal is written by
+    /// the client whose key is its local node identity.
+    fn client(&mut self, value: u64) -> Result<String> {
+        if let Some(did) = self.bound_clients.get(&value) {
+            return Ok(did.clone());
+        }
+        if !self.client_keys.contains_key(&value) {
+            self.client_keys.insert(
+                value,
+                KeyIdentity::load_or_create(
+                    self.root.path().join(format!("client-{value}.key")),
+                    None,
+                )?,
+            );
+        }
+        let did = self.client_keys[&value].did().to_owned();
+        self.clients.insert(did.clone(), value);
+        Ok(did)
+    }
+
     fn intent(&mut self, input: &Value) -> Result<Intent> {
         let envelope = number(input, "envelope")?;
+        let client = self.client(number(&input["caller"], "requester")?)?;
         let intent = Intent::new(
-            format!("did:key:client-{}", number(&input["caller"], "requester")?),
+            client,
             self.node(number(input, "node")?)?,
             identity(number(&input["caller"], "request")?),
             format!("authored-envelope-{envelope}").as_bytes(),
@@ -113,7 +159,9 @@ impl Facts {
     fn records_json(&self, records: &[Record]) -> Result<Value> {
         records.iter().map(|record| {
             let node = self.nodes.iter().find(|(_, identity)| identity.did() == record.intent.node_did)
-                .map(|(id, _)| *id).context("known native node")?;
+                .map(|(id, _)| *id)
+                .or_else(|| self.node_dids.iter().find(|(_, did)| **did == record.intent.node_did).map(|(id, _)| *id))
+                .context("known native node")?;
             Ok(json!({
                 "intent": {
                     "caller": { "requester": self.clients.get(&record.intent.client_did).context("caller")?,
@@ -196,8 +244,10 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
             let input = &step["input"];
             let decision = match input["kind"].as_str().context("receipt action")? {
                 "prepare" => {
+                    let journal = facts.client(number(input, "journal")?)?;
                     let proposal = facts.proposal(&input["intent"], &input["proposal"]).await?;
                     let (reserved, result) = prepare(
+                        &journal,
                         &records,
                         &proposal,
                         input["durable"]
@@ -210,12 +260,14 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
                     facts.decision_json(result)?
                 }
                 "observe" | "acknowledge" => {
+                    let journal = facts.client(number(input, "journal")?)?;
                     let caller = &input["caller"];
-                    let client = format!("did:key:client-{}", number(caller, "requester")?);
+                    let client = facts.client(number(caller, "requester")?)?;
                     let request = identity(number(caller, "request")?);
                     let reference = facts.reference(&input["prepared"], context).await?;
                     if input["kind"] == "observe" {
                         observe(
+                            &journal,
                             &mut records,
                             &client,
                             &request,
@@ -223,7 +275,7 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
                             serde_json::from_value(input["outcome"].clone())?,
                         );
                     } else {
-                        acknowledge(&mut records, &client, &request, &reference);
+                        acknowledge(&journal, &mut records, &client, &request, &reference);
                     }
                     Value::Null
                 }
@@ -243,17 +295,45 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
     Ok(())
 }
 
+/// One desktop journal per modeled client.
+#[derive(Default)]
+struct Journals(BTreeMap<String, Arc<defra_node::Node>>);
+
+impl Journals {
+    async fn open(&mut self, client: &str) -> Result<&Arc<defra_node::Node>> {
+        if !self.0.contains_key(client) {
+            let node = crate::test_support::client_journal_node(client).await?;
+            self.0.insert(client.to_owned(), node);
+        }
+        Ok(&self.0[client])
+    }
+
+    async fn shutdown(self) {
+        for node in self.0.into_values() {
+            node.shutdown().await.unwrap();
+        }
+    }
+}
+
+/// The modeled journal family as a set: grouped by caller key, then request.
+/// Lean lists it in reservation order; journals are separate stores.
+fn by_caller(rows: &Value) -> Result<Vec<Value>> {
+    let mut rows = rows.as_array().context("modeled journal")?.clone();
+    rows.sort_by_key(|row| {
+        (
+            row["intent"]["caller"]["requester"].as_u64(),
+            row["intent"]["caller"]["request"].as_u64(),
+        )
+    });
+    Ok(rows)
+}
+
 #[tokio::test]
 async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result<()> {
     use super::super::journal;
-    use gents::store::config_client::ConfigAccess;
     use gents::store::graphql::graphql_with_transaction_retry;
-    use std::sync::Arc;
 
     let cases = tokio::task::spawn_blocking(model_cases).await??;
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
-    node.add_collection(&crate::test_support::unbound_journal_schema())
-        .await?;
     let result = async {
         let mut count = 0;
         for case in cases {
@@ -263,24 +343,30 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
             {
                 continue;
             }
-            ConfigAccess::write_local(
-                &node,
-                "test.receipt.clear",
-                "mutation { delete_PendingChatSubmission { _docID } }",
-            )
-            .await?;
+            // Each modeled journal is the local store of the client whose key
+            // is its node identity, opened the way production opens it.
             let mut facts = Facts::new()?;
+            let mut journals = Journals::default();
             let context = &steps[0]["input"]["intent"];
             for step in steps {
                 let input = &step["input"];
                 match input["kind"].as_str().context("receipt action")? {
                     "prepare" => {
+                        let key = facts.client(number(input, "journal")?)?;
                         let proposal = facts.proposal(&input["intent"], &input["proposal"]).await?;
-                        let output = match journal::caller::reserve(&node, &proposal).await {
-                            Ok(record) => record.result(),
-                            Err(_) if step["output"]["kind"] == "refused" => Decision::Refused,
-                            Err(error) => return Err(error.context("reserving modeled receipt")),
-                        };
+                        let output =
+                            match journal::caller::reserve(journals.open(&key).await?, &proposal)
+                                .await
+                            {
+                                Ok(record) => record.result(),
+                                Err(_) if step["output"]["kind"] == "refused" => Decision::Refused,
+                                Err(error) => {
+                                    return Err(error.context(format!(
+                                        "reserving modeled receipt in {}",
+                                        case["name"]
+                                    )))
+                                }
+                            };
                         assert_eq!(
                             facts.decision_json(output)?,
                             step["output"],
@@ -289,9 +375,10 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                         );
                     }
                     "observe" | "acknowledge" => {
+                        let key = facts.client(number(input, "journal")?)?;
                         let mut binding = facts.intent(context)?;
                         binding.client_did =
-                            format!("did:key:client-{}", number(&input["caller"], "requester")?);
+                            facts.client(number(&input["caller"], "requester")?)?;
                         binding.request_id = identity(number(&input["caller"], "request")?);
                         let reference = facts.reference(&input["prepared"], context).await?;
                         let observation = if input["kind"] == "observe" {
@@ -299,42 +386,53 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                         } else {
                             None
                         };
-                        let _ =
-                            journal::caller::update(&node, &binding, &reference, observation).await;
+                        let _ = journal::caller::update(
+                            journals.open(&key).await?,
+                            &binding,
+                            &reference,
+                            observation,
+                        )
+                        .await;
                     }
                     "reconnect" => {}
                     _ => anyhow::bail!("unknown receipt action"),
                 }
-                let response = graphql_with_transaction_retry(
-                    &node,
-                    "{ PendingChatSubmission { payload } }",
-                    "test.receipt.snapshot",
-                )
-                .await?;
-                let rows = response
-                    .data
-                    .as_ref()
-                    .and_then(|data| data["PendingChatSubmission"].as_array())
-                    .context("journal snapshot")?;
                 let mut records = Vec::new();
-                for row in rows {
-                    let envelope: Value =
-                        serde_json::from_str(row["payload"].as_str().context("payload")?)?;
-                    records.push(serde_json::from_value::<Record>(
-                        envelope["record"].clone(),
-                    )?);
+                for (key, node) in &journals.0 {
+                    let response = graphql_with_transaction_retry(
+                        node,
+                        "{ PendingChatSubmission { payload } }",
+                        "test.receipt.snapshot",
+                    )
+                    .await?;
+                    for row in response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data["PendingChatSubmission"].as_array())
+                        .context("journal snapshot")?
+                    {
+                        let envelope: Value =
+                            serde_json::from_str(row["payload"].as_str().context("payload")?)?;
+                        let record = serde_json::from_value::<Record>(envelope["record"].clone())?;
+                        assert_eq!(
+                            &record.intent.client_did, key,
+                            "{}: a journal holds only its own key's records",
+                            case["name"]
+                        );
+                        records.push(record);
+                    }
                 }
-                records.sort_by(|a, b| a.intent.request_id.cmp(&b.intent.request_id));
                 assert_eq!(
-                    facts.records_json(&records)?,
-                    step["after"],
+                    by_caller(&facts.records_json(&records)?)?,
+                    by_caller(&step["after"])?,
                     "{} after {}",
                     case["name"],
                     input["kind"]
                 );
                 for record in &records {
+                    let node = journals.open(&record.intent.client_did).await?;
                     let scoped = journal::caller::lookup(
-                        &node,
+                        node,
                         &record.intent.client_did,
                         &record.intent.node_did,
                         &record.intent.request_id,
@@ -345,12 +443,12 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                         facts.records_json(&[scoped])?,
                         facts.records_json(std::slice::from_ref(record))?
                     );
-                    let recovered = journal::caller::recover(&node, &record.intent)
+                    let recovered = journal::caller::recover(node, &record.intent)
                         .await?
                         .context("durable caller binding")?;
                     assert_eq!(recovered.reference, record.reference);
                     let pending =
-                        journal::load(&node, &record.intent.client_did, &record.intent.request_id)
+                        journal::load(node, &record.intent.client_did, &record.intent.request_id)
                             .await?;
                     assert_eq!(pending.is_some(), record.outcome == Outcome::Unresolved);
                     if let Some(pending) = pending {
@@ -359,23 +457,23 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                             record.reference.signed_payload_hash
                         );
                     }
-                    journal::forget(&node, &record.intent.client_did, &record.intent.request_id)
+                    journal::forget(node, &record.intent.client_did, &record.intent.request_id)
                         .await?;
                     assert!(
-                        journal::caller::recover(&node, &record.intent)
+                        journal::caller::recover(node, &record.intent)
                             .await?
                             .is_some(),
                         "cleanup erased caller correlation"
                     );
                 }
             }
+            journals.shutdown().await;
             count += 1;
         }
-        anyhow::ensure!(count >= 15, "durable traces were not exercised");
+        anyhow::ensure!(count >= 18, "durable traces were not exercised");
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await.unwrap();
     result
 }
 
@@ -396,7 +494,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     let home = tempfile::tempdir()?;
     let node = Arc::new(
         defra_node::Node::builder()
-            .with_node_identity_did(&proposal.intent.node_did)
+            .with_node_identity_did(&proposal.intent.client_did)
             .data_path(home.path())
             .build()
             .await?,
@@ -416,7 +514,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
 
     let node = Arc::new(
         defra_node::Node::builder()
-            .with_node_identity_did(&proposal.intent.node_did)
+            .with_node_identity_did(&proposal.intent.client_did)
             .data_path(home.path())
             .build()
             .await?,
@@ -448,7 +546,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
 
     let node = Arc::new(
         defra_node::Node::builder()
-            .with_node_identity_did(&proposal.intent.node_did)
+            .with_node_identity_did(&proposal.intent.client_did)
             .data_path(home.path())
             .build()
             .await?,
@@ -479,16 +577,19 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     result
 }
 
+/// The owner effects run on a served runtime as its User: the modeled caller
+/// is the User's client key and the modeled node its runtime, reached through
+/// a proxy that counts creates and can lose replies. An accepted outcome is
+/// the caller's own commit whose reply, and the receipt read after it, were
+/// lost; a confirmed rejection is a request refused inside its transaction
+/// (its admission signature does not verify). Replays and recovery after the
+/// outcome is retained reach no owner: they run against an endpoint that
+/// records every request.
 #[tokio::test]
 async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
     use super::super::{delivery, journal, SubmissionNotDelivered};
-    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    };
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+    use crate::test_fixtures::ServedRuntimeHome;
+    use wiremock::MockServer;
 
     let cases = tokio::task::spawn_blocking(model_cases).await??;
     for name in [
@@ -503,55 +604,49 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             .context("modeled owner outcome")?;
         let trace = case["trace"].as_array().context("receipt trace")?;
         let first = &trace[0]["input"];
-        let mut facts = Facts::new()?;
-        let proposal = facts.proposal(&first["intent"], &first["proposal"]).await?;
-        let pending = proposal.pending.as_ref().context("signed proposal")?;
         let expected: Outcome = serde_json::from_value(trace[1]["input"]["outcome"].clone())?;
-        let server_outcome = if stale {
+        let owner_outcome = if stale {
             serde_json::from_value(trace[2]["input"]["outcome"].clone())?
         } else {
             expected
         };
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
-        node.add_collection(&crate::test_support::unbound_journal_schema())
-            .await?;
-        let server = MockServer::start().await;
-        let stored = Arc::new(AtomicBool::new(false));
-        let stored_for_server = Arc::clone(&stored);
-        let create = &pending.create;
-        let row = json!({
-            "request_id":create.request_id, "node_did":create.node_did,
-            "session_id":create.session_id, "requester_did":create.requester_did,
-            "admission_signer_did":create.admission.signer_did,
-            "admission_signature":bs58::encode(&create.admission.signature).into_string(),
-        });
-        Mock::given(method("POST"))
-            .and(path("/api/v0/graphql"))
-            .respond_with(move |request: &Request| {
-                let body = String::from_utf8_lossy(&request.body);
-                if body.contains("create_AgentRequest") {
-                    if server_outcome == Outcome::Accepted {
-                        stored_for_server.store(true, Ordering::SeqCst);
-                        ResponseTemplate::new(502)
-                    } else {
-                        ResponseTemplate::new(200)
-                            .set_body_json(json!({"errors":[{"message":"admission refused"}]}))
-                    }
-                } else {
-                    let rows = if stored_for_server.load(Ordering::SeqCst) {
-                        vec![row.clone()]
-                    } else {
-                        vec![]
-                    };
-                    ResponseTemplate::new(200).set_body_json(json!({"data":{"AgentRequest":rows}}))
-                }
-            })
-            .mount(&server)
-            .await;
-        let access = ConfigAccess::Graphql(GraphqlEndpoint::anonymous(format!(
-            "{}/api/v0/graphql",
-            server.uri()
-        )));
+        let home = ServedRuntimeHome::start().await;
+        let agent = home.publish_chat_agent().await;
+        let user = home.user().clone();
+        let mut facts = Facts::new()?;
+        facts.bind_client(number(&first["intent"]["caller"], "requester")?, user.did());
+        facts.bind_node(number(&first["intent"], "node")?, home.node_did());
+        let intent = facts.intent(&first["intent"])?;
+        let prepared = &first["proposal"];
+        let (result, mut create) = super::super::super::prepare::prepare_request_submission(
+            &home.user_access(),
+            &crate::client::ClientStore::default(),
+            &identity(number(prepared, "session")?),
+            home.node_did(),
+            user.did(),
+            user.as_ref(),
+            AgentRequestAdmissionRecord::client(user.did()),
+            format!("envelope-{}", number(&first["intent"], "envelope")?).as_str(),
+            Some(&agent.agent_did),
+            super::super::super::SubmitRequestOptions::default(),
+            Some(&intent.request_id),
+        )
+        .await?;
+        if owner_outcome == Outcome::NotDelivered {
+            create.admission.signature[0] ^= 1;
+        }
+        let pending = UnresolvedSubmission::new(create, result)?;
+        facts.bind_payload(&pending, number(prepared, "signedBytes")?);
+        let proposal = Record::proposal(intent, pending);
+        let node = crate::test_support::client_journal_node(user.did()).await?;
+        let owner = home.user_access();
+        let proxy = crate::test_fixtures::ReplyLossProxy::start(home.graphql()).await;
+        let caller = proxy.user_access(user.as_ref());
+        let unreachable = MockServer::start().await;
+        let silent = super::super::test_access(
+            &format!("{}/api/v0/graphql", unreachable.uri()),
+            user.as_ref(),
+        );
         let result = async {
             let retained = journal::caller::reserve(&node, &proposal).await?;
             if stale {
@@ -563,12 +658,16 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                 )
                 .await?;
             }
-            let mut reply = delivery::reconcile(&node, Some(&access), retained).await;
-            if expected == Outcome::Accepted && !stale {
+            let reply = if expected == Outcome::Accepted && !stale {
+                // The owner commits the caller's create, then the commit reply
+                // and the caller's receipt read are lost.
+                proxy.lose_replies_after_next_create();
+                let lost = delivery::reconcile(&node, delivery::OwnerAccess::Granted(&caller), retained).await;
                 assert!(matches!(
-                    reply.unwrap_err(),
+                    lost.unwrap_err(),
                     super::super::SubmissionError::Unknown(_)
                 ));
+                proxy.restore();
                 let unknown = journal::caller::recover(&node, &proposal.intent)
                     .await?
                     .context("unknown outcome remains retained")?;
@@ -576,8 +675,15 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                     facts.records_json(std::slice::from_ref(&unknown))?,
                     trace[0]["after"]
                 );
-                reply = delivery::reconcile(&node, Some(&access), unknown).await;
-            }
+                delivery::reconcile(&node, delivery::OwnerAccess::Granted(&caller), unknown).await
+            } else {
+                delivery::reconcile(&node, delivery::OwnerAccess::Granted(&caller), retained).await
+            };
+            assert_eq!(
+                proxy.creates(),
+                usize::from(owner_outcome == Outcome::Accepted),
+                "the caller issued exactly one owner create, and none once its outcome was settled"
+            );
             if expected == Outcome::Accepted {
                 assert_eq!(reply?, proposal.reference.request);
             } else {
@@ -597,12 +703,8 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                 facts.records_json(std::slice::from_ref(&retained))?,
                 trace[1]["after"]
             );
-            let request_count = server
-                .received_requests()
-                .await
-                .context("recorded transport")?
-                .len();
-            let replay = delivery::reconcile(&node, Some(&access), retained).await;
+            let before = unreachable.received_requests().await.unwrap().len();
+            let replay = delivery::reconcile(&node, delivery::OwnerAccess::Granted(&silent), retained).await;
             if expected == Outcome::Accepted {
                 assert_eq!(replay?, proposal.reference.request);
             } else {
@@ -611,20 +713,15 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                     super::super::SubmissionError::NotDelivered(_)
                 ));
             }
-            assert_eq!(
-                server.received_requests().await.unwrap().len(),
-                request_count,
-                "confirmed reply recovery must not issue another owner write or query"
-            );
             let frozen = super::super::super::submit_request(
                 &node,
                 &crate::client::ClientStore::default(),
-                &access,
+                &silent,
                 "new-session-must-not-replace-the-original",
                 &proposal.intent.node_did,
                 "new-requester-must-not-replace-the-original",
-                &facts.nodes[&2],
-                AgentRequestAdmissionRecord::local_self(&proposal.intent.node_did),
+                user.as_ref(),
+                AgentRequestAdmissionRecord::client(user.did()),
                 "",
                 None,
                 super::super::super::SubmitRequestOptions {
@@ -642,25 +739,30 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
                 ));
             }
             assert_eq!(
-                server.received_requests().await.unwrap().len(),
-                request_count,
-                "recovered submit must use the frozen preparation"
+                unreachable.received_requests().await.unwrap().len(),
+                before,
+                "confirmed reply recovery and the frozen submit reach no owner"
             );
-            let creates = server
-                .received_requests()
-                .await
-                .unwrap()
-                .into_iter()
-                .filter(|request| {
-                    String::from_utf8_lossy(&request.body).contains("create_AgentRequest")
-                })
-                .count();
-            assert_eq!(creates, 1, "exactly one owner submission");
+            let rows = owner
+                .execute(&format!(
+                    "{{AgentRequest(filter:{{request_id:{{_eq:\"{}\"}}}}){{admission_signature}}}}",
+                    proposal.intent.request_id
+                ))
+                .await?;
+            assert_eq!(
+                rows["data"]["AgentRequest"]
+                    .as_array()
+                    .context("owner rows")?
+                    .len(),
+                usize::from(owner_outcome == Outcome::Accepted),
+                "the owner holds the original request exactly when it accepted it"
+            );
             Ok::<(), anyhow::Error>(())
         }
         .await;
         node.shutdown().await.unwrap();
-        result?;
+        home.shutdown().await;
+        result.with_context(|| format!("modeled owner outcome {name}"))?;
     }
     Ok(())
 }

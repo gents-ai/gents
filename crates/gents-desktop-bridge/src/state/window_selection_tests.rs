@@ -17,7 +17,7 @@ fn select(state: &DesktopAppState, label: &str, did: Option<&str>) {
         .bridge
         .lock()
         .unwrap()
-        .set_window_selected_node(label, did.map(str::to_owned));
+        .select_window_node(label, did.map(str::to_owned), |_| {});
 }
 
 fn selected(state: &DesktopAppState) -> Option<String> {
@@ -121,6 +121,38 @@ async fn window_scope_reaches_the_core_and_survives_core_recreation() {
     assert_eq!(core.selected_node_did(), None);
     state.bridge.lock().unwrap().core.take();
     core.shutdown().await.expect("shutdown recreated core");
+}
+
+/// Regression: the selection was written and the watches cancelled after it
+/// in a second critical section, so a delivery between them sent the old
+/// node's snapshot to a window that selects the new one (TLA
+/// `MCPackUxWatchSelectBeforeCancel`).
+#[test]
+fn a_selection_change_cancels_watches_while_the_old_node_is_selected() {
+    let (_temp, state) = state();
+    state.register_window("main");
+    select(&state, "main", Some("did:a"));
+    let watch = state.ux_watches.insert("main", "watch").unwrap();
+    let mut bridge = state.bridge.lock().unwrap();
+    let mut old_node_selected = None;
+    assert!(
+        bridge.select_window_node("main", Some("did:b".into()), |bridge| {
+            old_node_selected = Some(bridge.window_selects_node("main", "did:a"));
+            state.ux_watches.cancel_window("main");
+        })
+    );
+    assert_eq!(old_node_selected, Some(true));
+    assert!(watch.is_cancelled());
+    assert!(!state.ux_watches.deliver("main", "watch", || true));
+    assert!(bridge.window_selects_node("main", "did:b"));
+
+    let kept = state.ux_watches.insert("main", "kept").unwrap();
+    assert!(
+        !bridge.select_window_node("main", Some("did:b".into()), |_| {
+            state.ux_watches.cancel_window("main");
+        })
+    );
+    assert!(!kept.is_cancelled());
 }
 
 #[test]

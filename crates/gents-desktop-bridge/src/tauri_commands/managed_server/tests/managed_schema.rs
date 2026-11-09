@@ -115,7 +115,7 @@ async fn paired_managed_runtime_with_skewed_schema_projects_incompatible_sync() 
         peer.node_did == node_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
-            && peer.is_chat_ready_at(chrono::Utc::now())
+            && peer.is_chat_ready()
     }));
 
     let mut updates = core.sync_state_updates();

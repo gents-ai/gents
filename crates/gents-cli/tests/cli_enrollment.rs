@@ -824,7 +824,11 @@ async fn wait_for_chat_ready_enrollment(
             .peer_records()
             .await
             .into_iter()
-            .find(|record| record.node_did == node_did && record.is_chat_ready_at(now))
+            .find(|record| {
+                record.node_did == node_did
+                    && record.is_enrollment_ready_at(now)
+                    && record.is_chat_ready()
+            })
         {
             return Ok(record);
         }

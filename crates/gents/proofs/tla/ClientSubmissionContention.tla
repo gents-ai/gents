@@ -34,37 +34,86 @@
 \* existing session, so its rebuild binds the same targets. A lost commit
 \* response is unconfirmed and never rebuilt (`LostResponse`).
 \*
+\* Recovery after an unconfirmed submission (`Recovery`): the caller's
+\* journal retains the signed bytes, and the reconciler reads the owner's
+\* request (`reconcile_client_request`) and replays the identical bytes when
+\* it sees none (`resolve_unresolved_submission`). DefraDB derives the
+\* document identity from its content, so the identical replay and a late
+\* landing of the original commit are one document ("orig"). A lost response
+\* may leave the original commit in flight; it later lands or aborts. The
+\* reconciler reaches the owner only while the owner is reachable
+\* (`OwnerReachable`); otherwise it returns `SubmissionOutcomeUnknown` and the
+\* send stays unconfirmed. An identical replay the owner definitely rejects
+\* (`ReplayRejects`) is reported not delivered and its bytes retired.
+\*
+\* The bytes may be lost first (a restart of an older uncorrelated send, a
+\* reset journal); the caller can then only read the owner's visible request
+\* (`reconcile_unretained_submission`), whose absence proves nothing.
+\* `UnretainedPolicy` reads that absence: "wait" keeps the send unconfirmed
+\* (`DeliveryUnconfirmed`), "refuse" reports it not delivered (the `.refused`
+\* branch of Lean `ClientSubmissionReceipt.result`), and the person may then
+\* resend a new identity ("resend"). `SetAside` is the person's way out of an
+\* unprovable send (Lean `affordances`, `.unknown .unretained`): it never
+\* claims non-delivery and mints no identity, and a late landing of the
+\* original still appears in the session. Lean
+\* `journal_records_never_show_unprovable` shows a journal-written record
+\* never reaches that view; this models the rows the journal did not write.
+\*
+\* A reservation whose commit response is lost (`reserveUnconfirmed`) has sent
+\* no request; the saved message offers Resume, which repeats the idempotent
+\* reservation against the same session (`ReserveRetry`).
+\*
 \* `Publications` bounds the Agent's session refreshes that land inside one
 \* submission's attempt series: the owned loop refreshes the observation once
 \* per published message, and the series spans the bounded
 \* `transaction_backoff` (100 + 200 + 400 ms). An abort consumes one such
 \* refresh, so either phase's series outlasts them only when
 \* `Publications < Attempts`.
-EXTENDS Naturals
+EXTENDS Naturals, FiniteSets
 
 CONSTANTS
   Publications,  \* Agent session refreshes landing in one attempt series
   Attempts,      \* bounded attempts (TRANSACT_CONFLICT_MAX_RETRIES + 1)
   Redrive,       \* signed-conflict rebuild of the submission
   ReserveRedrive,\* signed-conflict rebuild of the target reservation
-  LostResponse   \* a commit response may be lost (unconfirmed)
+  LostResponse,  \* a commit response may be lost (unconfirmed)
+  Recovery,      \* model recovery and an in-flight original commit
+  BytesLost,     \* the caller may lose the signed bytes first
+  ReplayIdentical, \* recovery replays the retained bytes, not a new identity
+  OwnerReachable,  \* a reconcile of retained bytes can reach the owner
+  ReplayRejects,   \* the owner may definitely reject the identical replay
+  SetAsideOffered, \* the person may set aside an unprovable send
+  UnretainedPolicy \* "wait" | "refuse": an unproven send without bytes
 
 ASSUME /\ Publications \in Nat
        /\ Attempts \in Nat \ {0}
        /\ Redrive \in BOOLEAN
        /\ ReserveRedrive \in BOOLEAN
        /\ LostResponse \in BOOLEAN
+       /\ Recovery \in BOOLEAN
+       /\ BytesLost \in BOOLEAN
+       /\ ReplayIdentical \in BOOLEAN
+       /\ OwnerReachable \in BOOLEAN
+       /\ ReplayRejects \in BOOLEAN
+       /\ SetAsideOffered \in BOOLEAN
+       /\ UnretainedPolicy \in {"wait", "refuse"}
 
 VARIABLES
   sessVer,   \* committed version of the AgentSession document
   agentLeft, \* Agent session refreshes still to land
-  client,    \* "idle" | "reserving" | "reserved" | "open" | "admitted"
-             \* | "unconfirmed" | "lost"
+  client,    \* "idle" | "reserving" | "reserveUnconfirmed" | "reserved"
+             \* | "open" | "admitted" | "unconfirmed" | "lost" | "unretained"
+             \* | "notDelivered" | "setAside"
   snap,      \* the session version the open attempt read
   tries,     \* attempts begun in the current phase
-  created    \* committed AgentRequest documents for this submission
+  committed, \* committed AgentRequest identities: "orig" and a "resend"
+  inflight,  \* the original commit is still undecided
+  retained   \* the caller still holds the original signed bytes
 
-vars == <<sessVer, agentLeft, client, snap, tries, created>>
+vars == <<sessVer, agentLeft, client, snap, tries, committed, inflight, retained>>
+
+\* Committed AgentRequest documents for this authored message.
+created == Cardinality(committed)
 
 Init ==
   /\ sessVer = 0
@@ -72,14 +121,16 @@ Init ==
   /\ client = "idle"
   /\ snap = 0
   /\ tries = 0
-  /\ created = 0
+  /\ committed = {}
+  /\ inflight = FALSE
+  /\ retained = TRUE
 
 \* The working Agent publishes a message and refreshes the observation.
 AgentPublish ==
   /\ agentLeft > 0
   /\ sessVer' = sessVer + 1
   /\ agentLeft' = agentLeft - 1
-  /\ UNCHANGED <<client, snap, tries, created>>
+  /\ UNCHANGED <<client, snap, tries, committed, inflight, retained>>
 
 \* The reservation opens its first attempt and reads the session.
 ReserveBegin ==
@@ -87,7 +138,7 @@ ReserveBegin ==
   /\ client' = "reserving"
   /\ snap' = sessVer
   /\ tries' = 1
-  /\ UNCHANGED <<sessVer, agentLeft, created>>
+  /\ UNCHANGED <<sessVer, agentLeft, committed, inflight, retained>>
 
 \* Reservation commit: the targets are bound when the read session is
 \* unchanged; a confirmed abort is rebuilt by re-reading while attempts remain.
@@ -103,16 +154,24 @@ ReserveCommit ==
                    /\ UNCHANGED client
               ELSE /\ client' = "lost"
                    /\ UNCHANGED <<snap, tries>>
-  /\ UNCHANGED <<sessVer, agentLeft, created>>
+  /\ UNCHANGED <<sessVer, agentLeft, committed, inflight, retained>>
 
-\* The reservation commits but its response is lost: it is reported, and the
-\* caller repeats it against the same existing session.
+\* The reservation commits but its response is lost: it is reported, and no
+\* request was sent.
 ReserveCommitUnconfirmed ==
   /\ LostResponse
   /\ client = "reserving"
   /\ snap = sessVer
-  /\ client' = "unconfirmed"
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, created>>
+  /\ client' = "reserveUnconfirmed"
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight, retained>>
+
+\* Resume repeats the reservation; it binds the session the lost commit made.
+ReserveRetry ==
+  /\ client = "reserveUnconfirmed"
+  /\ client' = "reserving"
+  /\ snap' = sessVer
+  /\ tries' = 1
+  /\ UNCHANGED <<sessVer, agentLeft, committed, inflight, retained>>
 
 \* The submission opens its first attempt and reads the session.
 ClientBegin ==
@@ -120,7 +179,7 @@ ClientBegin ==
   /\ client' = "open"
   /\ snap' = sessVer
   /\ tries' = 1
-  /\ UNCHANGED <<sessVer, agentLeft, created>>
+  /\ UNCHANGED <<sessVer, agentLeft, committed, inflight, retained>>
 
 \* Commit: success when the read session is unchanged; otherwise a confirmed
 \* abort, which the rebuild re-drives by re-reading while attempts remain.
@@ -128,15 +187,15 @@ ClientCommit ==
   /\ client = "open"
   /\ IF snap = sessVer
        THEN /\ client' = "admitted"
-            /\ created' = created + 1
+            /\ committed' = committed \cup {"orig"}
             /\ UNCHANGED <<snap, tries>>
        ELSE IF Redrive /\ tries < Attempts
               THEN /\ snap' = sessVer
                    /\ tries' = tries + 1
-                   /\ UNCHANGED <<client, created>>
+                   /\ UNCHANGED <<client, committed>>
               ELSE /\ client' = "lost"
-                   /\ UNCHANGED <<snap, tries, created>>
-  /\ UNCHANGED <<sessVer, agentLeft>>
+                   /\ UNCHANGED <<snap, tries, committed>>
+  /\ UNCHANGED <<sessVer, agentLeft, inflight, retained>>
 
 \* The commit lands but its response is lost: finality is unknown, so the
 \* submission reports it and never rebuilds a second graph.
@@ -145,41 +204,161 @@ ClientCommitUnconfirmed ==
   /\ client = "open"
   /\ snap = sessVer
   /\ client' = "unconfirmed"
-  /\ created' = created + 1
-  /\ UNCHANGED <<sessVer, agentLeft, snap, tries>>
+  /\ committed' = committed \cup {"orig"}
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, inflight, retained>>
+
+\* The response is lost before the commit is decided: the submission is
+\* reported unconfirmed while the original may still land.
+ClientCommitInFlight ==
+  /\ LostResponse
+  /\ Recovery
+  /\ client = "open"
+  /\ snap = sessVer
+  /\ client' = "unconfirmed"
+  /\ inflight' = TRUE
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, retained>>
+
+\* The undecided original commit lands, or aborts.
+OriginalLands ==
+  /\ inflight
+  /\ inflight' = FALSE
+  /\ committed' = committed \cup {"orig"}
+  /\ UNCHANGED <<sessVer, agentLeft, client, snap, tries, retained>>
+
+OriginalAborts ==
+  /\ inflight
+  /\ inflight' = FALSE
+  /\ UNCHANGED <<sessVer, agentLeft, client, snap, tries, committed, retained>>
+
+\* The caller loses the signed bytes of an unconfirmed send.
+LoseBytes ==
+  /\ BytesLost
+  /\ client = "unconfirmed"
+  /\ retained
+  /\ retained' = FALSE
+  /\ client' = "unretained"
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight>>
+
+\* With retained bytes, a reachable owner decides: a visible request settles
+\* it; absence replays the identical bytes, which is the same document as the
+\* original. Without `ReplayIdentical` the absence is answered with a freshly
+\* signed request. An unreachable owner leaves the send unconfirmed: no step.
+ReconcileRetained ==
+  /\ Recovery
+  /\ OwnerReachable
+  /\ client = "unconfirmed"
+  /\ retained
+  /\ client' = "admitted"
+  /\ committed' = IF "orig" \in committed \/ ReplayIdentical
+                    THEN committed \cup {"orig"}
+                    ELSE committed \cup {"resend"}
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, inflight, retained>>
+
+\* The owner shows no request and definitely rejects the identical replay
+\* (`SubmissionAttemptError::Rejected`); the journal retires the bytes.
+ReplayRejected ==
+  /\ Recovery
+  /\ OwnerReachable
+  /\ ReplayRejects
+  /\ client = "unconfirmed"
+  /\ retained
+  /\ "orig" \notin committed
+  /\ client' = "notDelivered"
+  /\ retained' = FALSE
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight>>
+
+\* Without bytes only the owner's visible request is evidence.
+CheckUnretained ==
+  /\ client = "unretained"
+  /\ IF "orig" \in committed
+       THEN client' = "admitted"
+       ELSE IF UnretainedPolicy = "refuse"
+              THEN client' = "notDelivered"
+              ELSE UNCHANGED client
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight, retained>>
+
+\* The person sets aside a send that cannot be proven either way.
+SetAside ==
+  /\ SetAsideOffered
+  /\ client = "unretained"
+  /\ client' = "setAside"
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, committed, inflight, retained>>
+
+\* Told it was not delivered, the person sends it again as a new identity.
+Resend ==
+  /\ client = "notDelivered"
+  /\ client' = "admitted"
+  /\ committed' = committed \cup {"resend"}
+  /\ UNCHANGED <<sessVer, agentLeft, snap, tries, inflight, retained>>
 
 Next ==
   \/ AgentPublish
   \/ ReserveBegin
   \/ ReserveCommit
   \/ ReserveCommitUnconfirmed
+  \/ ReserveRetry
   \/ ClientBegin
   \/ ClientCommit
   \/ ClientCommitUnconfirmed
+  \/ ClientCommitInFlight
+  \/ OriginalLands
+  \/ OriginalAborts
+  \/ LoseBytes
+  \/ ReconcileRetained
+  \/ ReplayRejected
+  \/ CheckUnretained
+  \/ SetAside
+  \/ Resend
 
 Spec ==
   /\ Init
   /\ [][Next]_vars
   /\ WF_vars(ReserveBegin)
-  /\ WF_vars(ReserveCommit)
+  \* A repeated reservation does not lose its response forever.
+  /\ SF_vars(ReserveCommit)
+  /\ WF_vars(ReserveRetry)
   /\ WF_vars(ClientBegin)
   /\ WF_vars(ClientCommit)
+  /\ WF_vars(OriginalLands \/ OriginalAborts)
+  /\ WF_vars(ReconcileRetained \/ ReplayRejected)
+  /\ WF_vars(CheckUnretained)
+  /\ WF_vars(SetAside)
+  /\ WF_vars(Resend)
 
 TypeOK ==
   /\ sessVer \in 0..Publications
   /\ agentLeft \in 0..Publications
-  /\ client \in {"idle", "reserving", "reserved", "open", "admitted",
-                 "unconfirmed", "lost"}
+  /\ client \in {"idle", "reserving", "reserveUnconfirmed", "reserved", "open", "admitted",
+                 "unconfirmed", "lost", "unretained", "notDelivered", "setAside"}
   /\ tries \in 0..Attempts
-  /\ created \in 0..1
+  /\ committed \subseteq {"orig", "resend"}
+  /\ inflight \in BOOLEAN
+  /\ retained \in BOOLEAN
 
 \* A valid submission during a turn is never lost to the turn's own writes.
 NoConflictLoss == client # "lost"
 
-\* Rebuilding never creates a second request, even after a lost response.
+\* Neither rebuilding nor recovery creates a second request for one
+\* authored message, even after a lost response.
 CreatedOnce == created <= 1
 
-\* Every submission settles: admitted, or reported unconfirmed.
-EverySubmissionSettles == <>(client \in {"admitted", "unconfirmed"})
+\* A send is reported not delivered only when it cannot still land.
+NotDeliveredIsProven ==
+  client = "notDelivered" => ("orig" \notin committed /\ ~inflight)
+
+\* An unprovable send never blocks the person: setting it aside is offered.
+NeverBlocked == client = "unretained" => ENABLED SetAside
+
+\* Every submission settles: admitted, or reported unconfirmed or not
+\* delivered. A lost reservation response is not settled; Resume repeats it.
+EverySubmissionSettles ==
+  <>(client \in {"admitted", "unconfirmed", "notDelivered"})
+
+\* Recovery: an unconfirmed send is eventually shown delivered, not delivered
+\* with a way forward, or set aside by the person; it is never left checking
+\* forever.
+UnconfirmedResolves ==
+  [](client \in {"reserveUnconfirmed", "unconfirmed", "unretained"} =>
+       <>(client \in {"admitted", "notDelivered", "setAside"}))
 
 ====

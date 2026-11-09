@@ -3,7 +3,7 @@ use chrono::Utc;
 use gents::store::config_client::ConfigAccess;
 
 use super::super::bootstrap::normalize_required;
-use super::{ensure_peer_chat_ready_at, ClientCore};
+use super::{ensure_peer_chat_ready, ClientCore};
 use crate::client::mutations;
 
 fn mailbox_node_for_document<'a>(
@@ -65,7 +65,7 @@ impl ClientCore {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready(node_did, peer.as_ref())?;
         let requester = self.requester_did(
             peer.as_ref()
                 .context("chat target has no current owned peer route")?,
