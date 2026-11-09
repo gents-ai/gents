@@ -1,12 +1,12 @@
 import { expect, gotoHarness, test } from "./desktopTest";
-import { chatDraftKey, retainChatDraft } from "../../src/hooks/chatDrafts";
+import { chatDraftKey, chatDraftOf } from "../../src/hooks/chatDrafts";
 
 for (const colorScheme of ["light", "dark"] as const) {
   test(`keeps a failed message compact, keyboard reachable and retryable in ${colorScheme}`, async ({
     page,
   }, info) => {
     await page.emulateMedia({ colorScheme });
-    const draft = retainChatDraft(
+    const draft = chatDraftOf(
       {
         clientDid: "did:key:desktop-harness",
         nodeDid: "did:key:z6MkBombadilAgent",

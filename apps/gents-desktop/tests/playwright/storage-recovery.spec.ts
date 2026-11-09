@@ -1,5 +1,5 @@
 import { expect, gotoHarness, test } from "./desktopTest";
-import { chatDraftKey, retainChatDraft } from "../../src/hooks/chatDrafts";
+import { chatDraftKey, chatDraftOf } from "../../src/hooks/chatDrafts";
 
 for (const colorScheme of ["light", "dark"] as const) {
   test(`reviews disk-full recovery without replaying saved input in ${colorScheme}`, async ({
@@ -20,7 +20,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       content: "Retain this original message",
     };
     const draft = {
-      ...retainChatDraft(request, "session-intro"),
+      ...chatDraftOf(request, "session-intro"),
       failure: {
         message: "Storage is full",
         error: {

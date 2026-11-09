@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatSendRequest } from "@source-inc/gents-desktop-client";
 import { ChatDeliveryFeedback } from "../src/ui/screens/session/ChatDeliveryFeedback";
-import { retainChatDraft, saveChatDraft } from "../src/hooks/chatDrafts";
+import { chatDraftOf, saveChatDraft } from "../src/hooks/chatDrafts";
 import { acceptedChat } from "./chat-delivery-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { loadChatDrafts } from "../src/hooks/chatDrafts";
@@ -51,9 +51,9 @@ function fixture(sending = false) {
   saveChatDraft(
     app.stores.chat,
     sending
-      ? { ...retainChatDraft(request, null), pendingUntil: Date.now() + 60_000 }
+      ? { ...chatDraftOf(request, null), pendingUntil: Date.now() + 60_000 }
       : {
-          ...retainChatDraft(request, null),
+          ...chatDraftOf(request, null),
           failure: { message: "The runtime connection was lost", error: null },
         },
   );

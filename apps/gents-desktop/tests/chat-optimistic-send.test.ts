@@ -13,11 +13,7 @@ import {
   observeLandedChatSends,
 } from "../src/hooks/chatDelivery";
 import { createChatStore } from "../src/hooks/chatStore";
-import {
-  loadChatDrafts,
-  retainChatDraft,
-  saveChatDraft,
-} from "../src/hooks/chatDrafts";
+import { loadChatDrafts, chatDraftOf, saveChatDraft } from "../src/hooks/chatDrafts";
 import { writeSession } from "../src/hooks/sessionStore";
 import { deliveryAffordances, sendStatus } from "../src/hooks/chatDeliveryView";
 import { admittingProjection, shellStores } from "./shell-fixture";
@@ -282,7 +278,7 @@ it("retires a failed send, and its composer error, once the session shows its re
 it("retires a send restored after a restart once its deadline passes and the session shows it", async () => {
   vi.useFakeTimers();
   const f = fixture();
-  const draft = retainChatDraft(
+  const draft = chatDraftOf(
     {
       clientDid: "client",
       nodeDid: "node",
@@ -307,7 +303,7 @@ it("retires a send restored after a restart once its deadline passes and the ses
 it("keeps an observed answer saved as sent until its question closes", async () => {
   vi.useFakeTimers();
   const f = fixture();
-  const answer = retainChatDraft(
+  const answer = chatDraftOf(
     {
       clientDid: "client",
       nodeDid: "node",

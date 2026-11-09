@@ -5,8 +5,11 @@ import {
   type DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
 import {
+  chatDraftOf,
+  chatDraftPayload,
   chatDraftRequest,
   chatDraftsFor,
+  forgetChatDraftAttachments,
   loadChatDrafts,
   removeChatDraft,
   retainChatDraft,
@@ -128,19 +131,35 @@ export function createChatDelivery(
     }
     return reply.result;
   }
-  async function send(draft: ChatDraft, applied: Applied, saved?: Saved) {
-    if (clientDid() !== draft.clientDid)
-      throw new Error("The selected client changed before dispatch.");
+  async function send(
+    draft: ChatDraft,
+    applied: Applied,
+    saved?: Saved,
+    fresh = false,
+  ) {
     const attempt: ChatDraft = {
       ...draft,
       failure: undefined,
       pendingUntil: now() + CHAT_SEND_DEADLINE_MS,
     };
-    saveChatDraft(stores.chat, attempt);
+    try {
+      if (clientDid() !== draft.clientDid)
+        throw new Error("The selected client changed before dispatch.");
+      saveChatDraft(stores.chat, attempt);
+    } catch (error) {
+      // A new send that was never saved keeps no attachment bytes.
+      if (fresh) forgetChatDraftAttachments(draft);
+      throw error;
+    }
     saved?.(attempt);
     const reply: Promise<Reply> = (async () => {
       try {
-        const result = await api.sendChatMessage(chatDraftRequest(attempt));
+        // Without attachments the send is dispatched in the task that saved it.
+        const result = await api.sendChatMessage(
+          attempt.attachments?.length
+            ? await chatDraftPayload(attempt)
+            : chatDraftRequest(attempt),
+        );
         validateChatResult(attempt, result);
         return { ok: true as const, result };
       } catch (error) {
@@ -176,34 +195,37 @@ export function createChatDelivery(
       const actor = clientDid();
       if (request.clientDid && request.clientDid !== actor)
         throw new Error("The selected client changed before dispatch.");
-      if (
-        chatDraftsFor(
-          load(),
-          actor,
-          request.nodeDid,
-          selectedSessionId,
-          mailbox?.itemId,
-        ).some(
-          (draft) =>
-            deliveryAffordances(sendStatus(draft, now()), mailbox !== undefined)
-              .blocksComposer,
+      const input: ChatSendRequest = {
+        ...request,
+        clientDid: actor,
+        requestId: crypto.randomUUID(),
+        sessionId: request.sessionId ?? crypto.randomUUID(),
+      };
+      const draft = input.attachments?.length
+        ? await retainChatDraft(input, selectedSessionId, queued, mailbox)
+        : chatDraftOf(input, selectedSessionId, queued, mailbox);
+      try {
+        if (
+          chatDraftsFor(
+            load(),
+            actor,
+            request.nodeDid,
+            selectedSessionId,
+            mailbox?.itemId,
+          ).some(
+            (row) =>
+              deliveryAffordances(sendStatus(row, now()), mailbox !== undefined)
+                .blocksComposer,
+          )
         )
-      )
-        throw new Error(
-          "Retry or discard the saved answer before answering this question again.",
-        );
-      const draft = retainChatDraft(
-        {
-          ...request,
-          clientDid: actor,
-          requestId: crypto.randomUUID(),
-          sessionId: request.sessionId ?? crypto.randomUUID(),
-        },
-        selectedSessionId,
-        queued,
-        mailbox,
-      );
-      return send(draft, applied, saved);
+          throw new Error(
+            "Retry or discard the saved answer before answering this question again.",
+          );
+      } catch (error) {
+        forgetChatDraftAttachments(draft);
+        throw error;
+      }
+      return send(draft, applied, saved, true);
     },
     /** Resend a failed message: the same payload under the same identity. */
     async retry(requestId: string, applied: Applied) {

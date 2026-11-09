@@ -1,4 +1,3 @@
-import { attachmentMetadata } from "./attachmentMetadata";
 import { splitSkillLines } from "@/lib/skillLines";
 import type {
   RequestAttachment,
@@ -202,10 +201,7 @@ export function createChatActions({
     try {
       request = chatDraftRequest(draft);
     } catch {}
-    const attachmentViews = request?.attachments?.length
-      ? await Promise.all(request.attachments.map(attachmentMetadata))
-      : [];
-    if (!showing()) return false;
+    const attachmentViews = draft.attachments ?? [];
     if (draft.selectedSessionId === null) {
       if (request)
         writeChatFolders(stores.chat, (folders) =>
