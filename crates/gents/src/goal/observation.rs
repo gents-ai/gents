@@ -107,6 +107,15 @@ async fn rows_in_txn(
         escape_graphql_string(&session.session.node_did),
         escape_graphql_string(&session.session.session_id),
     )).await?;
+    decode_observation_rows(&response, session)
+}
+
+/// Decodes the projection query's response for `session`'s physical document.
+/// As for the session row, a response without the row list fails the read.
+fn decode_observation_rows(
+    response: &serde_json::Value,
+    session: &SessionOwnerRow,
+) -> Result<Vec<ObservationRow>> {
     let rows: Vec<ObservationRow> = serde_json::from_value(
         response
             .pointer("/data/GoalObservation")
@@ -122,6 +131,21 @@ async fn rows_in_txn(
         "goal observation has conflicting physical documents"
     );
     Ok(rows)
+}
+
+/// Lean `SessionObservation.ProjectionRead` for a present session's rows.
+async fn classify_projection(
+    verifier: &dyn NodeIdentity,
+    session: &SessionOwnerRow,
+    rows: &[ObservationRow],
+) -> Result<SessionGoalProjectionRead> {
+    Ok(match rows.first() {
+        Some(row) => match verified(verifier, session, row).await? {
+            Some(observation) => SessionGoalProjectionRead::Verified(Box::new(observation)),
+            None => SessionGoalProjectionRead::Unverified,
+        },
+        None => SessionGoalProjectionRead::Missing,
+    })
 }
 
 async fn verified(
@@ -169,9 +193,9 @@ async fn verified(
     Ok(Some(observation))
 }
 
-/// Collapses [`SessionGoalObservationState`] to the verified envelope, for
-/// runtime callers that act only on one. Client views and sends use the
-/// three-state read: `None` here does not mean the session has no Goal.
+/// Collapses [`SessionGoalObservationState`] to the verified envelope for
+/// `requester_did`, for callers that act only on one. Client views and sends
+/// use the three-state read: `None` here does not mean the session has no Goal.
 pub async fn load_session_goal_observation(
     access: &ConfigAccess,
     verifier: &dyn NodeIdentity,
@@ -180,17 +204,16 @@ pub async fn load_session_goal_observation(
     requester_did: Option<&str>,
 ) -> Result<Option<SessionGoalObservation>> {
     Ok(
-        match load_session_goal_observation_state(
-            access,
-            verifier,
-            node_did,
-            session_id,
-            requester_did,
-        )
-        .await?
+        match load_client_session_goal_observation_state(access, verifier, node_did, session_id)
+            .await?
         {
-            SessionGoalObservationState::Observed(observation) => Some(*observation),
-            SessionGoalObservationState::NoReadableSession
+            SessionGoalObservationState::Observed(observation)
+                if observation.requester_did.as_deref() == requester_did =>
+            {
+                Some(*observation)
+            }
+            SessionGoalObservationState::Observed(_)
+            | SessionGoalObservationState::NoReadableSession
             | SessionGoalObservationState::Unknown(_) => None,
         },
     )
@@ -202,9 +225,19 @@ pub async fn load_session_goal_observation(
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum SessionGoalUnknownCause {
-    ReadIncomplete,
     ProjectionMissing,
     ProjectionUnverified,
+}
+
+/// The next step a Goal state offers (Lean `SessionObservation.NextAction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGoalNextAction {
+    ControlGoal,
+    StartGoal,
+    Send,
+    AwaitPublication,
 }
 
 /// One read transaction's Goal state (Lean `SessionObservation.State`). A
@@ -215,6 +248,56 @@ pub enum SessionGoalObservationState {
     NoReadableSession,
     Unknown(SessionGoalUnknownCause),
     Observed(Box<SessionGoalObservation>),
+}
+
+impl SessionGoalObservationState {
+    /// Lean `SessionObservation.next`.
+    pub fn next(&self) -> SessionGoalNextAction {
+        match self {
+            Self::Observed(observation) if observation.goal.is_some() => {
+                SessionGoalNextAction::ControlGoal
+            }
+            Self::Observed(_) => SessionGoalNextAction::StartGoal,
+            Self::NoReadableSession => SessionGoalNextAction::Send,
+            Self::Unknown(_) => SessionGoalNextAction::AwaitPublication,
+        }
+    }
+}
+
+/// A send or Goal change refused because its session's Goal state is unknown
+/// (Lean `SessionObservation.refusal`). It names the cause its view shows; the
+/// next action is to wait for the Agent's runtime to publish and act again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum GoalInputRefused {
+    #[error(
+        "This chat's Goal state is unknown: its Agent has not published it yet. \
+         The Agent's runtime publishes it while the Agent runs; try again then."
+    )]
+    ProjectionMissing,
+    #[error(
+        "This chat's Goal state is unknown: its published state does not verify for this \
+         session and Agent. The Agent's runtime republishes it while the Agent runs; try \
+         again then."
+    )]
+    ProjectionUnverified,
+}
+
+impl GoalInputRefused {
+    pub fn cause(self) -> SessionGoalUnknownCause {
+        match self {
+            Self::ProjectionMissing => SessionGoalUnknownCause::ProjectionMissing,
+            Self::ProjectionUnverified => SessionGoalUnknownCause::ProjectionUnverified,
+        }
+    }
+}
+
+impl From<SessionGoalUnknownCause> for GoalInputRefused {
+    fn from(cause: SessionGoalUnknownCause) -> Self {
+        match cause {
+            SessionGoalUnknownCause::ProjectionMissing => Self::ProjectionMissing,
+            SessionGoalUnknownCause::ProjectionUnverified => Self::ProjectionUnverified,
+        }
+    }
 }
 
 /// The projection row read with its session (Lean
@@ -233,9 +316,6 @@ pub fn observe_session_goal(
     projection: SessionGoalProjectionRead,
 ) -> SessionGoalObservationState {
     match (session, projection) {
-        (AgentSessionRowRead::Omitted, _) => {
-            SessionGoalObservationState::Unknown(SessionGoalUnknownCause::ReadIncomplete)
-        }
         (AgentSessionRowRead::Absent, _) => SessionGoalObservationState::NoReadableSession,
         (AgentSessionRowRead::Present(_), SessionGoalProjectionRead::Missing) => {
             SessionGoalObservationState::Unknown(SessionGoalUnknownCause::ProjectionMissing)
@@ -249,19 +329,17 @@ pub fn observe_session_goal(
     }
 }
 
-/// Lean `SessionObservation.bind`.
+/// Lean `SessionObservation.bind` and `refusal`.
 pub fn bind_goal_input(
     input: gents_protocol::request_input::RequestInput,
     state: SessionGoalObservationState,
-) -> Result<gents_protocol::request_input::RequestInput> {
+) -> std::result::Result<gents_protocol::request_input::RequestInput, GoalInputRefused> {
     if input.goal_assignment.is_some() {
         return Ok(input);
     }
     let reference = match state {
         SessionGoalObservationState::NoReadableSession => None,
-        SessionGoalObservationState::Unknown(_) => {
-            anyhow::bail!("Goal state is still syncing. Refresh this chat before sending.")
-        }
+        SessionGoalObservationState::Unknown(cause) => return Err(cause.into()),
         SessionGoalObservationState::Observed(observation) => observation.goal.and_then(|goal| {
             goal.assignment_root_request_doc_id.map(|root| {
                 gents_protocol::request_input::GoalAssignmentInput {
@@ -284,54 +362,33 @@ fn bind_goal_reference(
     input
 }
 
-pub async fn prepare_goal_input(
-    access: &ConfigAccess,
-    verifier: &dyn NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-    input: gents_protocol::request_input::RequestInput,
-) -> Result<gents_protocol::request_input::RequestInput> {
-    if input.goal_assignment.is_some() {
-        return Ok(input);
-    }
-    let state =
-        load_session_goal_observation_state(access, verifier, node_did, session_id, requester_did)
-            .await?;
-    bind_goal_input(input, state)
-}
-
-/// The client's send preparation: one read transaction scopes the
-/// observation to the session row's requester provenance (or `actor_did` when
-/// no row is readable) and binds the input from it.
+/// The client's send preparation: one read transaction, then the binding.
 pub async fn prepare_client_goal_input(
     access: &ConfigAccess,
     verifier: &dyn NodeIdentity,
     node_did: &str,
     session_id: &str,
-    actor_did: &str,
     input: gents_protocol::request_input::RequestInput,
 ) -> Result<gents_protocol::request_input::RequestInput> {
     if input.goal_assignment.is_some() {
         return Ok(input);
     }
     let state =
-        load_client_session_goal_observation_state(access, verifier, node_did, session_id, actor_did)
-            .await?;
-    bind_goal_input(input, state)
+        load_client_session_goal_observation_state(access, verifier, node_did, session_id).await?;
+    Ok(bind_goal_input(input, state)?)
 }
 
-/// The client's read of one session's Goal state in one transaction. An
-/// existing row's requester provenance scopes its projection; a client never
-/// reads it under another requester.
+/// The client's read of one session's Goal state in one transaction, as the
+/// actor `access` signs for. The session row is scoped by node and session id
+/// only; its projection is verified for that row's own requester provenance,
+/// which the client never substitutes. Whether that actor may then send into
+/// the session is admission's decision, not this read's.
 pub async fn load_client_session_goal_observation_state(
     access: &ConfigAccess,
     verifier: &dyn NodeIdentity,
     node_did: &str,
     session_id: &str,
-    actor_did: &str,
 ) -> Result<SessionGoalObservationState> {
-    anyhow::ensure!(!actor_did.trim().is_empty(), "Goal observation requires its client actor");
     access
         .transact_readonly("goal.read_client_observation", |txn| {
             Box::pin(async move {
@@ -339,13 +396,17 @@ pub async fn load_client_session_goal_observation_state(
                     txn, node_did, session_id,
                 )
                 .await?;
-                if let AgentSessionRowRead::Present(row) = &session {
-                    anyhow::ensure!(
-                        row.session.requester_did.is_some(),
-                        "existing session has no requester provenance"
-                    );
-                }
-                observe_session_row_in_txn(txn, verifier, session).await
+                let projection = match &session {
+                    AgentSessionRowRead::Present(row) => {
+                        anyhow::ensure!(
+                            row.session.requester_did.is_some(),
+                            "existing session has no requester provenance"
+                        );
+                        classify_projection(verifier, row, &rows_in_txn(txn, row).await?).await?
+                    }
+                    AgentSessionRowRead::Absent => SessionGoalProjectionRead::Missing,
+                };
+                Ok(observe_session_goal(&session, projection))
             })
         })
         .await
@@ -389,68 +450,6 @@ pub async fn prepare_goal_input_in_txn(
             })
         });
     Ok(bind_goal_reference(input, reference))
-}
-
-pub async fn load_session_goal_observation_state(
-    access: &ConfigAccess,
-    verifier: &dyn NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<SessionGoalObservationState> {
-    access
-        .transact_readonly("goal.read_observation", |txn| {
-            Box::pin(load_session_goal_observation_state_in_txn(
-                txn,
-                verifier,
-                node_did,
-                session_id,
-                requester_did,
-            ))
-        })
-        .await
-}
-
-pub async fn load_session_goal_observation_state_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    verifier: &dyn NodeIdentity,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<SessionGoalObservationState> {
-    let session = match crate::store::config_client::agent_session::read_agent_session_owner_in_txn(
-        txn, node_did, session_id,
-    )
-    .await?
-    {
-        AgentSessionRowRead::Present(row)
-            if row.session.requester_did.as_deref() != requester_did =>
-        {
-            AgentSessionRowRead::Absent
-        }
-        read => read,
-    };
-    observe_session_row_in_txn(txn, verifier, session).await
-}
-
-async fn observe_session_row_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    verifier: &dyn NodeIdentity,
-    session: AgentSessionRowRead,
-) -> Result<SessionGoalObservationState> {
-    let projection = match &session {
-        AgentSessionRowRead::Present(row) => match rows_in_txn(txn, row).await?.first() {
-            Some(projection) => match verified(verifier, row, projection).await? {
-                Some(observation) => SessionGoalProjectionRead::Verified(Box::new(observation)),
-                None => SessionGoalProjectionRead::Unverified,
-            },
-            None => SessionGoalProjectionRead::Missing,
-        },
-        AgentSessionRowRead::Absent | AgentSessionRowRead::Omitted => {
-            SessionGoalProjectionRead::Missing
-        }
-    };
-    Ok(observe_session_goal(&session, projection))
 }
 
 /// Publishes `session_id`'s Goal projection signed by `signer`, its selected

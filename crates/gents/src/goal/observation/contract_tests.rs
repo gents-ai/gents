@@ -612,11 +612,11 @@ fn modeled_reference(value: &Value) -> Option<gents_protocol::request_input::Goa
     })
 }
 
-fn modeled_observation(goal: &Value) -> SessionGoalObservation {
+fn modeled_observation(goal: &Value, agent_did: &str) -> SessionGoalObservation {
     SessionGoalObservation {
         version: SESSION_GOAL_CONTROL_VERSION,
         node_did: "did:key:node".into(),
-        agent_did: "did:key:agent".into(),
+        agent_did: agent_did.into(),
         session_id: "chat".into(),
         session_doc_id: "session-document".into(),
         requester_did: Some("did:key:user".into()),
@@ -655,51 +655,92 @@ fn modeled_state(value: &SessionGoalObservationState) -> Value {
     }
 }
 
-/// Replays Lean `SessionObservation.observe` and `bind` against the native
-/// classifier and the binder every send uses.
-#[test]
-fn generated_session_goal_reads_classify_and_bind() {
+/// The GraphQL responses one modeled read transaction returns: the session
+/// row list and, for a present row, the projection row list, with a projection
+/// signed by the selected Agent (or a corrupted signature when unverified).
+async fn modeled_responses(case: &Value, agent: &dyn NodeIdentity) -> (Value, Value) {
+    let session_rows = match case["session"].as_str().unwrap() {
+        "absent" => json!([]),
+        "present" => json!([{
+            "_docID": "session-document", "session_id": "chat", "node_did": "did:key:node",
+            "requester_did": "did:key:user", "agent_did": agent.did(),
+            "created_at": "2026-11-08T00:00:00Z",
+        }]),
+        other => panic!("unmodeled session read {other}"),
+    };
+    let projection_rows = match case["projection"]["kind"].as_str().unwrap() {
+        "missing" => json!([]),
+        kind @ ("unverified" | "verified") => {
+            let mut observation = modeled_observation(&case["projection"]["goal"], agent.did());
+            observation.signature = agent.sign(&observation.signing_payload().unwrap()).await.unwrap();
+            if kind == "unverified" {
+                observation.signature[0] ^= 1;
+            }
+            json!([{
+                "_docID": "observation-document", "node_did": observation.node_did,
+                "session_id": observation.session_id,
+                "session_doc_id": observation.session_doc_id,
+                "requester_did": observation.requester_did,
+                "observation_json": serde_json::to_string(&observation).unwrap(),
+            }])
+        }
+        other => panic!("unmodeled projection read {other}"),
+    };
+    (
+        json!({"data": {"AgentSession": session_rows}}),
+        json!({"data": {"GoalObservation": projection_rows}}),
+    )
+}
+
+/// Replays Lean `SessionObservation.observe`, `next`, `bind` and `refusal`
+/// from the read transaction's responses: through the session and projection
+/// decoders, signature and scope classification, the classifier, and the
+/// binder every send uses. Only the transport call itself is not replayed.
+#[tokio::test]
+async fn generated_session_goal_reads_classify_and_bind() {
     #[derive(Deserialize)]
     struct Contracts {
         goal_session_observation_cases: Vec<Value>,
     }
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_session_observation_cases.len(), 30);
-    let row = gents_protocol::session::decode_session_row(&json!({
-        "_docID": "session-document", "session_id": "chat", "node_did": "did:key:node",
-        "requester_did": "did:key:user", "agent_did": "did:key:agent",
-        "created_at": "2026-11-08T00:00:00Z",
-    }))
-    .unwrap();
+    assert_eq!(contracts.goal_session_observation_cases.len(), 20);
+    let home = tempfile::tempdir().unwrap();
+    let agent = crate::KeyIdentity::load_or_create(home.path().join("agent.key"), None).unwrap();
     for case in &contracts.goal_session_observation_cases {
-        let state = || {
-            let session = match case["session"].as_str().unwrap() {
-                "absent" => AgentSessionRowRead::Absent,
-                "present" => AgentSessionRowRead::Present(Box::new(row.clone())),
-                "omitted" => AgentSessionRowRead::Omitted,
-                other => panic!("unmodeled session read {other}"),
-            };
-            let projection = match case["projection"]["kind"].as_str().unwrap() {
-                "missing" => SessionGoalProjectionRead::Missing,
-                "unverified" => SessionGoalProjectionRead::Unverified,
-                "verified" => SessionGoalProjectionRead::Verified(Box::new(modeled_observation(
-                    &case["projection"]["goal"],
-                ))),
-                other => panic!("unmodeled projection read {other}"),
+        let (session_response, projection_response) = modeled_responses(case, &agent).await;
+        let read = || async {
+            let session = crate::store::config_client::agent_session::decode_agent_session_read(
+                &session_response,
+                "chat",
+            )
+            .unwrap();
+            let projection = match &session {
+                AgentSessionRowRead::Present(row) => classify_projection(
+                    &agent,
+                    row,
+                    &decode_observation_rows(&projection_response, row).unwrap(),
+                )
+                .await
+                .unwrap(),
+                AgentSessionRowRead::Absent => SessionGoalProjectionRead::Missing,
             };
             observe_session_goal(&session, projection)
         };
-        assert_eq!(modeled_state(&state()), case["expected_state"], "{case}");
+        let state = read().await;
+        assert_eq!(modeled_state(&state), case["expected_state"], "{case}");
+        assert_eq!(json!(state.next()), case["expected_next"], "{case}");
         let input = gents_protocol::request_input::RequestInput {
             goal_assignment: modeled_reference(&case["captured"]),
             ..Default::default()
         };
-        let bound = bind_goal_input(input.clone(), state());
+        let bound = bind_goal_input(input.clone(), state);
+        assert_eq!(
+            json!(bound.as_ref().err().map(|refused| refused.cause())),
+            case["expected_refusal"],
+            "{case}"
+        );
         match case["expected_bind"]["kind"].as_str().unwrap() {
-            "pending" => assert!(
-                bound.unwrap_err().to_string().contains("still syncing"),
-                "{case}"
-            ),
+            "pending" => assert!(bound.is_err(), "{case}"),
             "prepared" => {
                 let mut expected = input;
                 expected.goal_assignment = modeled_reference(&case["expected_bind"]["reference"]);
@@ -708,6 +749,24 @@ fn generated_session_goal_reads_classify_and_bind() {
             other => panic!("unmodeled bind outcome {other}"),
         }
     }
+}
+
+/// Omission is not a modeled state (Lean `SessionObservation.SessionRead`):
+/// both reads of one transaction fail a response without its row list alike.
+#[test]
+fn both_reads_fail_a_response_that_omits_its_rows() {
+    let omitted = json!({"data": {}});
+    assert!(
+        crate::store::config_client::agent_session::decode_agent_session_read(&omitted, "chat")
+            .is_err()
+    );
+    let row = gents_protocol::session::decode_session_row(&json!({
+        "_docID": "session-document", "session_id": "chat", "node_did": "did:key:node",
+        "requester_did": "did:key:user", "agent_did": "did:key:agent",
+        "created_at": "2026-11-08T00:00:00Z",
+    }))
+    .unwrap();
+    assert!(decode_observation_rows(&omitted, &row).is_err());
 }
 
 /// The client read is one transaction: a missing projection on a readable
@@ -721,14 +780,12 @@ async fn client_goal_read_is_unknown_until_the_agent_publishes() {
     let read = |session: &'static str| {
         let access = access.clone();
         let identity = identity.clone();
-        let user = f.user.did().to_owned();
         async move {
             load_client_session_goal_observation_state(
                 &access,
                 identity.as_ref(),
                 identity.did(),
                 session,
-                &user,
             )
             .await
             .unwrap()
@@ -749,5 +806,15 @@ async fn client_goal_read_is_unknown_until_the_agent_publishes() {
         panic!("published projection must be observed");
     };
     assert_eq!(observed.goal.unwrap().snapshot.goal_id, f.goal.goal_id);
+    for (requester, collapsed) in [(Some(f.user.did()), true), (Some("did:key:other"), false), (None, false)] {
+        assert_eq!(
+            load_session_goal_observation(&access, identity.as_ref(), identity.did(), SESSION, requester)
+                .await
+                .unwrap()
+                .is_some(),
+            collapsed,
+            "the collapse yields only the envelope verified for {requester:?}"
+        );
+    }
     f.node.shutdown().await.expect("node shutdown");
 }
