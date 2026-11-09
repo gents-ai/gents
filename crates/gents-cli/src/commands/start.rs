@@ -90,11 +90,7 @@ impl InterfaceEndpoint {
     ) -> Result<()> {
         match self {
             Self::Shell { remote } => {
-                ensure!(
-                    resume.is_none(),
-                    "the shell cannot open a session at launch yet. Send the next turn with `gents --continue SESSION_ID -p MESSAGE`, or switch to Codex with `gents config client set codex`."
-                );
-                crate::commands::shell::open(home, &remote, agent, prompt, runtime).await
+                crate::commands::shell::open(home, &remote, agent, prompt, resume, runtime).await
             }
             Self::Codex { remote } => {
                 open_codex(CodexArgs {
@@ -135,6 +131,11 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
     let (home, config) = ready_home(home_given.clone(), args.store_key_custody, terminal).await?;
     let Some(message) = args.print.take() else {
         let client = ClientSettings::read(&home)?.client;
+        ensure!(
+            !refuses_continue_with_a_prompt(client, &args),
+            "{}",
+            shell_cannot_continue_with_a_prompt()
+        );
         let endpoint = InterfaceEndpoint::for_client(client);
         ensure_runtime(&home, &config.node_did, &endpoint).await?;
         let (agent, made) = chosen_agent(&home, &config, &args).await?;
@@ -144,14 +145,19 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
         ensure_an_agent_can_run(endpoint.remote(), &home, agent.is_some(), PUBLISH_WAIT).await?;
         let opened_at = chrono::Utc::now();
         let opened = endpoint
-            .open(&home, agent.clone(), args.prompt, args.continue_session, runtime)
+            .open(
+                &home,
+                agent.clone(),
+                args.prompt,
+                args.continue_session,
+                runtime,
+            )
             .await;
         print_continue_hint(
             &home,
             &config.node_did,
             agent.as_deref(),
             opened_at,
-            client,
             home_given.as_deref(),
         )
         .await;
@@ -189,14 +195,14 @@ async fn chosen_agent(
     Ok((Some(agent), made))
 }
 
-/// Interfaces keep a session's history in Gents, so the session a window last gave a turn
-/// to can be reopened with `--continue`. Best effort: a failed read prints nothing.
+/// Interfaces keep a session's history in Gents, so the newest session the window's opening
+/// agent took a turn in can be reopened with `--continue`. A shell tab on another agent is not
+/// counted. Best effort: a failed read prints nothing.
 async fn print_continue_hint(
     home: &Path,
     node_did: &str,
     agent: Option<&str>,
     opened_at: chrono::DateTime<chrono::Utc>,
-    client: InterfaceClient,
     home_flag: Option<&Path>,
 ) {
     let Ok(Some(graphql)) = answering_graphql(home).await else {
@@ -223,7 +229,7 @@ async fn print_continue_hint(
     let Ok(rows) = latest else {
         return;
     };
-    if let Some(hint) = continue_hint(rows.first(), opened_at, client, home_flag) {
+    if let Some(hint) = continue_hint(rows.first(), opened_at, home_flag) {
         eprintln!("{hint}");
     }
 }
@@ -231,7 +237,6 @@ async fn print_continue_hint(
 fn continue_hint(
     latest: Option<&serde_json::Value>,
     opened_at: chrono::DateTime<chrono::Utc>,
-    client: InterfaceClient,
     home_flag: Option<&Path>,
 ) -> Option<String> {
     let latest = latest?;
@@ -244,10 +249,17 @@ fn continue_hint(
     if let Some(home) = home_flag {
         command.push_str(&format!(" --home {}", crate::shell_word(home)));
     }
-    if client == InterfaceClient::Shell {
-        command.push_str(" -p MESSAGE");
-    }
     Some(format!("Pick this up again with: {command}"))
+}
+
+/// The shell opens a continued session in its first tab and sends a prompt from a new one, so
+/// the two together would split the turn from its session.
+fn refuses_continue_with_a_prompt(client: InterfaceClient, args: &StartArgs) -> bool {
+    client == InterfaceClient::Shell && args.continue_session.is_some() && args.prompt.is_some()
+}
+
+fn shell_cannot_continue_with_a_prompt() -> &'static str {
+    "The shell opens the session for you to type in. Leave PROMPT out, or send it with `gents --continue SESSION_ID -p MESSAGE`."
 }
 
 async fn session_agent(graphql: &GraphqlEndpoint, node_did: &str, session: &str) -> Result<String> {
@@ -757,27 +769,39 @@ mod tests {
         let row = |at: &str| serde_json::json!({"session_id": "s1", "created_at": at});
         let after = row("2026-11-05T10:00:05.5+00:00");
         assert_eq!(
-            continue_hint(Some(&after), opened, InterfaceClient::Codex, None).as_deref(),
+            continue_hint(Some(&after), opened, None).as_deref(),
             Some("Pick this up again with: gents --continue s1")
         );
         assert_eq!(
-            continue_hint(
-                Some(&after),
-                opened,
-                InterfaceClient::Shell,
-                Some(Path::new("/srv/my home"))
-            )
-            .as_deref(),
-            Some("Pick this up again with: gents --continue s1 --home '/srv/my home' -p MESSAGE")
+            continue_hint(Some(&after), opened, Some(Path::new("/srv/my home"))).as_deref(),
+            Some("Pick this up again with: gents --continue s1 --home '/srv/my home'")
         );
         let before = row("2026-11-05T09:59:59+00:00");
-        assert_eq!(
-            continue_hint(Some(&before), opened, InterfaceClient::Codex, None),
-            None
-        );
-        assert_eq!(
-            continue_hint(None, opened, InterfaceClient::Codex, None),
-            None
+        assert_eq!(continue_hint(Some(&before), opened, None), None);
+        assert_eq!(continue_hint(None, opened, None), None);
+    }
+
+    #[test]
+    fn only_the_shell_refuses_continue_with_a_prompt() {
+        let args = |continuing: bool, prompt: bool| StartArgs {
+            home: None,
+            store_key_custody: None,
+            agent: None,
+            print: None,
+            prompt: prompt.then(|| "hello".to_string()),
+            continue_session: continuing.then(|| "s1".to_string()),
+            yolo: false,
+        };
+        let shell = InterfaceClient::Shell;
+        assert!(refuses_continue_with_a_prompt(shell, &args(true, true)));
+        assert!(!refuses_continue_with_a_prompt(shell, &args(true, false)));
+        assert!(!refuses_continue_with_a_prompt(shell, &args(false, true)));
+        let codex = InterfaceClient::Codex;
+        assert!(!refuses_continue_with_a_prompt(codex, &args(true, true)));
+        let message = shell_cannot_continue_with_a_prompt();
+        assert!(
+            message.contains("gents --continue SESSION_ID -p MESSAGE"),
+            "{message}"
         );
     }
 }

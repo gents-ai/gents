@@ -209,6 +209,11 @@ pub enum Update {
         agent: Option<String>,
         prompt: Option<String>,
     },
+    /// What `gents --continue` was opened with: the starter tab takes `session`, on `agent`.
+    Continue {
+        session: String,
+        agent: Option<String>,
+    },
     /// The working tree's changes in git's order, replaced whole, or why it could not be read.
     WorkingTree(Result<Vec<Change>, String>),
     /// A menu's rows, replaced whole, or why they could not be read.

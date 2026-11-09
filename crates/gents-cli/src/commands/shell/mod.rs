@@ -23,12 +23,13 @@ use gents_shell::source::Intent;
 use tokio::runtime::Handle;
 
 /// Runs the shell on the runtime at `remote` until the user quits. Its first tab takes `agent`
-/// and sends `prompt`. Jobs and the mailbox come from `home`'s GraphQL.
+/// and sends `prompt`, or opens `session`. Jobs and the mailbox come from `home`'s GraphQL.
 pub(crate) async fn open(
     home: &Path,
     remote: &str,
     agent: Option<String>,
     prompt: Option<String>,
+    session: Option<String>,
     runtime: Handle,
 ) -> anyhow::Result<()> {
     let home = home.to_path_buf();
@@ -56,6 +57,7 @@ pub(crate) async fn open(
         remote: remote.to_string(),
         agent,
         prompt,
+        session,
         work,
         home,
         cwd: std::env::current_dir().ok(),

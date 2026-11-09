@@ -647,6 +647,7 @@ impl App {
             Update::Jobs { jobs, as_of } => self.set_jobs(jobs, as_of),
             Update::Background { calls, as_of } => self.set_background(calls, as_of),
             Update::Begin { agent, prompt } => self.begin(agent, prompt),
+            Update::Continue { session, agent } => self.continue_session(session, agent),
             Update::WorkingTree(tree) => self.set_working_tree(tree),
             Update::Menu { menu, rows } => self.set_menu(menu, rows),
             Update::Ask { title, rows } => self.ask(title, rows),
@@ -747,6 +748,22 @@ impl App {
             };
             self.emit(intent);
         }
+    }
+
+    /// Binds the starter tab to `session` as `begin` gives it an agent, so it needs no list; the
+    /// first list that holds the session names the tab.
+    fn continue_session(&mut self, session: String, agent: Option<String>) {
+        let first = &self.tabs[0];
+        if first.session.is_some() || first.starting || first.agent_picked {
+            return;
+        }
+        let agent = agent.unwrap_or_else(|| first.agent_id.clone());
+        let name = self.agent_name(&agent);
+        let first = &mut self.tabs[0];
+        first.session = Some(session.clone());
+        first.agent = name;
+        first.agent_id = agent.clone();
+        self.emit(Intent::Open { session, agent });
     }
 
     /// The tab, or the subagent the sidebar shows, whose session is `session`.
@@ -4645,6 +4662,37 @@ mod tests {
                 blank()
             ]
         );
+    }
+
+    /// `gents --continue SESSION`: the starter tab binds it before any list is read, so text
+    /// typed while the lists load goes to it, and the list names the tab once it comes.
+    #[test]
+    fn a_continued_session_binds_the_starter_tab_before_the_lists() {
+        let (mut app, intents) = connected();
+        let session = crate::sample::sessions()[0].clone();
+        app.apply(Update::Continue {
+            session: session.id.clone(),
+            agent: Some(session.agent.clone()),
+        });
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].session.as_deref(), Some(session.id.as_str()));
+        assert_eq!(app.tabs[0].agent_id, session.agent);
+        let open = Intent::Open {
+            session: session.id.clone(),
+            agent: session.agent.clone(),
+        };
+        assert_eq!(intents.try_recv(), Ok(open));
+
+        app.apply(Update::Sessions(crate::sample::sessions()));
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].name, session.tab);
+
+        app.apply(Update::Continue {
+            session: "other".to_string(),
+            agent: None,
+        });
+        assert_eq!(app.tabs[0].session.as_deref(), Some(session.id.as_str()));
+        assert!(intents.try_recv().is_err(), "a bound tab is never rebound");
     }
 
     #[test]

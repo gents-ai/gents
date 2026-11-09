@@ -652,9 +652,10 @@ fn open_shell_on(
     work: Result<Work, String>,
     home: std::path::PathBuf,
 ) -> Shell {
-    open_shell_in(fake, agent, prompt, answer_wait, work, home, None)
+    open_shell_in(fake, agent, prompt, answer_wait, work, home, None, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn open_shell_in(
     fake: &FakeRuntime,
     agent: Option<&str>,
@@ -663,6 +664,7 @@ fn open_shell_in(
     work: Result<Work, String>,
     home: std::path::PathBuf,
     cwd: Option<std::path::PathBuf>,
+    session: Option<&str>,
 ) -> Shell {
     let runtime = test_runtime_handle();
     let (intents, intended) = mpsc::unbounded_channel();
@@ -671,6 +673,7 @@ fn open_shell_in(
         remote: fake.remote(),
         agent: agent.map(str::to_string),
         prompt: prompt.map(str::to_string),
+        session: session.map(str::to_string),
         work,
         home,
         cwd,
@@ -832,6 +835,54 @@ async fn begin_follows_agents_before_the_first_session_sweep() {
         ),
         "{applied:?}"
     );
+}
+
+/// As `gents --continue s1` opens it: `Continue` takes `Begin`'s place, before `Ready`, so no
+/// key the user presses while the session lists load can reach the starter tab first.
+#[tokio::test]
+async fn a_continued_session_is_told_where_begin_would_be() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let endpoint = GraphqlEndpoint::with_delegated_authorization(fake.graphql(), "Bearer shell")
+        .expect("a bearer");
+    let home = std::path::PathBuf::new();
+    let work = Work {
+        endpoint,
+        home: home.clone(),
+    };
+    let shell = open_shell_in(
+        &fake,
+        Some("b"),
+        None,
+        ANSWER_WAIT,
+        Ok(work),
+        home,
+        None,
+        Some("s1"),
+    );
+    let (mut app, _intended) = connected_app();
+
+    let applied = shell
+        .apply_through(&mut app, |update| matches!(update, Update::Sessions(_)))
+        .await;
+
+    let continued = Update::Continue {
+        session: "s1".to_string(),
+        agent: Some("b".to_string()),
+    };
+    assert!(
+        matches!(
+            applied.as_slice(),
+            [
+                Update::Agents(_),
+                found,
+                Update::Connection(Connection::Ready),
+                Update::Sessions(_)
+            ] if *found == continued
+        ),
+        "{applied:?}"
+    );
+    assert_eq!(app.tabs[0].session.as_deref(), Some("s1"));
+    assert_eq!(app.tabs[0].agent_id, "b");
 }
 
 #[tokio::test]
@@ -2273,6 +2324,7 @@ async fn the_branch_comes_from_git_in_the_working_directory() {
         Ok(work),
         home,
         Some(repo.path().into()),
+        None,
     );
 
     assert!(matches!(shell.next().await, Update::Agents(_)));

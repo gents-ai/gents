@@ -41,6 +41,8 @@ pub(super) struct Opening {
     pub(super) remote: String,
     pub(super) agent: Option<String>,
     pub(super) prompt: Option<String>,
+    /// `gents --continue`'s session, which `agent` then names the agent of.
+    pub(super) session: Option<String>,
     pub(super) work: Result<Work, String>,
     pub(super) home: PathBuf,
     pub(super) cwd: Option<PathBuf>,
@@ -63,6 +65,7 @@ pub(super) async fn run(
         remote,
         agent,
         prompt,
+        session,
         work,
         home,
         cwd,
@@ -107,10 +110,14 @@ pub(super) async fn run(
         .filter(|agent| source.client(&agent.id).is_some())
         .collect();
     source.tell(Update::Agents(connected));
-    // `Begin` must reach the shell before a send the user makes once the agents are known.
-    // Both go through one queue, so it is told before the sweep awaits anything.
-    if agent.is_some() || prompt.is_some() {
-        source.tell(Update::Begin { agent, prompt });
+    // `Begin` or `Continue` must reach the shell before a send the user makes once the agents
+    // are known. Both go through one queue, so it is told before the sweep awaits anything.
+    match session {
+        Some(session) => source.tell(Update::Continue { session, agent }),
+        None if agent.is_some() || prompt.is_some() => {
+            source.tell(Update::Begin { agent, prompt });
+        }
+        None => {}
     }
     source.tell(Update::Connection(Connection::Ready));
     // Read beside startup, never ahead of it: git may hang for its timeout. Once only, so a
