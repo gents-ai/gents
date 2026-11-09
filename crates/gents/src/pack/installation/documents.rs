@@ -250,12 +250,8 @@ impl PreparedDocumentPackInstall {
     }
 }
 
-pub(super) fn document_ux_install_allowed(
-    has_ux: bool,
-    has_home: bool,
-    installed_via: InstalledVia,
-) -> bool {
-    !has_ux || (has_home && installed_via == InstalledVia::Operator)
+pub(super) fn document_ux_install_allowed(has_ux: bool, has_home: bool) -> bool {
+    !has_ux || has_home
 }
 
 pub(super) fn require_installed_dependency_ux(
@@ -267,13 +263,14 @@ pub(super) fn require_installed_dependency_ux(
         return Ok(());
     }
     let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
-    let home = home.context(
-        "a dependency with UX must first be installed by the operator in the node's local home",
-    )?;
+    let home =
+        home.context("a dependency with UX must first be installed in the node's local home")?;
     let record = super::super::read_home_install(home, &coordinate)?
-        .context("a dependency with UX must first be installed by the operator")?;
-    anyhow::ensure!(record.digest == digest && record.installed_via == Some(InstalledVia::Operator),
-        "dependency {coordinate} with UX must first be installed explicitly by the operator at the same digest");
+        .context("a dependency with UX must first be installed")?;
+    anyhow::ensure!(
+        record.digest == digest,
+        "dependency {coordinate} with UX must first be installed explicitly at the same digest"
+    );
     Ok(())
 }
 
@@ -598,9 +595,8 @@ async fn prepare_document_pack_install_inner(
         document_ux_install_allowed(
             !manifest.metadata.ux.is_empty(),
             plugin_home.is_some() || hosted.is_some(),
-            installed_via
         ),
-        "document packs with UX require an operator install with the node's local home; a model-authored install cannot authorize UI code, so ask the operator to run `gents pack install` on the built .pack"
+        "document packs with UX need the node's local home, where the desktop reads their pages"
     );
     for dependency in dependencies {
         if let Some(hosted) = hosted {
@@ -942,10 +938,9 @@ pub async fn install_prepared_document_pack(
     anyhow::ensure!(
         document_ux_install_allowed(
             !archive.manifest().metadata.ux.is_empty(),
-            plugin_home.is_some(),
-            installed_via
+            plugin_home.is_some()
         ),
-        "document packs with UX require an operator install with the node's local home; a model-authored install cannot authorize UI code, so ask the operator to run `gents pack install` on the built .pack"
+        "document packs with UX need the node's local home, where the desktop reads their pages"
     );
     for dependency in &prepared.dependencies {
         require_installed_dependency_ux(&dependency.manifest, &dependency.digest, plugin_home)?;

@@ -79,7 +79,8 @@ def selfConfigBackendJson (entry : String × String × String) : String :=
   ++ "}"
 
 def selfConfigGrantsJson (g : Grants) : String :=
-  "{\"pack_install\":" ++ scBool g.packInstall ++ ",\"policy\":" ++ scBool g.policy ++ "}"
+  "{\"pack_install\":" ++ scBool g.packInstall ++ ",\"policy\":" ++ scBool g.policy
+    ++ ",\"pack_authority\":" ++ scBool g.packAuthority ++ "}"
 
 /-- Every combination of the policy grant bit on the candidate, the stored Tools and
 the invoker, with pack installation off. Rust `OperatorGrants::bounded_by` must

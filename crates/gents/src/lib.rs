@@ -779,9 +779,9 @@ pub use tools::mcp::health::{
 pub use tools::mcp::meta::build_meta_tools;
 pub use tools::mcp::pool::McpPool;
 pub use tools::native::{
-    build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, ToolSet,
-    ToolSetBuilder,
+    build_native_tools, enable_self_runner, run_plugin_build, CliToolConfig, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, PluginBuildOutcome,
+    ToolSet, ToolSetBuilder, PLUGIN_BUILD_COMMAND,
 };
 pub use tools::surface::{
     cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,

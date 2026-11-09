@@ -39,18 +39,12 @@ fn document_ux_install_admission_matches_lean() {
     )
     .unwrap();
     let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 4);
     for case in cases {
-        let via = if case["operator"].as_bool().unwrap() {
-            InstalledVia::Operator
-        } else {
-            InstalledVia::SelfConfig
-        };
         assert_eq!(
             documents::document_ux_install_allowed(
                 case["hasUx"].as_bool().unwrap(),
                 case["home"].as_bool().unwrap(),
-                via
             ),
             case["allowed"].as_bool().unwrap(),
             "{case}"

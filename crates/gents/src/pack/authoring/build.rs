@@ -76,29 +76,31 @@ pub fn build_pack(
     pack_directory(dir, &manifest, out)
 }
 
-/// Packs a directory without running any compiler. Plugin source, which only a
-/// compiler can turn into an artifact, is refused; prebuilt plugins ship as is.
-pub fn build_pack_without_compiler(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
+/// Packs a directory whose plugins are already artifacts: prebuilt ones, or
+/// ones a compiler just produced.
+pub fn pack_built(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
     let manifest = super::check::read_manifest(dir)?;
-    ensure_no_compile_step(&manifest)?;
     pack_directory(dir, &manifest, out)
 }
 
-/// A plugin with `source` needs a compiler, even when an artifact is present:
-/// that artifact may predate the source.
-pub fn ensure_no_compile_step(manifest: &PackManifest) -> Result<()> {
-    let source_plugins: Vec<&str> = manifest
+/// A pack's plugins with `source`, which only a compiler turns into artifacts.
+pub fn plugins_with_source(manifest: &PackManifest) -> Vec<&str> {
+    manifest
         .metadata
         .plugins
         .iter()
         .filter(|plugin| plugin.source.is_some())
         .map(|plugin| plugin.name.as_str())
-        .collect();
+        .collect()
+}
+
+/// A directory install packs what is on disk, and a present artifact may
+/// predate its source, so plugin source has to go through a build first.
+pub fn ensure_no_compile_step(manifest: &PackManifest) -> Result<()> {
+    let source_plugins = plugins_with_source(manifest);
     anyhow::ensure!(
         source_plugins.is_empty(),
-        "plugin {} has source that needs a compiler, and config runs none. Ask the operator to run \
-         `gents pack build`, then preview the built .pack, or ship the plugin prebuilt with pack \
-         add plugin NAME --prebuilt PATH",
+        "plugin {} has source that must be built first; call [\"pack\",\"build\",DIR], then preview the built .pack",
         source_plugins.join(", ")
     );
     Ok(())

@@ -158,6 +158,7 @@ pub struct ResolvedToolSelection {
     pub self_config_no_lockout: bool,
     pub self_config_preview: bool,
     pub enable_pack_install: bool,
+    pub enable_pack_authority: bool,
     pub enable_lsp: bool,
     pub lsp_config: Option<String>,
     pub plugin_tools: Vec<crate::documents::PluginToolRef>,
@@ -197,6 +198,7 @@ impl Default for ResolvedToolSelection {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -350,6 +352,9 @@ impl ResolvedToolSelection {
                 .unwrap_or(false),
             enable_pack_install: self_config_group
                 .and_then(|group| group.enable_pack_install)
+                .unwrap_or(false),
+            enable_pack_authority: self_config_group
+                .and_then(|group| group.enable_pack_authority)
                 .unwrap_or(false),
             enable_lsp: integrations
                 .map(|group| group.lsp.is_some())

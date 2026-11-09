@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::pack::authoring::{
-    build_pack_without_compiler, check_dir, scaffold, verify_pack_file, CheckReport, Kind,
-    PackAddition, PackEdit, ScaffoldInput, Template,
+    check_dir, pack_built, plugins_with_source, read_manifest, scaffold, verify_pack_file,
+    CheckReport, Kind, PackAddition, PackEdit, ScaffoldInput, Template,
 };
 
 const PACK_PARTS: &str = "agent, task, trigger, schema, skill, plugin, page";
@@ -24,6 +24,9 @@ enum AuthoringCall {
         addition: PackAddition,
     },
     Build {
+        dir: Option<String>,
+    },
+    Test {
         dir: Option<String>,
     },
 }
@@ -156,25 +159,25 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
             };
             Ok(AuthoringCall::Add { dir: optional("dir")?, addition })
         }
-        "build" => {
+        "build" | "test" => {
             anyhow::ensure!(
                 parsed.switches.is_empty() && parsed.options.is_empty(),
-                "pack build takes only an optional DIR; it accepts no options"
+                "pack {verb} takes only an optional DIR; it accepts no options"
             );
             anyhow::ensure!(
                 parsed.positionals.len() <= 1,
-                "pack build accepts at most one DIR"
+                "pack {verb} accepts at most one DIR"
             );
-            Ok(AuthoringCall::Build {
-                dir: parsed.positionals.first().cloned(),
+            let dir = parsed.positionals.first().cloned();
+            Ok(if verb == "build" {
+                AuthoringCall::Build { dir }
+            } else {
+                AuthoringCall::Test { dir }
             })
         }
-        "test" => bail!(
-            "pack test isn't available through config. Run `gents pack test` from the operator CLI."
-        ),
         other => Err(CommandGuidance {
             message: format!(
-                "unknown pack authoring command {other:?}; authoring verbs are scaffold, add, check, build and verify"
+                "unknown pack authoring command {other:?}; authoring verbs are scaffold, add, check, build, test and verify"
             ),
             next_call: json!({"argv":["help","pack"]}),
         }
@@ -193,7 +196,7 @@ fn ensure_mode(
             "pack {operation} requires effective file permission on the invoking agent; the effective file tools are Off. Grant file tools, or run pack authoring from the operator CLI"
         ),
         (true, FileToolMode::ReadOnly) => bail!(
-            "pack {operation} may write inside the tool root (scaffold writes the template files), so it requires readwrite file tools, not the current read-only mode"
+            "pack {operation} writes inside the tool root, so it requires readwrite file tools, not the current read-only mode"
         ),
         _ => Ok(()),
     }
@@ -223,6 +226,7 @@ impl ConfigCommandTool {
             AuthoringCall::Verify { pack } => self.verify(&pack).await,
             AuthoringCall::Add { dir, addition } => self.add_part(dir.as_deref(), addition).await,
             AuthoringCall::Build { dir } => self.build(dir.as_deref()).await,
+            AuthoringCall::Test { dir } => self.test(dir.as_deref()).await,
         }
     }
 
@@ -263,7 +267,7 @@ impl ConfigCommandTool {
             "dir": relative,
             "files": report.files,
             "next_call": json!({"argv":["pack","check",relative]}),
-            "note": "Scaffolded inside the effective tool root. The pack is not installed and nothing runs; check it, then pack build. Plugin sources need `gents pack build` from the operator CLI.",
+            "note": "Scaffolded inside the effective tool root. The pack is not installed and nothing runs; check it, then pack build.",
         }
         .pretty()
     }
@@ -318,6 +322,17 @@ impl ConfigCommandTool {
         .pretty()
     }
 
+    /// Compiling runs the pack's build scripts, so it takes the pack authority
+    /// grant as well as the pack grant, even in the sandbox.
+    fn ensure_compile_grant(&self, operation: &str, plugins: &[&str]) -> Result<()> {
+        anyhow::ensure!(
+            self.core.held_grants().pack_authority,
+            "pack {operation} would compile plugin source ({}), which needs self_config.enable_pack_authority on this agent's Tools; the operator can grant it or run `gents pack {operation}`",
+            plugins.join(", ")
+        );
+        Ok(())
+    }
+
     async fn build(&self, dir: Option<&str>) -> Result<String> {
         let context = self.authoring_paths("build", true).await?;
         let dir = context.resolve_existing_dir(dir)?;
@@ -325,11 +340,23 @@ impl ConfigCommandTool {
             dir != context.root(),
             "pack build writes the .pack beside the pack directory, which would be outside the tool root; put the pack in a subdirectory"
         );
-        let report = tokio::task::spawn_blocking(move || build_pack_without_compiler(&dir, None))
+        let manifest = read_manifest(&dir)?;
+        let sources = plugins_with_source(&manifest);
+        let sandbox = if sources.is_empty() {
+            None
+        } else {
+            self.ensure_compile_grant("build", &sources)?;
+            self.execution.enter_mutation();
+            Some(
+                crate::tools::native::run_plugin_build(&context.root(), &dir, false)
+                    .await?
+                    .sandbox,
+            )
+        };
+        let report = tokio::task::spawn_blocking(move || pack_built(&dir, None))
             .await
             .context("pack build task did not finish")??;
         let out = context.display_path(&report.out);
-        let operator_install = !report.ux.is_empty();
         ordered! {
             "completed": true,
             "pack": report.pack,
@@ -338,8 +365,46 @@ impl ConfigCommandTool {
             "digest": report.digest,
             "out": out,
             "size_bytes": report.size_bytes,
-            "next_call": if operator_install { json!({"argv":["help","page"]}) } else { json!({"argv":["pack","preview","install",out]}) },
-            "operator_action": operator_install.then(|| format!("This pack ships a page, and a page is UI code a model-authored install cannot authorize. Ask the operator to run `gents pack install {out}`, through the mailbox if they are not here.")),
+            "sandbox": sandbox,
+            "next_call": json!({"argv":["pack","preview","install",out]}),
+        }
+        .pretty()
+    }
+
+    async fn test(&self, dir: Option<&str>) -> Result<String> {
+        let context = self.authoring_paths("test", true).await?;
+        let dir = context.resolve_existing_dir(dir)?;
+        let manifest = read_manifest(&dir)?;
+        let sources = plugins_with_source(&manifest);
+        let relative = context.display_path(&dir);
+        if sources.is_empty() {
+            return ordered! {
+                "passed": 0,
+                "failed": 0,
+                "plugins": Vec::<Value>::new(),
+                "note": "This pack has no plugin source, so it has no plugin cases to run.",
+                "next_call": json!({"argv":["pack","build",relative]}),
+            }
+            .pretty();
+        }
+        self.ensure_compile_grant("test", &sources)?;
+        self.execution.enter_mutation();
+        let build = crate::tools::native::run_plugin_build(&context.root(), &dir, true).await?;
+        let plugins = build.output["cases"].clone();
+        let mut passed = 0;
+        let mut failed = 0;
+        for plugin in plugins.as_array().into_iter().flatten() {
+            passed += plugin["passed"].as_u64().unwrap_or(0);
+            failed += plugin["failures"]
+                .as_array()
+                .map_or(0, |list| list.len() as u64);
+        }
+        ordered! {
+            "passed": passed,
+            "failed": failed,
+            "plugins": plugins,
+            "sandbox": build.sandbox,
+            "next_call": if failed == 0 { json!({"argv":["pack","build",relative]}) } else { json!({"argv":["help","pack"]}) },
         }
         .pretty()
     }

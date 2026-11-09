@@ -47,9 +47,6 @@ impl PackInstaller {
             .map(|slot| slot.name.clone())
             .collect::<Vec<_>>();
         let mut blockers = self.plugin_install_blockers(manifest);
-        if !manifest.metadata.ux.is_empty() {
-            blockers.push(json!({"reason":"This pack ships a page, and a model-authored install cannot authorize UI code. Ask the operator to run `gents pack install` on the built .pack."}));
-        }
         if let Some(previous) = &installed {
             anyhow::ensure!(
                 previous.kind == crate::pack::PackKind::Plugins,
@@ -80,6 +77,7 @@ impl PackInstaller {
             )?;
         }
         let ready = blockers.is_empty() && missing.is_empty();
+        let authority = self.granted_authority([manifest])?;
         if !commit {
             return ordered! {
                 "committed": false,
@@ -90,6 +88,7 @@ impl PackInstaller {
                 "installation_blockers": blockers,
                 "missing_inference_slots": missing,
                 "installed": installed,
+                "would_grant": authority,
                 "manifest": manifest,
                 "artifact_digest": distribution.digest(),
                 "inference": inference,
@@ -113,7 +112,7 @@ impl PackInstaller {
         let (record, plugins) = crate::pack::plugin_lifecycle::install(
             home,
             &distribution.0.archive,
-            false,
+            self.grants_authority(),
             Some(self.core.node_did()),
             &inference.bindings,
             move |identity, changes| {
@@ -157,6 +156,7 @@ impl PackInstaller {
             "next_call": single,
             "next_calls": discovery,
             "guidance": "Installation installs every plugin in `plugins` but selects no tool: installed is not selected. Read the current Tools document first and preserve its full `integrations` object, including every existing entry and plugin; do not generate a replacement patch or overwrite the whole object. Then explicitly select each installed plugin by name in `Tools.integrations.plugins`, one entry per plugin. Read config tools get and config get after selection; start a fresh request to call each selected plugin.",
+            "granted_authority": authority,
             "plugins": plugins,
             "artifact_digest": distribution.digest(),
         }.pretty()

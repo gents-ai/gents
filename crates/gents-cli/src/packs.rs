@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents::ConfigAccess;
 use serde_json::Value;
 
@@ -363,6 +363,28 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
         home: Some(home),
     }))
     .await
+}
+
+/// The body of `__plugin-build`, which the runtime starts under the command
+/// sandbox: builds the pack's plugins, runs their cases when asked, and prints
+/// one JSON object on stdout.
+pub async fn plugin_build(dir: PathBuf, run_cases: bool) -> Result<()> {
+    let build_dir = dir.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let manifest = gents::pack::authoring::read_manifest(&build_dir)?;
+        for plugin in &manifest.metadata.plugins {
+            command::build::build_plugin(&build_dir, &manifest, plugin)?;
+        }
+        Ok(())
+    })
+    .await
+    .context("the plugin build task did not finish")??;
+    let cases = if run_cases {
+        Some(gents::pack::authoring::run_plugin_cases(&dir).await?)
+    } else {
+        None
+    };
+    crate::print_json(&serde_json::json!({ "cases": cases }))
 }
 
 /* ---- UX plugins: what the desktop's doors read ---- */

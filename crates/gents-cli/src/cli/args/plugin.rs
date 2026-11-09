@@ -226,6 +226,13 @@ pub(crate) struct PluginUnbindArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct SandboxedPluginBuildArgs {
+    pub(crate) dir: PathBuf,
+    #[arg(long, default_value_t = false)]
+    pub(crate) test: bool,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct NativeFsRunnerArgs {
     #[arg(long, value_name = "ROOT")]
     pub(crate) root: Option<PathBuf>,

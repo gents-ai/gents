@@ -134,6 +134,10 @@ impl PackInstaller {
             let sdl = std::str::from_utf8(distribution.0.archive.asset(path)?)?;
             schemas.push(crate::store::config_client::preview_schema_install(&access, sdl).await?);
         }
+        let authority = self.granted_authority(
+            std::iter::once(distribution.manifest())
+                .chain(dependencies.iter().map(|d| d.manifest())),
+        )?;
         let dependency_receipts = dependencies.iter().map(|dependency| json!({
             "coordinate": format!("{}/{}", dependency.manifest().metadata.namespace, dependency.manifest().name),
             "version": dependency.manifest().version, "artifact_digest": dependency.digest(),
@@ -146,7 +150,7 @@ impl PackInstaller {
                 "registry_artifact_digest": distribution.registry_artifact_digest(),
                 "inference": prepared.inference, "dependency_inference": prepared.dependency_inference,
                 "dependencies": dependency_receipts, "schemas": schemas, "installation_blockers": blockers,
-                "installed": prior,
+                "installed": prior, "would_grant": authority,
                 "materialized_ids": crate::pack::pack_document_digests(&prepared.config)?.into_keys().map(|(collection, id)| json!({"collection":collection,"id":id})).collect::<Vec<_>>(),
                 "apply_with": blockers.is_empty().then(|| json!({
                     "argv_prefix": ["pack", operation, distribution.pinned_spec(&args.package), "--digest", distribution.digest()],
@@ -168,7 +172,7 @@ impl PackInstaller {
                 .collect::<Vec<_>>(),
             &prepared,
             self.home.as_deref(),
-            false,
+            self.grants_authority(),
             crate::pack::InstalledVia::SelfConfig,
             crate::pack::DriftPolicy::Refuse,
         )
@@ -186,6 +190,7 @@ impl PackInstaller {
             "registry_artifact_digest": distribution.registry_artifact_digest(), "install": receipt,
             "inference": prepared.inference, "dependency_inference": prepared.dependency_inference,
             "dependencies": dependency_receipts, "effective": effective,
+            "granted_authority": authority,
             "effect": "The document pack is installed.",
         }))?)
     }

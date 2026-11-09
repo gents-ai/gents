@@ -98,19 +98,27 @@ structure Grants where
   grant and revoke commands. Held-bounded like pack installation, so an Agent
   cannot select it for itself or a sibling without holding it. -/
   policy : Bool
+  /-- `self_config.enable_pack_authority`: a pack install grants what its
+  plugins ask for, and plugin source compiles in the command sandbox. The
+  Engineer preset carries it (maintainer decision, 2026-11-09); any other agent
+  has it only through its own Tools, and a node owner narrows it by clearing
+  the flag. Held-bounded like `packInstall`. -/
+  packAuthority : Bool := false
   deriving DecidableEq, Repr
 
 def Grants.bot : Grants := { packInstall := false, policy := false }
 
 def Grants.le (a b : Grants) : Bool :=
-  (!a.packInstall || b.packInstall) && (!a.policy || b.policy)
+  (!a.packInstall || b.packInstall) && (!a.policy || b.policy) &&
+    (!a.packAuthority || b.packAuthority)
 
 /-- Whether each grant the candidate `c` carries stays within its own bound
 against the stored Tools `s` and the invoker's `held` grants; each grant is
 judged on its own, never as a whole vector. -/
 def Grants.boundedBy (c s held : Grants) : Bool :=
   (!c.packInstall || s.packInstall || held.packInstall) &&
-    (!c.policy || s.policy || held.policy)
+    (!c.policy || s.policy || held.policy) &&
+    (!c.packAuthority || s.packAuthority || held.packAuthority)
 
 /-- A self-config write is accepted when every operator-managed grant of the
 candidate stays within its own bound against the Tools document it replaces;

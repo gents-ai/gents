@@ -16,6 +16,8 @@ pub struct OperatorGrants {
     pub pack_install: bool,
     /// The `policy` self-config category.
     pub policy: bool,
+    /// `self_config.enable_pack_authority`.
+    pub pack_authority: bool,
 }
 
 impl OperatorGrants {
@@ -49,6 +51,7 @@ impl OperatorGrants {
                 .iter()
                 .flatten()
                 .any(|category| category == "policy"),
+            pack_authority: config.enable_pack_authority.unwrap_or(false),
         })
     }
 
@@ -61,6 +64,9 @@ impl OperatorGrants {
         }
         if self.policy && !stored.policy && !held.policy {
             unheld.push("the policy category");
+        }
+        if self.pack_authority && !stored.pack_authority && !held.pack_authority {
+            unheld.push("enable_pack_authority");
         }
         unheld
     }

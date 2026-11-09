@@ -295,6 +295,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
             .with_held_grants(OperatorGrants {
                 pack_install: config.enable_pack_install,
                 policy: config.categories.contains("policy"),
+                pack_authority: config.enable_pack_authority,
             }),
         Err(error) => {
             tracing::warn!(

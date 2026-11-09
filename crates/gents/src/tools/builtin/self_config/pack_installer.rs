@@ -166,11 +166,10 @@ impl PackInstaller {
             // Local built artifacts flow through the same canonical
             // installers as registry-resolved packs: documents through
             // prepare/install_prepared_document_pack, plugins-only through
-            // plugins_pack. Plugin authority is unchanged: preview reports
-            // installation_blockers and commit refuses them unless the
-            // operator grants authority, so a locally built pack (e.g. one
-            // declaring child_process or bind_dir capabilities) cannot
-            // silently authorize itself.
+            // plugins_pack. Plugin authority follows `grants_authority`:
+            // without it preview reports installation_blockers and commit
+            // refuses them; with it the install grants what the pack asks
+            // for and the receipt lists it.
             anyhow::ensure!(
                 installs_kind(&archive.manifest().metadata.kind),
                 "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
@@ -258,6 +257,36 @@ impl PackInstaller {
             .map_err(Into::into)
     }
 
+    /// Whether this agent's installs carry the operator's consent to what a
+    /// pack's plugins ask for (`self_config.enable_pack_authority`).
+    pub(super) fn grants_authority(&self) -> bool {
+        self.core.held_grants().pack_authority
+    }
+
+    /// What installing `manifests` grants each plugin that asks for anything:
+    /// a successful install grants exactly what the plugin declares.
+    pub(super) fn granted_authority<'a>(
+        &self,
+        manifests: impl IntoIterator<Item = &'a crate::pack::PackManifest>,
+    ) -> anyhow::Result<Vec<Value>> {
+        let mut granted = Vec::new();
+        for manifest in manifests {
+            for plugin in &manifest.metadata.plugins {
+                let declared = crate::plugin::authority::declared_manifold(plugin)?;
+                if let Some(description) =
+                    crate::plugin::authority::describe_plugin_authority(plugin, &declared)
+                {
+                    granted.push(json!({
+                        "plugin": format!("{}/{}", manifest.metadata.namespace, plugin.name),
+                        "granted": description,
+                        "manifold": plugin.manifold,
+                    }));
+                }
+            }
+        }
+        Ok(granted)
+    }
+
     pub(super) fn plugin_install_blockers(
         &self,
         manifest: &crate::pack::PackManifest,
@@ -276,7 +305,7 @@ impl PackInstaller {
                             home,
                             &manifest.metadata.namespace,
                             plugin,
-                            false,
+                            self.grants_authority(),
                         )
                     });
                 result

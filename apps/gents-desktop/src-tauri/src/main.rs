@@ -18,6 +18,27 @@ fn main() {
         return;
     }
 
+    if command.as_deref() == Some(gents::PLUGIN_BUILD_COMMAND) {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .try_init();
+        let result = (|| -> anyhow::Result<()> {
+            let dir = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing pack directory"))?;
+            let run_cases = args.next().as_deref() == Some("--test");
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(gents_server::packs::plugin_build(dir.into(), run_cases))
+        })();
+        if let Err(error) = result {
+            tracing::error!("{error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if command.as_deref() == Some("__clear-browser-data") {
         let _ = tracing_subscriber::fmt()
             .with_writer(std::io::stderr)

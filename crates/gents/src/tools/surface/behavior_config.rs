@@ -214,6 +214,7 @@ impl AgentToolSurfaceConfig {
             self_config_no_lockout,
             self_config_preview,
             enable_pack_install,
+            enable_pack_authority,
             enable_lsp: _,
             lsp_config,
             plugin_tools,
@@ -358,6 +359,7 @@ impl AgentToolSurfaceConfig {
                 no_lockout: self_config_no_lockout,
                 preview: self_config_preview,
                 enable_pack_install,
+                enable_pack_authority,
                 process_ceiling: super::SelfConfigProcessCeiling {
                     file_mode: ceiling.file_tools(),
                     bash_mode: ceiling.bash(),
