@@ -518,8 +518,10 @@ private def assembleSnapshot (source : Source) (admission : Request) : Except Er
     let initial : Snapshot := ⟨admission, selected, tools, []⟩
     .ok { initial with ordering := tools.map fun fact => Order.window initial input fact.tool }
 
+/-- The source owner's own read: the admission's requester owns the exact
+physical session root. Every other reader uses `directSnapshot`. -/
 def snapshot (source : Source) (admission : Request) : Except Error Snapshot := do
-  if !decide (admits source.catalog admission) then .error .rejected else pure ()
+  if !decide (ownedSession admission ∈ source.catalog.sessions) then .error .rejected else pure ()
   assembleSnapshot source admission
 
 /-- Direct inventory reads use the authenticated ConfigAccess actor and native
@@ -639,19 +641,6 @@ inductive PageResult where
   | page (value : Page)
   deriving DecidableEq, Repr
 
-/-- Source-side logical commitment. The full value is not a receiver wire
-field. Its native digest encoding and authenticated page rendering must bind
-this exact preimage; transcript v1 has a disjoint purpose. -/
-inductive VerifiedReceipt where
-  | transcriptV1 (admission : Request) (documents : List CanonicalOutput.Hydration.DocumentKey)
-  | metadata (snapshot : Snapshot)
-  deriving DecidableEq, Repr
-
-def VerifiedReceipt.proves (receipt : VerifiedReceipt) (value : Snapshot) : Bool :=
-  match receipt with
-  | .transcriptV1 _ _ => false
-  | .metadata expected => expected == value
-
 def makePage (value : Snapshot) (offset : Nat) : Page :=
   let entries := (value.entries.drop offset).take pageLimit
   let following := offset + entries.length
@@ -667,14 +656,6 @@ def pageFromSnapshot (current : Snapshot) (cursor : Option Cursor) : PageResult 
           cursor.offset >= current.entries.length then .rejected
       else .page (makePage current cursor.offset)
 
-def page (source : Source) (admission : Request) (receipt : VerifiedReceipt)
-    (cursor : Option Cursor) : PageResult :=
-  match snapshot source admission with
-  | .error .rejected => .rejected
-  | .error .unknown => .unknown
-  | .ok current =>
-      if !receipt.proves current then .stale else pageFromSnapshot current cursor
-
 def directPage (source : Source) (actor : String) (admission : Request)
     (cursor : Option Cursor) : PageResult :=
   match directSnapshot source actor admission with
@@ -687,21 +668,11 @@ theorem page_is_bounded (value : Snapshot) (offset : Nat) :
   simp only [makePage]
   exact List.length_take_le _ _
 
-theorem transcript_receipt_cannot_prove_metadata
-    (admission : Request) (documents : List CanonicalOutput.Hydration.DocumentKey) (value : Snapshot) :
-    (VerifiedReceipt.transcriptV1 admission documents).proves value = false := rfl
-
-theorem changed_snapshot_invalidates_old_receipt (before after : Snapshot)
-    (h : before ≠ after) :
-    (VerifiedReceipt.metadata before).proves after = false := by
-  simp [VerifiedReceipt.proves, h]
-
 def Snapshot.coverage (value : Snapshot) : Coverage :=
   ⟨value.entries.length, value.pending.length, value.unknown.length⟩
 
 /-- Digest strings are opaque native canonical commitments, not decoded
-snapshots. Signature verification binds every page field and its digest to
-the source; the receiver does not infer unreceived membership from a hash. -/
+snapshots. The reader does not infer unreceived membership from a hash. -/
 structure PageBinding where
   admission : Request
   digest : String
@@ -712,26 +683,6 @@ structure PageCursor where
   binding : PageBinding
   offset : Nat
   deriving DecidableEq, Repr
-
-/-- The attempt identity is persisted by the client before transport. A retry
-of that attempt retains its identity; an explicit new attempt is distinct.
-Native request keys domain-separate the complete demand's canonical encoding;
-collision resistance and physical-reference decoding remain native premises. -/
-structure PageDemand where
-  admission : Request
-  attempt : String
-  cursor : Option PageCursor
-  deriving DecidableEq, Repr
-
-def PageDemand.wellFormed (demand : PageDemand) : Bool :=
-  [demand.attempt, demand.admission.key, demand.admission.peer,
-   demand.admission.requester, demand.admission.node, demand.admission.session].all
-    (fun value => !value.isEmpty) &&
-  match demand.cursor with
-  | none => true
-  | some cursor => cursor.binding.admission == demand.admission &&
-      !cursor.binding.digest.isEmpty && cursor.offset != 0 && cursor.offset % pageLimit == 0 &&
-      cursor.offset < cursor.binding.coverage.entries
 
 structure WirePage where
   binding : PageBinding
@@ -746,22 +697,6 @@ premise, not a claim that every String uniquely encodes an arbitrary snapshot. -
 def Page.toWire (value : Page) (digest : String) : WirePage :=
   let binding := PageBinding.mk value.snapshot.admission digest value.snapshot.coverage
   ⟨binding, value.offset, value.entries, value.next.map fun cursor => ⟨binding, cursor.offset⟩⟩
-
-inductive ReceiptPurpose where
-  | transcriptV1
-  | fileInventoryV2
-  deriving DecidableEq, Repr
-
-/-- `signatureVerified` is the existing NodeIdentity verifier's observation
-over the exact versioned purpose, nonce, binding and full page payload. It is
-not a field accepted from the wire or persisted without re-verification. -/
-structure PageEnvelope where
-  purpose : ReceiptPurpose
-  requestKey : String
-  signer : String
-  signatureVerified : Bool
-  page : WirePage
-  deriving DecidableEq, Repr
 
 def Entry.key (value : Entry) : DocId × String × String :=
   ⟨value.projection, value.change.root, value.change.path⟩
@@ -804,82 +739,6 @@ def WirePage.wellFormed (value : WirePage) : Bool :=
         coverage.pending ≤ value.binding.coverage.pending &&
         coverage.unknown ≤ value.binding.coverage.unknown)) &&
     coherentEntries value.entries
-
-/-- Correlation precedes the existing signed receiver checks. The native
-nonce comparison binds the complete demand's domain-separated key; it is not
-an untrusted boolean field received from the peer. -/
-def PageDemand.matchesPage (demand : PageDemand) (value : WirePage) (nonceMatches : Bool) : Bool :=
-  demand.wellFormed && nonceMatches && value.binding.admission == demand.admission &&
-    match demand.cursor with
-    | none => value.offset == 0
-    | some cursor => value.binding == cursor.binding && value.offset == cursor.offset
-
-/-- The selected page is the source's immutable, signature-verified preparation.
-Its exact demand, digest and entry index bind the image request to one physical
-root and historical snapshot. A metadata receipt alone grants no image read. -/
-structure ImageDemand where
-  image : FileImages.Demand
-  metadata : PageDemand
-  digest : String
-  entryIndex : Nat
-  deriving DecidableEq, Repr
-
-/-- Native ACP observations are obtained as the authenticated reader, in the
-same source transaction as the canonical root and selected physical tool.
-Authored requester fields and a readable public session cannot supply these
-protected projection/image observations. These facts are not caller claims. -/
-structure SelectedImageRead where
-  scope : CanonicalOutput.Hydration.AuthorizationScope
-  projection : DocId
-  observation : DocId
-  projectionVisible : Bool
-  imageVisible : Bool
-  projectionOwner : String
-  imageOwner : String
-  deriving DecidableEq, Repr
-
-def selectImage (demand : ImageDemand) (catalog : Catalog) (page : PageEnvelope)
-    (nonceMatches : Bool) (pageOwner : String) (read : SelectedImageRead)
-    (tools : List FileImages.Tool) (images : List FileImages.Image) : FileImages.Selection :=
-  if !FileImages.wellFormed demand.image || !decide (admits catalog demand.image.admission) ||
-      demand.image.admission.authorizationScope != demand.metadata.admission.authorizationScope ||
-      !page.signatureVerified || page.requestKey.isEmpty || page.purpose != .fileInventoryV2 ||
-      page.signer != demand.image.admission.node || pageOwner != page.signer ||
-      !demand.metadata.matchesPage page.page nonceMatches || !page.page.wellFormed ||
-      demand.digest.isEmpty || demand.digest != page.page.binding.digest then .rejected
-  else match page.page.entries[demand.entryIndex]? with
-  | none => .rejected
-  | some entry =>
-      if read.scope != demand.image.admission.authorizationScope ||
-          read.projection != entry.projection || read.observation != entry.observation ||
-          !read.projectionVisible || !read.imageVisible ||
-          read.projectionOwner != entry.scope.node || read.imageOwner != entry.scope.node ||
-          entry.scope.node != demand.image.admission.node ||
-          demand.image.toolDocId != toString entry.tool ||
-          demand.image.requestDocId != toString entry.request then .rejected
-      else match tools.filter (fun tool => tool.docId == demand.image.toolDocId),
-          images.filter (fun image => image.toolDocId == demand.image.toolDocId) with
-      | [tool], [image] =>
-          if tool.accepted && tool.terminal && tool.scope == entry.scope &&
-              tool.requestDocId == demand.image.requestDocId && image.scope == entry.scope &&
-              image.docId == toString entry.observation &&
-              image.toolDocId == tool.docId && image.requestDocId == tool.requestDocId &&
-              image.contents.all (fun content => !content.docId.isEmpty && content.toolDocId == tool.docId && content.scope == entry.scope) then
-            .selected image.docId
-          else .rejected
-      | _, _ => .rejected
-
-theorem metadata_cannot_replace_image_permission (demand : ImageDemand) (catalog : Catalog)
-    (page : PageEnvelope) (nonceMatches : Bool) (pageOwner : String) (read : SelectedImageRead)
-    (tools : List FileImages.Tool) (images : List FileImages.Image)
-    (denied : read.imageVisible = false) :
-    selectImage demand catalog page nonceMatches pageOwner read tools images = .rejected := by
-  simp only [selectImage]
-  split
-  · rfl
-  · split
-    · rfl
-    · simp [denied]
 
 inductive RefusalReason where
   | rejected | stale | unavailable

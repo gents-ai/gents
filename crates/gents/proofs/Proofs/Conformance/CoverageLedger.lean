@@ -1501,12 +1501,6 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases"
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "stored_file_image_access_cases"
-      "StoredFileImageAccessCases"
-      "runtime::agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_refuses_runtime_local_collections"
-      "Drives the native refusal to replicate or push runtime-local file-image collections between peers; P2P carries only discovery and enrollment.")
-      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_private_journal_policy"
       "PrivateJournalPolicy"
@@ -1637,7 +1631,7 @@ def caseCoverage : List CoverageEntry :=
       "node_file_request_access_cases"
       "NodeFileRequestAccessCases"
       "store::config_client::dormant_file_request_conformance::native_node_scoped_file_requests_match_modeled_access"
-      "The retained schemas have no production publisher or consumer; this test covers native document authority, not a live hydration flow.")
+      "The retained FileInventoryRequest schema has no production publisher or consumer; this test covers native document authority, not a live peer flow.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "callback_workspace_actor_cases"
@@ -1666,18 +1660,13 @@ def caseCoverage : List CoverageEntry :=
       "client::mutations::chat::request::receipt::tests::cleanup_observation_preserves_the_modeled_delivery_and_identity")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "file_image_read_grant_cases"
-      "FileImageReadGrantCases"
-      "tool_call_lifecycle::file_review_access::tests::file_image_read_grant_matches_signed_receipt_contract")
-      "file-inventory" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
       "file_review_subscription_cases"
       "FileReviewSubscriptionCases"
       "client::schema::tests::generated_file_review_rules_exclude_whole_collection_delivery")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "file_image_hydration_route_cases"
-      "FileImageHydrationRouteCases"
+      "file_review_route_cases"
+      "FileReviewRouteCases"
       "runtime::agent::p2p_reconcile::templates::file_route_tests::generated_routes_follow_executable_scope_filters")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1719,31 +1708,25 @@ def caseCoverage : List CoverageEntry :=
       "file_inventory_direct_reader_cases"
       "FileInventoryDirectReaderCases"
       "file_inventory::tests::generated_direct_inventory_uses_native_reader_and_agent_owner"
-      "Drives actual operator reads and signed pages under the native source identity. HTTP extraction and installed consumption remain separate obligations.")
+      "Drives actual operator reads and bounded pages under the authenticated reader. HTTP extraction and installed consumption remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_fork_cases"
       "FileInventoryForkCases"
       "file_inventory::snapshot::tests::generated_fork_inventory_retains_only_selected_native_origins"
-      "Uses the native fork owner and source snapshot reader to preserve selected physical origins while excluding later parent work. Signed inventory transport and installed acceptance remain separate obligations.")
+      "Uses the native fork owner and source snapshot reader to preserve selected physical origins while excluding later parent work. Installed acceptance remains a separate obligation.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_reader_cases"
       "FileInventoryReaderCases"
       "file_inventory::snapshot::tests::readers::shared_reader_metadata_preserves_canonical_authorship_and_image_privacy"
-      "Refines public-root visibility, exact physical binding, explicit projection read permission, revocation and reauthorization in one native source snapshot. Two enrolled identities, signed delivery and selected-image transport remain separate obligations.")
-      "file-inventory" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "file_inventory_selected_image_cases"
-      "FileInventorySelectedImageCases"
-      "file_inventory::images::tests::generated_inventory_images_keep_reader_root_snapshot_and_source_distinct"
-      "Executes snapshot-bound selection over native page, root, canonical tool and independent metadata/image-read observations. Source cryptographic/ACP interleavings, two enrolled identities and installed delivery remain separate obligations.")
+      "Refines public-root visibility, exact physical binding, explicit projection read permission, revocation and reauthorization for the authenticated direct reader in one native source snapshot. Installed consumption remains a separate obligation.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_inventory_source_projection_cases"
       "FileInventorySourceProjectionCases"
       "file_inventory::snapshot::tests::generated_projection_cases_use_native_owners_and_scopes"
-      "Refines source projection scope, terminal coverage, path coherence, authenticated native owners and unsigned bounded pages. Remaining canonical admission, fork, publication and signed page transport refinements stay separate obligations.")
+      "Refines source projection scope, terminal coverage, path coherence, authenticated native owners and unsigned bounded pages. Remaining canonical admission, fork and publication refinements stay separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "schema_argument_repair_cases"

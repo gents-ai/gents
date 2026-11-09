@@ -78,7 +78,6 @@ inductive AccessState where
   deriving DecidableEq, Repr
 
 structure AuthorizationScope where
-  peer : String
   requester : String
   node : String
   session : String
@@ -514,7 +513,7 @@ def originMessage : MessageEnvelope :=
 def childMessage : MessageEnvelope :=
   { originMessage with header := forkHeader originMessage.header 201 2, key := "child" }
 
-def scope : AuthorizationScope := ⟨"peer-a", "requester-a", "agent-a", "session-a", 2⟩
+def scope : AuthorizationScope := ⟨"requester-a", "agent-a", "session-a", 2⟩
 
 def access : List ProvenanceAccess :=
   [ ⟨scope, ⟨.agentRequest, 10⟩, .authorized⟩
@@ -591,7 +590,7 @@ example : resultMatches
 example : resultMatches
     (buildManifest originScope 1 [] [200] [] [originMessage] [closing]
       (originAccess.map fun observation =>
-        { observation with scope := { originScope with peer := "peer-b" } }) [] [])
+        { observation with scope := { originScope with requester := "requester-b" } }) [] [])
     (.error (.provenanceMissing ⟨.agentMessage, 200⟩)) = true := by native_decide
 
 example : resultMatches

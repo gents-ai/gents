@@ -63,7 +63,7 @@ import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.SessionReplyPreview
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
-import Proofs.Conformance.FileImageHydration
+import Proofs.Conformance.FileReviewRoutes
 import Proofs.Conformance.FileInventory
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
@@ -1023,8 +1023,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
     ++ "\"file_inventory_reader_cases\":"
       ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
-    ++ "\"file_inventory_selected_image_cases\":"
-      ++ Conformance.FileInventoryContracts.selectedImageCasesJson ++ ","
     ++ "\"file_inventory_order_window_cases\":"
       ++ Conformance.FileInventoryContracts.orderingWindowCasesJson ++ ","
     ++ "\"file_inventory_order_resolution_cases\":"
@@ -1033,17 +1031,13 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.FileInventoryContracts.orderingComparisonCasesJson ++ ","
     ++ "\"file_inventory_order_entry_cases\":"
       ++ Conformance.FileInventoryContracts.orderingEntryCasesJson ++ ","
-    ++ "\"file_image_hydration_route_cases\":"
-      ++ Conformance.FileImageHydrationContracts.routeCasesJson ++ ","
+    ++ "\"file_review_route_cases\":"
+      ++ Conformance.FileReviewRouteContracts.routeCasesJson ++ ","
     ++ "\"file_review_subscription_cases\":"
-      ++ Conformance.FileImageHydrationContracts.subscriptionCasesJson ++ ","
+      ++ Conformance.FileReviewRouteContracts.subscriptionCasesJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"stored_file_image_access_cases\":"
-      ++ Conformance.FileImageHydrationContracts.storageCasesJson ++ ","
-    ++ "\"file_image_read_grant_cases\":"
-      ++ Conformance.FileImageHydrationContracts.readGrantCasesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
     ++ "\"workspace_cases\":"
