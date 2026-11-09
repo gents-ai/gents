@@ -4,7 +4,7 @@
 //! exactly what the webview will receive; `lint` runs the static lint on
 //! one module or stylesheet before it is ever in a pack.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::cli::args::{UxCommand, UxLintArgs, UxListArgs, UxModuleArgs, UxPreviewArgs};
 
@@ -70,21 +70,7 @@ async fn preview(args: UxPreviewArgs) -> Result<()> {
 }
 
 fn lint(args: UxLintArgs) -> Result<()> {
-    let text = std::fs::read_to_string(&args.file)
-        .with_context(|| format!("reading {}", args.file.display()))?;
-    let is_stylesheet = args.file.extension().is_some_and(|e| e == "css");
-    // Either file may declare a custom property the other reads, so each is
-    // linted with the one the frame would load beside it.
-    let beside = |name: &str| std::fs::read_to_string(args.file.with_file_name(name)).ok();
-    let findings = if is_stylesheet {
-        let entry = beside(gents::plugin::ux::DEV_ENTRY).unwrap_or_default();
-        let mut findings = gents::plugin::ux::lint::lint_plugin(&entry, Some(&text));
-        findings.retain(|finding| finding.stylesheet);
-        findings
-    } else {
-        let css = beside(gents::plugin::ux::DEV_CSS);
-        gents::plugin::ux::lint::lint_plugin(&text, css.as_deref())
-    };
+    let findings = gents::plugin::ux::lint_file(&args.file)?;
     crate::print_json(&serde_json::json!({
         "file": args.file,
         "admitted": findings.is_empty(),

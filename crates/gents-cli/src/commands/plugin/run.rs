@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents::plugin::executor::PluginExecutor;
 use gents::plugin::model_calls::AccessModels;
-use gents::plugin::{BoundDir, PluginOutcome, PluginVerdict};
+use gents::plugin::BoundDir;
 
 use crate::cli::args::PluginRunArgs;
 
@@ -101,7 +101,7 @@ async fn call_installed_inner(
     if let Some(note) = &call.binding_note {
         tracing::warn!(plugin = %coordinate, "{note}");
     }
-    let mut output = outcome_output(&coordinate, call.outcome)?;
+    let mut output = call.outcome.into_output(&coordinate)?;
     if let Some((grant, writes)) = ux.then(|| record.data_grant()).flatten().and_then(|grant| {
         output
             .as_object_mut()
@@ -157,42 +157,7 @@ async fn run_plugin(
     if let Some(note) = &call.binding_note {
         eprintln!("{note}");
     }
-    outcome_output(&coordinate, call.outcome)
-}
-
-fn outcome_output(coordinate: &str, outcome: PluginOutcome) -> Result<serde_json::Value> {
-    match outcome.verdict {
-        PluginVerdict::Success => Ok(outcome.output),
-        PluginVerdict::Refused => {
-            anyhow::bail!(
-                "{coordinate} was refused before it ran: {}",
-                outcome.diagnostics
-            )
-        }
-        PluginVerdict::OutOfFuel => {
-            anyhow::bail!(
-                "{coordinate} ran out of its fuel budget: {}",
-                outcome.diagnostics
-            )
-        }
-        PluginVerdict::OutOfMemory => {
-            anyhow::bail!(
-                "{coordinate} exceeded its memory budget: {}",
-                outcome.diagnostics
-            )
-        }
-        PluginVerdict::Timeout => {
-            anyhow::bail!(
-                "{coordinate} exceeded its wall-clock budget: {}",
-                outcome.diagnostics
-            )
-        }
-        PluginVerdict::BadOutput => anyhow::bail!(
-            "{coordinate} did not return a single JSON value: {}",
-            outcome.diagnostics
-        ),
-        PluginVerdict::Failed => anyhow::bail!("{coordinate} failed: {}", outcome.diagnostics),
-    }
+    call.outcome.into_output(&coordinate)
 }
 
 #[cfg(test)]

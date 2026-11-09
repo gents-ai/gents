@@ -217,17 +217,8 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     }
 
     if input.ux {
-        let (path, source) = ux_plugin_source(&names);
-        let directive = names.name.replace('_', "-");
-        manifest["ux"] = json!([{
-            "name": names.name,
-            "description": format!("{} page, nav row and ::{directive} directive.", names.title),
-            "entry": path,
-            "contributes": {
-                "areas": ["nav", "plugin.pages", "transcript.directives"],
-                "directives": [directive],
-            },
-        }]);
+        let (path, source, entry) = ux_plugin(&names);
+        manifest["ux"] = json!([entry]);
         files.push((path, source));
     }
 
@@ -275,6 +266,22 @@ fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A UX plugin's pack-relative entry path, source and `ux[]` manifest row.
+pub(super) fn ux_plugin(names: &Names) -> (String, String, Value) {
+    let (path, source) = ux_plugin_source(names);
+    let directive = names.name.replace('_', "-");
+    let entry = json!({
+        "name": names.name,
+        "description": format!("{} page, nav row and ::{directive} directive.", names.title),
+        "entry": path,
+        "contributes": {
+            "areas": ["nav", "plugin.pages", "transcript.directives"],
+            "directives": [directive],
+        },
+    });
+    (path, source, entry)
 }
 
 /// The scaffolded UX plugin: a plain ESM file (no build) that lands a nav

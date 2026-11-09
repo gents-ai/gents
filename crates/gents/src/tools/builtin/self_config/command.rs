@@ -21,6 +21,7 @@ mod policy;
 mod reads;
 mod skill;
 mod ux_preview;
+mod ux;
 mod validate;
 
 use args::{
@@ -60,7 +61,8 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "automation",
         "connect sources, tasks and triggers; wiring recipes",
     ),
-    ("pack", "pack installation"),
+    ("pack", "pack installation and authoring"),
+    ("page", "author a desktop page shipped in a pack"),
     (
         "policy",
         "node permissions and document relationships, delegated as this agent",
@@ -137,6 +139,7 @@ impl ConfigCommandParams {
                 | ["skill", "get", ..]
                 | ["pack", "get" | "install" | "update" | "remove", ..]
                 | ["plugin", "get", ..] => 2,
+                ["task", "run", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
                 ["get", ..] => return Err(CommandGuidance {
                     message: "Put the resource before the verb: use agent get to inspect an agent.".into(),
@@ -254,13 +257,17 @@ pub(crate) fn is_help_call(args: &Value) -> bool {
 }
 
 fn help_verb(argv: &[String]) -> Vec<&str> {
-    if argv
-        .first()
-        .is_none_or(|first| matches!(first.as_str(), "help" | "--help" | "-h"))
-    {
+    let Some(first) = argv.first() else {
         return Vec::new();
-    }
-    let mut words = argv[1..]
+    };
+    let start = if matches!(first.as_str(), "help" | "--help" | "-h") {
+        2
+    } else {
+        1
+    };
+    let mut words = argv
+        .get(start..)
+        .unwrap_or_default()
         .iter()
         .map(String::as_str)
         .take_while(|word| !matches!(*word, "--help" | "-h"))
@@ -420,6 +427,7 @@ impl ConfigCommandTool {
                     "agent" => ["clone", "disable", "default", "context"].contains(&verb.as_str()),
                     "backend" => ["discover", "accounts"].contains(&verb.as_str()),
                     "skill" => verb == "import",
+                    "task" => verb == "run",
                     _ => false,
                 };
                 if !common.contains(&verb.as_str()) && !extra {
@@ -467,6 +475,8 @@ impl ConfigCommandTool {
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
             "policy" => self.policy(&argv[1..]).await,
+            "ux" => self.ux(&argv[1..]).await,
+            "task" => self.task_run(&argv[1..]).await,
             "plugin" => self.plugin(&argv[1..]),
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,

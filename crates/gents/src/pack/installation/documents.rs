@@ -600,7 +600,7 @@ async fn prepare_document_pack_install_inner(
             plugin_home.is_some() || hosted.is_some(),
             installed_via
         ),
-        "document packs with UX require an operator install with the node's local home"
+        "document packs with UX require an operator install with the node's local home; a model-authored install cannot authorize UI code, so ask the operator to run `gents pack install` on the built .pack"
     );
     for dependency in dependencies {
         if let Some(hosted) = hosted {
@@ -945,7 +945,7 @@ pub async fn install_prepared_document_pack(
             plugin_home.is_some(),
             installed_via
         ),
-        "document packs with UX require an operator install with the node's local home"
+        "document packs with UX require an operator install with the node's local home; a model-authored install cannot authorize UI code, so ask the operator to run `gents pack install` on the built .pack"
     );
     for dependency in &prepared.dependencies {
         require_installed_dependency_ux(&dependency.manifest, &dependency.digest, plugin_home)?;

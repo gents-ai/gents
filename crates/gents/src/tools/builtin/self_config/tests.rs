@@ -8608,3 +8608,5 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     assert_eq!(installed["effective"]["digest"], Value::String(digest));
     assert!(node.get_collection("FixtureJob").unwrap().is_some());
 }
+
+mod pack_authoring;

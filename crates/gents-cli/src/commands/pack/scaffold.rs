@@ -88,18 +88,6 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
     })
 }
 
-pub(crate) fn tool_markdown(name: &str) -> (String, String) {
-    gents::pack::authoring::tool_markdown(name)
-}
-
-pub(crate) fn write_plugin_source(
-    source: &Path,
-    name: &str,
-    language: Option<&str>,
-) -> Result<String> {
-    gents::pack::authoring::write_plugin_source(source, name, language)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

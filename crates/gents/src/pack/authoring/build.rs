@@ -24,6 +24,8 @@ pub struct BuildReport {
     pub size_bytes: u64,
     pub out: PathBuf,
     pub plugins: Vec<PluginReport>,
+    /// The pack's UX plugins, by name.
+    pub ux: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +73,38 @@ pub fn build_pack(
     for plugin in &manifest.metadata.plugins {
         build_plugin(dir, &manifest, plugin, compiler)?;
     }
+    pack_directory(dir, &manifest, out)
+}
+
+/// Packs a directory without running any compiler. Plugin source, which only a
+/// compiler can turn into an artifact, is refused; prebuilt plugins ship as is.
+pub fn build_pack_without_compiler(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
+    let manifest = super::check::read_manifest(dir)?;
+    ensure_no_compile_step(&manifest)?;
+    pack_directory(dir, &manifest, out)
+}
+
+/// A plugin with `source` needs a compiler, even when an artifact is present:
+/// that artifact may predate the source.
+pub fn ensure_no_compile_step(manifest: &PackManifest) -> Result<()> {
+    let source_plugins: Vec<&str> = manifest
+        .metadata
+        .plugins
+        .iter()
+        .filter(|plugin| plugin.source.is_some())
+        .map(|plugin| plugin.name.as_str())
+        .collect();
+    anyhow::ensure!(
+        source_plugins.is_empty(),
+        "plugin {} has source that needs a compiler, and config runs none. Ask the operator to run \
+         `gents pack build`, then preview the built .pack, or ship the plugin prebuilt with pack \
+         add plugin NAME --prebuilt PATH",
+        source_plugins.join(", ")
+    );
+    Ok(())
+}
+
+fn pack_directory(dir: &Path, manifest: &PackManifest, out: Option<&Path>) -> Result<BuildReport> {
     // A file-produced UX plugin the webview would refuse never gets packed;
     // an .afb-produced one is linted when its producer runs.
     let refused: Vec<String> = crate::plugin::ux::lint_pack_dir(dir, &manifest.metadata.ux)?
@@ -138,6 +172,12 @@ pub fn build_pack(
                 name: plugin.name.clone(),
                 artifact: plugin.artifact.clone(),
             })
+            .collect(),
+        ux: manifest
+            .metadata
+            .ux
+            .iter()
+            .map(|page| page.name.clone())
             .collect(),
     })
 }

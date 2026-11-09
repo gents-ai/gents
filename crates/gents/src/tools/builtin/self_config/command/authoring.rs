@@ -2,13 +2,30 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::pack::authoring::{
-    check_dir, scaffold, verify_pack_file, CheckReport, Kind, ScaffoldInput, Template,
+    build_pack_without_compiler, check_dir, scaffold, verify_pack_file, CheckReport, Kind,
+    PackAddition, PackEdit, ScaffoldInput, Template,
 };
 
+const PACK_PARTS: &str = "agent, task, trigger, schema, skill, plugin, page";
+
 enum AuthoringCall {
-    Scaffold { name: String, input: ScaffoldInput },
-    Check { dir: Option<String> },
-    Verify { pack: String },
+    Scaffold {
+        name: String,
+        input: ScaffoldInput,
+    },
+    Check {
+        dir: Option<String>,
+    },
+    Verify {
+        pack: String,
+    },
+    Add {
+        dir: Option<String>,
+        addition: PackAddition,
+    },
+    Build {
+        dir: Option<String>,
+    },
 }
 
 fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
@@ -27,11 +44,16 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                 anyhow::ensure!(
                     matches!(
                         option.as_str(),
-                        "namespace" | "kind" | "template" | "language"
+                        "namespace" | "kind" | "template" | "language" | "page"
                     ),
-                    "unknown pack scaffold option --{option}; accepted: --namespace, --kind, --template, --language"
+                    "unknown pack scaffold option --{option}; accepted: --namespace, --kind, --template, --language, --page"
                 );
             }
+            let page = match parsed.one("page")? {
+                None | Some("false") => false,
+                Some("true") => true,
+                Some(other) => bail!("--page takes true or false, not {other:?}"),
+            };
             let kind = parsed
                 .one("kind")?
                 .map(|kind| match kind {
@@ -63,7 +85,7 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                     template,
                     kind,
                     language: parsed.one("language")?.map(ToOwned::to_owned),
-                    ux: false,
+                    ux: page,
                 },
             })
         }
@@ -93,15 +115,66 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                 pack: parsed.positionals[0].clone(),
             })
         }
-        "build" => bail!(
-            "pack build isn't available through config. Run `gents pack build` from the operator CLI to build plugin artifacts before installing."
-        ),
+        "add" => {
+            anyhow::ensure!(parsed.switches.is_empty(), "pack add takes no switches");
+            let [part, id] = parsed.positionals.as_slice() else {
+                bail!("pack add requires PART and ID; parts: {PACK_PARTS}");
+            };
+            let accepted: &[&str] = match part.as_str() {
+                "agent" => &["slot"],
+                "task" => &["agent"],
+                "trigger" => &["task", "on"],
+                "schema" | "page" => &[],
+                "skill" => &["from"],
+                "plugin" => &["language", "prebuilt"],
+                other => bail!("unknown pack part {other:?}; parts: {PACK_PARTS}"),
+            };
+            for option in parsed.options.keys() {
+                anyhow::ensure!(
+                    option == "dir" || accepted.contains(&option.as_str()),
+                    "pack add {part} does not take --{option}; it takes --dir{}",
+                    accepted.iter().map(|name| format!(", --{name}")).collect::<String>()
+                );
+            }
+            let id = id.clone();
+            let optional = |name: &str| Ok::<_, anyhow::Error>(parsed.one(name)?.map(ToOwned::to_owned));
+            let required = |name: &str| {
+                optional(name)?.with_context(|| format!("pack add {part} requires options.{name}"))
+            };
+            let addition = match part.as_str() {
+                "agent" => PackAddition::Agent { id, slot: optional("slot")? },
+                "task" => PackAddition::Task { id, agent: required("agent")? },
+                "trigger" => PackAddition::Trigger { id, task: required("task")?, on: required("on")? },
+                "schema" => PackAddition::Schema { collection: id },
+                "skill" => PackAddition::Skill { id, from: optional("from")?.map(PathBuf::from) },
+                "plugin" => PackAddition::Plugin {
+                    name: id,
+                    language: optional("language")?,
+                    prebuilt: optional("prebuilt")?.map(PathBuf::from),
+                },
+                _ => PackAddition::Page { name: id },
+            };
+            Ok(AuthoringCall::Add { dir: optional("dir")?, addition })
+        }
+        "build" => {
+            anyhow::ensure!(
+                parsed.switches.is_empty() && parsed.options.is_empty(),
+                "pack build takes only an optional DIR; it accepts no options"
+            );
+            anyhow::ensure!(
+                parsed.positionals.len() <= 1,
+                "pack build accepts at most one DIR"
+            );
+            Ok(AuthoringCall::Build {
+                dir: parsed.positionals.first().cloned(),
+            })
+        }
         "test" => bail!(
             "pack test isn't available through config. Run `gents pack test` from the operator CLI."
         ),
         other => Err(CommandGuidance {
             message: format!(
-                "unknown pack authoring command {other:?}; authoring verbs are scaffold, check and verify"
+                "unknown pack authoring command {other:?}; authoring verbs are scaffold, add, check, build and verify"
             ),
             next_call: json!({"argv":["help","pack"]}),
         }
@@ -148,10 +221,12 @@ impl ConfigCommandTool {
             AuthoringCall::Scaffold { name, input } => self.scaffold(&name, &input).await,
             AuthoringCall::Check { dir } => self.check(dir.as_deref()).await,
             AuthoringCall::Verify { pack } => self.verify(&pack).await,
+            AuthoringCall::Add { dir, addition } => self.add_part(dir.as_deref(), addition).await,
+            AuthoringCall::Build { dir } => self.build(dir.as_deref()).await,
         }
     }
 
-    async fn authoring_paths(
+    pub(super) async fn authoring_paths(
         &self,
         operation: &str,
         write: bool,
@@ -188,7 +263,7 @@ impl ConfigCommandTool {
             "dir": relative,
             "files": report.files,
             "next_call": json!({"argv":["pack","check",relative]}),
-            "note": "Scaffolded inside the effective tool root. The pack is not installed and nothing runs; check it, then build plugin artifacts with `gents pack build` from the operator CLI before installing.",
+            "note": "Scaffolded inside the effective tool root. The pack is not installed and nothing runs; check it, then pack build. Plugin sources need `gents pack build` from the operator CLI.",
         }
         .pretty()
     }
@@ -206,6 +281,65 @@ impl ConfigCommandTool {
             "unverified": report.unverified,
             "validated": validated,
             "note": note,
+        }
+        .pretty()
+    }
+
+    async fn add_part(&self, dir: Option<&str>, mut addition: PackAddition) -> Result<String> {
+        let context = self.authoring_paths("add", true).await?;
+        let dir = context.resolve_existing_dir(dir)?;
+        if let PackAddition::Skill {
+            from: Some(path), ..
+        }
+        | PackAddition::Plugin {
+            prebuilt: Some(path),
+            ..
+        } = &mut addition
+        {
+            *path = context.resolve_existing_file(path.to_str().context("path is not UTF-8")?)?;
+        }
+        let pack_dir = dir.clone();
+        let assets = tokio::task::spawn_blocking(move || {
+            let mut pack = PackEdit::load(&pack_dir)?;
+            pack.add(addition)?;
+            pack.save()?;
+            anyhow::Ok(pack.manifest["assets"].clone())
+        })
+        .await
+        .context("pack add task did not finish")??;
+        let relative = context.display_path(&dir);
+        ordered! {
+            "completed": true,
+            "dir": relative,
+            "assets": assets,
+            "next_call": json!({"argv":["pack","check",relative]}),
+            "note": "Edit the new files with the file tools, then check the pack.",
+        }
+        .pretty()
+    }
+
+    async fn build(&self, dir: Option<&str>) -> Result<String> {
+        let context = self.authoring_paths("build", true).await?;
+        let dir = context.resolve_existing_dir(dir)?;
+        anyhow::ensure!(
+            dir != context.root(),
+            "pack build writes the .pack beside the pack directory, which would be outside the tool root; put the pack in a subdirectory"
+        );
+        let report = tokio::task::spawn_blocking(move || build_pack_without_compiler(&dir, None))
+            .await
+            .context("pack build task did not finish")??;
+        let out = context.display_path(&report.out);
+        let operator_install = !report.ux.is_empty();
+        ordered! {
+            "completed": true,
+            "pack": report.pack,
+            "namespace": report.namespace,
+            "version": report.version,
+            "digest": report.digest,
+            "out": out,
+            "size_bytes": report.size_bytes,
+            "next_call": if operator_install { json!({"argv":["help","page"]}) } else { json!({"argv":["pack","preview","install",out]}) },
+            "operator_action": operator_install.then(|| format!("This pack ships a page, and a page is UI code a model-authored install cannot authorize. Ask the operator to run `gents pack install {out}`, through the mailbox if they are not here.")),
         }
         .pretty()
     }
@@ -261,6 +395,36 @@ mod tests {
             error.contains("workflow"),
             "the refusal lists every template: {error}"
         );
+    }
+
+    #[test]
+    fn add_parses_each_part_and_names_what_it_accepts() {
+        let argv = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let AuthoringCall::Add { dir, addition } = parse_authoring_args(
+            "add",
+            &argv(&["task", "review", "--agent", "worker", "--dir", "p"]),
+        )
+        .unwrap_or_else(|error| panic!("{error:#}")) else {
+            panic!("add parses to an add call");
+        };
+        assert_eq!(dir.as_deref(), Some("p"));
+        assert!(matches!(addition, PackAddition::Task { .. }));
+        for (words, expected) in [
+            (vec!["task", "review"], "requires options.agent"),
+            (vec!["page", "board", "--slot", "x"], "does not take --slot"),
+            (vec!["gizmo", "board"], "agent, task, trigger"),
+        ] {
+            let error = match parse_authoring_args("add", &argv(&words)) {
+                Err(error) => format!("{error:#}"),
+                Ok(_) => panic!("{words:?} is refused"),
+            };
+            assert!(error.contains(expected), "{words:?}: {error}");
+        }
     }
 
     #[test]

@@ -30,6 +30,8 @@ pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<
     }
     if pack {
         resources.push("pack");
+        resources.push("page");
+        resources.push("ux");
     }
     if categories.contains("policy") {
         resources.push("policy");

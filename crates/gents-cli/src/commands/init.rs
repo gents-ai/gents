@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
 use gents::documents::{
-    Agent, AgentContext, AgentTools, BackendAuth, BashTools, BuiltInTools,
+    Agent, AgentContext, AgentTargetDocument, AgentTools, BackendAuth, BashTools, BuiltInTools,
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
     InferenceExecution, SurfaceToolDecl, Tools,
 };
@@ -59,6 +59,7 @@ You have write-capable local tools. When the user asks you to make a change, you
 For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
 
 const ENGINEER_SYSTEM_PROMPT: &str = gents_protocol::ENGINEER_PROMPT;
+const ENGINEER_TARGET_ID: &str = "engineer";
 
 const YOLO_WARNING: &str = "\
 WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
@@ -1157,9 +1158,14 @@ async fn initialize_runtime_home(
         args.defra_query_collections.clone(),
     );
     tools.self_config = Some(engineer_self_config());
-    let engineer_mailbox = args
-        .engineer
-        .then(|| engineer_tools(&mut tools, node_did, !args.disable_defra_query));
+    let engineer_documents = args.engineer.then(|| {
+        engineer_tools(
+            &mut tools,
+            node_did,
+            &default_agent_did,
+            !args.disable_defra_query,
+        )
+    });
     let context = AgentContext {
         context_id: default_context_id_for_agent(&default_agent_did),
         node_did: node_did.to_string(),
@@ -1234,8 +1240,9 @@ async fn initialize_runtime_home(
         replacement(Collection::Agent, &agent)?,
         replacement(Collection::Tools, &wide_open_tools_document(node_did))?,
     ];
-    if let Some(surface) = &engineer_mailbox {
+    if let Some((surface, own_target)) = &engineer_documents {
         documents.push(replacement(Collection::DatastoreToolSurface, surface)?);
+        documents.push(replacement(Collection::AgentTarget, own_target)?);
     }
     publish_home_config(
         access,
@@ -1452,11 +1459,21 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
 fn engineer_tools(
     tools: &mut Tools,
     node_did: &str,
+    agent_did: &str,
     enable_defra_query: bool,
-) -> DatastoreToolSurfaceDocument {
+) -> (DatastoreToolSurfaceDocument, AgentTargetDocument) {
     let surface_id = "engineer-mailbox".to_string();
+    let own_target = AgentTargetDocument {
+        target_id: ENGINEER_TARGET_ID.to_string(),
+        node_did: node_did.to_string(),
+        target_node_did: node_did.to_string(),
+        agent_did: agent_did.to_string(),
+        name: ENGINEER_TARGET_ID.to_string(),
+        description: Some("Start another session of this Engineer.".to_string()),
+        tags: Vec::new(),
+    };
     tools.agents = Some(AgentTools {
-        target_ids: Vec::new(),
+        target_ids: vec![own_target.target_id.clone()],
         enabled: Some(true),
     });
     let built_ins = tools.built_ins.get_or_insert_with(Default::default);
@@ -1467,7 +1484,7 @@ fn engineer_tools(
     let datastore = tools.datastore.get_or_insert_with(Default::default);
     datastore.enable_defra_query = Some(enable_defra_query);
     datastore.datastore_tool_surface_ids = Some(vec![surface_id.clone()]);
-    DatastoreToolSurfaceDocument {
+    let surface = DatastoreToolSurfaceDocument {
         surface_id,
         node_did: node_did.to_string(),
         display_name: Some("Engineer escalations".to_string()),
@@ -1477,7 +1494,8 @@ fn engineer_tools(
         )]),
         created_at: None,
         tags: Vec::new(),
-    }
+    };
+    (surface, own_target)
 }
 
 fn wide_open_tools_id_for_node(node_did: &str) -> String {
@@ -2186,7 +2204,27 @@ mod tests {
             .find(|resolved| resolved.agent_did == summary.default_agent_did)
             .expect("init default agent resolves")
             .tools
-            .explain_with_runtime(false, &owner, &Default::default())
+            .explain_with_runtime(
+                false,
+                &owner,
+                &std::iter::once(summary.default_agent_id.clone()).collect(),
+            )
+    }
+
+    #[tokio::test]
+    async fn a_fresh_engineer_can_start_its_own_agent() {
+        let engineer = explain_initialized_default_agent(true).await;
+        assert!(
+            engineer.tool_names.iter().any(|name| name == "agent_new"),
+            "{:?}",
+            engineer.tool_names
+        );
+        let other = explain_initialized_default_agent(false).await;
+        assert!(
+            !other.tool_names.iter().any(|name| name == "agent_new"),
+            "{:?}",
+            other.tool_names
+        );
     }
 
     #[tokio::test]

@@ -191,10 +191,7 @@ impl SelfConfigCore {
     /// fails with `ManagedAgentSignerRequired`, and it never falls back to the
     /// Agent identity alone or to the Node.
     pub(crate) fn access(&self) -> Result<ConfigAccess> {
-        let signer = self
-            .agent_signer
-            .clone()
-            .ok_or(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)?;
+        let signer = self.agent_signer()?;
         let actor = self.identity()?;
         anyhow::ensure!(
             actor.as_str() != self.node_did,
@@ -205,6 +202,14 @@ impl SelfConfigCore {
             actor,
             signer,
         )?)
+    }
+
+    /// The invoking Agent's own managed signer.
+    pub(crate) fn agent_signer(&self) -> Result<crate::store::identity::ManagedAgentSigner> {
+        Ok(self
+            .agent_signer
+            .clone()
+            .ok_or(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)?)
     }
 
     pub(crate) fn with_runtime_identity(

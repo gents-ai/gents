@@ -26,6 +26,7 @@ impl ConfigCommandTool {
         let resource = match requested {
             "agent" => "agent",
             "event_source" => "event-source",
+            "ux" => "page",
             other => other,
         };
         let granted = resource == "get"
@@ -45,6 +46,14 @@ impl ConfigCommandTool {
                 &self::page("context").expect("context help"),
                 &command[1..],
             );
+        }
+        if resource == "page" {
+            if let Some((_, text)) = PAGE_TOPICS
+                .iter()
+                .find(|(topic, _)| command.first() == Some(topic))
+            {
+                return Ok((*text).to_owned());
+            }
         }
         if let Some(target) = crud::resource_target(resource) {
             return crud_help(resource, target, &page, &command);
@@ -80,6 +89,17 @@ impl ConfigCommandTool {
         }
         if !page.notes.is_empty() {
             writeln!(out, "{}", page.notes)?;
+        }
+        if resource == "page" {
+            let topics = PAGE_TOPICS
+                .iter()
+                .map(|(topic, _)| *topic)
+                .collect::<Vec<_>>();
+            writeln!(
+                out,
+                "Topics: [\"help\",\"page\",TOPIC]: {}.",
+                topics.join(", ")
+            )?;
         }
         for (title, steps) in recipes(resource).into_iter().take(1) {
             writeln!(out, "Recipe: {title}")?;
@@ -206,6 +226,12 @@ fn resource_has_fields(resource: &str) -> bool {
         .is_some_and(|contracts| !contracts.is_empty())
 }
 
+/// Reference for page authors, one read away from `["help","page"]`.
+const PAGE_TOPICS: &[(&str, &str)] = &[
+    ("contributions", "A page module is plain ESM; its default export is {id, name, register(ctx)}, and register calls ctx.registerMany([...]). Each row is {id, area, order?, data?, render?}. Areas: nav (data: {id, label, icon, to, placement, order}), plugin.pages (render: a React element), agent.sections, session.header.actions, transcript.directives (data: {name, label, onClick}). Every area and directive must be declared in the manifest's ux[].contributes; the desktop refuses anything else. Only @gents/ux-sdk, react and react/jsx-runtime may be imported; ux lint reports any other import and dynamic code."),
+    ("data", "A page reads and writes node documents only through datastore tools its manifest grants: ux[].data = [{surface: SURFACE_ID, tools: [TOOL_NAME, ...]}]. Create the DatastoreToolSurface with config datastore create or ship it in the pack's pack_config.json. In the page: useQuery(ctx, SURFACE, TOOL, {args, live}) returns the rows and useWrite(ctx, SURFACE, TOOL) returns {write, pending, error}. ACP on the node still decides what the operator may read or write. A tool with a runtime-filled field cannot be called from a page."),
+];
+
 pub(super) fn page(resource: &str) -> Option<Page> {
     Some(match resource {
         "context" => Page {
@@ -217,7 +243,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "compaction" => Page { what: "context compaction settings selected by a Context.", commands: &[], notes: "Create a separate document for different compaction settings.", next: "context update with set.compaction_id." },
         "task" | "trigger" | "schedule" | "event-source" => Page {
             what: match resource { "task" => "work performed by an agent.", "trigger" => "routes an event source or schedule to a task.", "schedule" => "a timer that starts work.", _ => "watches collection changes and starts work." },
-            commands: &[], notes: match resource {
+            commands: if resource == "task" { &["task run TASK_ID  options: args (JSON object bound as args.*), session-id, continue-session; fires it once now and returns the queued request"] } else { &[] }, notes: match resource {
                 "task" => "Create uses options.agent (default: you); agent_did is protected. Updates resolve the saved owner; agent_did cannot be changed. To run a different agent, create a separate Task and Trigger. A before hook may set skip_exit_codes to nonzero codes from 1 to 255; a match skips agent execution, runs cleanup, and completes the request if cleanup succeeds. A reply can finish a task; writing another input fires the workflow again. For stored outputs and completion records see help automation.",
                 "trigger" => "Create the source and Task first. The Task determines who handles the event. Updating a Trigger cannot change its Task’s agent; create a separate Trigger for another owner. concurrency controls overlap; session_id_template controls the destination independently. An existing destination session must use the Task’s agent. To continue a known session, set its ID as session_id_template. Omit it for a new session per fire. See help automation for the full workflow.",
                 _ => "A source alone starts no work: create a Task, then a Trigger linking it to this source. See help automation for the full workflow.",
@@ -353,6 +379,18 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             notes: "Delegation is held-bounded: you can grant or revoke only what you hold, never admin-class permissions (bypass-dac, NAC relation changes, enable/disable/purge) and never a wildcard subject. Reading another identity's node permissions needs NacStatus or admin. Subjects are DIDs; display names are not resolved. Receipts give the answer first, then the subject's access after the change, what was refused, and assumptions.",
             next: "policy get to see what you hold; policy check --permission NAME to test one permission.",
         },
+        "page" => Page {
+            what: "a desktop UI a pack ships: one plain ESM module the desktop loads in its own frame (pack grant).",
+            commands: &[
+                "pack scaffold NAME  options.page true: writes ux/NAME/plugin.js and declares it in the manifest",
+                "pack add page NAME  options.dir: the pack; adds another page to an existing pack",
+                "ux lint FILE  the static lint on one plugin.js inside the tool root",
+                "ux list  options: limit, cursor; every page on this node with its door, areas and data grants",
+                "ux module ID  the module the desktop receives for a listed id, source capped at 64 KiB",
+            ],
+            notes: "Edit ux/NAME/plugin.js with the file tools: no build step. A data-and-page pack is a documents pack: pack add schema turns an assets pack into one, so it needs no agent and no inference slot. pack check and pack build run the lint; build writes the .pack. Installing is the operator's step: a page is UI code a model-authored install cannot authorize, so preview refuses a pack with a page. Hand the built .pack to the operator with the mailbox.",
+            next: "build it with pack build, then ask the operator to run gents pack install on the .pack; it then appears in ux list.",
+        },
         "plugin" => Page {
             what: "inspect installed plugins; installation and model tool selection are separate steps.",
             commands: &["plugin list  options: limit, cursor", "plugin get NAMESPACE/NAME"],
@@ -364,18 +402,17 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             commands: &[
                 "pack search  options: query (omit to browse), page (starts at 1); reads the registry",
                 "pack list  options: limit, cursor; shows installed and locally stored versions",
-                "pack get PACKAGE  a name, sha256:<hex>, or explicit built .pack path",
+                "pack get PACKAGE  a name, sha256:<hex>, a built .pack path, or a pack directory as ./DIR",
                 "pack preview install|update PACKAGE [--inference-slot NAME=PROFILE_ID ...] [--var NAME=VALUE ...]",
                 "pack install|update PACKAGE  the same pairs, and options.digest from the preview",
                 "pack remove PACKAGE",
-                "pack scaffold NAME  options: namespace (default gents), kind (documents|assets|plugins), template, language",
+                "pack scaffold NAME  options: namespace (default gents), kind (documents|assets|plugins), template, language, page (true adds a page)",
+                "pack add PART ID  options.dir: the pack (default tool root); PART: agent (options.slot), task (options.agent), trigger (options.task, options.on), schema (ID is the collection), skill (options.from), plugin (options.language or options.prebuilt), page",
                 "pack check [DIR]  every validation an install runs; reports unverified in problems' place, never full success",
+                "pack build [DIR]  writes the .pack beside DIR; refused when a plugin has source to compile",
                 "pack verify PACK  verify a built .pack file in place",
-                "pack scaffold --help",
-                "pack check --help",
-                "pack verify --help",
             ],
-            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local .pack paths require the held file read grant and explicit tool root; symlinks and request workspace paths use the file owner. Local pack authoring: scaffold, check and verify run inside the effective tool root; scaffold needs readwrite file tools, check and verify only read, and all take the pack grant. pack build (compiles plugin sources through language toolchains) and pack test (author tests) are unavailable through config; run them from the operator CLI. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not select model tools. Inspect plugins with plugin get, then explicitly select integrations.plugins on Tools and start a fresh request. A plugins-only pack can carry workflow plugins: one whose manifest declares `job: true` (a Tools job block on a plugin that does not declare `job: true` is refused at tool resolution). Selecting it and starting a fresh request exposes it as a model tool named after the plugin (the name part of its namespace/name), and its calls run as jobs on the runtime's job driver. No model tool action lists jobs: observe runs with the operator CLI `gents job list`. Remove deletes the package's documents; it releases no plugin bytes or archive, and schemas stay.",
+            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local paths require the held file read grant and the explicit tool root; symlinks and request workspace paths use the file owner. A pack directory must be spelled ./DIR, or the name is looked up as a pack. Local pack authoring runs inside the effective tool root: scaffold, add and build need readwrite file tools, check and verify only read, and all take the pack grant. Plugin source needs a compiler, so build and directory installs refuse it, as does pack test: the operator runs `gents pack build` or `gents pack test`. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not select model tools. Inspect plugins with plugin get, then explicitly select integrations.plugins on Tools and start a fresh request. A plugins-only pack can carry workflow plugins: one whose manifest declares `job: true` (a Tools job block on a plugin that does not declare `job: true` is refused at tool resolution). Selecting it and starting a fresh request exposes it as a model tool named after the plugin (the name part of its namespace/name), and its calls run as jobs on the runtime's job driver. No model tool action lists jobs: observe runs with the operator CLI `gents job list`. Remove deletes the package's documents; it releases no plugin bytes or archive, and schemas stay.",
             next: "Inspect plugin selection with plugin get, or call an installed workflow plugin by its tool name in a fresh request and list its runs with gents job list.",
         },
         _ => return None,
@@ -516,6 +553,7 @@ fn crud_help(
         ("agent", Some("clone" | "disable" | "default" | "create"))
             | ("skill", Some("import"))
             | ("backend", Some("discover" | "accounts"))
+            | ("task", Some("run"))
     ) {
         if let Some(text) = command_help(
             resource,
@@ -561,6 +599,12 @@ fn crud_help(
         writeln!(
             out,
             "Also: skill [preview] import ID PATH reads a SKILL.md inside the tool root."
+        )?;
+    }
+    if resource == "task" {
+        writeln!(
+            out,
+            "Also: task run ID fires it once now; see task run --help."
         )?;
     }
     let writes = command.is_empty()

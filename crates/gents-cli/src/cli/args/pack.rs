@@ -142,6 +142,8 @@ pub(crate) enum PackAddCommand {
     },
     /// A collection schema under schemas/.
     Schema { collection: String },
+    /// A UX page under ux/<name>/plugin.js, declared in the manifest.
+    Page { name: String },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]

@@ -6,9 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::{
-    documents::skills::prompt_slash_skill_selection, store::graphql::escape_graphql_string,
-};
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use gents_protocol::request_admission::AgentRequestCreate;
@@ -703,19 +701,7 @@ async fn resolve_request_agent_did(
     Ok(agent_did)
 }
 
-pub(crate) fn content_and_input_with_prompt_selected_skill_ids(
-    input: Option<RequestInput>,
-    content: &str,
-) -> (String, RequestInput) {
-    let selection = prompt_slash_skill_selection(content);
-    let mut input = input.unwrap_or_default();
-    for id in selection.selected_skill_ids {
-        if !input.selected_skill_ids.contains(&id) {
-            input.selected_skill_ids.push(id);
-        }
-    }
-    (selection.prompt, input)
-}
+pub(crate) use gents::documents::skills::content_and_input_with_prompt_selected_skill_ids;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WaitProgressMarker {

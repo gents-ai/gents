@@ -132,6 +132,44 @@ pub struct PluginOutcome {
     pub wall_ms: u64,
 }
 
+impl PluginOutcome {
+    /// The plugin's output, or an error naming the budget or fault that stopped it.
+    pub fn into_output(self, coordinate: &str) -> Result<serde_json::Value> {
+        match self.verdict {
+            PluginVerdict::Success => Ok(self.output),
+            PluginVerdict::Refused => {
+                anyhow::bail!(
+                    "{coordinate} was refused before it ran: {}",
+                    self.diagnostics
+                )
+            }
+            PluginVerdict::OutOfFuel => {
+                anyhow::bail!(
+                    "{coordinate} ran out of its fuel budget: {}",
+                    self.diagnostics
+                )
+            }
+            PluginVerdict::OutOfMemory => {
+                anyhow::bail!(
+                    "{coordinate} exceeded its memory budget: {}",
+                    self.diagnostics
+                )
+            }
+            PluginVerdict::Timeout => {
+                anyhow::bail!(
+                    "{coordinate} exceeded its wall-clock budget: {}",
+                    self.diagnostics
+                )
+            }
+            PluginVerdict::BadOutput => anyhow::bail!(
+                "{coordinate} did not return a single JSON value: {}",
+                self.diagnostics
+            ),
+            PluginVerdict::Failed => anyhow::bail!("{coordinate} failed: {}", self.diagnostics),
+        }
+    }
+}
+
 pub struct PluginRunner {
     afb_bytes: Vec<u8>,
     plugin: PackPlugin,

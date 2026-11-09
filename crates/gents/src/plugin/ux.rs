@@ -356,6 +356,11 @@ where
     }
 }
 
+/// Lints one module file, within the limit the desktop evaluates.
+pub fn lint_file(path: &Path) -> Result<Vec<lint::Finding>> {
+    Ok(lint::lint(&read_bounded(path, "ux plugin entry")?))
+}
+
 /// Lints every UX plugin a pack carries from its materialized directory:
 /// what `gents pack check` and `gents pack build` run. Keys are plugin
 /// names; a plugin produced by an `.afb` has no file to lint here.

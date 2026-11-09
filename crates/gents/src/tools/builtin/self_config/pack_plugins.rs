@@ -47,6 +47,9 @@ impl PackInstaller {
             .map(|slot| slot.name.clone())
             .collect::<Vec<_>>();
         let mut blockers = self.plugin_install_blockers(manifest);
+        if !manifest.metadata.ux.is_empty() {
+            blockers.push(json!({"reason":"This pack ships a page, and a model-authored install cannot authorize UI code. Ask the operator to run `gents pack install` on the built .pack."}));
+        }
         if let Some(previous) = &installed {
             anyhow::ensure!(
                 previous.kind == crate::pack::PackKind::Plugins,

@@ -69,7 +69,10 @@ impl ConfigCommandTool {
             .first()
             .map(String::as_str)
             .context("pack command is required; see [\"help\",\"pack\"]")?;
-        if matches!(verb, "scaffold" | "check" | "verify" | "build" | "test") {
+        if matches!(
+            verb,
+            "scaffold" | "add" | "check" | "verify" | "build" | "test"
+        ) {
             return self.authoring(verb, &argv[1..]).await;
         }
         match verb {

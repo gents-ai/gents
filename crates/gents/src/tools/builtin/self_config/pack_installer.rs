@@ -142,9 +142,21 @@ impl PackInstaller {
                         .and_then(Value::as_str)
                         .context("local pack inspection requires an effective tool root")?;
                     let context = crate::tools::native::ToolContext::new(root.into(), false)?;
-                    let path = context
-                        .resolve_existing_file(path.to_str().context("pack path is not UTF-8")?)?;
-                    anyhow::ensure!(path.extension().is_some_and(|extension| extension == crate::pack::archive::EXTENSION), "native local inspection accepts a built .pack artifact; directories require a scoped build owner");
+                    let requested = path.to_str().context("pack path is not UTF-8")?;
+                    let path = context.resolve_path(requested)?;
+                    if path.is_dir() {
+                        crate::pack::authoring::ensure_no_compile_step(
+                            &crate::pack::authoring::read_manifest(&path)?,
+                        )?;
+                    } else {
+                        anyhow::ensure!(
+                            path.is_file()
+                                && path.extension().is_some_and(
+                                    |extension| extension == crate::pack::archive::EXTENSION
+                                ),
+                            "{requested} is neither a pack directory nor a built .pack file"
+                        );
+                    }
                     // The no-follow import carries the same handle the
                     // admission validated, so a swap after admission cannot
                     // change which bytes are verified and stored.
