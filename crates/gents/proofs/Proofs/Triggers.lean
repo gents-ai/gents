@@ -8,3 +8,4 @@ import Proofs.Triggers.Lineage
 import Proofs.Triggers.Groups
 import Proofs.Triggers.Durable
 import Proofs.Triggers.Refinement
+import Proofs.Triggers.NativeRoute
