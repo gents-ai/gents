@@ -6,7 +6,7 @@ use gents::store::identity::NodeIdentity as _;
 
 use super::super::bootstrap::normalize_required;
 use super::super::p2p_ops;
-use super::{ux_local_runtime_record, ClientCore};
+use super::{ux_local_runtime_record, ClientCore, LocalHomeAccessError};
 use crate::client::mutations::PeerMutationResult;
 use crate::client::peer_directory::{PeerRecord, RemovalCause};
 
@@ -263,31 +263,32 @@ impl ClientCore {
         Ok(crate::agent_identity::provision(&endpoint, node_did).await?)
     }
 
-    pub fn local_home_operator_access(
+    /// The User's signed endpoint on the managed runtime whose home installed
+    /// a pack app.
+    pub fn local_home_operator_endpoint(
         &self,
         node_did: &str,
         home: &std::path::Path,
-    ) -> Result<ConfigAccess> {
+    ) -> std::result::Result<gents::store::config_client::GraphqlEndpoint, LocalHomeAccessError>
+    {
         let records = self.sync_state.records();
         let record = ux_local_runtime_record(&records, node_did, home)?;
-        record
+        let url = record
             .operator_graphql()
-            .map(|url| -> Result<ConfigAccess> {
-                let capability =
-                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
-                        self.node_identity.private_key_bytes(),
-                    )?;
-                Ok(ConfigAccess::Graphql(
-                    gents::store::config_client::GraphqlEndpoint::as_principal(
-                        url,
-                        self.node_identity.did(),
-                    )
-                    .with_client_signing_capability(capability)?
-                    .with_client_signed_agent_creates(),
-                ))
-            })
-            .transpose()?
-            .context("the local node that installed this app has no operator connection")
+            .ok_or(LocalHomeAccessError::NoOperatorConnection)?;
+        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            self.node_identity.private_key_bytes(),
+        )
+        .map_err(LocalHomeAccessError::Signing)?;
+        Ok(
+            gents::store::config_client::GraphqlEndpoint::as_principal(
+                url,
+                self.node_identity.did(),
+            )
+            .with_client_signing_capability(capability)
+            .map_err(LocalHomeAccessError::Signing)?
+            .with_client_signed_agent_creates(),
+        )
     }
 }
 

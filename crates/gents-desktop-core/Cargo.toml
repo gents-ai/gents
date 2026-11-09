@@ -31,6 +31,7 @@ sha2.workspace = true
 rapidhash = { workspace = true }
 tempfile = "3"
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 # ts-rs is the source-of-truth generator for the desktop bridge wire contract
 # (see gents-desktop-bridge). DesktopInitSummary is exported from here.

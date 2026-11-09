@@ -189,6 +189,31 @@ describe("useQuery live observation", () => {
     hook.unmount();
   });
 
+  it("shows a reconnect, falls back to client updates meanwhile, and goes live on the next snapshot", async () => {
+    const t = liveTool();
+    const hook = renderHook(() =>
+      useQuery<Out>(t.ctx, "s", "list", { intervalMs: 0, pages: "all" }),
+    );
+    await waitFor(() => expect(hook.result.current.data?.count).toBe(4));
+    await waitFor(() => expect(hook.result.current.stream).toBe("live"));
+    act(() => t.watches[0]!.listener({ kind: "reconnecting", delay_ms: 2000 }));
+    expect(hook.result.current.stream).toBe("reconnecting");
+    expect(t.watches[0]!.stop).not.toHaveBeenCalled();
+    await waitFor(() => expect(t.events.has("client-updated")).toBe(true));
+    t.data.push({ id: "d4", title: "new" });
+    act(() => t.events.get("client-updated")?.());
+    await waitFor(() => expect(hook.result.current.data?.count).toBe(5));
+    act(() =>
+      t.watches[0]!.listener({
+        kind: "snapshot",
+        value: { kind: "query", output: {} },
+      }),
+    );
+    expect(hook.result.current.stream).toBe("live");
+    await waitFor(() => expect(t.events.has("client-updated")).toBe(false));
+    hook.unmount();
+  });
+
   it("uses the existing client-update fallback if the stream fails", async () => {
     const t = liveTool();
     const hook = renderHook(() =>
@@ -197,6 +222,8 @@ describe("useQuery live observation", () => {
     await waitFor(() => expect(hook.result.current.data?.count).toBe(4));
     await waitFor(() => expect(t.watches).toHaveLength(1));
     act(() => t.watches[0]!.listener({ kind: "error", message: "unavailable" }));
+    expect(hook.result.current.stream).toBe("unavailable");
+    expect(hook.result.current.streamError).toBe("unavailable");
     await waitFor(() => expect(t.events.has("client-updated")).toBe(true));
     t.data.push({ id: "d4", title: "new" });
     act(() => t.events.get("client-updated")?.());

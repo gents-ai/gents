@@ -5,6 +5,7 @@ pub mod home_reset;
 pub mod inference;
 mod inference_activity;
 pub mod local_runtime;
+pub mod pack_watch;
 pub mod preference;
 pub mod remote_admin;
 pub mod workspace_root;

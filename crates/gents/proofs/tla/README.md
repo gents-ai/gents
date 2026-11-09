@@ -56,6 +56,25 @@ See `../README.md` for how this fits the broader formal-verification model.
   test); `ReserveSingleAttempt` is the found reservation race ("a partial read
   lost to a newer merge" in the live backgrounding run); `ShortBudget` shows
   the overlap premise is load-bearing.
+- `PackUxWatch` — a pack page's live data watch (`desktop_ux_data_watch`)
+  racing runtime restarts, window node selection, unwatch, window
+  destruction and four runtime hazards (stopped for good, credentials
+  refused, a watcher that fails after every connect, malformed events). The
+  task re-acquires the endpoint at every connect, backs off on transient
+  failures, keeps its failure count across accepted connections, ends the
+  watch after `RetryBudget` consecutive failures, notifies the page of every
+  failed attempt and every end, and sends under the registry lock only while
+  its watch is registered; the selection change cancels before it writes the
+  selection. `NoCrossNodeDelivery`, `RegistryReleased`, `NotSilent`,
+  `TerminalNamed`, `EventualResume`, `NoLeakedWatch` and `EntryReleased` hold
+  with every guard. `Transient` is the observed defect (one read timeout ends
+  the watch); `StaleEndpoint` reuses the endpoint captured at start;
+  `NodeSwitch` drops the selection cancel; `SelectBeforeCancel` writes the
+  selection before cancelling; `UnlockedDeliver` checks the token and then
+  sends outside the lock; `NoDestroyCancel` keeps a destroyed window's
+  registry entry; `SilentBackoff` sends only snapshots and terminal errors;
+  `ResetOnAccept` resets the count on every accepted connection; `Unbounded`
+  retries forever. Lean `ClientShell.PackWatch` owns the per-task phases.
 - `SessionHeadObservation` — a session's observed request head and the
   client that projects it on reopen (#3604). The runtime claims a session's
   requests one at a time; each claim or admission refusal names the incoming
@@ -326,6 +345,21 @@ and `ListenFailure` violate `ViewConverges`; `NoInitialRead`,
 ./scripts/run-tlc.sh MCDesktopUpdateListenerSupersededMismatch
 ```
 
+For PackUxWatch — the green model checks clean; the nine diagnostics are
+EXPECTED to report the violation named in their config:
+```bash
+./scripts/run-tlc.sh MCPackUxWatch
+./scripts/run-tlc.sh MCPackUxWatchTransient
+./scripts/run-tlc.sh MCPackUxWatchStaleEndpoint
+./scripts/run-tlc.sh MCPackUxWatchNodeSwitch
+./scripts/run-tlc.sh MCPackUxWatchSelectBeforeCancel
+./scripts/run-tlc.sh MCPackUxWatchUnlockedDeliver
+./scripts/run-tlc.sh MCPackUxWatchNoDestroyCancel
+./scripts/run-tlc.sh MCPackUxWatchSilentBackoff
+./scripts/run-tlc.sh MCPackUxWatchResetOnAccept
+./scripts/run-tlc.sh MCPackUxWatchUnbounded
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -440,6 +474,16 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCDesktopUpdateListenerListenFailure.cfg` | as green, `Relisten = FALSE` | `ViewConverges` intentionally VIOLATED: the read without a listener settles the session, registration rejects and is never retried, and the next commit is never read | 6,073 distinct states; 25,790 generated | 16 | <1s |
 | `MCDesktopUpdateListenerPendingNoEvent.cfg` | as green, `PendingReread = FALSE` | `NoStuckPending` intentionally VIOLATED: a read answers a waiting phase (`accepted` in the trace), then a silent arrival; the waiting status stays with no action | 5,093 distinct states; 18,904 generated | 15 | <1s |
 | `MCDesktopUpdateListenerSupersededMismatch.cfg` | as green, `MismatchExit = FALSE` | `NoStuckPending` intentionally VIOLATED: a reply for another session (FinishMismatch) is dropped and the load stays `loading` with no read behind it | 10,903 distinct states; 46,605 generated | 17 | <1s |
+| `MCPackUxWatch.cfg` | all guards, all four hazards, `RetryBudget = 4`, `OutageAttempts = MaxRestarts = MaxFaults = MaxRev = 1`, `MaxSelects = 2` | Passes `TypeOK`, `NoCrossNodeDelivery`, `RegistryReleased`, `NotSilent`, `TerminalNamed`, `EventualResume`, `NoLeakedWatch`, `EntryReleased` | 380,360 distinct states; 1,781,565 generated | 34 | 29s (OpenJDK 25, 4 workers) |
+| `MCPackUxWatchTransient.cfg` | `RetryTransient = FALSE`, no hazards, `MaxRestarts = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: Start, Connect, Write, SendAtomic, ReadTimeout, Notify, Release ends a healthy runtime's watch | 139 distinct states; 311 generated | 10 | <1s |
+| `MCPackUxWatchStaleEndpoint.cfg` | `Reacquire = FALSE`, no hazards, `MaxSelects = 0` | `EventualResume` intentionally VIOLATED: after Restart every Connect uses the old endpoint until the budget ends the watch | 2,487 distinct states; 6,550 generated | 23 | <1s |
+| `MCPackUxWatchNodeSwitch.cfg` | `CancelOnSelect = FALSE`, no hazards | `NoCrossNodeDelivery` intentionally VIOLATED: Start, BeginSelect("B"), EndSelect, Connect, SendAtomic | 128 distinct states before counterexample; 221 generated | 6 | <1s |
+| `MCPackUxWatchSelectBeforeCancel.cfg` | `CancelBeforeSelect = FALSE`, no hazards | `NoCrossNodeDelivery` intentionally VIOLATED: Start, BeginSelect("B") writes the selection, Connect, SendAtomic before the cancellation | 71 distinct states before counterexample; 106 generated | 5 | <1s |
+| `MCPackUxWatchUnlockedDeliver.cfg` | `AtomicDeliver = FALSE`, no hazards | `NoCrossNodeDelivery` intentionally VIOLATED: Connect, Check, BeginSelect("B"), EndSelect, SendChecked | 454 distinct states before counterexample; 1,085 generated | 8 | <1s |
+| `MCPackUxWatchNoDestroyCancel.cfg` | `CancelOnDestroy = FALSE`, no hazards | `RegistryReleased` intentionally VIOLATED: Start, Destroy | 30 distinct states before counterexample; 37 generated | 4 | <1s |
+| `MCPackUxWatchSilentBackoff.cfg` | `NotifyStall = FALSE`, no hazards, `MaxSelects = 0` | `NotSilent` intentionally VIOLATED: Start, Restart, Connect backs off with nothing shown | 45 distinct states before counterexample; 67 generated | 5 | <1s |
+| `MCPackUxWatchResetOnAccept.cfg` | `KeepFailuresOnAccept = FALSE`, hazard `broken`, `MaxRestarts = MaxFaults = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: Connect, SendAtomic, StreamBroken, Notify, Retry cycles forever | 297 distinct states; 749 generated | 13 | <1s |
+| `MCPackUxWatchUnbounded.cfg` | `BoundedRetry = FALSE`, hazard `stop`, `MaxRestarts = MaxFaults = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: a stopped runtime is retried forever and never reported | 536 distinct states; 1,257 generated | 20 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and

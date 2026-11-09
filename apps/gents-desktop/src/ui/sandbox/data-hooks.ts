@@ -12,10 +12,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { UxContext, UxDataCallResult } from "./contract";
 
+/** the live stream behind a query: `live` while snapshots arrive, `reconnecting`
+    after a failed attempt (the data refreshes on client updates meanwhile),
+    `unavailable` once the stream ended for good (reopen the page), `off` when
+    the query is not watched */
+export type QueryStream = "off" | "live" | "reconnecting" | "unavailable";
+
 export interface QueryState<T = unknown> {
   data: T | null;
   error: string | null;
   loading: boolean;
+  stream: QueryStream;
+  /** why the stream ended, when it is `unavailable` */
+  streamError: string | null;
   /** run again now */
   refresh: () => void;
 }
@@ -210,7 +219,11 @@ export function useQuery<T = unknown>(
   const currentNode = () => ctx.shell?.selectedDeployment?.()?.nodeDid ?? null;
   const [node, setNode] = useState(currentNode);
   const observedNode = useRef(node);
-  const [watching, setWatching] = useState(false);
+  const [stream, setStream] = useState<{ state: QueryStream; error: string | null }>({
+    state: "off",
+    error: null,
+  });
+  const watching = stream.state === "live";
   const loadedNode = useRef(node);
   const generation = useRef(0);
 
@@ -262,7 +275,7 @@ export function useQuery<T = unknown>(
   }, [ctx, surface, tool, argsKey, enabled, tick, pages, maxRows, recover, node]);
 
   useEffect(() => {
-    setWatching(false);
+    setStream({ state: "off", error: null });
     if (!enabled || !live || typeof ctx.data.watch !== "function") return;
     let disposed = false;
     let failed = false;
@@ -276,10 +289,14 @@ export function useQuery<T = unknown>(
       .then(() =>
         ctx.data.watch(surface, tool, JSON.parse(argsKey), (event) => {
           if (disposed || failed) return;
-          if (event.kind === "snapshot") refresh();
-          else {
+          if (event.kind === "snapshot") {
+            setStream({ state: "live", error: null });
+            refresh();
+          } else if (event.kind === "reconnecting") {
+            setStream({ state: "reconnecting", error: null });
+          } else {
             failed = true;
-            setWatching(false);
+            setStream({ state: "unavailable", error: event.message });
             cancelWatch();
           }
         }),
@@ -288,11 +305,13 @@ export function useQuery<T = unknown>(
         if (disposed || failed) cancel();
         else {
           stop = cancel;
-          setWatching(true);
+          setStream((current) =>
+            current.state === "off" ? { state: "live", error: null } : current,
+          );
         }
       })
       .catch(() => {
-        if (!disposed) setWatching(false);
+        if (!disposed) setStream({ state: "off", error: null });
       });
     return () => {
       disposed = true;
@@ -319,7 +338,7 @@ export function useQuery<T = unknown>(
     return () => clearInterval(timer);
   }, [enabled, intervalMs, refresh]);
 
-  return { ...state, refresh };
+  return { ...state, stream: stream.state, streamError: stream.error, refresh };
 }
 
 export interface WriteState {

@@ -107,30 +107,51 @@ fn peer_record_owning_node_at(
         .cloned()
 }
 
+/// Why this desktop cannot reach the managed runtime that installed an app.
+/// Every variant is a property of the saved runtime record, the app's home or
+/// the client key, not of the runtime's current availability: the record's
+/// endpoint is written when the runtime is connected and only replaced, never
+/// cleared, so retrying does not heal any of them.
+#[derive(Debug, thiserror::Error)]
+pub enum LocalHomeAccessError {
+    #[error("the local node that installed this app is not connected")]
+    NotConnected,
+    #[error("the local node that installed this app is not connected locally")]
+    NotLocal,
+    #[error("the installed app's runtime home is unavailable")]
+    RuntimeHomeUnavailable(#[source] std::io::Error),
+    #[error("the installed app's home is unavailable")]
+    AppHomeUnavailable(#[source] std::io::Error),
+    #[error("the app's local node belongs to a different home")]
+    DifferentHome,
+    #[error("the local node that installed this app has no operator connection")]
+    NoOperatorConnection,
+    #[error("the desktop's client key cannot sign requests to its runtime")]
+    Signing(#[source] gents::store::config_client::ConfigClientError),
+}
+
 fn ux_local_runtime_record<'a>(
     records: &'a [PeerRecord],
     node_did: &str,
     home: &Path,
-) -> Result<&'a PeerRecord> {
+) -> std::result::Result<&'a PeerRecord, LocalHomeAccessError> {
     let record = records
         .iter()
         .find(|record| record.node_did == node_did)
-        .context("the local node that installed this app is not connected")?;
+        .ok_or(LocalHomeAccessError::NotConnected)?;
     let recorded_home = record
         .local_node_home
         .as_deref()
-        .context("the local node that installed this app is not connected locally")?;
+        .ok_or(LocalHomeAccessError::NotLocal)?;
     let recorded_home = std::fs::canonicalize(recorded_home)
-        .context("the installed app's runtime home is unavailable")?;
-    let home = std::fs::canonicalize(home).context("the installed app's home is unavailable")?;
-    anyhow::ensure!(
-        recorded_home == home,
-        "the app's local node belongs to a different home"
-    );
-    anyhow::ensure!(
-        record.operator_graphql().is_some(),
-        "the local node that installed this app has no operator connection"
-    );
+        .map_err(LocalHomeAccessError::RuntimeHomeUnavailable)?;
+    let home = std::fs::canonicalize(home).map_err(LocalHomeAccessError::AppHomeUnavailable)?;
+    if recorded_home != home {
+        return Err(LocalHomeAccessError::DifferentHome);
+    }
+    if record.operator_graphql().is_none() {
+        return Err(LocalHomeAccessError::NoOperatorConnection);
+    }
     Ok(record)
 }
 

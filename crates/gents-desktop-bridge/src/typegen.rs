@@ -511,8 +511,9 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     assert!(
         watch_event.contains("\"snapshot\"")
             && watch_event.contains("UxDataCallResult")
+            && watch_event.contains("\"reconnecting\", delay_ms: number")
             && watch_event.contains("\"error\""),
-        "the watch channel must expose its snapshot and error events: {watch_event}"
+        "the watch channel must expose its snapshot, reconnecting and error events: {watch_event}"
     );
     let goal = std::fs::read_to_string(tmp.path().join("GoalControlAction.ts"))
         .expect("GoalControlAction.ts");

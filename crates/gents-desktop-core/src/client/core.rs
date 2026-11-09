@@ -46,7 +46,7 @@ pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
 pub use observation_scope::ClientObservationAttachment;
 pub use sync_state::RuntimeSchemaObservation;
-pub use writes::RefreshedRequestProjection;
+pub use writes::{LocalHomeAccessError, RefreshedRequestProjection};
 
 /// Peer bootstrap retries need a deadline so an unreachable peer does not hold
 /// startup indefinitely.

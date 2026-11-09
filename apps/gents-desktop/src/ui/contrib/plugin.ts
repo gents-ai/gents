@@ -61,7 +61,9 @@ export interface UxDataCallResult {
 }
 
 export type UxDataWatchEvent =
-  { kind: "snapshot"; value: UxDataCallResult } | { kind: "error"; message: string };
+  | { kind: "snapshot"; value: UxDataCallResult }
+  | { kind: "reconnecting"; delay_ms: number }
+  | { kind: "error"; message: string };
 
 /** the plugin a host verb acts for: its id and the name the inventory shows */
 export interface UxCaller {
