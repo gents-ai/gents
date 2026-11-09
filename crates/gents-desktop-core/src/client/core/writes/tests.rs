@@ -133,6 +133,28 @@ async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync()
 }
 
 #[tokio::test]
+async fn committed_write_survives_refresh_failure_and_requests_scoped_resync() {
+    let (store, _version) = ObservedStore::new(ClientStore::default());
+    let mut wake = store.subscribe_resync_requests();
+    let before = store.projection_revision();
+    observe_committed_write::<u64>(&store, "did:test:node", "save task", async {
+        anyhow::bail!("projection unavailable after commit")
+    })
+    .await;
+    assert!(wake.has_changed().unwrap());
+    wake.borrow_and_update();
+    assert_eq!(
+        store.take_resync_requests(),
+        (false, vec!["did:test:node".to_owned()])
+    );
+    assert_eq!(store.projection_revision(), before);
+
+    observe_committed_write(&store, "did:test:node", "save task", async { Ok(1_u64) }).await;
+    assert!(!wake.has_changed().unwrap());
+    assert_eq!(store.take_resync_requests(), (false, Vec::new()));
+}
+
+#[tokio::test]
 async fn submitted_request_refresh_success_does_not_schedule_another_read() {
     let (store, _version) = ObservedStore::new(ClientStore::default());
     let wake = store.subscribe_resync_requests();

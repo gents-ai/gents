@@ -29,9 +29,8 @@ impl ClientCore {
         let result = gents::session::mailbox::dismiss_mailbox_item_on(&access, doc_id).await;
         match result {
             Ok(item) => {
-                if self.refresh_node(node_did).await?.is_none() {
-                    self.refresh_store().await?;
-                }
+                self.observe_committed_config(node_did, "dismiss mailbox item")
+                    .await;
                 self.clear_mutation_error();
                 Ok(item)
             }
@@ -103,22 +102,18 @@ impl ClientCore {
             archived,
         )
         .await;
+        let action = if archived {
+            "archive session"
+        } else {
+            "restore session"
+        };
         match result {
             Ok(receipt) => {
-                if self.refresh_node(node_did).await?.is_none() {
-                    self.refresh_store().await?;
-                }
+                self.observe_committed_config(node_did, action).await;
                 self.clear_mutation_error();
                 Ok(receipt)
             }
-            Err(error) => Err(self.record_mutation_error(
-                if archived {
-                    "archive session"
-                } else {
-                    "restore session"
-                },
-                error,
-            )),
+            Err(error) => Err(self.record_mutation_error(action, error)),
         }
     }
 
@@ -147,9 +142,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(()) => {
-                if self.refresh_node(node_did).await?.is_none() {
-                    self.refresh_store().await?;
-                }
+                self.observe_committed_config(node_did, "rename session")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

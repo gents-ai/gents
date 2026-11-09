@@ -109,10 +109,7 @@ pub async fn interrupt_request(
     // Best-effort, not atomic: a request that finishes between this read and
     // the owner's transaction may still be latched.
     if target.terminal {
-        return Err(format!(
-            "request {} is already terminal and cannot be interrupted",
-            req.request_id
-        ));
+        return Ok(result(None, true));
     }
     gents::request::interrupt::interrupt_request_by_doc_id_with_access(
         &access,

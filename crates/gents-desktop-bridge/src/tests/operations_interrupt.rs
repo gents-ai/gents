@@ -71,7 +71,7 @@ async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
 }
 
 #[tokio::test]
-async fn interrupt_refuses_ambiguous_terminal_and_non_user_causes() {
+async fn interrupt_treats_finished_requests_as_stopped_and_refuses_non_user_causes() {
     let served = served_desktop().await;
     let (core, node) = (&served.core, served.node_did());
     // Client admission refuses a second request under an identity the User
@@ -90,10 +90,11 @@ async fn interrupt_refuses_ambiguous_terminal_and_non_user_causes() {
     );
     let done = submit_request(core, &served.runtime, &served.agent, "done-session", "done").await;
     reject_admission(&served.runtime, &served.agent, &done, "fixture rejection").await;
-    assert!(interrupt_request(core, &user_cancel("done", Some(node)))
+    let finished = interrupt_request(core, &user_cancel("done", Some(node)))
         .await
-        .unwrap_err()
-        .contains("already terminal"));
+        .unwrap();
+    assert!(finished.accepted && finished.already_interrupted);
+    assert!(finished.interrupt_requested_at.is_none());
     assert!(latch(core, node, "done").await.is_none());
     let mut invalid = user_cancel("done", Some(node));
     invalid.cause = "deadline".into();

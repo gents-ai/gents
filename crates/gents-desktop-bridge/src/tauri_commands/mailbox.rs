@@ -40,5 +40,5 @@ pub async fn desktop_mailbox_dismiss(
 ) -> Result<(), BridgeError> {
     dismiss_mailbox(running_core(&state)?.as_ref(), &request.item_id)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }

@@ -53,6 +53,27 @@ async fn observe_submitted_request(
     receipt
 }
 
+/// A committed write is reported as saved even when its projection refresh
+/// fails: an error here would present a durable change as failed and invite
+/// the person to repeat it. The observer reloads the node instead.
+async fn observe_committed_write<T>(
+    store: &ObservedStore,
+    node_did: &str,
+    action: &str,
+    refresh: impl std::future::Future<Output = Result<T>>,
+) {
+    if let Err(error) = refresh.await {
+        store.request_resync(Some(node_did));
+        tracing::warn!(
+            target: "gents_desktop_core::writes",
+            node_did = %node_did,
+            action = %action,
+            error = %format!("{error:#}"),
+            "desktop write saved; its refresh failed and the node will resynchronize"
+        );
+    }
+}
+
 pub(super) fn find_request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
@@ -238,6 +259,16 @@ impl ClientCore {
             None => self.refresh_store().await?,
         };
         Ok(refresh.version())
+    }
+
+    async fn observe_committed_config(&self, node_did: &str, action: &str) {
+        observe_committed_write(
+            self.store.as_ref(),
+            node_did,
+            action,
+            self.refresh_config_source(node_did),
+        )
+        .await;
     }
 
     #[cfg(test)]

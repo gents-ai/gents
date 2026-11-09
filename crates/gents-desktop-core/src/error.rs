@@ -151,7 +151,7 @@ impl BridgeError {
             gents::store::config_client::TransactionFailure::config_client_error(&error)
                 .and_then(gents::store::config_client::ConfigClientError::transport_error)
                 .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
-        let message = error.to_string();
+        let message = format!("{error:#}");
         let Some(transport) = transport else {
             return Self::untyped(message);
         };
@@ -381,6 +381,14 @@ mod tests {
         ));
         assert_eq!(err.code, BridgeErrorCode::Unknown);
         assert_eq!(err.endpoint, None);
+    }
+
+    #[test]
+    fn unclassified_errors_keep_their_whole_cause_chain() {
+        let error = anyhow::anyhow!("schedule_id is required").context("saving Schedule");
+        let bridge = BridgeError::classify_transport_error(error);
+        assert_eq!(bridge.code, BridgeErrorCode::Unknown);
+        assert_eq!(bridge.message, "saving Schedule: schedule_id is required");
     }
 
     #[test]

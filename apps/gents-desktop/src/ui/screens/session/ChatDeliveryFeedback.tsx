@@ -156,6 +156,8 @@ function SavedMessage({
     }
   }
   const failed = shown.view === "failed";
+  /* sending again under the same identity is refused again */
+  const denied = failed && draft.failure?.error?.code === "permissionDenied";
   return (
     <Notice
       tone={failed ? "destructive" : "info"}
@@ -178,7 +180,7 @@ function SavedMessage({
       detailsLabel={`Saved ${noun}`}
       actions={
         <>
-          {shown.retry && (
+          {shown.retry && !denied && (
             <Button
               variant="outline"
               size="sm"
@@ -201,7 +203,12 @@ function SavedMessage({
         </>
       }
     >
-      {failed && (
+      {denied && (
+        <p>
+          {`This account can't post in this session. Ask the node's owner for access, or discard the ${noun}.`}
+        </p>
+      )}
+      {failed && !denied && (
         <p>
           {draft.failure
             ? errorWords(draft.failure.message)
