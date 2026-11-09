@@ -14,11 +14,15 @@ use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
-pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
-    let Some(node_did) = core.selected_node_did() else {
+/// The MCP services of the caller's node; a caller without a node has none.
+pub async fn load_mcp_services_with_health(
+    core: &ClientCore,
+    node_did: Option<&str>,
+) -> Result<Vec<MCPServiceHealthView>> {
+    let Some(node_did) = node_did else {
         return Ok(Vec::new());
     };
-    load_mcp_services_with_health_for_node(core, &node_did).await
+    load_mcp_services_with_health_for_node(core, node_did).await
 }
 
 pub(crate) async fn load_mcp_services_with_health_for_node(

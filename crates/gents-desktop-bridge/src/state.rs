@@ -103,6 +103,18 @@ impl DesktopBridge {
         self.selected_nodes_by_window.contains_key(label)
     }
 
+    /// `ClientWindowScope.commandNode`: the node a window's command acts on is
+    /// the node it names, else the calling window's own selection. Another
+    /// window's selection is never consulted, so each window keeps working
+    /// on its own node while others are open.
+    pub(crate) fn window_command_node(&self, label: &str, explicit: Option<&str>) -> Option<String> {
+        explicit
+            .map(str::trim)
+            .filter(|node| !node.is_empty())
+            .map(str::to_owned)
+            .or_else(|| self.selected_nodes_by_window.get(label).cloned().flatten())
+    }
+
     pub(crate) fn window_selects_node(&self, label: &str, node_did: &str) -> bool {
         self.selected_nodes_by_window
             .get(label)
@@ -170,6 +182,14 @@ impl DesktopAppState {
             pending_oauth_credentials: Arc::default(),
             ux_watches: Default::default(),
         }
+    }
+
+    /// [`DesktopBridge::window_command_node`] under the bridge lock.
+    pub(crate) fn window_command_node(&self, label: &str, explicit: Option<&str>) -> Option<String> {
+        self.bridge
+            .lock()
+            .expect("desktop bridge lock poisoned")
+            .window_command_node(label, explicit)
     }
 
     pub(crate) fn register_window(&self, label: &str) {

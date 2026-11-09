@@ -247,3 +247,109 @@ async fn external_attachment_release_retains_the_current_window_scope() {
     state.bridge.lock().unwrap().core.take();
     core.shutdown().await.unwrap();
 }
+
+fn session(node: &str, id: &str) -> gents_protocol::session::AgentSession {
+    serde_json::from_value(serde_json::json!({
+        "session_id": id, "node_did": node, "agent_did": "agent",
+        "created_at": "2026-11-08T00:00:00Z",
+    }))
+    .unwrap()
+}
+
+/// A window's node-scoped view: the sessions of the node its commands act on.
+fn window_view(
+    state: &DesktopAppState,
+    store: &gents_desktop_core::client::ObservedStore,
+    label: &str,
+) -> Vec<String> {
+    let node = state.window_command_node(label, None);
+    store
+        .snapshot()
+        .sessions
+        .iter()
+        .filter(|row| Some(&row.node_did) == node.as_ref())
+        .map(|row| row.session_id.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// TLA `WindowIndependence` with two windows on two nodes: each window's
+/// commands act on its own node while the other is open (the core's shared
+/// selection names none), a node's update changes only the view of the
+/// window on that node, and a node switch cancels only the switching
+/// window's watch, so no delivery crosses windows.
+#[test]
+fn two_windows_on_two_nodes_act_and_observe_independently() {
+    use gents_desktop_core::client::{ClientStore, ClientStoreRows, ObservedStore};
+
+    let (_temp, state) = state();
+    state.register_window("main");
+    state.register_window("second");
+    select(&state, "main", Some("did:a"));
+    select(&state, "second", Some("did:b"));
+    assert_eq!(selected(&state), None, "no shared selection with two windows");
+    assert_eq!(state.window_command_node("main", None).as_deref(), Some("did:a"));
+    assert_eq!(state.window_command_node("second", None).as_deref(), Some("did:b"));
+    assert_eq!(
+        state.window_command_node("second", Some(" did:a ")).as_deref(),
+        Some("did:a"),
+        "a named node wins"
+    );
+
+    let (store, _) = ObservedStore::new(ClientStore::default());
+    let mut notices = store.subscribe_changes();
+    let main_watch = state.ux_watches.insert("main", "pack").unwrap();
+    let second_watch = state.ux_watches.insert("second", "pack").unwrap();
+    let mut delivered = Vec::new();
+
+    for (node, id) in [("did:a", "a-1"), ("did:b", "b-1"), ("did:a", "a-2")] {
+        let main_before = window_view(&state, &store, "main");
+        let second_before = window_view(&state, &store, "second");
+        store.merge_observer_patch(ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session(node, id)],
+            ..Default::default()
+        }));
+        // The notice reaches every window; each re-reads its own node.
+        assert!(notices.has_changed().unwrap());
+        notices.borrow_and_update();
+        for label in ["main", "second"] {
+            if state.bridge.lock().unwrap().window_selects_node(label, node) {
+                assert!(state.ux_watches.deliver(label, "pack", || {
+                    delivered.push((label, node));
+                    true
+                }));
+            }
+        }
+        let (changed, unchanged, unchanged_before) = if node == "did:a" {
+            ("main", "second", second_before)
+        } else {
+            ("second", "main", main_before)
+        };
+        assert!(window_view(&state, &store, changed).contains(&id.to_owned()));
+        assert_eq!(window_view(&state, &store, unchanged), unchanged_before);
+    }
+    assert_eq!(window_view(&state, &store, "main"), vec!["a-1", "a-2"]);
+    assert_eq!(window_view(&state, &store, "second"), vec!["b-1"]);
+    assert_eq!(
+        delivered,
+        vec![("main", "did:a"), ("second", "did:b"), ("main", "did:a")]
+    );
+
+    state
+        .bridge
+        .lock()
+        .unwrap()
+        .select_window_node("main", Some("did:b".into()), |_| {
+            state.ux_watches.cancel_window("main");
+        });
+    assert!(main_watch.is_cancelled());
+    assert!(!second_watch.is_cancelled(), "the other window keeps its watch");
+    assert!(!state.ux_watches.deliver("main", "pack", || true));
+    assert_eq!(window_view(&state, &store, "main"), vec!["b-1"]);
+    assert_eq!(state.window_command_node("second", None).as_deref(), Some("did:b"));
+
+    state.window_event("second", &tauri::WindowEvent::Destroyed);
+    assert_eq!(state.window_command_node("second", None), None);
+    assert_eq!(state.window_command_node("main", None).as_deref(), Some("did:b"));
+}

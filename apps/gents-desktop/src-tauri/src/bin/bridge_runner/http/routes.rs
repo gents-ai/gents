@@ -566,12 +566,18 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&view)?))
         }
         ("GET", "/desktop/backend-health") => {
+            // The runner serves one frontend, whose selection is the core's.
+            let core = fixture.desktop_core();
             let rows =
-                list_backends_with_health_for_core(Arc::clone(fixture.desktop_core())).await?;
+                list_backends_with_health_for_core(Arc::clone(core), core.selected_node_did())
+                    .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("GET", "/desktop/mcp-health") => {
-            let rows = load_mcp_services_with_health(fixture.desktop_core().as_ref()).await?;
+            let core = fixture.desktop_core();
+            let rows =
+                load_mcp_services_with_health(core.as_ref(), core.selected_node_did().as_deref())
+                    .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("POST", "/desktop/mcp/probe") => {

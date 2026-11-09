@@ -29,19 +29,18 @@ const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
 const RECENT_CALLS_PER_BACKEND: usize = 10;
 
 #[tauri::command]
-pub async fn desktop_operations_snapshot(
+pub async fn desktop_operations_snapshot<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
     request: DesktopOperationsSnapshotRequest,
-) -> Result<DesktopOperationsSnapshot, BridgeError> {
+) -> Result<DesktopOperationsSnapshot, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge not initialized"))?;
-    let node_did = request
-        .node_did
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| core.selected_node_did())
+    let node_did = state
+        .window_command_node(window.label(), request.node_did.as_deref())
         .ok_or_else(|| BridgeError::untyped("no node selected; pass nodeDid explicitly"))?;
 
     let endpoint = core
@@ -228,24 +227,34 @@ mod background_tool_query_tests {
 }
 
 #[tauri::command]
-pub async fn desktop_session_provenance(
+pub async fn desktop_session_provenance<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-    request: DesktopSessionProvenanceRequest,
-) -> Result<SessionProvenanceView, BridgeError> {
+    mut request: DesktopSessionProvenanceRequest,
+) -> Result<SessionProvenanceView, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge has not finished bootstrapping"))?;
+    request.node_did = state.window_command_node(window.label(), request.node_did.as_deref());
     crate::provenance::session_provenance_request(&core, request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
-pub async fn desktop_interrupt_request(
+pub async fn desktop_interrupt_request<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-    request: DesktopInterruptRequest,
-) -> Result<InterruptRequestResult, BridgeError> {
+    mut request: DesktopInterruptRequest,
+) -> Result<InterruptRequestResult, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let core = crate::state::current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    request.node_did = state.window_command_node(window.label(), request.node_did.as_deref());
     tracing::info!(
         target: "gents_desktop::interrupt",
         request_id = %request.request_id,
@@ -315,21 +324,25 @@ pub async fn desktop_process_control(
 }
 
 #[tauri::command]
-pub async fn desktop_list_backends_with_health(
+pub async fn desktop_list_backends_with_health<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<Vec<BackendHealthView>, BridgeError> {
+) -> Result<Vec<BackendHealthView>, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
-    list_backends_with_health_for_core(core).await
+    list_backends_with_health_for_core(core, state.window_command_node(window.label(), None)).await
 }
 
+/// The backends of `node_did`, the calling window's node.
 pub async fn list_backends_with_health_for_core(
     core: Arc<ClientCore>,
+    node_did: Option<String>,
 ) -> Result<Vec<BackendHealthView>, BridgeError> {
-    let node_did = core
-        .selected_node_did()
-        .ok_or_else(|| BridgeError::untyped("no runtime selected"))?;
+    let node_did = node_did.ok_or_else(|| BridgeError::untyped("no runtime selected"))?;
     let endpoint = core
         .operator_observation_endpoint(&node_did)
         .await
@@ -511,19 +524,26 @@ fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
 }
 
 #[tauri::command]
-pub async fn desktop_list_mcp_services_with_health(
+pub async fn desktop_list_mcp_services_with_health<R>(
+    window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<Vec<MCPServiceHealthView>, BridgeError> {
+) -> Result<Vec<MCPServiceHealthView>, BridgeError>
+where
+    R: tauri::Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
-    list_mcp_services_with_health_for_core(core).await
+    list_mcp_services_with_health_for_core(core, state.window_command_node(window.label(), None))
+        .await
 }
 
+/// The MCP services of `node_did`, the calling window's node.
 pub async fn list_mcp_services_with_health_for_core(
     core: Arc<ClientCore>,
+    node_did: Option<String>,
 ) -> Result<Vec<MCPServiceHealthView>, BridgeError> {
-    load_mcp_services_with_health(core.as_ref())
+    load_mcp_services_with_health(core.as_ref(), node_did.as_deref())
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
