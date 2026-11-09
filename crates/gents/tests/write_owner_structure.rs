@@ -1978,8 +1978,6 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/native_service.rs", 1),
     // not yet typed: pairing closures flatten failures to strings
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
-    // DefraDB duplicate-document rejection wording (no structured code)
-    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt.rs", 2),
     // provider text through Rig's ProviderError(String) (ProviderReport)
     ("crates/gents-loop/src/error.rs", 21),
     // serde_json schema-mismatch message prefixes
