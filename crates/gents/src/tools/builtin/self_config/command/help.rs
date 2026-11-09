@@ -393,8 +393,8 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "pack build, then pack preview install and pack install on the .pack; it then appears in ux list.",
         },
         "plugin" => Page {
-            what: "inspect installed plugins; installation and model tool selection are separate steps.",
-            commands: &["plugin list  options: limit, cursor", "plugin get NAMESPACE/NAME"],
+            what: "inspect and try installed plugins; installation and model tool selection are separate steps.",
+            commands: &["plugin list  options: limit, cursor", "plugin get NAMESPACE/NAME", "plugin run NAMESPACE/NAME  options.input: the plugin's JSON input; runs it once, sealed, and returns its output"],
             notes: "get returns the exact artifact digest and pinned selection. Read the target Tools document, preserve its other fields and existing integration/plugin entries, then explicitly select integrations.plugins through tools update. Operator authority is enforced by the plugin store; model input cannot grant it.",
             next: "Read tools get and effective config get to verify resolved selection. Start a fresh request to call the selected plugin.",
         },

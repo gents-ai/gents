@@ -51,8 +51,45 @@ impl ConfigCommandTool {
                     "installed": record,
                 }.pretty()
             }
-            _ => bail!("plugin supports list and get; call [\"help\",\"plugin\"]"),
+            _ => bail!("plugin supports list, get and run; call [\"help\",\"plugin\"]"),
         }
+    }
+
+    /// `plugin run`: call an installed plugin once through the owner
+    /// `gents plugin run` uses, sealed: no bound directory and no data caller.
+    pub(super) async fn plugin_run(&self, argv: &[String]) -> Result<String> {
+        anyhow::ensure!(
+            self.core.held_grants().pack_install || self.categories.contains("tools"),
+            "plugin run requires the pack or tools grant"
+        );
+        let parsed = ParsedArgs::parse(argv)?;
+        let [coordinate] = parsed.positionals.as_slice() else {
+            bail!("plugin run requires exactly one NAMESPACE/NAME; see [\"plugin\",\"list\"]");
+        };
+        anyhow::ensure!(
+            parsed.switches.is_empty() && parsed.options.keys().all(|name| name == "input"),
+            "plugin run takes NAMESPACE/NAME and options.input, the plugin's JSON input"
+        );
+        let input = match parsed.one("input")? {
+            Some(raw) => {
+                serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_owned()))
+            }
+            None => Value::Null,
+        };
+        let home = self
+            .plugins
+            .home()
+            .context("this runtime has no plugin home")?;
+        let (namespace, name) = store::parse_coordinate(coordinate)?;
+        let record = store::read_record(home, namespace, name)?;
+        let call = self
+            .plugins
+            .call(&record, input)
+            .await
+            .with_context(|| format!("calling plugin {coordinate}"))?;
+        let output = call.outcome.into_output(coordinate)?;
+        ordered! {"output": output, "plugin": coordinate, "binding_note": call.binding_note}
+            .pretty()
     }
 
     pub(super) async fn pack(&self, argv: &[String]) -> Result<String> {

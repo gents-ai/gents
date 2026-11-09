@@ -181,6 +181,18 @@ async fn pack_authority_grants_what_a_plugins_pack_asks_for() {
             crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
         assert!(record.granted.is_some(), "the store keeps the grant");
         assert!(
+        let ran = tools
+            .iter()
+            .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+            .unwrap()
+            .call(
+                json!({"argv":["plugin","run","fixture/native_echo"],"options":{"input":{}}})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+        let ran: Value = serde_json::from_str(&ran).unwrap();
+        assert_eq!(ran["output"]["native_pack_echo"], "ok", "{ran}");
             crate::plugin::ux::list(home.path())
                 .unwrap()
                 .iter()

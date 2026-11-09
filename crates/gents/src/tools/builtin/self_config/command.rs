@@ -140,7 +140,7 @@ impl ConfigCommandParams {
                 | ["profile", "create", ..]
                 | ["skill", "get", ..]
                 | ["pack", "get" | "install" | "update" | "remove", ..]
-                | ["plugin", "get", ..] => 2,
+                | ["plugin", "get" | "run", ..] => 2,
                 ["task", "run", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
                 ["get", ..] => return Err(CommandGuidance {
@@ -517,3 +517,6 @@ fn apply_refusal(resource: &str) -> Option<String> {
     };
     Some(format!("{resource} has no apply verb; use {form}"))
 }
+            "plugin" if argv.get(1).is_some_and(|verb| verb == "run") => {
+                self.plugin_run(&argv[2..]).await
+            }
