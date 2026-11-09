@@ -358,7 +358,18 @@ where
 
 /// Lints one module file, within the limit the desktop evaluates.
 pub fn lint_file(path: &Path) -> Result<Vec<lint::Finding>> {
-    Ok(lint::lint(&read_bounded(path, "ux plugin entry")?))
+    let text = read_bounded(path, "ux plugin entry")?;
+    // Either file may declare a custom property the other reads, so each is
+    // linted with the one the frame would load beside it.
+    let beside = |name: &str| read_bounded(&path.with_file_name(name), "ux plugin file").ok();
+    if path.extension().is_some_and(|extension| extension == "css") {
+        let entry = beside(DEV_ENTRY).unwrap_or_default();
+        let mut findings = lint::lint_plugin(&entry, Some(&text));
+        findings.retain(|finding| finding.stylesheet);
+        Ok(findings)
+    } else {
+        Ok(lint::lint_plugin(&text, beside(DEV_CSS).as_deref()))
+    }
 }
 
 /// Lints every UX plugin a pack carries from its materialized directory:

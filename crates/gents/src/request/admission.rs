@@ -1342,7 +1342,7 @@ async fn verify_automated_trigger_source(
         .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
         triggers.len() == 1,
-        "runtime trigger is missing or ambiguous",
+        "runtime trigger no longer exists; it was removed before this fire ran",
     )?;
     let trigger = &triggers[0];
     deny_if(

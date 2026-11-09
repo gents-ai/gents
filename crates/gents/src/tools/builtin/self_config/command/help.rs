@@ -230,6 +230,7 @@ fn resource_has_fields(resource: &str) -> bool {
 const PAGE_TOPICS: &[(&str, &str)] = &[
     ("contributions", "A page module is plain ESM; its default export is {id, name, register(ctx)}, and register calls ctx.registerMany([...]). Each row is {id, area, order?, data?, render?}. Areas: nav (data: {id, label, icon, to, placement, order}), plugin.pages (render: a React element), agent.sections, session.header.actions, transcript.directives (data: {name, label, onClick}). Every area and directive must be declared in the manifest's ux[].contributes; the desktop refuses anything else. Only @gents/ux-sdk, react and react/jsx-runtime may be imported; ux lint reports any other import and dynamic code."),
     ("data", "A page reads and writes node documents only through datastore tools its manifest grants: ux[].data = [{surface: SURFACE_ID, tools: [TOOL_NAME, ...]}]. Create the DatastoreToolSurface with config datastore create or ship it in the pack's pack_config.json. In the page: useQuery(ctx, SURFACE, TOOL, {args, live}) returns the rows and useWrite(ctx, SURFACE, TOOL) returns {write, pending, error}. ACP on the node still decides what the operator may read or write. A tool with a runtime-filled field cannot be called from a page."),
+    ("sdk", crate::plugin::ux::reference::SDK_REFERENCE),
 ];
 
 pub(super) fn page(resource: &str) -> Option<Page> {
