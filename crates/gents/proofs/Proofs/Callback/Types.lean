@@ -119,9 +119,17 @@ structure ActionJournalEntry where
   state : ActionJournalState
   deriving DecidableEq, Repr
 
+/-- Unattended callbacks execute only as the Agent DID explicitly configured on
+CallbackBinding and frozen at admission. The source author and routing Node DID
+never supply document authority. Journals, results and plugin data use this same
+agent actor. CallbackBinding, CallbackInvocation and CallbackResult are node-local
+documents; reusable callback configuration is not constrained by that choice.
+Runtime custody of agent keys isolates agents from each other, not
+from the runtime. Native policy wiring remains unenforced pending #3485. -/
 structure CallbackInvocation where
   invocationId : String
   ownerNodeDid : String
+  agentDid : String
   /-- Opaque frozen projected input, including ordered group members. Its
   internal JSON encoding belongs to the existing projection owner. -/
   input : String := ""

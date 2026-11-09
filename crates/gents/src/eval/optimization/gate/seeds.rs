@@ -33,7 +33,7 @@ fn failed_seeds(
         .as_deref()
         .unwrap_or("1970-01-01T00:00:00Z");
     let identity = uuid::Uuid::nil().to_string();
-    let (node, ctx) = task_node_ctx(&definition.node_did, &baseline.agent_id, now);
+    let (node, ctx) = task_node_ctx(&definition.node_did, &baseline.agent_slot, now);
     let mut failures = Vec::new();
     for case in &definition.cases {
         for (index, stage) in case.stages.iter().enumerate() {
@@ -138,9 +138,12 @@ mod tests {
         for row in &crate::lean_vocab_test::lean_optimization_cases().seed_rendering {
             let dir = tempfile::tempdir().unwrap();
             crate::eval::optimization::subject::tests::write_task_fixture_pack(dir.path(), false);
+            use crate::NodeIdentity;
+            let runtime =
+                crate::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
             let fixture = crate::eval::optimization::subject::materialize_pack(
                 dir.path(),
-                crate::eval::runner::freeze::tests::OWNER,
+                runtime.did(),
                 "monitor",
                 &crate::eval::optimization::target::JobTarget::Task("plan".into()),
             )

@@ -12,8 +12,8 @@ export function initials(name: string) {
   ).replace(/^(.)(.)$/, (_, a: string, b: string) => a.toUpperCase() + b.toLowerCase());
 }
 
-export function agentName(agentId: string | null, deployment: NodeView | null) {
-  return agentOf(deployment, agentId)?.displayName ?? "Default";
+export function agentName(agentDid: string | null, deployment: NodeView | null) {
+  return agentOf(deployment, agentDid)?.displayName ?? "Default";
 }
 
 export const fileAccess = (mode: string) =>

@@ -6,26 +6,11 @@ use gents::store::config_client::GraphqlEndpoint;
 use serde_json::{json, Value};
 
 use crate::cli::args::P2pTransportArg;
-use crate::shared::{
-    P2pCollectionSubscriptionRow, P2pReplicatorOutputRow, P2pReplicatorRow, StoredRuntimeState,
-};
+use crate::shared::{P2pReplicatorOutputRow, P2pReplicatorRow, StoredRuntimeState};
 
 use crate::{http_get_json, normalize_optional_string, read_runtime_state, resolve_home_dir};
 
-pub(super) fn p2p_collection_rows(
-    collection_ids: &[String],
-    collection_names_by_id: &BTreeMap<String, String>,
-) -> Vec<P2pCollectionSubscriptionRow> {
-    collection_ids
-        .iter()
-        .map(|id| P2pCollectionSubscriptionRow {
-            id: id.clone(),
-            name: collection_names_by_id.get(id).cloned(),
-        })
-        .collect()
-}
-
-pub(super) fn p2p_collection_names(
+fn p2p_collection_names(
     collection_ids: &[String],
     collection_names_by_id: &BTreeMap<String, String>,
 ) -> Vec<String> {

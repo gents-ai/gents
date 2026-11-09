@@ -1,0 +1,4 @@
+---- MODULE MCDesktopUpdateListenerPendingNoEvent ----
+EXTENDS DesktopUpdateListener
+
+====

@@ -1,6 +1,7 @@
-type PeerPairingDesired {
+type PeerPairingDesired @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "pairing_observations") {
     peer_id: String @index(unique: true)
     node_did: String @index
+    actor_did: String @index @immutable
     collections: [String!]!
     replicator_addresses: [String!]!
     profiles: [String!]
@@ -9,6 +10,8 @@ type PeerPairingDesired {
     enrollment_request_digest: String @index
     enrollment_authorization_sequence: Int @index
     enrollment_authorization_expires_at: DateTime @index
+    node_doc_id: String
+    parent_linked: Boolean
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
 }

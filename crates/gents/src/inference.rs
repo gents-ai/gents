@@ -4,6 +4,7 @@ pub mod backends;
 pub mod clients;
 pub mod compaction;
 pub mod llm;
+pub mod profile_switch;
 pub mod rendered_request;
 pub mod resolved;
 pub mod usage_observation;

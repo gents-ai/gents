@@ -69,17 +69,20 @@ async fn configure_worker(access: &ConfigAccess, owner: &str, enabled: bool) -> 
 }
 
 async fn assignment(access: &ConfigAccess, label: &str) -> Result<()> {
-    access.write("test.delivery_process.assignment", &format!(
-        "mutation {{ create_DeliveryWork(input: {{ handoff_id: \"{}\", lane: 0, shard_id: \"{}\", attempt: 1, tags: [\"test\"] }}) {{ _docID }} }}",
-        escape_graphql_string(label), escape_graphql_string(label),
-    )).await?;
+    create_source(
+        access,
+        "DeliveryWork",
+        WORK_SDL,
+        json!({"handoff_id": label, "lane": 0, "shard_id": label, "attempt": 1, "tags": ["test"]}),
+    )
+    .await?;
     Ok(())
 }
 
 async fn evidence(access: &ConfigAccess, owner: &str) -> Result<Value> {
     Ok(json!({
         "owner_did":owner,
-        "requests":rows(access, "AgentRequest", "_docID request_id session_id agent_id lifecycle_state content failure_reason", owner).await?,
+        "requests":rows(access, "AgentRequest", "_docID request_id session_id agent_did lifecycle_state content failure_reason", owner).await?,
         "fires":rows(access, "TriggerFire", "fire_key owner_did trigger_id source_collection source_doc_id request_id session_id queued_serial emit_outcome", owner).await?,
         "outcomes":rows(access, "FireOutcome", "handoff_id fire_key owner_did trigger_id source_collection source_doc_id request_id session_id source_handoff_id terminal_state", owner).await?,
     }))
@@ -297,21 +300,23 @@ async fn delivery_crash_child() -> Result<()> {
     };
     let db = support::test_db_from_home(home);
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::local(db.node.clone());
-    if phase == "seed" {
+    // Later phases reopen the retained home and act as its retained User.
+    let access = if phase == "seed" {
         let endpoints = [
             std::env::var("GENTS_DELIVERY_ENDPOINT_1")?,
             std::env::var("GENTS_DELIVERY_ENDPOINT_2")?,
         ];
-        access.add_collection(SCHEMA).await?;
-        configure(&access, &db.node, &owner, &endpoints).await?;
-        configure_worker(&access, &owner, false).await?;
-        apply(&access, &owner, vec![(Collection::Trigger, json!({
+        let (fixture, _) = configure(&db, &endpoints).await?;
+        configure_worker(&fixture.access, &owner, false).await?;
+        apply(&fixture.access, &owner, vec![(Collection::Trigger, json!({
             "trigger_id":"delivery-inbox", "task_id":"delivery-inbox", "enabled":false,
             "source":{"kind":"event", "event_source_id":"delivery-inbox"}, "concurrency":"parallel",
             "session_id_template":"{{ doc.reply_session_id }}"
         }))]).await?;
-    }
+        fixture.access
+    } else {
+        user_access(&db).await
+    };
     if phase == "offline" {
         let prior = evidence(&access, &owner).await?;
         ensure!(
@@ -377,7 +382,7 @@ async fn delivery_crash_child() -> Result<()> {
             );
         }
         for request in state["requests"].as_array().unwrap() {
-            let answer = terminal_assistant_answer(&db.node, string(request, "request_id")?).await;
+            let answer = terminal_assistant_answer(&access, string(request, "request_id")?).await;
             ensure!(
                 answer.contains("WORK"),
                 "recovered request lacks real provider answer: {request}"
@@ -388,7 +393,7 @@ async fn delivery_crash_child() -> Result<()> {
             serde_json::to_vec_pretty(&state)?,
         )?;
         runtime.shutdown().await;
-        db.node.shutdown().await;
+        db.node.shutdown().await?;
         ready(&artifacts, &phase)?;
     }
     Ok(())

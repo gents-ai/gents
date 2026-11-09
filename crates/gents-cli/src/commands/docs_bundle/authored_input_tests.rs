@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use gents::pack::interpolate::{interpolate_with, SUBSTITUTION_PATTERN};
 use gents::pack::{
-    authored_document_schema, authored_pack_config_schema, decode_pack_config, PackInstallOptions,
-    PackManifest,
+    authored_document_schema, authored_pack_config_schema, decode_pack_config,
+    load_pack_authoring_config, PackInstallOptions, PackManifest,
 };
 use gents::Collection;
 use schemars::{schema_for, Schema};
@@ -339,6 +339,36 @@ fn decodes(config: &Value, dir: &Path, sidecar: Option<&str>) -> bool {
         .filter(|did| !did.contains('$'))
         .unwrap_or(OWNER)
         .to_owned();
+    if config
+        .get("agents")
+        .and_then(Value::as_array)
+        .is_some_and(|agents| !agents.is_empty())
+    {
+        let Some(manifest) = fs::read(dir.join("manifest.json"))
+            .ok()
+            .and_then(|bytes| PackManifest::from_slice(&bytes).ok())
+        else {
+            return false;
+        };
+        let Some(config_path) = manifest.config.as_deref() else {
+            return false;
+        };
+        return load_pack_authoring_config(
+            &manifest,
+            &PackInstallOptions { node_did: owner },
+            &|path| {
+                if path == config_path {
+                    return Ok(serde_json::to_vec(config)?);
+                }
+                if let Some(text) = sidecar {
+                    return Ok(text.as_bytes().to_vec());
+                }
+                Ok(fs::read(dir.join(path))?)
+            },
+            &|_| None,
+        )
+        .is_ok();
+    }
     decode_pack_config(
         config.clone(),
         Some(&PackInstallOptions { node_did: owner }),
@@ -467,15 +497,6 @@ fn null_owner_and_sidecar_input_the_loader_accepts_validates() {
     for (config, sidecar) in [
         (json!({"node": {"node_did": OWNER}, "tools": null}), None),
         (
-            json!({"node": {}, "agents": [{
-                "agent_id": "agent",
-                "inference_profile_id": "profile",
-                "tags": null,
-                "enabled": null
-            }]}),
-            None,
-        ),
-        (
             json!({"node": {}, "eval_definitions": [{
                 "definition_id": "definition",
                 "comparability_version": 1,
@@ -495,6 +516,29 @@ fn null_owner_and_sidecar_input_the_loader_accepts_validates() {
             .collect();
         assert!(errors.is_empty(), "{config} is rejected: {errors:?}");
     }
+}
+
+#[test]
+fn authored_agent_schema_requires_slots_without_materialized_identity() {
+    let root = repository_root();
+    let path = root.join(DOCUMENTS_FIXTURE);
+    let dir = path.parent().unwrap();
+    let config = read_json(&path).expect("fixture config");
+    assert!(decodes(&config, dir, None));
+    let schema = authored_pack_config_schema();
+    let validator = jsonschema::validator_for(schema.as_value()).expect("compiles");
+    assert!(validator.is_valid(&config));
+    let mut forged = config.clone();
+    forged["agents"][0]["agent_did"] = json!("did:key:forged");
+    assert!(!decodes(&forged, dir, None));
+    assert!(!validator.is_valid(&forged));
+    let mut missing = config;
+    missing["agents"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("agent_slot");
+    assert!(!decodes(&missing, dir, None));
+    assert!(!validator.is_valid(&missing));
 }
 
 fn backend(fields: Value) -> Value {

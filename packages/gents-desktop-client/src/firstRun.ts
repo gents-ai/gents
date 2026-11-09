@@ -24,7 +24,7 @@ export function inferenceIsConfigured(
   >,
 ): boolean {
   const agent = deployment.agentConfigs.find(
-    (row) => row.agent_id === deployment.node.defaultAgentId,
+    (row) => row.agent_did === deployment.node.defaultAgentDid,
   );
   const profile = deployment.inferenceProfiles.find(
     (row) => row.profile_id === agent?.inference_profile_id,
@@ -61,7 +61,7 @@ export function shouldRebindSetupDefault(
 ): boolean {
   if (!addingExtra) return true;
   const defaultAgent = deployment.agents.find(
-    (agent) => agent.agentId === deployment.node.defaultAgentId,
+    (agent) => agent.agentDid === deployment.node.defaultAgentDid,
   );
   const defaultProfile = deployment.inferenceProfiles.find(
     (profile) => profile.profile_id === defaultAgent?.inferenceProfileId,

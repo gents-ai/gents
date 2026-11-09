@@ -188,7 +188,7 @@ impl Tool for AgentMessageTool {
         let mut properties = message_body_schema("message");
         properties["session_id"] = serde_json::json!({
             "type": "string",
-            "description": "An agent session you can reach (see agent_session_list), never this conversation's own session."
+            "description": "A session_id that agent_new returned or agent_session_list shows; never an agent name (start an agent with agent_new) or this conversation's own session."
         });
         properties["interrupt"] = serde_json::json!({
             "type": "boolean",

@@ -17,7 +17,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "inference_profile_id"
@@ -97,8 +97,8 @@
             "links": [
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "engineer",
+                "key": "agent_did",
+                "id": "gents:agent-slot:engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -143,7 +143,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "inference_profile_id"
@@ -222,8 +222,8 @@
             "links": [
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "engineer",
+                "key": "agent_did",
+                "id": "gents:agent-slot:engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -231,8 +231,8 @@
               },
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "engineer",
+                "key": "agent_did",
+                "id": "gents:agent-slot:engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -256,8 +256,8 @@
               },
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "engineer",
+                "key": "agent_did",
+                "id": "gents:agent-slot:engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",

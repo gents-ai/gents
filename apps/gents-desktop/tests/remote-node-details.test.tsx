@@ -42,7 +42,7 @@ function remotePage(overrides: Partial<NodeView>) {
 describe("a remote node's own details", () => {
   it("shows what the node shares, read only", () => {
     remotePage({
-      node: { ...deployment.node, defaultAgentId: "ops", displayName: "Amy" },
+      node: { ...deployment.node, defaultAgentDid: "ops", displayName: "Amy" },
       nodeConfig: { node_did: remote, max_request_hop: 3 },
     });
     expect(screen.getByRole("status")).toHaveTextContent(/^Read-only here/);
@@ -61,7 +61,7 @@ describe("a remote node's own details", () => {
 
   it("says what a node on an older build doesn't share, rather than looking unset", () => {
     remotePage({
-      node: { ...deployment.node, defaultAgentId: null, displayName: null },
+      node: { ...deployment.node, defaultAgentDid: null, displayName: null },
       nodeConfig: null,
     });
     expect(

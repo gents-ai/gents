@@ -110,9 +110,7 @@ def enrollmentTraceStepJson (step : EnrollmentTraceStep) : String :=
     ++ "\"request_binding_conflict\":" ++ boolJson step.requestBindingConflict ++ ","
     ++ "\"current_approval\":" ++ boolJson step.currentApproval ++ ","
     ++ "\"peer_admitted\":" ++ boolJson step.peerAdmitted ++ ","
-    ++ "\"ready\":" ++ boolJson step.ready ++ ","
-    ++ "\"client_hydration_admits\":" ++ boolJson step.clientHydrationAdmits ++ ","
-    ++ "\"server_hydration_admits\":" ++ boolJson step.serverHydrationAdmits
+    ++ "\"ready\":" ++ boolJson step.ready
     ++ "}"
 
 def enrollmentCaseJson (c : EnrollmentCase) : String :=
@@ -176,7 +174,7 @@ def agentRequestAdmissionCaseJson (c : AgentRequestAdmissionCase) : String :=
       boolJson c.triggerConfigDocumentBindingCurrent ++ ","
     ++ "\"source_document_binding_current\":" ++ boolJson c.sourceDocumentBindingCurrent ++ ","
     ++ "\"target_policy_allows\":" ++ boolJson c.targetPolicyAllows ++ ","
-    ++ "\"peer_authority_allows\":" ++ boolJson c.peerAuthorityAllows ++ ","
+    ++ "\"native_create_authorized\":" ++ boolJson c.nativeCreateAuthorized ++ ","
     ++ "\"hop_within_bound\":" ++ boolJson c.hopWithinBound ++ ","
     ++ "\"expected_admitted\":" ++ boolJson c.expectedAdmitted ++ ","
     ++ "\"expected_disposition\":" ++ jsonString c.expectedDisposition
@@ -228,7 +226,7 @@ private def titleParentEvidenceJson (parent : Enrollment.AuxiliaryParentEvidence
     ++ "\"document_id\":" ++ jsonString parent.link.documentId ++ ","
     ++ "\"node_did\":" ++ jsonString parent.nodeDid ++ ","
     ++ "\"session_id\":" ++ jsonString parent.sessionId ++ ","
-    ++ "\"agent_id\":" ++ jsonString parent.agentId ++ ","
+    ++ "\"agent_did\":" ++ jsonString parent.agentDid ++ ","
     ++ "\"logical_binding_current\":" ++ boolJson parent.logicalBindingCurrent ++ ","
     ++ "\"physical_binding_current\":" ++ boolJson parent.physicalBindingCurrent ++ "}"
 
@@ -261,7 +259,7 @@ def titleRequestAdmissionCaseJson (case : TitleRequestAdmissionCase) : String :=
     ++ "\"purpose\":" ++ jsonString request.purpose.toWire ++ ","
     ++ "\"target_node\":" ++ jsonString request.targetNode ++ ","
     ++ "\"requester_did\":" ++ jsonString request.requesterDid ++ ","
-    ++ "\"agent_id\":" ++ jsonString request.agentId ++ ","
+    ++ "\"agent_did\":" ++ jsonString request.agentDid ++ ","
     ++ "\"session_id\":" ++ jsonString request.sessionId ++ ","
     ++ "\"content\":" ++ jsonString request.content ++ ","
     ++ "\"input\":" ++ titleRequestInputJson request.input ++ ","
@@ -278,6 +276,7 @@ def titleRequestAdmissionCaseJson (case : TitleRequestAdmissionCase) : String :=
     ++ "\"admission\":{"
     ++ "\"kind\":" ++ jsonString (match admission.kind with
       | .enrollment => "enrollment"
+      | .client => "client"
       | .localSelf => "local-self"
       | .runtimeInternal => "runtime-internal"
       | .peer => "peer") ++ ","

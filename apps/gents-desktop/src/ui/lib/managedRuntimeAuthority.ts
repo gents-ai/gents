@@ -25,3 +25,69 @@ export function authoritiesEqual(
 ): boolean {
   return left.toolCeiling === right.toolCeiling && left.toolRoot === right.toolRoot;
 }
+
+export type AuthorityRestartObservation = {
+  rootChanged: boolean;
+  nodeObserved: boolean;
+  agentPresent: boolean;
+};
+export type AuthorityRestartRefusal = "nodeUnobserved" | "noAgent";
+export type AuthorityRestartAction =
+  "keepCurrentFolder" | "retryWhenLoaded" | "addAgent";
+export type AuthorityRestartPlan =
+  | { kind: "restart" }
+  | { kind: "publishThenRestart" }
+  | {
+      kind: "refused";
+      cause: AuthorityRestartRefusal;
+      nextActions: AuthorityRestartAction[];
+    };
+
+/** Lean owner: `ClientShell.AuthorityRestart.plan` and `nextActions`. The
+    restarted runtime admits only a published root, so a changed root is
+    published first, and a change that cannot be published is refused before
+    any write. */
+export function authorityRestartPlan({
+  rootChanged,
+  nodeObserved,
+  agentPresent,
+}: AuthorityRestartObservation): AuthorityRestartPlan {
+  if (!rootChanged) return { kind: "restart" };
+  if (!nodeObserved)
+    return {
+      kind: "refused",
+      cause: "nodeUnobserved",
+      nextActions: ["keepCurrentFolder", "retryWhenLoaded"],
+    };
+  if (!agentPresent)
+    return {
+      kind: "refused",
+      cause: "noAgent",
+      nextActions: ["keepCurrentFolder", "addAgent"],
+    };
+  return { kind: "publishThenRestart" };
+}
+
+const REFUSAL_CAUSE: Record<AuthorityRestartRefusal, string> = {
+  nodeUnobserved:
+    "The new folder must be published for an agent before the restart, and this node's agents have not loaded yet.",
+  noAgent:
+    "The new folder must be published for an agent before the restart, and this node has no agent.",
+};
+const NEXT_ACTION: Record<
+  Exclude<AuthorityRestartAction, "keepCurrentFolder">,
+  string
+> = {
+  retryWhenLoaded: "wait for the node's agents to appear and restart again",
+  addAgent: "add an agent to this node and restart again",
+};
+
+/** The refusal's cause followed by its next actions, as shown to the User. */
+export function authorityRefusalText(
+  plan: Extract<AuthorityRestartPlan, { kind: "refused" }>,
+): string {
+  const actions = plan.nextActions.map((action) =>
+    action === "keepCurrentFolder" ? "keep the current folder" : NEXT_ACTION[action],
+  );
+  return `${REFUSAL_CAUSE[plan.cause]} To continue, ${actions.join(", or ")}.`;
+}

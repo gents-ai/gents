@@ -26,12 +26,8 @@ pub struct DesktopBootstrapSummary {
     pub init_tool_ceiling: Option<String>,
     pub init_tool_root: Option<String>,
     pub desktop_home: String,
-    pub peer_directory_path: String,
-    pub node_data_dir: String,
     pub diagnostics_hint: String,
     pub node_home_exists: bool,
-    pub desktop_home_exists: bool,
-    pub peer_directory_exists: bool,
     pub client_state_exists: bool,
     pub saved_peers: Vec<SavedPeerView>,
 }

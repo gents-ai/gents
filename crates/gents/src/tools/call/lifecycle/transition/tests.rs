@@ -6,18 +6,40 @@ use super::super::{ToolCallLifecycle, ToolCallState};
 use super::IllegalToolCallTransition;
 
 async fn published_job_row(name: &str) -> PublishedAdmission {
-    published_admission(PublishedAdmissionOptions {
+    use crate::store::identity::NodeIdentity;
+    let mut admission = published_admission(PublishedAdmissionOptions {
         name: name.to_owned(),
+        real_identity: true,
         await_mode: AwaitMode::Background,
         job_pin: true,
         ..Default::default()
     })
     .await
-    .unwrap()
+    .unwrap();
+    let root = crate::KeyIdentity::load_existing(admission.path.join("node.key"), None).unwrap();
+    assert_eq!(root.did(), admission.node_did);
+    let agent = crate::load_agent(&admission.node, admission.tool.actor().as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+        agent_did: agent.agent_did,
+        creation_nonce: agent.creation_nonce,
+    };
+    let identity = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    admission
+        .tool
+        .bind_agent_signer(identity.managed_agent_signer())
+        .unwrap();
+    admission
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -25,12 +47,13 @@ async fn teardown(admission: PublishedAdmission) {
 async fn job_row_has_kind_plugin_job() {
     let admission = published_job_row("job-kind").await;
     assert_eq!(admission.tool.kind(), ToolRowKind::PluginJob);
-    let loaded = ToolCallLifecycle::load_by_doc_id(
+    let loaded = ToolCallLifecycle::load_by_doc_id_as(
         admission.node.clone(),
+        admission.tool.actor().clone(),
         admission.tool.doc_id().unwrap(),
         &admission.node_did,
         "session-job-kind",
-        None,
+        admission.tool.requester_did(),
     )
     .await
     .unwrap()
@@ -45,17 +68,19 @@ async fn orphan_sweep_excludes_job_rows() {
     let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
         &admission.node,
         &admission.node_did,
+        &super::super::recovery_closeout_conformance::recovery_identities(&admission),
         &crate::BackgroundExecutionRegistry::default(),
     )
     .await
     .unwrap();
     assert_eq!(report.tool_calls_terminalized, 0);
-    let loaded = ToolCallLifecycle::load_by_doc_id(
+    let loaded = ToolCallLifecycle::load_by_doc_id_as(
         admission.node.clone(),
+        admission.tool.actor().clone(),
         admission.tool.doc_id().unwrap(),
         &admission.node_did,
         "session-job-sweep",
-        None,
+        admission.tool.requester_did(),
     )
     .await
     .unwrap()
@@ -108,14 +133,16 @@ async fn published_admission_with_job_pin_loads_as_plugin_job() {
     let admission = published_job_row("job-pin").await;
     assert_eq!(admission.tool.kind(), ToolRowKind::PluginJob);
     let response = admission
-        .node
+        .tool
+        .access()
+        .unwrap()
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ job_pin }} }}"#,
             admission.tool.doc_id().unwrap()
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let stored = &response.data.unwrap()["AgentToolCall"][0]["job_pin"];
+        .await
+        .expect("read pinned job row as its owning actor");
+    let stored = &response["data"]["AgentToolCall"][0]["job_pin"];
     assert_eq!(
         serde_json::from_value::<gents_protocol::job::JobPin>(stored.clone()).unwrap(),
         fixture_job_pin()
@@ -124,6 +151,7 @@ async fn published_admission_with_job_pin_loads_as_plugin_job() {
 
     let default = published_admission(PublishedAdmissionOptions {
         name: "job-pin-default".to_owned(),
+        real_identity: true,
         ..Default::default()
     })
     .await

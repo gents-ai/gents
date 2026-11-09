@@ -1,0 +1,12 @@
+name: Gents identity ownership model
+resources:
+  - name: mailbox_items
+    relations:
+      - name: recipient
+        types: [actor]
+    permissions:
+      - name: read
+        expr: recipient
+      - name: update
+        expr: recipient
+      - name: delete

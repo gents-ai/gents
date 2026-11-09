@@ -1,4 +1,5 @@
 import Proofs.RuntimeReconcile
+import Lean
 import Mathlib.Data.Finset.Sort
 import Proofs.Conformance.ContractCases.Types
 
@@ -81,7 +82,7 @@ def runtimeCaseFromStep
       , trackedRequestAgent := post.requestAgent trackedRequestId
       , trackedSessionAgent :=
           match post.sessionAgent trackedSessionId with
-          | some agentId => agentId
+          | some agentDid => agentDid
           | none => 0
       }
   | none =>
@@ -198,9 +199,9 @@ def clientAgentReadinessCase
     (runnable unavailable startupDemoted : Bool)
     (runtimeUnavailableReason : RuntimeState.AgentUnavailableReason := .backendTemporarilyUnavailable) :
     ClientAgentReadinessCase :=
-  let runnableSet : Finset AgentId := if runnable then {20} else ∅
-  let unavailableSet : Finset AgentId := if unavailable then {20} else ∅
-  let demotedSet : Finset AgentId := if startupDemoted then {20} else ∅
+  let runnableSet : Finset AgentDid := if runnable then {20} else ∅
+  let unavailableSet : Finset AgentDid := if unavailable then {20} else ∅
+  let demotedSet : Finset AgentDid := if startupDemoted then {20} else ∅
   let resolved : ResolvedSnapshot :=
     { defaultAgent := 20
     , runnable := runnableSet
@@ -265,5 +266,18 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   , clientAgentReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
   , clientAgentReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
   ]
+
+def sessionSelectionCasesJson : String :=
+  let cases : List (String × Nat × Option Nat) :=
+    [("invisible", 10, none), ("matching", 10, some 10), ("mismatched", 10, some 20)]
+  let result (selection : RuntimeState.SessionSelection) : String :=
+    match selection with
+    | .unavailable => "unavailable"
+    | .matched => "matched"
+    | .mismatched => "mismatched"
+  (Lean.toJson (cases.map fun (name, requested, visible) => Lean.Json.mkObj
+    [("name", Lean.toJson name), ("requested", Lean.toJson requested),
+     ("visible", Lean.toJson visible),
+     ("expected", Lean.toJson (result (RuntimeState.sessionSelection requested visible)))] )).compress
 
 end Conformance.ContractCases

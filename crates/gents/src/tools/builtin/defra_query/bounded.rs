@@ -43,6 +43,7 @@ pub struct BoundedQueryTool {
     access: ConfigAccess,
     decl: QueryToolDecl,
     surface_id: Option<String>,
+    surface_scope: Option<crate::documents::DatastoreSurfaceScope>,
     actor: Option<::identity::Did>,
 }
 
@@ -55,6 +56,7 @@ impl BoundedQueryTool {
             access,
             decl,
             surface_id: None,
+            surface_scope: None,
             actor: None,
         }
     }
@@ -69,6 +71,20 @@ impl BoundedQueryTool {
 
     pub fn declared_by(mut self, surface_id: Option<String>) -> Self {
         self.surface_id = surface_id;
+        self
+    }
+
+    pub(crate) fn with_surface_owner(mut self, owner: String) -> Self {
+        self.surface_scope = Some(crate::documents::DatastoreSurfaceScope::SelectedAgent(
+            owner,
+        ));
+        self
+    }
+
+    pub(crate) fn with_visible_surface_owner(mut self, owner: String) -> Self {
+        self.surface_scope = Some(crate::documents::DatastoreSurfaceScope::VisibleCaller(
+            owner,
+        ));
         self
     }
 
@@ -497,7 +513,28 @@ impl Tool for BoundedQueryTool {
                     local.node(),
                     Some(actor.clone()),
                     "bounded_application_query",
-                    |txn| Box::pin(super::execute_command(txn, &command, &scope)),
+                    |txn| {
+                        let command = &command;
+                        let scope = &scope;
+                        Box::pin(async move {
+                            if let Some(surface_scope) = &self.surface_scope {
+                                let surface = self
+                                    .surface_id
+                                    .as_deref()
+                                    .ok_or_else(|| anyhow!("datastore source missing"))?;
+                                surface_scope
+                                    .revalidate(
+                                        txn,
+                                        surface,
+                                        &crate::documents::SurfaceToolDecl::Query(
+                                            self.decl.clone(),
+                                        ),
+                                    )
+                                    .await?;
+                            }
+                            super::execute_command(txn, command, scope).await
+                        })
+                    },
                 )
                 .await?
             }
@@ -507,10 +544,41 @@ impl Tool for BoundedQueryTool {
                      endpoint reads as its own principal",
                     self.decl.tool_name
                 )
-                .into())
+                .into());
             }
             // One request, no snapshot: a field page whose value changed
             // since the previous page is caught by its `expected_hash`.
+            (_, None)
+                if matches!(
+                    self.surface_scope.as_ref(),
+                    Some(crate::documents::DatastoreSurfaceScope::SelectedAgent(_))
+                ) =>
+            {
+                return Err(anyhow!("datastore surface requires its selected Agent actor").into());
+            }
+            (_, None) if self.surface_scope.is_some() => {
+                let surface_scope = self.surface_scope.as_ref().expect("scope was checked");
+                let surface = self
+                    .surface_id
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("datastore source missing"))?;
+                self.access
+                    .transact_readonly("bounded_application_query", |txn| {
+                        let command = &command;
+                        let scope = &scope;
+                        Box::pin(async move {
+                            surface_scope
+                                .revalidate(
+                                    txn,
+                                    surface,
+                                    &crate::documents::SurfaceToolDecl::Query(self.decl.clone()),
+                                )
+                                .await?;
+                            super::execute_command(txn, command, scope).await
+                        })
+                    })
+                    .await?
+            }
             (_, None) => super::execute_command(&self.access, &command, &scope).await?,
         };
         let mut payload = result;
@@ -550,7 +618,7 @@ mod tests {
     use super::*;
     use crate::documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
     use crate::inference::llm::tool::Tool;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
 
     #[tokio::test]
     async fn native_scalar_filters_match_lean_admission() {
@@ -667,7 +735,10 @@ mod tests {
     async fn field_recovery_preserves_complete_contract_and_runtime_scope() {
         let node = node_with_findings().await;
         let text = format!("{}{}", "é".repeat(2001), "😀".repeat(300));
-        let mutation = format!("mutation {{ update_CandidateFinding(filter: {{finding_id: {{_eq: \"f1\"}}}}, input: {{title: \"{}\"}}) {{_docID}} }}", crate::store::graphql::escape_graphql_string(&text));
+        let mutation = format!(
+            "mutation {{ update_CandidateFinding(filter: {{finding_id: {{_eq: \"f1\"}}}}, input: {{title: \"{}\"}}) {{_docID}} }}",
+            crate::store::graphql::escape_graphql_string(&text)
+        );
         let response = crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.field_recovery.seed",

@@ -258,10 +258,10 @@ structure DataWriteCase where
 
 private def declaredStamps : List (String × Stamp) :=
   [("job_row_doc_id", .jobRowDocId), ("chain_root_doc_id", .chainRootDocId),
-   ("node_did", .nodeDid)]
+   ("caller_did", .callerDid)]
 
 private def noteFields : List String := ["note_id", "body", "job_row_doc_id", "chain_root_doc_id"]
-private def nameFields : List String := ["name", "script", "node_did"]
+private def nameFields : List String := ["name", "script", "caller_did"]
 
 private def boundedWrite : ApplicationWrite.Observation :=
   { granted := true, application := true, blocked := false, credential := false, bounded := true,
@@ -273,7 +273,7 @@ private def noteWrite : DataWriteCase :=
     collectionFields := noteFields, write := boundedWrite }
 
 /-- A note collection carries the job stamps; a name collection carries only
-`node_did`, so job stamps do not apply to it. -/
+`caller_did`, so job stamps do not apply to it. -/
 def dataWriteCases : List DataWriteCase :=
   [ noteWrite, { noteWrite with inOwnSdl := false }, { noteWrite with runtimeOrProtected := true }
   , { noteWrite with actorIsInvoker := false }, { noteWrite with opGranted := false }
@@ -300,13 +300,13 @@ def dataQueryCases : List (Nat × Bool × Bool × Bool) :=
 def dataQueryVerdict (c : Nat × Bool × Bool × Bool) : Bool :=
   queryAdmitted c.1 c.2.1 c.2.2.1 c.2.2.2
 
-private def hostNodeDid : String := "did:key:host"
+private def callerDid : String := "did:key:agent"
 
 def dataFilterCases : List Filter :=
-  [ [("owner", .callerNodeDid), ("name", .literal "draft")]
+  [ [("owner", .callerDid), ("name", .literal "draft")]
   , [("owner", .literal "did:key:guest")], [] ]
 
-def dataFilterVerdict (f : Filter) : Filter := substituteCallerNodeDid f hostNodeDid
+def dataFilterVerdict (f : Filter) : Filter := substituteCallerDid f callerDid
 
 def dataNoteCases : List (Option Fingerprint × Fingerprint × OnConflict) :=
   [none, some "fp-a"].flatMap fun existing => ["fp-a", "fp-b"].flatMap fun new =>
@@ -322,7 +322,7 @@ private def invocationSpelling : Invocation → String
   | .toolCall => "tool_call" | .jobStep => "job_step" | .callback => "callback" | .ux => "ux"
 
 private def stampSpelling : Stamp → String
-  | .nodeDid => "node_did" | .sessionId => "session_id" | .requestDocId => "request_doc_id"
+  | .callerDid => "caller_did" | .sessionId => "session_id" | .requestDocId => "request_doc_id"
   | .toolCallDocId => "tool_call_doc_id" | .jobRowDocId => "job_row_doc_id"
   | .chainRootDocId => "chain_root_doc_id"
 
@@ -341,9 +341,9 @@ private def writeJson (w : ApplicationWrite.Observation) : Json := Json.mkObj [
   ("bounded", toJson w.bounded), ("targets", toJson w.targets), ("limit", toJson w.limit),
   ("preview", toJson w.preview), ("digest_matches", toJson w.digestMatches)]
 
-/-- `$caller.node_did` is the placeholder's wire spelling. -/
+/-- `$caller.did` is the placeholder's wire spelling. -/
 private def filterJson (f : Filter) : Json := Json.mkObj <| f.map fun (field, value) =>
-  (field, toJson (match value with | .literal v => v | .callerNodeDid => "$caller.node_did"))
+  (field, toJson (match value with | .literal v => v | .callerDid => "$caller.did"))
 
 private def insertOutcomeSpelling : InsertOutcome → String
   | .inserted => "inserted" | .unchanged => "unchanged" | .abortStep => "abort_step"
@@ -365,7 +365,7 @@ def dataCasesJson : String := (Json.mkObj [
     ("runtime_or_protected", toJson c.2.2.1), ("query_granted", toJson c.2.2.2),
     ("expected", toJson (dataQueryVerdict c))]),
   ("filters", toJson <| dataFilterCases.map fun f => Json.mkObj [
-    ("host_node_did", toJson hostNodeDid), ("filter", filterJson f),
+    ("caller_did", toJson callerDid), ("filter", filterJson f),
     ("expected", filterJson (dataFilterVerdict f))]),
   ("notes", toJson <| dataNoteCases.map fun c => Json.mkObj [
     ("existing", toJson c.1), ("new", toJson c.2.1),
@@ -382,13 +382,13 @@ theorem data_regressions :
       , (noteStamps, false, some .other), (noteStamps, false, some .other)
       , (noteStamps, false, some (.stampUnavailable .jobRowDocId .callback))
       , (noteStamps, false, some (.stampUnavailable .jobRowDocId .toolCall))
-      , ([("node_did", .nodeDid)], true, none), ([("node_did", .nodeDid)], true, none)
+      , ([("caller_did", .callerDid)], true, none), ([("caller_did", .callerDid)], true, none)
       , (noteStamps, false, some (.stampUnavailable .jobRowDocId .ux))
-      , ([("node_did", .nodeDid)], true, none)
+      , ([("caller_did", .callerDid)], true, none)
       , (noteStamps, false, some .other) ] ∧
     dataQueryCases.map dataQueryVerdict = [false, true, true, false, false, false, false] ∧
     dataFilterCases.map dataFilterVerdict =
-      [ [("owner", .literal "did:key:host"), ("name", .literal "draft")]
+      [ [("owner", .literal "did:key:agent"), ("name", .literal "draft")]
       , [("owner", .literal "did:key:guest")], [] ] ∧
     dataNoteCases.map dataNoteVerdict =
       [ .inserted, .inserted, .inserted, .inserted

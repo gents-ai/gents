@@ -162,8 +162,8 @@ fn render_request(
         client_request_id_header: route.client_request_id_header,
         workspace_id: route.workspace_id.as_deref(),
         agent: plan.agent.as_ref().map(|agent| AgentHeaders {
-            agent_id: &agent.agent_id,
-            parent_agent_id: agent.parent_agent_id.as_deref(),
+            agent_did: &agent.agent_did,
+            parent_agent_did: agent.parent_agent_did.as_deref(),
         }),
         // Every Gents agent is operator-defined, which Claude Code types as a custom agent.
         agent_type: plan.agent.as_ref().map(|_| headers::CUSTOM_AGENT_TYPE),

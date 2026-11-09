@@ -48,7 +48,7 @@ pub(crate) fn session_message_display_body_with_content<'a>(
     }
     let header = sender_header(
         present(parent.node_did.as_deref())?,
-        present(parent.agent_id.as_deref())?,
+        present(parent.agent_did.as_deref())?,
         present(parent.session_id.as_deref())?,
         &parent.request_id,
         present(request.created_at.as_deref())?,
@@ -64,7 +64,7 @@ mod tests {
             doc_id: Some("parent-document".into()),
             request_id: "parent-request".into(),
             node_did: Some("did:test:sender".into()),
-            agent_id: Some("did:test:sender:engineer".into()),
+            agent_did: Some("did:test:sender:engineer".into()),
             session_id: Some("parent-session".into()),
             ..Default::default()
         };
@@ -105,7 +105,7 @@ mod tests {
                 "document" => changed.doc_id = Some("other".into()),
                 "request" => changed.request_id = "other".into(),
                 "node" => changed.node_did = Some("did:test:other".into()),
-                "agent" => changed.agent_id = Some("other".into()),
+                "agent" => changed.agent_did = Some("other".into()),
                 _ => changed.session_id = Some("other".into()),
             }
             assert_eq!(
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn absent_parent_fields_and_noncanonical_envelopes_remain_unavailable() {
         let (request, mut parent) = rows();
-        parent.agent_id = None;
+        parent.agent_did = None;
         assert_eq!(session_message_display_body(&request, &parent), None);
         let (mut request, parent) = rows();
         request.created_at = Some("2026-10-23T14:00:01Z".into());

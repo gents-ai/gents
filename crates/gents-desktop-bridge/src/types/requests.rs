@@ -34,6 +34,14 @@ pub struct ManagedServerRootValidationRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentWorkspaceRootSelectRequest {
+    pub node_did: String,
+    pub agent_did: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ManagedServerRestartRequest {
     pub node_name: String,
     pub tool_ceiling: ManagedServerToolCeiling,
@@ -72,23 +80,16 @@ pub struct EnrollmentStatusRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatSubmissionQuery {
-    pub client_did: String,
-    pub node_did: String,
-    pub request_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendRequest {
-    /// Allocated and retained by the caller before the first helper call.
+    /// The request identity the client picked when the person sent; a retry
+    /// sends the same identity (Lean `ClientOptimisticSend`).
     #[serde(default)]
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
-    /// Existing local client DID captured with the operation, so switching
-    /// history identities cannot reinterpret an unresolved caller operation.
+    /// The local client DID the message was authored under; a send under
+    /// another client identity is refused.
     #[serde(default)]
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,7 +97,7 @@ pub struct ChatSendRequest {
     pub node_did: String,
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -125,12 +126,6 @@ pub struct ChatSendRequest {
     #[ts(optional = nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// Reconcile this earlier send whose delivery is unknown instead of sending
-    /// a new request; the original signed request is replayed or confirmed.
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolve_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -143,6 +138,7 @@ pub struct MailboxItemRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MailboxItemObservationRequest {
     pub client_did: String,
+    pub node_did: String,
     pub item_id: String,
 }
 
@@ -193,7 +189,7 @@ pub struct NodeConfigSaveRequest {
 #[serde(deny_unknown_fields)]
 pub struct DefaultAgentSetRequest {
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -262,7 +258,7 @@ pub struct ToolServiceDeleteRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeleteRequest {
-    pub agent_id: String,
+    pub agent_did: String,
     pub node_did: String,
 }
 
@@ -471,7 +467,9 @@ pub struct ConfigComponentsPatchRequest {
 pub enum ConfigComponentPatch {
     Agent {
         id: String,
-        #[ts(type = "Partial<Omit<import(\"./Agent.js\").Agent, \"node_did\" | \"agent_id\">>")]
+        #[ts(
+            type = "Partial<Omit<import(\"./Agent.js\").Agent, \"node_did\" | \"agent_did\" | \"creation_nonce\">>"
+        )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     AgentContext {
@@ -656,7 +654,7 @@ pub struct PendingQueueEditResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentModelSelectionRequest {
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub backend_id: String,
     pub model_name: String,
     pub reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,

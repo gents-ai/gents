@@ -1,4 +1,4 @@
-use super::{request_patch_cache_reusable, session_delivery_error};
+use super::request_patch_cache_reusable;
 use crate::client::observe::ObservedStore;
 use crate::client::store::{ClientStore, ClientStoreRows};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -93,34 +93,6 @@ fn generated_publication_cases_drive_request_patch_cache_admission() {
             case["expected_action"].as_str().expect("Lean action"),
             "{}",
             case["name"].as_str().expect("case name")
-        );
-    }
-}
-
-#[test]
-fn each_delivery_state_reads_as_its_own_typed_code_naming_the_node() {
-    use crate::error::BridgeErrorCode;
-    use gents_protocol::client_protocol::SessionDelivery;
-    for (delivery, code) in [
-        (
-            SessionDelivery::Delivering,
-            BridgeErrorCode::SessionDelivering,
-        ),
-        (
-            SessionDelivery::NotConnected,
-            BridgeErrorCode::SessionNotConnected,
-        ),
-        (SessionDelivery::Accepted, BridgeErrorCode::SessionAccepted),
-        (SessionDelivery::NoRequest, BridgeErrorCode::NotFound),
-    ] {
-        let error = session_delivery_error(delivery, "did:test:node", "Studio");
-        assert_eq!(error.code, code, "{delivery:?}");
-        assert_eq!(error.endpoint.as_deref(), Some("did:test:node"));
-        assert!(error.message.contains("Studio"), "{}", error.message);
-        assert_eq!(
-            error.retryable,
-            delivery != SessionDelivery::NoRequest,
-            "{delivery:?}: a waiting state resolves on its own"
         );
     }
 }

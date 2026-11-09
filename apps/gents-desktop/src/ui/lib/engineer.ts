@@ -27,7 +27,7 @@ export function engineerPatches(deployment: NodeView): ConfigComponentPatch[] {
   const patches: ConfigComponentPatch[] = [
     {
       collection: "Agent",
-      id: agent.agentId,
+      id: agent.agentDid,
       changes: {
         display_name: "The Engineer",
         description: ENGINEER_DESCRIPTION,

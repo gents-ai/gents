@@ -5,7 +5,23 @@ pub(crate) use support::canonical_presentation::native_adapter::native_presentat
 pub(crate) use support::*;
 
 pub(crate) async fn native_queue_image(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
+    node_did: &str,
+    session_id: &str,
+    selection: &[crate::request::lifecycle::queue::FoldedInput],
+) -> QueueImage {
+    native_queue_image_with_access(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        node_did,
+        session_id,
+        selection,
+    )
+    .await
+}
+
+/// The queue image observed by `access`, such as the Agent that owns the rows.
+pub(crate) async fn native_queue_image_with_access(
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     selection: &[crate::request::lifecycle::queue::FoldedInput],
@@ -16,7 +32,6 @@ pub(crate) async fn native_queue_image(
         request_id: String,
         lifecycle_state: RequestLifecycleState,
     }
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state }} }}"#,
@@ -46,7 +61,7 @@ pub(crate) async fn native_queue_image(
         .filter(|id| state(id) == Some(RequestLifecycleState::Pending))
         .collect::<Vec<_>>();
     let pending =
-        crate::request::lifecycle::pending_user_queue(&access, node_did, session_id, node_did)
+        crate::request::lifecycle::pending_user_queue(access, node_did, session_id, node_did)
             .await
             .unwrap()
             .entries

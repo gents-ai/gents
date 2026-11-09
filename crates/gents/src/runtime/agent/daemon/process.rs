@@ -15,8 +15,8 @@ use crate::observe::runtime_trace::{
 };
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
 use crate::request::streaming::DefraStreamWriter;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::worker_capacity::{RequestGuard, WorkerTicket};
+use gents_protocol::row::AgentRequest;
 
 impl<M> AgentDaemon<M>
 where
@@ -28,8 +28,7 @@ where
         request: AgentRequest,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
-        self.process_request_with_capacity(request, None, shutdown)
-            .await
+        Box::pin(self.process_request_with_capacity(request, None, shutdown)).await
     }
 
     /// `capacity` is the post-dequeue worker permit; this call owns it until
@@ -48,15 +47,15 @@ where
         else {
             return Ok(());
         };
-        let stream_writer = DefraStreamWriter::new(
+        let stream_writer = DefraStreamWriter::new_managed(
             self.node.clone(),
-            self.agent_config.node_did(),
+            self.agent_config.agent_identity.as_ref(),
             Duration::from_millis(self.agent_config.stream_batch_ms),
-        );
-        let Some(request) = verify_request_at_claim_boundary(
+        )?;
+        let Some((request, client_claim)) = verify_request_at_claim_boundary(
             &self.request_admission,
             self.node.clone(),
-            &self.agent_config.agent_id,
+            self.agent_config.agent_identity.as_ref(),
             request,
         )
         .await
@@ -69,12 +68,16 @@ where
         .expect("fresh request admission requires a canonical execution_origin");
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.agent_config.agent_id,
-            self.agent_config.node_did(),
             request.clone(),
             self.agent_config.deadline_duration.as_secs(),
             execution_origin,
             self.agent_config.backend_id.clone().unwrap_or_default(),
+        );
+        lifecycle.bind_managed_agent(self.agent_config.agent_identity.as_ref())?;
+        lifecycle.set_client_claim_admission(client_claim);
+        lifecycle.set_steering_admission(
+            self.request_admission.clone(),
+            self.agent_config.agent_identity.clone(),
         );
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
@@ -87,7 +90,7 @@ where
                 request_id = %request.request_id,
                 session_id = %request.session_id,
                 node_did = %request.node_did,
-                agent_id = %self.agent_config.agent_id,
+                agent_did = %self.agent_config.agent_did,
             ))
             .await;
 
@@ -128,7 +131,7 @@ where
                 record_current_claim_outcome("queued");
                 record_current_request_outcome("queued");
                 tracing::info!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     "request queued behind an earlier same-session request"
@@ -140,7 +143,7 @@ where
                 record_current_request_outcome("interrupted_pre_claim");
                 tracing::info!(
                     target: super::TRACING_TARGET,
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "pre_claim",
@@ -153,7 +156,7 @@ where
                 record_current_request_outcome("expired_pre_claim");
                 tracing::info!(
                     target: super::TRACING_TARGET,
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "stale_ttl",
@@ -173,7 +176,7 @@ where
                 record_current_failure_class(&error);
                 if deterministic_rejection {
                     tracing::warn!(
-                        agent_id = %self.agent_config.agent_id,
+                        agent_did = %self.agent_config.agent_did,
                         request_id = %request.request_id,
                         error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                         "rejecting request with an invalid canonical admission binding"
@@ -183,7 +186,7 @@ where
                         .await
                     {
                         tracing::error!(
-                            agent_id = %self.agent_config.agent_id,
+                            agent_did = %self.agent_config.agent_did,
                             request_id = %request.request_id,
                             error = %rejection_error,
                             "failed to persist request admission rejection"
@@ -192,7 +195,7 @@ where
                     return Ok(());
                 }
                 tracing::warn!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "failed to claim request; leaving it pending for retry"
@@ -206,26 +209,27 @@ where
         let observer = tokio_util::task::AbortOnDropHandle::new(
             crate::request::interrupt::spawn_request_interrupt_observer(
                 self.node.clone(),
+                lifecycle.access()?,
                 request.doc_id.clone(),
                 interrupt_tx,
                 shutdown.clone(),
             ),
         );
 
-        let requested_agent_id = request.agent_id.as_str();
-        if requested_agent_id != self.agent_config.agent_id {
+        let requested_agent_did = request.agent_did.as_str();
+        if requested_agent_did != self.agent_config.agent_did {
             let error = anyhow::anyhow!(
                 "request targets agent {} but runtime is serving agent {}",
-                requested_agent_id,
-                self.agent_config.agent_id
+                requested_agent_did,
+                self.agent_config.agent_did
             );
             record_current_request_outcome("rejected_agent_mismatch");
             record_current_failure_class(&error);
             tracing::warn!(
-                agent_id = %self.agent_config.agent_id,
+                agent_did = %self.agent_config.agent_did,
                 request_id = %request.request_id,
                 session_id = %request.session_id,
-                requested_agent_id = %requested_agent_id,
+                requested_agent_did = %requested_agent_did,
                 "rejecting request for unroutable agent"
             );
             self.finalize_failure_before_work(
@@ -240,7 +244,11 @@ where
 
         let sealed = request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            crate::tools::workspace::writer_request_already_sealed(&self.node, &request),
+            crate::tools::workspace::writer_request_already_sealed_with_identity(
+                &self.node,
+                self.agent_config.agent_identity.as_ref(),
+                &request,
+            ),
         )
         .await;
         let Some(sealed) = sealed else {
@@ -269,6 +277,7 @@ where
                 }
                 if let Err(error) = crate::tools::workspace::seal_on_writer_success(
                     &self.node,
+                    self.agent_config.agent_identity.as_ref(),
                     &request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -338,7 +347,7 @@ where
             Err(error) => {
                 record_current_failure_class(&error);
                 tracing::error!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     error = %format!("{error:#}"),
                     "refusing to run a request whose task hooks cannot be prepared"
@@ -373,6 +382,7 @@ where
                     request.doc_id.clone(),
                     crate::request::lifecycle::RequestExecutionLease::new(
                         lifecycle.execution_generation()?.to_owned(),
+                        lifecycle.actor_did()?,
                     ),
                 );
 
@@ -390,15 +400,14 @@ where
                     return observation;
                 }
             }
-            let outcome = self
-                .observe_owned_work(
-                    &mut lifecycle,
-                    &stream_writer,
-                    &request,
-                    shutdown,
-                    interrupt_rx,
-                )
-                .await;
+            let outcome = Box::pin(self.observe_owned_work(
+                &mut lifecycle,
+                &stream_writer,
+                &request,
+                shutdown,
+                interrupt_rx,
+            ))
+            .await;
             let observation = outcome.observation();
             owned_work = Some(outcome);
             observation
@@ -446,7 +455,7 @@ where
         if !cleanup_errors.is_empty() {
             let note = format!("task cleanup hooks failed: {}", cleanup_errors.join(", "));
             tracing::error!(
-                agent_id = %self.agent_config.agent_id,
+                agent_did = %self.agent_config.agent_did,
                 request_id = %request.request_id,
                 cleanup_errors = %cleanup_errors.join(","),
                 "task cleanup hooks failed"
@@ -472,9 +481,12 @@ where
                 match terminalize_request(&mut lifecycle, &stream_writer, terminal, None).await {
                     Ok(true) if skipped_before_work => {
                         record_current_request_outcome("completed");
-                        if let Err(error) =
-                            crate::tools::workspace::release_writer_binding(&self.node, &request)
-                                .await
+                        if let Err(error) = crate::tools::workspace::release_writer_binding(
+                            &self.node,
+                            self.agent_config.agent_identity.as_ref(),
+                            &request,
+                        )
+                        .await
                         {
                             tracing::warn!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                                 "failed to release writer workspace binding after skipped task gate");
@@ -520,8 +532,12 @@ where
                     }
                 }
                 self.record_request_interruption(&request, interruption_source);
-                if let Err(error) =
-                    crate::tools::workspace::release_writer_binding(&self.node, &request).await
+                if let Err(error) = crate::tools::workspace::release_writer_binding(
+                    &self.node,
+                    self.agent_config.agent_identity.as_ref(),
+                    &request,
+                )
+                .await
                 {
                     tracing::warn!(
                         request_id = %request.request_id,
