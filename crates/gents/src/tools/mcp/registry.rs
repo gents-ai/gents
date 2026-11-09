@@ -16,20 +16,6 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
-pub(crate) async fn configured_mcp_services(
-    node: &defra_node::EmbeddedNode,
-    node_did: &str,
-) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
-    let query = services_query(node_did)?;
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "configured_mcp_services",
-    )
-    .await?;
-    parse_services(response.data.as_ref(), node_did)
-}
-
 pub async fn configured_mcp_services_on(
     access: &crate::ConfigAccess,
     node_did: &str,
@@ -38,7 +24,27 @@ pub async fn configured_mcp_services_on(
     parse_services(response.get("data"), node_did)
 }
 
-fn services_query(node_did: &str) -> anyhow::Result<String> {
+pub(crate) async fn configured_mcp_service_on(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    service_id: &str,
+) -> anyhow::Result<Option<crate::documents::ToolServiceRegistry>> {
+    anyhow::ensure!(
+        !service_id.trim().is_empty(),
+        "MCP service identity is required"
+    );
+    let query = services_query_for(node_did, Some(service_id))?;
+    let response = access.execute(&query).await?;
+    Ok(parse_services(response.get("data"), node_did)?
+        .into_iter()
+        .next())
+}
+
+pub(crate) fn services_query(node_did: &str) -> anyhow::Result<String> {
+    services_query_for(node_did, None)
+}
+
+fn services_query_for(node_did: &str, service_id: Option<&str>) -> anyhow::Result<String> {
     anyhow::ensure!(
         !node_did.trim().is_empty(),
         "MCP registry owner is required"
@@ -48,14 +54,22 @@ fn services_query(node_did: &str) -> anyhow::Result<String> {
         None,
     )?;
     let owner = crate::store::graphql::escape_graphql_string(node_did);
+    let service_filter = service_id
+        .map(|id| {
+            format!(
+                ", service_id: {{ _eq: \"{}\" }}",
+                crate::store::graphql::escape_graphql_string(id)
+            )
+        })
+        .unwrap_or_default();
     let query = format!(
-        "{{ ToolServiceRegistry(filter: {{ node_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
+        "{{ ToolServiceRegistry(filter: {{ node_did: {{ _eq: \"{owner}\" }}{service_filter} }}) {{ {} }} }}",
         fields.join(" ")
     );
     Ok(query)
 }
 
-fn parse_services(
+pub(crate) fn parse_services(
     data: Option<&serde_json::Value>,
     node_did: &str,
 ) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
@@ -81,6 +95,7 @@ fn parse_services(
     Ok(services)
 }
 
+#[derive(PartialEq, Eq)]
 pub struct ResolvedMcpService {
     pub endpoint: String,
     pub send_node_did: bool,

@@ -58,7 +58,7 @@ function session(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "session",
     nodeDid: NODE,
-    agentId: "default",
+    agentDid: "default",
     title: "Session",
     turnState: "interrupted",
     timelineItems: [],
@@ -78,11 +78,15 @@ function setup(held: DesktopSessionSnapshot) {
     appliedGoalResult(request),
   );
   const fetchSessionGoal = vi.fn().mockResolvedValue({
-    nodeDid: NODE,
-    sessionId: "session",
-    sessionDocId: "session-doc",
-    observedAt: "2026-10-26T00:00:00Z",
-    goal: held.goal ? { goalId: "g", revision: REVISION } : null,
+    kind: "observed",
+    observation: {
+      nodeDid: NODE,
+      sessionId: "session",
+      sessionDocId: "session-doc",
+      observedAt: "2026-10-26T00:00:00Z",
+      goal: held.goal ? { goalId: "g", revision: REVISION } : null,
+    },
+    next: held.goal ? "control_goal" : "start_goal",
   });
   const app = testApp({
     api: {

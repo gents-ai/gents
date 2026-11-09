@@ -1,5 +1,6 @@
 import Proofs.ClientShell.PresentationAgreement
 import Proofs.ClientShell.Projection
+import Proofs.Conformance.ClientSyncHealthCases
 
 namespace Conformance.ClientPresentationAgreement
 
@@ -21,6 +22,7 @@ def blockers : List (String × SendBlockedReason) :=
   , ("sessionMissingFromSnapshot", .sessionAbsent)
   , ("inconsistentTurnObservation", .inconsistentObservation)
   , ("routeNotReady", .workflowBlocked)
+  , ("runtimeNotConnected", .workflowBlocked)
   ]
 
 def cases : List PresentationCase :=
@@ -87,25 +89,55 @@ def recoveryActionJson : Option Unit → String
   | none => "null"
   | some _ => jsonString "required"
 
-def recoveryCaseJson (surface : String) (connected routeReady pairingPending : Bool) : String :=
+def refusalJson : Option ClientChatReadiness.Cause → String
+  | none => "null"
+  | some cause => "{\"cause\":" ++ jsonString (ClientChatReadiness.causeToken cause) ++
+      ",\"nextAction\":" ++
+        jsonString (ClientChatReadiness.nextActionToken (ClientChatReadiness.nextAction cause)) ++ "}"
+
+def recoveryCaseJson (surface : String) (connected : Bool)
+    (refusal : Option ClientChatReadiness.Cause) : String :=
   let projected := if surface = "transport" then projectTransportRecovery connected
-    else if surface = "route" then projectRouteRecovery routeReady pairingPending
+    else if surface = "route" then projectRouteRecovery refusal
     else projectConnectionFailure
-  "{\"name\":" ++ jsonString s!"{surface}_{connected}_{routeReady}_{pairingPending}" ++
+  let refusalName := match refusal with
+    | none => "ready"
+    | some cause => ClientChatReadiness.causeToken cause
+  "{\"name\":" ++ jsonString s!"{surface}_{connected}_{refusalName}" ++
     ",\"surface\":" ++ jsonString surface ++
     ",\"connected\":" ++ toString connected ++
-    ",\"routeReady\":" ++ toString routeReady ++
-    ",\"pairingPending\":" ++ toString pairingPending ++
+    ",\"refusal\":" ++ refusalJson refusal ++
     ",\"expected_kind\":" ++ recoveryKindJson projected.kind ++
     ",\"expected_action\":" ++ recoveryActionJson projected.action ++ "}"
 
+/-- One case per distinct sync view the facts reach; the desktop receives the
+view's state, cause and next action as projected by `ClientSyncHealth.view`. -/
+def syncRecoveryCaseJson (view : ClientSyncHealth.View) : String :=
+  let projected := projectSyncRecovery view
+  let state := ClientSyncHealthCases.stateToken view.state
+  let cause := view.cause.map ClientSyncHealthCases.causeToken
+  "{\"name\":" ++ jsonString s!"sync_{state}_{cause.getD "none"}" ++
+    ",\"surface\":" ++ jsonString "sync" ++
+    ",\"connected\":false" ++
+    ",\"refusal\":null" ++
+    ",\"sync\":{\"state\":" ++ jsonString state ++
+      ",\"cause\":" ++ optionJson cause ++
+      ",\"nextAction\":" ++
+        optionJson (view.nextAction.map ClientSyncHealthCases.nextActionToken) ++ "}" ++
+    ",\"expected_kind\":" ++ recoveryKindJson projected.kind ++
+    ",\"expected_action\":" ++ recoveryActionJson projected.action ++ "}"
+
+def syncViews : List ClientSyncHealth.View :=
+  (ClientSyncHealth.allFacts.map ClientSyncHealth.view).eraseDups
+
 def recoveryCasesJson : String :=
   let transport := [false, true].map fun connected =>
-    recoveryCaseJson "transport" connected false false
-  let route := [false, true].flatMap fun ready => [false, true].map fun pairing =>
-    recoveryCaseJson "route" true ready pairing
-  "[" ++ String.intercalate "," (transport ++ route ++ ["offline", "failed", "incompatible", "deploymentError"].map fun surface =>
-    recoveryCaseJson surface false false false) ++ "]"
+    recoveryCaseJson "transport" connected none
+  let route := (none :: ClientChatReadiness.allCauses.map some).map fun refusal =>
+    recoveryCaseJson "route" true refusal
+  let sync := syncViews.map syncRecoveryCaseJson
+  "[" ++ String.intercalate "," (transport ++ route ++ sync ++
+    [recoveryCaseJson "deploymentError" false none]) ++ "]"
 
 def presentationAndRecoveryJson : String :=
   "{\"presentationCases\":" ++ casesJson ++ ",\"recoveryCases\":" ++ recoveryCasesJson ++ "}"

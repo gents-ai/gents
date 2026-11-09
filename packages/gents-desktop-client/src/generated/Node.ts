@@ -9,7 +9,7 @@ export type Node = { node_did: string, display_name?: string | null,
  * The desktop's portrait for the node, by number. Cosmetic; a node
  * without one is drawn with the portrait its name picks.
  */
-avatar?: string | null, default_agent_id?: string | null, enabled?: boolean | null, created_at?: string | null, created_by?: string | null,
+avatar?: string | null, default_agent_did?: string | null, enabled?: boolean | null, created_at?: string | null, created_by?: string | null,
 /**
  * Optional admission bound on a request's causal hop; absent disables the cap.
  */

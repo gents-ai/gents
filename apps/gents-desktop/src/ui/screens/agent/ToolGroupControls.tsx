@@ -172,7 +172,7 @@ export function ToolGroupControls({
   value: string;
   onChange: (value: string) => void;
   deployment: NodeView;
-  onCreateTarget: (agentId: string) => void;
+  onCreateTarget: (agentDid: string) => void;
   onInvalid: (id: string, label: string | null) => void;
 }) {
   const {
@@ -346,7 +346,6 @@ export function ToolGroupControls({
         {flags("built_ins", [
           ["enable_goal_tools", "Read and update goals"],
           ["enable_goal_creation", "Create goals"],
-          ["enable_memory", "Memory"],
           ["enable_session_history_tool", "Session history", true],
           ["enable_context_budget", "Context budget"],
         ])}
@@ -370,7 +369,7 @@ export function ToolGroupControls({
           options={(deployment.agentTargets ?? []).map((target) => ({
             value: target.target_id,
             label: target.name,
-            description: `${target.agent_id}${target.target_node_did !== deployment.nodeDid ? ` · ${target.target_node_did}` : ""}`,
+            description: `${target.agent_did}${target.target_node_did !== deployment.nodeDid ? ` · ${target.target_node_did}` : ""}`,
           }))}
           selected={groups.agents?.target_ids ?? []}
           onChange={(ids) => update("agents", { target_ids: ids.length ? ids : null })}
@@ -388,12 +387,12 @@ export function ToolGroupControls({
                   !deployment.agentTargets.some(
                     (target) =>
                       target.target_node_did === deployment.nodeDid &&
-                      target.agent_id === agent.agent_id,
+                      target.agent_did === agent.agent_did,
                   ),
               )
               .map((agent) => ({
-                value: agent.agent_id,
-                label: agent.display_name ?? agent.agent_id,
+                value: agent.agent_did,
+                label: agent.display_name ?? agent.agent_did,
               })),
           ]}
           onChange={(id) => {

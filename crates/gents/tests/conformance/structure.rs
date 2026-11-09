@@ -59,6 +59,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("TitleText", WorkspaceTest("crates/gents/src/session/title_text.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Eval", Module("conformance/eval.rs")),
+        (
+            "FileInventory",
+            WorkspaceTest("crates/gents/src/file_inventory/snapshot/tests.rs"),
+        ),
         ("Fleet", Module("conformance/fleet.rs")),
         ("GoalAutomation", Module("conformance/goals.rs")),
         ("Goals", Module("conformance/goals.rs")),
@@ -67,10 +71,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("ManagedExec", Gap("Real process-group/job kill and bounded-drain tests live in src/tools/exec/mod.rs; generated OS/process-tree cases still need those consumers, not fixture-only flags.")),
         ("Mailbox", Module("conformance/mailbox.rs")),
         ("MCPHealth", Module("conformance/mcp_health.rs")),
-        (
-            "Migration",
-            WorkspaceTest("crates/gents-migration/tests/phase_b_steps.rs"),
-        ),
+        ("NativeSpawn", WorkspaceTest("crates/gents/src/tools/exec/native_spawn.rs")),
         ("Optimization", WorkspaceTest("crates/gents/src/eval/optimization/policy.rs")),
         (
             "PairingReconcile",
@@ -107,10 +108,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         ("ScopeTemplates", Module("conformance/scope_templates.rs")),
         ("SelfConfig", Module("conformance/self_config.rs")),
-        (
-            "SessionHydration",
-            Module("conformance/session_hydration.rs"),
-        ),
         ("SessionRecovery", WorkspaceTest("crates/gents-desktop-core/src/client/mutations/chat/request/tests.rs")),
         (
             "Skills",
@@ -157,10 +154,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             WorkspaceTest("crates/gents/src/triggers/engine/tests/dispatch_contract.rs"),
         ),
         ("Workspace", Gap("Canonical binding/admission fixtures await the workspace runtime owner; the removed test-local predicate mirror was not implementation coverage.")),
-        (
-            "ReversePairingHandlers",
-            Module("conformance/pairing_reconcile.rs"),
-        ),
     ])
 }
 

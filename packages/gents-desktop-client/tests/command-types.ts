@@ -45,15 +45,6 @@ invoke("desktop_session_archive", {
     expectedRevision: "9007199254740993",
   },
 });
-invoke("desktop_session_history", {
-  request: {
-    nodeDid: "node",
-    visibility: "archived",
-    query: null,
-    cursor: null,
-    limit: 30,
-  },
-});
 invoke("desktop_session_archive", {
   request: {
     nodeDid: "node",
@@ -65,7 +56,7 @@ invoke("desktop_session_archive", {
 });
 
 invoke("desktop_mailbox_observe", {
-  request: { clientDid: "reader", itemId: "question" },
+  request: { clientDid: "reader", nodeDid: "runtime", itemId: "question" },
 });
 // @ts-expect-error The exact reader identity is required for a mailbox observation.
 invoke("desktop_mailbox_observe", { request: { itemId: "question" } });

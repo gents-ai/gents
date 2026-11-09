@@ -19,7 +19,7 @@ pub struct ManagedPendingEnrollment {
     pub network_id: String,
     pub candidate_did: String,
     pub candidate_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub expires_at: String,
     pub profile: Option<String>,
     pub issued_at: Option<String>,
@@ -178,9 +178,30 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
     crate::commands::init::init(args).await
 }
 
-/// Approve the desktop client enrollment using the identity owned by a
-/// co-hosted managed runtime. The signed durable enrollment documents remain
-/// the route authority; this helper only drives the existing operator API.
+/// Grant the verified pending desktop request through the CLI User that owns
+/// the Node and the co-hosted runtime's native Node permission owner.
+pub async fn grant_managed_client_enrollment(
+    home: &Path,
+    graphql: &str,
+    request_id: &str,
+    node_did: &str,
+    client_did: &str,
+) -> Result<bool> {
+    let endpoint = crate::home_state::home_graphql_endpoint(home, graphql)?;
+    Ok(
+        crate::commands::p2p::enrollment_admin::grant_verified_client(
+            home,
+            endpoint,
+            request_id,
+            Some((node_did, client_did)),
+        )
+        .await?
+        .is_some(),
+    )
+}
+
+/// Approve the already granted desktop enrollment through the runtime's
+/// separately authenticated route-admission service.
 pub async fn approve_managed_client_enrollment(
     home: &Path,
     graphql: &str,
@@ -266,4 +287,19 @@ pub async fn decide_managed_enrollment(
 
 pub fn initialized_home(path: &Path) -> bool {
     path.join(crate::INIT_CONFIG_FILE_NAME).is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn pending_enrollment_reads_node_identity_from_runtime_response() {
+        let response = serde_json::json!({"pending": [{
+            "request_id": "request", "network_id": "network",
+            "candidate_did": "did:key:client", "candidate_peer": "peer",
+            "owner_node_did": "did:key:node", "expires_at": "later",
+            "profile": "client", "issued_at": "now"
+        }]});
+        let pending: super::ManagedPendingEnrollments = serde_json::from_value(response).unwrap();
+        assert_eq!(pending.pending[0].owner_node_did, "did:key:node");
+    }
 }

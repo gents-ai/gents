@@ -146,7 +146,7 @@ export function StorageFullRecovery({
     <div className="mt-2 border-t border-border/60 pt-2" aria-label="Storage recovery">
       <p className="text-muted-foreground">
         {recovered
-          ? "The runtime restarted. Check delivery to recover the original message; restarting did not resend it."
+          ? "The runtime restarted; restarting did not resend the message. Retry sends it again."
           : "This node ran out of disk space. Free space on its host, then restart its runtime to reopen the same history. Message delivery is still unconfirmed."}
       </p>
       {!recovered &&

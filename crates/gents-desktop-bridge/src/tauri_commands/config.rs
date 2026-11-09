@@ -1,3 +1,4 @@
+use gents_protocol::agent_identity::AgentIdentityBinding;
 use tauri::{AppHandle, Runtime, State};
 
 use crate::error::BridgeError;
@@ -429,4 +430,16 @@ where
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     emit_config_update_and_snapshot(&app, &core, &state).await
+}
+
+#[tauri::command]
+pub async fn desktop_agent_identity_provision(
+    node_did: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<AgentIdentityBinding, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    core.provision_agent_identity(&node_did)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }

@@ -235,6 +235,11 @@ pub async fn assemble_provider_request<M>(
 where
     M: CompletionModel,
 {
+    if let Some(guard) = &config.configuration_guard {
+        guard().await.map_err(|error| {
+            StreamingError::Completion(CompletionError::RequestError(Box::new(error)))
+        })?;
+    }
     let profile_wire = config.provider_input_counter.profile().replay_wire();
     if replay.wire.is_some() && replay.wire != profile_wire {
         return Err(replay_input_error(

@@ -1,9 +1,6 @@
 export type { ChatSendResult } from "../generated/ChatSendResult.js";
-export type { ChatSubmissionReceipt } from "../generated/ChatSubmissionReceipt.js";
-export type { ChatSubmissionRecovery } from "../generated/ChatSubmissionRecovery.js";
 export type { CommandDenialView } from "../generated/CommandDenialView.js";
 export type { DesktopSessionSnapshot } from "../generated/DesktopSessionSnapshot.js";
-export type { SessionHydrationView } from "../generated/SessionHydrationView.js";
 export type { SessionLiveDeltaView } from "../generated/SessionLiveDeltaView.js";
 export type { SessionRowsView } from "../generated/SessionRowsView.js";
 export type { SessionRowsWindow } from "../generated/SessionRowsWindow.js";
@@ -25,7 +22,6 @@ export type { ToolDiffLineKind } from "../generated/ToolDiffLineKind.js";
 export type { ToolDiffLineView } from "../generated/ToolDiffLineView.js";
 export type { ToolPresentationView } from "../generated/ToolPresentationView.js";
 
-export type { RequestResendResultView as RequestResendResult } from "../generated/RequestResendResultView.js";
 
 export type { RunTimelineEventView } from "../generated/RunTimelineEventView.js";
 export type { RequestTimelineView } from "../generated/RequestTimelineView.js";
@@ -37,6 +33,5 @@ export type { PendingQueueEntryView } from "../generated/PendingQueueEntryView.j
 
 export type { RequestTurnView } from "../generated/RequestTurnView.js";
 
-export type { ChatSubmissionQuery } from "../generated/ChatSubmissionQuery.js";
 export type { SessionContextDetails } from "../generated/SessionContextDetails.js";
 export type { SessionContextDetailsRequest } from "../generated/SessionContextDetailsRequest.js";

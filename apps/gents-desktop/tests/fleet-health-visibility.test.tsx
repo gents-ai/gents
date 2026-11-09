@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FleetRow, type FleetRowProps } from "@source-inc/gents-desktop-fleet";
 import { deploymentStatus } from "@source-inc/gents-desktop-fleet";
-import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
+import {
+  projectRuntimeConnectionStatus,
+  type DeploymentView,
+  type SyncHealthView,
+} from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
@@ -12,11 +16,8 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     lastError: null,
     connectedPeerCount: 1,
     activationErrorCount: 0,
-    pendingDagCount: 0,
-    persistedPendingDagCount: 0,
-    pushRetryMarkerCount: 0,
-    exhaustedFetchCount: 0,
-    quarantinedDagCount: 0,
+    cause: null,
+    nextAction: null,
     ...overrides,
   };
 }
@@ -42,19 +43,29 @@ describe("fleet health visibility", () => {
   it("labels statuses instead of relying on a hover dot", () => {
     expect(
       deploymentStatus({ ...deployment, dialSucceeded: true, lastError: null }).label,
-    ).toBe("Checking sync");
+    ).toBe("Online");
     expect(
       deploymentStatus(
         { ...deployment, dialSucceeded: true, lastError: null },
         syncHealth(),
       ).label,
     ).toBe("Online");
-    expect(deploymentStatus({ ...deployment, dialSucceeded: false }).label).toBe(
-      "Not connected",
-    );
-    expect(deploymentStatus({ ...deployment, lastError: "dial timeout" }).label).toBe(
-      "Error",
-    );
+    // The label is the presentation owner's (its reason is checked against
+    // Lean in lean-conformance/runtime-connection); an outage never reads as
+    // a connection attempt.
+    const outage = deploymentStatus({
+      ...deployment,
+      runtimeConnection: "disconnected",
+    }).label;
+    expect(outage).toBe(projectRuntimeConnectionStatus("disconnected").shortLabel);
+    expect(outage).not.toBe(projectRuntimeConnectionStatus("connecting").shortLabel);
+    expect(
+      deploymentStatus({
+        ...deployment,
+        dialSucceeded: false,
+        lastError: "dial timeout",
+      }).label,
+    ).toBe("Online");
   });
 
   it("keeps enrolled chat available when current readiness has an old observation timestamp", () => {
@@ -70,18 +81,18 @@ describe("fleet health visibility", () => {
       },
     };
     const syncing = syncHealth({
-      state: "syncing",
-      pendingDagCount: 1,
-      exhaustedFetchCount: 1,
+      state: "waiting",
+      cause: "discovery_degraded",
+      nextAction: "wait",
     });
-    expect(deploymentStatus(stale, syncing).label).toBe("Syncing");
+    expect(deploymentStatus(stale, syncing).label).toBe("Online");
     renderRow(stale, syncing);
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeEnabled();
   });
 
-  it("shows a visible error line with remediation-aware copy on failing rows", () => {
+  it("shows a separate P2P error alongside runtime status", () => {
     renderRow({ ...deployment, dialSucceeded: true, lastError: "dial timeout" });
-    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Error");
+    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Online");
     expect(screen.getByTestId("fleet-error-peer-1")).toHaveTextContent("dial timeout");
   });
 

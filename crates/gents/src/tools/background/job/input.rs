@@ -19,8 +19,7 @@ use serde_json::Value;
 use crate::plugin::job_calls::job_state;
 use crate::provider_usage::{sum_charged_from_persisted_parts, sum_persisted_usage_columns};
 use crate::request::admission::load_request_context;
-use crate::request::binding::load_agent_request_by_doc_id;
-use crate::request::watcher::AgentRequest;
+use crate::request::binding::load_agent_request_by_doc_id_with_access;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::admit::{meet, StepChild};
@@ -37,13 +36,14 @@ use crate::tools::call::lifecycle::{
     load_tool_call_arguments, CausedRequestTerminal, ToolCallState,
 };
 use crate::tools::workspace::request_workspace_cwd;
+use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
 tokio::task_local! {
     pub(super) static CHILD_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-const FIELDS: &str = "_docID caused_by_parent_tool_call_doc_id request_id node_did agent_id session_id retry_key lifecycle_state input created_at terminalized_at";
+const FIELDS: &str = "_docID caused_by_parent_tool_call_doc_id request_id node_did agent_did session_id retry_key lifecycle_state input created_at terminalized_at";
 
 #[derive(Clone, Deserialize)]
 struct Stored {
@@ -55,7 +55,7 @@ struct Stored {
     #[serde(default)]
     node_did: Option<String>,
     #[serde(default)]
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
@@ -324,9 +324,9 @@ fn pair(
                     .clone()
                     .context("spawn request omitted node_did")?,
                 spawn
-                    .agent_id
+                    .agent_did
                     .clone()
-                    .context("spawn request omitted agent_id")?,
+                    .context("spawn request omitted agent_did")?,
             ),
             state,
             messages: message_count,
@@ -514,16 +514,33 @@ pub(super) async fn live_job_settings(
     caller: &AgentRequest,
     coordinate: &str,
 ) -> Result<Option<PluginJobSettings>> {
-    let (_, tools, _) = load_request_context(&runtime.node, &caller.node_did, &caller.agent_id)
+    let (_, tools, _) = load_request_context(&runtime.node, &caller.node_did, &caller.agent_did)
         .await
         .context("reading the caller's tools")?;
-    Ok(tools
+    Ok(job_settings_for_tools(tools, coordinate))
+}
+
+fn job_settings_for_tools(
+    tools: Option<crate::documents::Tools>,
+    coordinate: &str,
+) -> Option<PluginJobSettings> {
+    tools
         .and_then(|tools| tools.integrations)
         .and_then(|integrations| integrations.plugins)
         .into_iter()
         .flatten()
         .find(|plugin| plugin.plugin == coordinate)
-        .and_then(|plugin| plugin.job))
+        .and_then(|plugin| plugin.job)
+}
+
+/// Lean `TargetResolution.guestTargets`: resolved caller routes only, in the
+/// order of the already intersected live and pinned job ceilings.
+pub(super) fn guest_target_ids(ceiling: &[String], available: &[String]) -> Vec<String> {
+    ceiling
+        .iter()
+        .filter(|id| available.contains(id))
+        .cloned()
+        .collect()
 }
 
 /// `row_doc_id` and the rows its pin resumes, oldest first.
@@ -627,16 +644,24 @@ pub async fn build_step_input(
     step: StepKind<'_>,
 ) -> Result<(JobStepInput, u64)> {
     let (row, call) = read_call(access, row_doc_id).await?;
-    let caller = load_agent_request_by_doc_id(&runtime.node, &row.request_doc_id)
+    let caller = load_agent_request_by_doc_id_with_access(access, &row.request_doc_id)
         .await?
         .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(caller.agent_did.as_str()),
+        "job input actor differs from its selected agent"
+    );
+    let (_, tools, routes) =
+        load_request_context(&runtime.node, &caller.node_did, &caller.agent_did)
+            .await
+            .context("reading the caller's configured job targets")?;
     let (pin, settings) = match step {
         StepKind::Step0 { binding } => (None, binding.settings.clone()),
         StepKind::Later => {
             let pin = read_pin(access, row_doc_id)
                 .await?
                 .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
-            let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
+            let settings = job_settings_for_tools(tools, &pin.plugin_ref);
             (Some(pin), settings)
         }
     };
@@ -660,7 +685,13 @@ pub async fn build_step_input(
     });
     let dynamic = policy.cloned().unwrap_or_default();
     let ceiling = JobCeilingView {
-        targets: effective.targets,
+        targets: guest_target_ids(
+            &effective.targets,
+            &routes
+                .into_iter()
+                .map(|target| target.target_id)
+                .collect::<Vec<_>>(),
+        ),
         max_live: effective.max_live,
         remaining_spawns: spawn_cap
             .saturating_sub(progress.as_ref().map_or(0, |progress| progress.spawned)),
@@ -715,7 +746,7 @@ pub async fn build_step_input(
             request_doc_id: row.request_doc_id.clone(),
             tool_call_id: row.tool_call_id.clone(),
             node_did: caller.node_did.clone(),
-            agent_id: caller.agent_id.clone(),
+            agent_did: caller.agent_did.clone(),
             request_hop: caller.request_hop,
             correlation: caller.caused_by_correlation.clone(),
             cwd,
@@ -742,7 +773,7 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use gents_protocol::job::JobChildState;
     use serde_json::{json, Value};
 
@@ -760,6 +791,61 @@ pub(crate) mod tests {
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         node
+    }
+
+    /// `open()` plus the runtime Node document and the fixture Agent installed
+    /// under the node identity, as signed fixtures install them.
+    pub(crate) async fn open_with_agent() -> Arc<EmbeddedNode> {
+        let node = open().await;
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did()).unwrap());
+        crate::test_support::bootstrap_signed_test_node(&owner, node_did()).await;
+        crate::test_support::install_test_agent_binding_with_access(
+            node_did(),
+            "Job fixture agent",
+            agent_binding(),
+            &owner,
+        )
+        .await;
+        node
+    }
+
+    /// Inserts a document through `access` and returns its doc id. Rows owned
+    /// by an Agent must be written through that Agent's access.
+    pub(crate) async fn insert_as(access: &ConfigAccess, collection: &str, value: Value) -> String {
+        access
+            .transact_write("test.plugin_job_children", |txn| {
+                let value = &value;
+                Box::pin(async move {
+                    let query = format!(
+                        "mutation($input: {collection}MutationInputArg!) {{create_{collection}(input:$input){{_docID}}}}"
+                    );
+                    let response = txn
+                        .execute_with_variables(&query, &json!({ "input": value }))
+                        .await?;
+                    Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
+                })
+            })
+            .await
+            .unwrap()
+    }
+
+    pub(crate) async fn doc_id_of(
+        access: &ConfigAccess,
+        collection: &str,
+        field: &str,
+        value: &str,
+    ) -> String {
+        let response = access
+            .execute(&format!(
+                r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(value)
+            ))
+            .await
+            .unwrap();
+        response["data"][collection][0]["_docID"]
+            .as_str()
+            .expect("fixture document exists")
+            .to_owned()
     }
 
     pub(crate) async fn insert(
@@ -814,19 +900,81 @@ pub(crate) mod tests {
         request_id: &str,
         session_id: &str,
         retry_key: &str,
-        agent_id: &str,
+        agent_did: &str,
         state: &str,
         title: Option<&str>,
         created_at: &str,
         terminalized_at: Option<&str>,
     ) {
+        let value = child_request(
+            chain,
+            request_id,
+            session_id,
+            retry_key,
+            agent_did,
+            state,
+            title,
+            created_at,
+            terminalized_at,
+        );
+        insert(node, "AgentRequest", value).await;
+    }
+
+    /// Seeds a job child request through `access`. A job's children are
+    /// created by the job's own Agent, so a fixture whose reads run as that
+    /// Agent must seed them through its access.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
+    pub(crate) async fn request_as(
+        access: &ConfigAccess,
+        chain: &str,
+        request_id: &str,
+        session_id: &str,
+        retry_key: &str,
+        agent_did: &str,
+        state: &str,
+        title: Option<&str>,
+        created_at: &str,
+        terminalized_at: Option<&str>,
+    ) {
+        let value = child_request(
+            chain,
+            request_id,
+            session_id,
+            retry_key,
+            agent_did,
+            state,
+            title,
+            created_at,
+            terminalized_at,
+        );
+        insert_as(access, "AgentRequest", value).await;
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
+    fn child_request(
+        chain: &str,
+        request_id: &str,
+        session_id: &str,
+        retry_key: &str,
+        agent_did: &str,
+        state: &str,
+        title: Option<&str>,
+        created_at: &str,
+        terminalized_at: Option<&str>,
+    ) -> Value {
         let mut value = json!({
             "request_id": request_id,
             "purpose": "normal",
             "node_did": "did-owner",
             "requester_did": null,
             "session_id": session_id,
-            "agent_id": agent_id,
+            "agent_did": agent_did,
             "lifecycle_state": state,
             "retry_key": retry_key,
             "created_at": created_at,
@@ -841,7 +989,7 @@ pub(crate) mod tests {
         if let Some(at) = terminalized_at {
             value["terminalized_at"] = json!(at);
         }
-        insert(node, "AgentRequest", value).await;
+        value
     }
 
     async fn usage(
@@ -949,7 +1097,7 @@ pub(crate) mod tests {
         assert_eq!(children[2].0.target, ("did-owner".into(), "agent-b".into()));
         assert_eq!(children[0].1.title, "Alpha");
         assert_eq!(children[1].1.request_id, "a1");
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1008,7 +1156,7 @@ pub(crate) mod tests {
         assert_eq!(children[0].1.usage.input, 3);
         assert_eq!(children[0].1.usage.output, 4);
         assert_eq!(children[0].1.usage.total, 7);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1039,7 +1187,7 @@ pub(crate) mod tests {
         assert_eq!(children[0].1.duration_ms, 2_000);
         assert_eq!(children[0].1.output_bytes, 0);
         assert!(!children[0].1.truncated);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1105,7 +1253,7 @@ pub(crate) mod tests {
         assert_eq!(beta.1.usage.input, 7);
         assert_eq!(beta.1.usage.output, 8);
         assert_eq!(beta.1.usage.total, 15);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1148,7 +1296,7 @@ pub(crate) mod tests {
         assert_eq!(triple.unwrap().len(), 3);
         assert_eq!(single_queries, triple_queries);
         assert!(single_queries > 0);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     pub(crate) async fn completed_request(
@@ -1159,15 +1307,16 @@ pub(crate) mod tests {
         retry_key: &str,
         text: &str,
     ) {
-        let node_did = "did:test:test";
-        insert(
-            node,
+        let agent = agent_access(node);
+        let node_did = node_did();
+        insert_as(
+            &agent,
             "AgentRequest",
             json!({
                 "request_id": request_id,
                 "purpose": "normal",
                 "node_did": node_did,
-                "agent_id": "general",
+                "agent_did": agent_did(),
                 "session_id": session_id,
                 "retry_parent_request": "",
                 "retry_root_request": request_id,
@@ -1189,32 +1338,33 @@ pub(crate) mod tests {
             }),
         )
         .await;
-        let row = node
+        let response = agent
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-                crate::request::watcher::AGENT_REQUEST_FIELDS,
+                gents_protocol::row::AGENT_REQUEST_FIELDS,
             ))
-            .await;
+            .await
+            .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&row, "AgentRequest")
-                .unwrap()
-                .unwrap();
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            "general",
-            node_did,
             row.try_into().unwrap(),
             60,
         );
+        lifecycle
+            .bind_managed_agent(managed_agent().as_ref())
+            .unwrap();
         assert_eq!(
             lifecycle.claim().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
             node.clone(),
-            node_did,
+            &lifecycle,
             std::time::Duration::from_millis(1),
-        );
+        )
+        .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         writer
             .start_provider_attempt(
@@ -1247,7 +1397,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn batched_jobs_keep_their_own_result_caps_for_repeated_slots() {
-        let node = open().await;
+        let node = open_with_agent().await;
         for (chain, request_id) in [("first-row", "first-child"), ("second-row", "second-child")] {
             completed_request(
                 &node,
@@ -1259,7 +1409,7 @@ pub(crate) mod tests {
             )
             .await;
         }
-        let access = ConfigAccess::local(node.clone());
+        let access = agent_access(&node);
         let first = vec!["first-row".into(), "first-row".into()];
         let second = vec!["second-row".into()];
         let children =
@@ -1279,7 +1429,7 @@ pub(crate) mod tests {
             assert_eq!(view.truncated, truncated);
         }
         assert!(children[2].is_empty());
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1310,12 +1460,12 @@ pub(crate) mod tests {
             error.to_string().contains("duplicate slot attempt"),
             "{error:#}"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
     async fn completed_child_reports_its_rendered_terminal_and_truncates_at_the_cap() {
-        let node = open().await;
+        let node = open_with_agent().await;
         let chain = "chain-row";
         completed_request(
             &node,
@@ -1326,7 +1476,7 @@ pub(crate) mod tests {
             "twelve bytes",
         )
         .await;
-        let access = ConfigAccess::local(node.clone());
+        let access = agent_access(&node);
         let whole = derive_children(&access, &[chain.into()], 64).await.unwrap();
         assert_eq!(whole[0].0.state, JobChildState::Completed);
         assert_eq!(whole[0].1.state, JobChildState::Completed);
@@ -1335,7 +1485,7 @@ pub(crate) mod tests {
         let capped = derive_children(&access, &[chain.into()], 5).await.unwrap();
         assert_eq!(capped[0].1.output_bytes, 5);
         assert!(capped[0].1.truncated);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1373,7 +1523,7 @@ pub(crate) mod tests {
         let children = derive_children(&access, &[chain.into()], 64).await.unwrap();
         assert_eq!(children[0].0.state, JobChildState::Interrupted);
         assert_eq!(children[1].0.state, JobChildState::Live);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1418,7 +1568,7 @@ pub(crate) mod tests {
         assert_eq!(children[0].0.messages, 0);
         assert_eq!(children[0].1.state, JobChildState::Live);
         assert_eq!(children[0].1.duration_ms, 0);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     use std::collections::BTreeMap;
@@ -1444,18 +1594,85 @@ pub(crate) mod tests {
     use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, publish_accepted_on_claimed_request,
     };
-    use crate::tools::call::lifecycle::AwaitMode;
+    use gents_protocol::tool_call::AwaitMode;
+
+    fn node_identity() -> &'static crate::KeyIdentity {
+        static IDENTITY: std::sync::OnceLock<crate::KeyIdentity> = std::sync::OnceLock::new();
+        IDENTITY.get_or_init(|| {
+            let directory = tempfile::tempdir().unwrap();
+            crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap()
+        })
+    }
+
+    pub(crate) fn agent_binding() -> &'static gents_protocol::agent_identity::AgentIdentityBinding {
+        static BINDING: std::sync::OnceLock<gents_protocol::agent_identity::AgentIdentityBinding> =
+            std::sync::OnceLock::new();
+        BINDING.get_or_init(|| {
+            crate::store::identity::provision_agent_identity(node_identity()).unwrap()
+        })
+    }
+
+    /// A fresh Agent binding under the fixture node identity, for fixtures that
+    /// install more Agents than the shared `agent_binding()`.
+    pub(crate) fn fresh_agent_binding() -> gents_protocol::agent_identity::AgentIdentityBinding {
+        crate::store::identity::provision_agent_identity(node_identity()).unwrap()
+    }
+
+    pub(crate) fn managed_agent() -> &'static Arc<dyn crate::store::identity::NodeIdentity> {
+        static AGENT: std::sync::OnceLock<Arc<dyn crate::store::identity::NodeIdentity>> =
+            std::sync::OnceLock::new();
+        AGENT.get_or_init(|| {
+            crate::store::identity::resolve_agent_identity(node_identity(), agent_binding())
+                .unwrap()
+        })
+    }
+
+    /// The fixture Agent's own access, which reads and writes the rows it owns.
+    pub(crate) fn agent_access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
+        ConfigAccess::local_managed_agent(node.clone(), agent_actor(), managed_agent().as_ref())
+            .unwrap()
+    }
 
     pub(crate) fn node_did() -> &'static str {
         use crate::NodeIdentity as _;
+        node_identity().did()
+    }
 
-        static IDENTITY: std::sync::OnceLock<crate::KeyIdentity> = std::sync::OnceLock::new();
-        IDENTITY
-            .get_or_init(|| {
-                let directory = tempfile::tempdir().unwrap();
-                crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap()
-            })
-            .did()
+    pub(crate) fn agent_did() -> &'static str {
+        managed_agent().did()
+    }
+
+    fn agent_snapshot() -> Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot> {
+        let mut unavailable_agents = rapidhash::RapidHashMap::default();
+        unavailable_agents.insert(
+            agent_did().to_owned(),
+            crate::runtime::snapshot::UnavailableAgent::new(
+                gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                "fixture agent",
+            ).with_watcher_identity(managed_agent().clone()),
+        );
+        Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+            generation: 1,
+            node: None,
+            local_did: node_did().to_owned(),
+            default_agent_did: agent_did().to_owned(),
+            agents: Default::default(),
+            tool_surfaces: Default::default(),
+            backend_admission_configs: Default::default(),
+            unavailable_agents,
+            active_schedules: Default::default(),
+            unavailable_schedules: Default::default(),
+            active_event_triggers: Default::default(),
+            unavailable_event_triggers: Default::default(),
+            active_tasks: Default::default(),
+            dispatchers: Default::default(),
+            agent_executor_capacities: Default::default(),
+            agent_executor_queue_capacities: Default::default(),
+        })
+    }
+
+    pub(crate) fn agent_actor() -> identity::Did {
+        identity::Did::new(agent_did()).unwrap()
     }
     fn plugin() -> InstalledPlugin {
         InstalledPlugin {
@@ -1475,6 +1692,7 @@ pub(crate) mod tests {
             model_binding: None,
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
         }
     }
 
@@ -1537,80 +1755,99 @@ pub(crate) mod tests {
         settings: Option<&PluginJobSettings>,
         request_cwd: Option<&str>,
     ) -> Job {
-        let node = open().await;
+        let node = open_with_agent().await;
         let home = tempfile::tempdir().unwrap();
         let cwd = tempfile::tempdir().unwrap();
         crate::plugin::store::write_record(home.path(), &plugin()).unwrap();
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did()).unwrap());
         let tools: Tools = serde_json::from_value(json!({
-            "tools_id": "tools",
+            "tools_id": format!("{}:tools", agent_did()),
             "node_did": node_did(),
             "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
         .unwrap();
-        let access = ConfigAccess::local(node.clone());
-        crate::store::config_client::write_tools_document(&access, &tools)
+        crate::documents::write_tools_document(&owner, &tools)
             .await
             .unwrap();
-        insert(
-            &node,
-            "AgentContext",
-            json!({"context_id": "context", "node_did": node_did(), "tools_id": "tools"}),
-        )
-        .await;
-        insert(
-            &node,
-            "Agent",
-            json!({"agent_id": "general", "node_did": node_did(), "context_id": "context",
-                   "inference_profile_id": "inference", "enabled": true}),
-        )
-        .await;
+        let agent = agent_access(&node);
         let now = chrono::Utc::now().to_rfc3339();
-        insert(
-            &node,
+        let session_doc = insert_as(
+            &owner,
             "AgentSession",
-            json!({"session_id": "session-1", "node_did": node_did(), "requester_did": null,
-                   "agent_id": "general", "created_at": now}),
+            json!({"session_id": "session-1", "node_did": node_did(), "requester_did": agent_did(),
+                   "agent_did": agent_did(), "created_at": now}),
         )
         .await;
-        let mut value = json!({
-            "request_id": "request-1", "purpose": "normal", "node_did": node_did(),
-            "agent_id": "general", "session_id": "session-1",
-            "retry_parent_request": "", "retry_root_request": "request-1",
-            "superseded_by_request": "", "content": "spawn", "lifecycle_state": "pending",
-            "backend_id": "", "execution_origin": "interactive", "failure_reason": "",
-            "created_at": now, "retry_count": 0, "max_retries": 3, "request_hop": 0,
-        });
-        if let Some(cwd) = request_cwd {
-            value["input"] = json!({ "cwd": cwd });
-        }
-        insert(&node, "AgentRequest", value).await;
-        let response = node
+        let agent_doc = doc_id_of(&owner, "Agent", "agent_did", agent_did()).await;
+        owner
+            .add_actor_relationship("Agent", &agent_doc, "executor", &agent_actor())
+            .await
+            .unwrap();
+        owner
+            .add_actor_relationship(
+                "AgentSession",
+                &session_doc,
+                "working_agent",
+                &agent_actor(),
+            )
+            .await
+            .unwrap();
+        // The caller is a local-self request its Agent signed, so a job child
+        // can verify it as the parent receipt.
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "request-1",
+            node_did(),
+            agent_did(),
+            agent_did(),
+            "session-1",
+            "spawn",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did()),
+        );
+        create.input.cwd = request_cwd.map(str::to_owned);
+        crate::sign_agent_request_create(managed_agent().as_ref(), &mut create)
+            .await
+            .unwrap();
+        agent
+            .write(
+                "test.job.caller_request",
+                &create.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+        let response = agent
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "request-1" }} }}) {{ {} }} }}"#,
-                crate::request::watcher::AGENT_REQUEST_FIELDS
+                gents_protocol::row::AGENT_REQUEST_FIELDS
             ))
-            .await;
+            .await
+            .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&response, "AgentRequest")
-                .unwrap()
-                .unwrap();
-        let mut request = RequestLifecycle::new_with_node_did(
-            node.clone(),
-            "general",
-            node_did(),
-            row.try_into().unwrap(),
-            60,
-        );
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        let mut request =
+            RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
+        request
+            .bind_managed_agent(managed_agent().as_ref())
+            .unwrap();
         assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
         let runtime = JobRuntime {
             node: node.clone(),
             plugins: Arc::new(PluginExecutor::new(Some(home.path().to_path_buf()))),
             home: home.path().to_path_buf(),
             tool_root: Some(cwd.path().to_path_buf()),
+            agent_snapshots: Default::default(),
         };
+        let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
+        runtime
+            .bind_snapshot(
+                crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(snapshot_rx),
+            )
+            .unwrap();
         Job {
             node,
-            access,
+            access: agent,
             runtime,
             _home: home,
             cwd,
@@ -1724,13 +1961,14 @@ pub(crate) mod tests {
         }
 
         pub(crate) async fn write_guest_state(&self, row: &str, guest: &serde_json::Value) {
-            ConfigAccess::transact_local_write(&self.node, None, "test.input.guest_state", |txn| {
-                Box::pin(async move {
-                    write_step_state_in_txn(txn, row, &evidence(), None, Some(guest)).await
+            self.access
+                .transact_write("test.input.guest_state", |txn| {
+                    Box::pin(async move {
+                        write_step_state_in_txn(txn, row, &evidence(), None, Some(guest)).await
+                    })
                 })
-            })
-            .await
-            .unwrap();
+                .await
+                .unwrap();
         }
 
         async fn later(&self, row: &str) -> anyhow::Result<(JobStepInput, u64)> {
@@ -1782,7 +2020,7 @@ pub(crate) mod tests {
         assert_eq!(input.args, None);
         assert_eq!(input.script, None);
         assert_eq!(input.agent_budget, None);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1818,7 +2056,7 @@ pub(crate) mod tests {
         assert_eq!(input.argv, ["resume", "h"]);
         assert_eq!(input.job.chain, [root.clone(), resumed.clone()]);
         assert_eq!(input.job.chain_root_doc_id, root);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1842,6 +2080,14 @@ pub(crate) mod tests {
             result_bytes: 4096,
             max_wall_secs: 600,
         };
+        assert_eq!(
+            super::super::admit::meet(
+                &super::super::settings::effective_ceiling(Some(&live)),
+                &pin.ceiling_at_pin
+            )
+            .targets,
+            ["b"]
+        );
         job.write_pin(&row, &pin).await;
         job.write_progress(&row, JobState::Running, 2).await;
         let (input, revision) = job.later(&row).await.unwrap();
@@ -1849,7 +2095,7 @@ pub(crate) mod tests {
         assert_eq!(
             input.ceiling,
             JobCeilingView {
-                targets: vec!["b".into()],
+                targets: Vec::new(),
                 max_live: 3,
                 remaining_spawns: 2,
                 max_messages_per_slot: 2,
@@ -1860,7 +2106,7 @@ pub(crate) mod tests {
         );
         assert_eq!(input.pin, Some(pin));
         assert_eq!(input.origin, Some(JobOrigin::Installed));
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1876,8 +2122,8 @@ pub(crate) mod tests {
             ("slot-a", 0, "a0"),
             ("slot-b", 0, "b0"),
         ] {
-            request(
-                &job.node,
+            request_as(
+                &job.access,
                 &row,
                 request_id,
                 &job_session_id("root", slot, attempt),
@@ -1897,7 +2143,7 @@ pub(crate) mod tests {
             .map(|(slot, view)| (slot.as_str(), view.attempt, view.request_id.as_str()))
             .collect();
         assert_eq!(kept, [("slot-a", 1, "a1"), ("slot-b", 0, "b0")]);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1950,7 +2196,7 @@ pub(crate) mod tests {
         expected.sort_by(|a, b| a.row_doc_id.cmp(&b.row_doc_id));
         assert_eq!(input.jobs, expected);
         assert!(input.jobs.iter().all(|view| view.row_doc_id != unpinned));
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -1995,7 +2241,7 @@ pub(crate) mod tests {
                 (newest.as_str(), 3_000, None),
             ]
         );
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -2028,7 +2274,7 @@ pub(crate) mod tests {
         assert_eq!(input.control, None);
         assert!(input.scratch.is_empty());
         assert_eq!(input.jobs.len(), 1);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     fn json_keys(value: &Value, keys: &mut Vec<String>) {
@@ -2099,7 +2345,7 @@ pub(crate) mod tests {
                 request_doc_id: "rd".into(),
                 tool_call_id: "c".into(),
                 node_did: "did".into(),
-                agent_id: "a".into(),
+                agent_did: "a".into(),
                 request_hop: 1,
                 correlation: Some("corr".into()),
                 cwd: "/work".into(),
@@ -2161,7 +2407,7 @@ pub(crate) mod tests {
             collections: vec!["notes".into()],
             ops: vec!["insert".into()],
             stamped: [
-                ("owner".to_owned(), StampedField::NodeDid),
+                ("owner".to_owned(), StampedField::CallerDid),
                 ("job_row".to_owned(), StampedField::JobRowDocId),
             ]
             .into(),
@@ -2178,7 +2424,7 @@ pub(crate) mod tests {
         assert!(keys.len() > 60);
         let secret: Vec<&String> = keys
             .iter()
-            .filter(|key| crate::tools::native::is_secret_env_name(key))
+            .filter(|key| crate::documents::callback::is_secret_env_name(key))
             .collect();
         assert!(secret.is_empty(), "{secret:?}");
         let value = serde_json::to_value(&input).unwrap();
@@ -2238,7 +2484,7 @@ pub(crate) mod tests {
         assert_eq!(input.origin, None);
         assert_eq!(input.job.chain, std::slice::from_ref(&row));
         assert_eq!(input.job.chain_root_doc_id, row);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
 
         let request_cwd = tempfile::tempdir().unwrap();
         let named = request_cwd.path().display().to_string();
@@ -2256,7 +2502,7 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(input.caller.cwd, named);
         assert!(input.scratch.is_empty());
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -2328,7 +2574,7 @@ pub(crate) mod tests {
                 })
             );
         }
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -2356,6 +2602,6 @@ pub(crate) mod tests {
         );
         let (input, _) = job.later(&plain).await.unwrap();
         assert_eq!(input.control, None);
-        job.node.shutdown().await;
+        job.node.shutdown().await.expect("shut down test node");
     }
 }

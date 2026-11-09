@@ -36,7 +36,8 @@ async fn runtime_control_fixture_with_plan_builder(
     let identity =
         Arc::new(gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap());
     let node_did = gents::NodeIdentity::did(identity.as_ref()).to_string();
-    let agent_id = gents::default_agent_id_for_node(&node_did);
+    let binding = gents::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let agent_did = binding.agent_did.clone();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path().join("node"))
@@ -48,11 +49,11 @@ async fn runtime_control_fixture_with_plan_builder(
     );
     gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let backend =
-        MockStreamingBackend::start_with_plans("grok-control-model", plans(&agent_id)).unwrap();
+        MockStreamingBackend::start_with_plans("grok-control-model", plans(&agent_did)).unwrap();
     configure_runtime_agent(
         &node,
         &node_did,
-        &agent_id,
+        &binding,
         &format!("grok-control-{name}"),
         backend.endpoint(),
         "grok-control-model",
@@ -63,7 +64,12 @@ async fn runtime_control_fixture_with_plan_builder(
     let config = AcpServiceConfig {
         node: node.clone(),
         node_did: Arc::from(node_did.as_str()),
-        agent_id: Arc::from(agent_id.as_str()),
+        agent_did: Arc::from(agent_did.as_str()),
+        agent_signer: gents::NodeIdentity::managed_agent_signer(
+            gents::store::identity::resolve_agent_identity(identity.as_ref(), &binding)
+                .unwrap()
+                .as_ref(),
+        ),
         current_model: bound_model(),
         grok_home: None,
         plugin_home: std::path::PathBuf::new(),
@@ -73,8 +79,11 @@ async fn runtime_control_fixture_with_plan_builder(
         crate::commands::grok_shim::turn::TurnManagerConfig {
             actor: identity::Did::new(node_did.clone()).expect("fixture creator DID"),
             node_did: node_did.clone(),
-            agent_id: agent_id.clone(),
-            graphql,
+            agent_did: agent_did.clone(),
+            graphql: gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &node_did)
+                .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                .unwrap(),
+            agent_signer: config.agent_signer.clone(),
         },
     ));
     let runtime_identity: Arc<dyn gents::NodeIdentity> = identity;
@@ -89,7 +98,7 @@ async fn runtime_control_fixture_with_plan_builder(
     .await
     .unwrap();
     let projections = Arc::new(
-        ProjectionEngine::new(
+        ProjectionEngine::new_for_test(
             node.clone(),
             crate::commands::grok_shim::projection::BoundModelContext::new(
                 "grok-control-model".into(),
@@ -121,7 +130,7 @@ async fn runtime_control_fixture_with_plan_builder(
                     snapshot.process_state.accepts_work()
                         && snapshot.active_generation >= 1
                         && snapshot.agents.iter().any(|agent| {
-                            agent.agent_id == agent_id
+                            agent.agent_did == agent_did
                                 && agent.state == gents_protocol::row::AgentReadinessState::Ready
                         })
                 })
@@ -247,6 +256,7 @@ async fn exact_request_by_doc_id(
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn native_task_kill_is_scoped_idempotent_and_uses_stock_envelope() {
     let prompt = "start task process";
     let fixture = runtime_control_fixture(
@@ -333,6 +343,7 @@ async fn native_task_kill_is_scoped_idempotent_and_uses_stock_envelope() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn native_child_controls_and_usage_follow_physical_lineage() {
     let parent_prompt = "spawn child worker";
     let child_prompt = "run child process";
@@ -341,7 +352,7 @@ async fn native_child_controls_and_usage_follow_physical_lineage() {
         "agent": "__BEHAVIOR__",
         "prompt": child_prompt
     });
-    let mut fixture = runtime_control_fixture_with_plan_builder("child-controls", |agent_id| {
+    let mut fixture = runtime_control_fixture_with_plan_builder("child-controls", |agent_did| {
         vec![
             StreamPlan::current_authored_user(
                 parent_prompt,
@@ -351,7 +362,7 @@ async fn native_child_controls_and_usage_follow_physical_lineage() {
                         vec![StreamChunk::tool_call(
                             "spawn-child-meta",
                             "agent_new",
-                            child_args.to_string().replace("__BEHAVIOR__", agent_id),
+                            child_args.to_string().replace("__BEHAVIOR__", agent_did),
                         )],
                     ),
                     StreamResponse::completes(parent_prompt, ["child started"]),

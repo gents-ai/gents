@@ -56,7 +56,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         expect(runner.taskRunResults).toHaveLength(1);
       });
       const taskRun = runner.taskRunResults[0];
-      expect(taskRun.agentId).toBe(ids.agentId);
+      expect(taskRun.agentDid).toBe(ids.agentDid);
       logTurn(`task run submitted taskId=${ids.taskId} requestId=${taskRun.requestId}`);
       const session = await runner.waitForRequestCompletion(taskRun);
       if (session.turnState !== "completed") {
@@ -82,7 +82,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
             requestDocId: taskRun.requestDocId,
             nodeDid: runner.nodeDid,
             backendId: ids.backendId,
-            agentId: ids.agentId,
+            agentDid: ids.agentDid,
             callKind: "inference",
             callState: "completed",
           }),

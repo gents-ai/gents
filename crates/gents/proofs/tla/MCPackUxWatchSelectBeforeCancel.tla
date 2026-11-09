@@ -1,0 +1,4 @@
+---- MODULE MCPackUxWatchSelectBeforeCancel ----
+EXTENDS PackUxWatch
+
+====

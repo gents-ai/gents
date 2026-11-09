@@ -93,14 +93,7 @@ fn archive_moves_the_home_and_client_state_to_a_sibling_backup_and_spares_other_
         assert!(backup.join("home").join(moved).exists(), "{moved} archived");
         assert!(!home.join(moved).exists(), "{moved} left the home");
     }
-    for moved in [
-        "node/MANIFEST",
-        "peers.json",
-        "principal.json",
-        "principal.ed25519.key",
-        "node.iroh.key",
-        MANAGED_SERVER_CONFIG,
-    ] {
+    for moved in ["node/MANIFEST", MANAGED_SERVER_CONFIG] {
         assert!(
             backup.join("desktop").join(moved).exists(),
             "{moved} archived"
@@ -108,6 +101,21 @@ fn archive_moves_the_home_and_client_state_to_a_sibling_backup_and_spares_other_
         assert!(
             !desktop.root().join(moved).exists(),
             "{moved} left the client"
+        );
+    }
+    for retained in [
+        "peers.json",
+        "principal.json",
+        "principal.ed25519.key",
+        "node.iroh.key",
+    ] {
+        assert!(
+            desktop.root().join(retained).exists(),
+            "{retained} retained"
+        );
+        assert!(
+            !backup.join("desktop").join(retained).exists(),
+            "{retained} stays live"
         );
     }
     assert_eq!(
@@ -158,7 +166,7 @@ fn delete_removes_only_the_home_and_client_state_it_previewed() {
     assert!(!home.join("data").exists());
     assert!(!home.join("keys").exists());
     assert!(!desktop.node_data_dir().exists());
-    assert!(!desktop.identity_key_path().exists());
+    assert!(desktop.identity_key_path().exists());
     assert!(home.join("grok-port-home/init.json").is_file());
     assert!(desktop.root().join("runtime/gents").is_file());
     assert_eq!(
@@ -364,6 +372,16 @@ async fn client_start_archives_state_paired_with_a_missing_home() {
     let desktop = state.policy.desktop_paths.clone();
     write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
     write(desktop.peer_directory_path(), "{}");
+    write(desktop.identity_key_path(), "existing User key");
+    write(
+        desktop.principal_metadata_path(),
+        r#"{"did":"did:key:existing","public_key_bytes":[1,2,3]}"#,
+    );
+    write(desktop.iroh_secret_key_path(), "existing client p2p key");
+    write(
+        desktop.store_encryption_path(),
+        r#"{"version":1,"custody":"macos-keychain","keychain_label":"existing-client-store"}"#,
+    );
     let stored = serde_json::json!({
         "nodeName": "Mandrake",
         "reviewedFor": {
@@ -385,7 +403,17 @@ async fn client_start_archives_state_paired_with_a_missing_home() {
         .join("desktop/node/MANIFEST")
         .is_file());
     assert!(!desktop.node_data_dir().exists());
-    assert!(!desktop.peer_directory_path().exists());
+    assert!(desktop.peer_directory_path().exists());
+    assert_eq!(
+        std::fs::read_to_string(desktop.identity_key_path()).unwrap(),
+        "existing User key"
+    );
+    assert!(desktop.principal_metadata_path().is_file());
+    assert_eq!(
+        std::fs::read_to_string(desktop.iroh_secret_key_path()).unwrap(),
+        "existing client p2p key"
+    );
+    assert!(desktop.store_encryption_path().is_file());
     assert!(!desktop.root().join(MANAGED_SERVER_CONFIG).exists());
     assert!(
         retire_orphaned_client_state(&state)
@@ -534,7 +562,7 @@ fn backups_user_files_and_unknown_homes_are_retained_and_shown() {
     assert!(preview
         .planned_paths
         .contains(&home.join("data").to_string_lossy().into_owned()));
-    assert!(preview
+    assert!(!preview
         .planned_paths
         .contains(&desktop.identity_key_path().to_string_lossy().into_owned()));
 

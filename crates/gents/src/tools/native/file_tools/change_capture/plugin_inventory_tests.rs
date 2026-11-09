@@ -33,6 +33,8 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     })
     .await
     .unwrap();
+    fixture.grant_agent_collection_get().await.unwrap();
+    fixture.grant_runtime_session_reader().await.unwrap();
     let mut parent = fixture.tool;
     let root = tempfile::tempdir().unwrap();
     let root_path = std::fs::canonicalize(root.path()).unwrap();
@@ -40,7 +42,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     tokio::fs::write(&path, "before\n").await.unwrap();
     let writer_tool = WriteFileTool::new(ToolContext::new(root_path.clone(), false).unwrap());
     let registry = LiveToolOutputRegistry::default();
-    let access = ConfigAccess::local(fixture.node.clone());
+    let access = parent.access().unwrap();
     let mut captures = Vec::new();
     let mut tools = Vec::new();
     for (ordinal, before, after) in [
@@ -107,24 +109,24 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     parent.complete("both effects completed").await.unwrap();
     let admission = ConfigAccess::transact_local_readonly(
         &fixture.node,
-        None,
+        Some(parent.actor().clone()),
         "test.inventory.plugin_session",
         |txn| {
             let parent = &parent;
             Box::pin(async move {
-                let session = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    parent.node_did(),
-                    parent.session_id(),
-                    parent.requester_did(),
-                )
-                .await?
-                .unwrap();
+                let session =
+                    crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                        txn,
+                        parent.node_did(),
+                        parent.session_id(),
+                        parent.requester_did(),
+                    )
+                    .await?
+                    .unwrap();
                 Ok::<_, anyhow::Error>(gents_protocol::file_inventory::FileInventoryAdmission {
                     session_doc_id: session.doc_id,
-                    request: gents_protocol::session_hydration::HydrationRequest {
+                    request: gents_protocol::file_inventory::FileInventoryRequest {
                         request_key: "plugin-inventory".into(),
-                        peer_id: "fixture-peer".into(),
                         node_did: parent.node_did().into(),
                         session_id: parent.session_id().into(),
                         requester_did: parent.requester_did().unwrap().into(),
@@ -132,6 +134,13 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
                 })
             })
         },
+    )
+    .await
+    .unwrap();
+    crate::tools::call::lifecycle::admission_fixture::grant_runtime_projection_readers(
+        &access,
+        parent.node_did(),
+        parent.session_id(),
     )
     .await
     .unwrap();
@@ -164,6 +173,6 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     assert_eq!(snapshot.binding(), repeated.binding());
     assert_eq!(snapshot.entries(), repeated.entries());
     assert_eq!(tokio::fs::read(&path).await.unwrap(), b"second effect\n");
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("shut down test node");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

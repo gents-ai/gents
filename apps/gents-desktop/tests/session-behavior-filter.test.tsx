@@ -13,7 +13,7 @@ const session = (over: Partial<SessionSummary>) =>
   ({
     sessionId: "s",
     nodeDid: "did:key:there",
-    agentId: null,
+    agentDid: null,
     title: null,
     turnState: "completed",
     updatedAt: null,
@@ -29,7 +29,7 @@ const app = () =>
         agents: [
           {
             ...deployment.agents[0],
-            agentId: "reviewer",
+            agentDid: "reviewer",
             displayName: "Code Reviewer",
           },
         ],
@@ -43,7 +43,7 @@ describe("the sessions agent filter", () => {
     renderIn(
       app(),
       <SessionFilters
-        sessions={[session({ agentId: "reviewer" })]}
+        sessions={[session({ agentDid: "reviewer" })]}
         nodeDids={["did:key:here", "did:key:there"]}
         value={emptyFilter}
         onChange={vi.fn()}
@@ -58,7 +58,7 @@ describe("the sessions agent filter", () => {
     renderIn(
       app(),
       <SessionFilters
-        sessions={[session({ agentId: "reviewer" })]}
+        sessions={[session({ agentDid: "reviewer" })]}
         nodeDids={["did:key:here", "did:key:there"]}
         value={{ ...emptyFilter, agents: ["gone"] }}
         onChange={vi.fn()}

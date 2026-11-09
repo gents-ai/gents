@@ -2,7 +2,7 @@ import Proofs.ToolPolicy.Meet
 
 namespace PluginJob
 
-/-- An AgentTarget wire ID resolves to `(target_node_did, agent_id)`. -/
+/-- An AgentTarget wire ID resolves to `(target_node_did, agent_did)`. -/
 abbrev Target := String × String
 
 namespace TargetResolution
@@ -28,6 +28,20 @@ def permits (bindings : List Binding) (ids : List String) (target : String × St
 for one endpoint do not make disjoint live and pinned ID ceilings overlap. -/
 def meetIds (live pinned : List String) : List String :=
   live.filter pinned.contains
+
+/-- Guest-visible IDs must be in the already intersected job ceiling and
+resolve through the caller's selected AgentTarget documents. This projects
+configured routing; native ACP remains the authority for publication. -/
+def guestTargets (ceiling : List String) (bindings : List Binding) : List String :=
+  ceiling.filter fun wire => (resolve bindings wire).isSome
+
+theorem guest_target_within_ceiling (ceiling : List String) (bindings : List Binding)
+    (wire : String) (member : wire ∈ guestTargets ceiling bindings) : wire ∈ ceiling := by
+  exact (List.mem_filter.mp member).1
+
+theorem no_routes_yields_no_guest_targets (ceiling : List String) :
+    guestTargets ceiling [] = [] := by
+  simp [guestTargets, resolve]
 
 def scope (bindings : List Binding) (ids : List String) : ToolPolicy.EndpointScope Target Unit :=
   .only ((bindings.filter fun binding => ids.contains binding.wire).map endpoint).toFinset

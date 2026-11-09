@@ -24,7 +24,7 @@ pub use store::{materialize_enrollment_desired_in_txn, GraphqlPairingStateStore}
 pub use sweep::run_pairing_reconciler;
 
 #[cfg(test)]
-use desired::{data_plane_desired_from_pairing_row, desired_from_pairing_row};
+use desired::data_plane_desired_from_pairing_row;
 #[cfg(test)]
 use rows::PairingStateRow;
 

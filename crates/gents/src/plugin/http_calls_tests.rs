@@ -663,6 +663,7 @@ impl crate::plugin::model_calls::ModelResolver for Endpoint {
     fn resolve<'a>(
         &'a self,
         _: &'a crate::plugin::model_calls::ModelBinding,
+        _: Option<&'a identity::Did>,
     ) -> BoxFuture<'a, Result<crate::plugin::model_calls::ModelEndpoint>> {
         Box::pin(async {
             Ok(crate::plugin::model_calls::ModelEndpoint {
@@ -674,6 +675,7 @@ impl crate::plugin::model_calls::ModelResolver for Endpoint {
                 connect_timeout: Duration::from_secs(1),
                 request_timeout: Duration::from_secs(1),
                 max_output_tokens: None,
+                profile_visibility: None,
             })
         })
     }

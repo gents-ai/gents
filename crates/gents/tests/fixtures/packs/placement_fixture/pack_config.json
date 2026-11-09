@@ -1,0 +1,59 @@
+{
+  "node": {},
+  "agents": [
+    {
+      "display_name": "Fixture writer",
+      "description": "A tool-less writer agent.",
+      "context_id": "fixture-placement-context",
+      "inference_profile_id": "gents:inference-slot:worker",
+      "agent_slot": "fixture-writer"
+    },
+    {
+      "display_name": "Fixture reviewer",
+      "description": "A tool-less reviewer agent.",
+      "context_id": "fixture-placement-context",
+      "inference_profile_id": "gents:inference-slot:worker",
+      "agent_slot": "fixture-reviewer"
+    },
+    {
+      "display_name": "Fixture integrator",
+      "description": "A tool-less integrator agent.",
+      "context_id": "fixture-placement-context",
+      "inference_profile_id": "gents:inference-slot:worker",
+      "agent_slot": "fixture-integrator"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "fixture-placement-context",
+      "display_name": "Fixture placement",
+      "system_prompt": "./agents/fixture_placement/system_prompt.md",
+      "tools_id": "fixture-placement-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "fixture-placement-tools",
+      "display_name": "Fixture placement: no tools",
+      "host": {
+        "bash": {
+          "mode": "Off"
+        }
+      }
+    }
+  ],
+  "repository_placements": [
+    {
+      "repository_id": "placement-fixture-repository",
+      "host_path": "${PLACEMENT_FIXTURE_ROOT:-.}",
+      "readers": [
+        {
+          "agent_did": "gents:agent-slot:fixture-writer"
+        },
+        {
+          "agent_did": "gents:agent-slot:fixture-reviewer"
+        }
+      ]
+    }
+  ]
+}

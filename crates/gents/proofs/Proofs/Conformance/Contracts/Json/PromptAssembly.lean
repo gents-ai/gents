@@ -1,5 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.Conformance.Contracts.Json.SessionHydration
+import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Compaction.Executable
 import Proofs.PromptAssembly.ClaudeWire

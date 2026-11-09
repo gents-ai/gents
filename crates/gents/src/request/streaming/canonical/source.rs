@@ -7,9 +7,9 @@ use gents_protocol::output::{
 };
 use gents_protocol::row::AgentRequestRow;
 
-use crate::session::canonical_rows::OutputSegmentRow;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::output::rows::OutputSegmentRow;
 
 pub(crate) fn retained_partial_blocks(
     records: &[ObservedSegment<'_>],
@@ -201,12 +201,10 @@ pub(super) async fn load_source_in_txn(
     prepared: &OutputSegment,
 ) -> Result<Vec<OutputSegmentRow>> {
     let response = txn
-        .execute_local_response(
-            &crate::session::canonical_rows::source_output_segments_query(
-                &prepared.request_doc_id,
-                &prepared.source,
-            )?,
-        )
+        .execute_local_response(&gents_protocol::output::rows::source_output_segments_query(
+            &prepared.request_doc_id,
+            &prepared.source,
+        )?)
         .await?;
     let rows = response
         .data
@@ -214,7 +212,7 @@ pub(super) async fn load_source_in_txn(
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
         .context("source query omitted rows")?;
-    crate::session::canonical_rows::decode_scoped_request_output_segments(
+    gents_protocol::output::rows::decode_scoped_request_output_segments(
         rows,
         &prepared.node_did,
         Some(&prepared.session_id),
@@ -225,4 +223,5 @@ pub(super) async fn load_source_in_txn(
             .filter(|row| row.segment.source == prepared.source)
             .collect()
     })
+    .map_err(anyhow::Error::from)
 }

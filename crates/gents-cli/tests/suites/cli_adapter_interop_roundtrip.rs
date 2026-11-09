@@ -3,7 +3,7 @@ use crate::support::*;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
 use gents::observe::adapter_projection::{
     adapter_projection_eval_jsonl_records, adapter_projection_jsonl_records,
     build_external_adapter_projection,

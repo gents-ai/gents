@@ -39,81 +39,166 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
 
 #[tokio::test]
 async fn ordinary_completion_rejects_claimed_without_execution() {
-    let db = test_db("ordinary-complete-from-claimed").await;
+    let db = support::test_db("ordinary-complete-from-claimed").await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    let mut lifecycle =
-        request_lifecycle_for_case(&db, doc_id.clone(), request_id, session_id, created_at);
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let created_at = support::agent_requests::canonical_now();
+    let (access, agent_doc, session_doc) =
+        super::session_control::seed_agent_session(&db, &fixture, &session_id, &created_at).await;
+    let doc_id = super::session_control::seed_agent_request(
+        &db,
+        &fixture,
+        &access,
+        &agent_doc,
+        &session_doc,
+        &session_id,
+        &request_id,
+        &created_at,
+    )
+    .await;
+    let mut request = build_request(doc_id.clone(), request_id, session_id, created_at);
+    request.node_did = db.node_identity.did().to_owned();
+    request.agent_did = fixture.agent.did().to_owned();
+    request.requester_did = Some(fixture.agent.did().to_owned());
+    request.content = "session control witness".into();
+    request.execution_origin = Some("interactive".into());
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    lifecycle
+        .bind_managed_agent(fixture.agent.as_ref())
+        .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
     assert_eq!(
         lifecycle
             .terminalize_owned(
                 RequestTerminalOutcome::Completed,
                 gents_protocol::output::TerminalOutput::NoMessage,
-                None
+                None,
             )
             .await
             .unwrap(),
         gents::request::lifecycle::TerminalizeResult::Lost,
     );
+    let response = access
+        .execute(&format!(
+            "{{ AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
+            escape_graphql_string(&doc_id),
+        ))
+        .await
+        .unwrap();
     assert_eq!(
-        fetch_request_snapshot(&db.node, &doc_id)
-            .await
-            .lifecycle_state,
-        RequestLifecycleState::Claimed
+        response["data"]["AgentRequest"][0]["lifecycle_state"],
+        "claimed"
     );
 }
 
 #[tokio::test]
 async fn claim_atomically_projects_the_request_owned_session() {
-    let db = test_db("claim-atomically-projects-session").await;
+    let db = support::test_db("claim-atomically-projects-session").await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    let mut lifecycle = request_lifecycle_for_case(
+    let created_at = support::agent_requests::canonical_now();
+    let (access, agent_doc, session_doc) =
+        super::session_control::seed_agent_session(&db, &fixture, &session_id, &created_at).await;
+    let doc_id = super::session_control::seed_agent_request(
         &db,
-        doc_id,
+        &fixture,
+        &access,
+        &agent_doc,
+        &session_doc,
+        &session_id,
+        &request_id,
+        &created_at,
+    )
+    .await;
+    let mut request = build_request(
+        doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
         created_at,
     );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    assert_session_observes_request(
-        &db.node,
-        &session_id,
-        &request_id,
-        RequestLifecycleState::Claimed,
-    )
-    .await;
+    request.node_did = db.node_identity.did().to_owned();
+    request.agent_did = fixture.agent.did().to_owned();
+    request.requester_did = Some(fixture.agent.did().to_owned());
+    request.content = "session control witness".into();
+    request.execution_origin = Some("interactive".into());
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    lifecycle
+        .bind_managed_agent(fixture.agent.as_ref())
+        .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let response = access
+        .execute(&format!(
+            "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} }} }}",
+            escape_graphql_string(&session_doc),
+            gents_protocol::session::AGENT_SESSION_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let session =
+        gents_protocol::session::decode_session_row(&response["data"]["AgentSession"][0]).unwrap();
+    assert_eq!(session.session.session_id, session_id);
+    assert_eq!(session.session.node_did, db.node_identity.did());
+    assert_eq!(session.session.agent_did, fixture.agent.did());
+    assert_eq!(
+        session.session.requester_did.as_deref(),
+        Some(fixture.agent.did())
+    );
+    let latest = session
+        .session
+        .observation
+        .expect("session observation")
+        .latest_request
+        .expect("latest request");
+    assert_eq!(latest.request_doc_id, doc_id);
+    assert_eq!(latest.request_id, request_id);
+    assert_eq!(latest.lifecycle_state, RequestLifecycleState::Claimed);
 }
 
 #[tokio::test]
 async fn admission_rejection_persists_despite_an_undecodable_session_row_under_its_label() {
     let db = test_db("admission-rejection-undecodable-session-row").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    let seeded = db
-        .node
-        .execute(&format!(
-            r#"mutation {{ create_AgentSession(input: {{
-                session_id: "{}", node_did: "{}", agent_id: "{}",
-                created_at: "not-an-rfc3339-timestamp"
-            }}) {{ _docID }} }}"#,
-            escape_graphql_string(&session_id),
-            escape_graphql_string(NODE_DID),
-            escape_graphql_string(AGENT_NAME),
-        ))
+    let created_at = support::agent_requests::canonical_now();
+    actors
+        .create_session_with(json!({
+            "session_id": session_id,
+            "node_did": actors.node_did(),
+            "requester_did": actors.agent_did(),
+            "agent_did": actors.agent_did(),
+            "created_at": "not-an-rfc3339-timestamp",
+            "relationships_pending": false,
+        }))
         .await;
-    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+    let doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
     let mut lifecycle = request_lifecycle_for_case(
-        &db,
+        &actors,
         doc_id.clone(),
         request_id,
         session_id.clone(),
@@ -126,27 +211,27 @@ async fn admission_rejection_persists_despite_an_undecodable_session_row_under_i
         .unwrap();
 
     assert_eq!(
-        fetch_request_snapshot(&db.node, &doc_id)
+        fetch_request_snapshot(&actors, &doc_id)
             .await
             .lifecycle_state,
         RequestLifecycleState::Failed
     );
-    let selected = db
-        .node
+    let selected = actors
+        .agent_access
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&session_id),
-            gents::session::AGENT_SESSION_FIELDS,
+            gents_protocol::session::AGENT_SESSION_FIELDS,
         ))
-        .await;
-    assert!(!selected.has_errors(), "{:?}", selected.errors);
-    let rows = selected.data.as_ref().unwrap()["AgentSession"]
+        .await
+        .unwrap();
+    let rows = selected["data"]["AgentSession"]
         .as_array()
         .cloned()
         .unwrap();
     assert_eq!(rows.len(), 1, "the refusal must not mint beside the row");
     assert!(
-        gents::session::decode_session_row(&rows[0]).is_err(),
+        gents_protocol::session::decode_session_row(&rows[0]).is_err(),
         "the refusal must leave the undecodable row untouched"
     );
 }
@@ -154,12 +239,18 @@ async fn admission_rejection_persists_despite_an_undecodable_session_row_under_i
 #[tokio::test]
 async fn admission_rejection_projects_the_failed_turn_into_its_session() {
     let db = test_db("admission-rejection-projects-session").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    let created_at = support::agent_requests::canonical_now();
+    let doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
     let mut lifecycle = request_lifecycle_for_case(
-        &db,
+        &actors,
         doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
@@ -171,21 +262,18 @@ async fn admission_rejection_projects_the_failed_turn_into_its_session() {
         .await
         .unwrap();
 
-    let request = fetch_request_snapshot(&db.node, &doc_id).await;
+    let request = fetch_request_snapshot(&actors, &doc_id).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
     assert_session_observes_request(
-        &db.node,
+        &actors,
         &session_id,
         &request_id,
         RequestLifecycleState::Failed,
     )
     .await;
-    let persisted = db.node.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ terminal_output failure_reason }} }}"#,
-        gents::store::graphql::escape_graphql_string(&doc_id),
-    )).await;
-    assert!(!persisted.has_errors(), "{:?}", persisted.errors);
-    let persisted = &persisted.data.as_ref().unwrap()["AgentRequest"][0];
+    let persisted = &actors
+        .request_row(&doc_id, "terminal_output failure_reason")
+        .await;
     assert_eq!(
         serde_json::from_value::<gents_protocol::output::TerminalOutput>(
             persisted["terminal_output"].clone()
@@ -199,19 +287,18 @@ async fn admission_rejection_projects_the_failed_turn_into_its_session() {
 #[tokio::test]
 async fn terminalizing_an_older_request_preserves_the_latest_projection() {
     let db = test_db("older-request-terminal-preserves-latest").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let first_request_id = uuid::Uuid::new_v4().to_string();
-    let first_doc_id = create_request(
-        &db.node,
-        &first_request_id,
-        &session_id,
-        "pending",
-        &created_at,
-    )
-    .await;
+    let first_doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(&first_request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
     let mut first = request_lifecycle_for_case(
-        &db,
+        &actors,
         first_doc_id.clone(),
         first_request_id,
         session_id.clone(),
@@ -220,29 +307,27 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
     assert_eq!(first.claim().await.unwrap(), ClaimOutcome::Claimed);
 
     let second_request_id = uuid::Uuid::new_v4().to_string();
-    let second_doc_id = create_request(
-        &db.node,
-        &second_request_id,
-        &session_id,
-        "pending",
-        &created_at,
-    )
-    .await;
-    support::seed_session_observation(
-        &db.node,
-        &session_id,
-        &gents_protocol::session::SessionObservation {
-            reply_preview: None,
-            last_activity_at: created_at.clone(),
-            preview: Some("newer request".into()),
-            latest_request: Some(gents_protocol::session::SessionRequestObservation {
-                request_doc_id: second_doc_id,
-                request_id: second_request_id.clone(),
-                lifecycle_state: RequestLifecycleState::Pending,
-            }),
-        },
-    )
-    .await;
+    let second_doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(&second_request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
+    actors
+        .seed_session_observation(
+            &session_id,
+            &gents_protocol::session::SessionObservation {
+                reply_preview: None,
+                last_activity_at: created_at.clone(),
+                preview: Some("newer request".into()),
+                latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                    request_doc_id: second_doc_id,
+                    request_id: second_request_id.clone(),
+                    lifecycle_state: RequestLifecycleState::Pending,
+                }),
+            },
+        )
+        .await;
 
     crate::support::begin_owned_execution(&mut first, &db.node)
         .await
@@ -256,13 +341,13 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
         .await
         .unwrap();
     assert_eq!(
-        fetch_request_snapshot(&db.node, &first_doc_id)
+        fetch_request_snapshot(&actors, &first_doc_id)
             .await
             .lifecycle_state,
         RequestLifecycleState::Completed
     );
     assert_session_observes_request(
-        &db.node,
+        &actors,
         &session_id,
         &(second_request_id),
         RequestLifecycleState::Pending,
@@ -271,17 +356,14 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
 }
 
 fn request_lifecycle_for_case(
-    db: &support::TestDb,
+    actors: &support::agent_requests::RequestActors,
     doc_id: String,
     request_id: String,
     session_id: String,
     created_at: String,
 ) -> RequestLifecycle {
-    let request = build_request(doc_id, request_id, session_id, created_at);
-    RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let request = actors.build_request(doc_id, request_id, session_id, created_at);
+    actors.lifecycle(
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -291,15 +373,17 @@ fn request_lifecycle_for_case(
 
 async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) {
     let db = test_db("generated-request-transition").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let action = case
         .action
         .as_deref()
         .expect("legal Request transition case must carry an action");
-    let valid_until = (action == "expire")
-        .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+    let valid_until = (action == "expire").then(|| {
+        support::agent_requests::canonical_at(chrono::Utc::now() - chrono::Duration::seconds(1))
+    });
     let request_input =
         (action == "dedupLose").then(|| coalesce_input(&format!("dedup-{request_id}")));
     let initial_state = if case.from == "workspaceBindingPending" {
@@ -307,41 +391,19 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
     } else {
         "pending"
     };
-    let doc_id = if action == "dedupLose" && case.from == "workspaceBindingPending" {
-        let response = db
-            .node
-            .execute(&format!(
-                r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{}", purpose: "normal", node_did: "{}", agent_id: "{}",
-                session_id: "{}", lifecycle_state: "workspaceBindingPending",
-                content: "hello", created_at: "{}", request_hop: 0,
-                retry_count: 0, max_retries: 0, caused_by_trigger_id: "conformance-trigger"
-            }}) {{ _docID }} }}"#,
-                gents::store::graphql::escape_graphql_string(&request_id),
-                gents::store::graphql::escape_graphql_string(NODE_DID),
-                gents::store::graphql::escape_graphql_string(AGENT_NAME),
-                gents::store::graphql::escape_graphql_string(&session_id),
-                gents::store::graphql::escape_graphql_string(&created_at),
-            ))
-            .await;
-        assert!(!response.has_errors(), "{response:?}");
-        crate::support::exact_request_doc_id(&db.node, &request_id).await
-    } else {
-        create_request_with_signed_fields(
-            &db.node,
-            &request_id,
-            &session_id,
-            initial_state,
-            &created_at,
-            valid_until.as_deref(),
-            request_input.as_deref(),
-            None,
-            None,
-        )
-        .await
+    let seed = support::agent_requests::RequestSeed {
+        input: request_input.as_deref(),
+        ..support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
+            .state(initial_state)
+            .valid_until(valid_until.as_deref())
     };
+    let mut create = actors.request_create(&seed);
+    if action == "dedupLose" && case.from == "workspaceBindingPending" {
+        create.caused_by_trigger_id = Some("conformance-trigger".into());
+    }
+    let doc_id = actors.create_signed(create).await;
     let mut lifecycle = request_lifecycle_for_case(
-        &db,
+        &actors,
         doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
@@ -350,7 +412,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
 
     match action {
         "bindWorkspace" => {
-            gents::__test_internals::activate_workspace_bound_request(&db.node, &doc_id)
+            activate_workspace_fixture(&actors, &doc_id)
                 .await
                 .expect("bindWorkspace CAS mutation failed");
         }
@@ -359,49 +421,49 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         }
         "dedupLose" => {
             if case.from == "workspaceBindingPending" {
-                gents::store::config_client::ConfigAccess::transact_local_write(
-                    &db.node,
-                    None,
-                    "test.supersede_before_workspace_binding",
-                    |txn| {
+                let node_did = actors.node_did();
+                actors
+                    .agent_access
+                    .transact_write("test.supersede_before_workspace_binding", |txn| {
                         Box::pin(async move {
                             gents::__test_internals::supersede_trigger_requests_in_txn(
                                 txn,
-                                NODE_DID,
+                                node_did,
                                 "conformance-trigger",
                                 None,
                             )
                             .await?;
                             Ok::<_, anyhow::Error>(())
                         })
-                    },
-                )
-                .await
-                .unwrap();
+                    })
+                    .await
+                    .unwrap();
             } else {
                 let survivor_id = uuid::Uuid::new_v4().to_string();
-                let survivor_created_at =
-                    (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+                let survivor_created_at = support::agent_requests::canonical_at(
+                    chrono::Utc::now() - chrono::Duration::seconds(30),
+                );
                 let key = format!("dedup-{request_id}");
                 let survivor_input = coalesce_input(&key);
-                let survivor_doc_id = create_request_with_signed_fields(
-                    &db.node,
-                    &survivor_id,
+                let survivor_doc_id = actors
+                    .create_request(support::agent_requests::RequestSeed {
+                        input: Some(&survivor_input),
+                        ..support::agent_requests::RequestSeed::new(
+                            &survivor_id,
+                            &session_id,
+                            &survivor_created_at,
+                        )
+                        .state("pending")
+                    })
+                    .await;
+                gents::__test_internals::reconcile_coalesced_pending_request_for_with_access(
+                    (&db.node, &actors.agent_access),
+                    actors.agent_did(),
                     &session_id,
-                    "pending",
-                    &survivor_created_at,
-                    None,
-                    Some(&survivor_input),
-                    None,
-                    None,
-                )
-                .await;
-                gents::__test_internals::reconcile_coalesced_pending_request(
-                    &db.node,
-                    &session_id,
-                    NODE_DID,
+                    actors.node_did(),
                     gents::__test_internals::QueueSource::User,
                     &key,
+                    None,
                 )
                 .await
                 .expect("coalesce reconcile must succeed");
@@ -470,13 +532,17 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         }
         "interruptBeforeClaim" => {
             let interrupt_at = chrono::Utc::now().to_rfc3339();
-            set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+            actors
+                .set_interrupt_requested_at(&doc_id, &interrupt_at)
+                .await;
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
         }
         "interruptClaimed" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             let interrupt_at = chrono::Utc::now().to_rfc3339();
-            set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+            actors
+                .set_interrupt_requested_at(&doc_id, &interrupt_at)
+                .await;
             lifecycle
                 .terminalize_owned(
                     RequestTerminalOutcome::Interrupted,
@@ -492,7 +558,9 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 .await
                 .unwrap();
             let interrupt_at = chrono::Utc::now().to_rfc3339();
-            set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+            actors
+                .set_interrupt_requested_at(&doc_id, &interrupt_at)
+                .await;
             lifecycle
                 .terminalize_owned(
                     RequestTerminalOutcome::Interrupted,
@@ -508,20 +576,10 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         ),
     }
 
-    let response = gents::store::graphql::graphql_with_transaction_retry(
-        &db.node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ stopped_before_running }} }}"#,
-            gents::store::graphql::escape_graphql_string(&doc_id)
-        ),
-        "test.interrupt_evidence",
-    ).await.unwrap();
-    let evidence: serde_json::Value = gents::store::graphql::first_row(&response, "AgentRequest")
-        .unwrap()
-        .unwrap();
+    let evidence = actors.request_row(&doc_id, "stopped_before_running").await;
     let certified = evidence["stopped_before_running"].as_bool() == Some(true);
     assert_eq!(certified, case.stopped_before_running, "{}", case.name);
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    let snap = fetch_request_snapshot(&actors, &doc_id).await;
     assert_eq!(
         snap.lifecycle_state,
         parsed_request_state(&case.to),
@@ -612,9 +670,13 @@ fn assert_terminal_lifecycle_state(lifecycle_state: &str) {
     );
 }
 
-async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
+async fn force_terminal_persisted_state(
+    actors: &support::agent_requests::RequestActors,
+    doc_id: &str,
+    lifecycle_state: &str,
+) {
     assert_terminal_lifecycle_state(lifecycle_state);
-    force_persisted_lifecycle_state(node, doc_id, lifecycle_state).await;
+    force_persisted_lifecycle_state(actors, doc_id, lifecycle_state).await;
 }
 
 fn coalesce_input(key: &str) -> String {
@@ -629,22 +691,54 @@ fn coalesce_input(key: &str) -> String {
     .to_string()
 }
 
-async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                input: {{ lifecycle_state: "{lifecycle_state}" }}
-            ) {{ _docID }}
-        }}"#
+async fn force_persisted_lifecycle_state(
+    actors: &support::agent_requests::RequestActors,
+    doc_id: &str,
+    lifecycle_state: &str,
+) {
+    actors
+        .set_lifecycle_state(doc_id, parsed_request_state(lifecycle_state))
+        .await;
+}
+
+async fn scoped_matrix_request(
+    actors: &support::agent_requests::RequestActors,
+    request_id: &str,
+    session_id: &str,
+    created_at: &str,
+    valid_until: Option<&str>,
+    input: Option<&str>,
+) -> String {
+    actors
+        .create_request(support::agent_requests::RequestSeed {
+            input,
+            ..support::agent_requests::RequestSeed::new(request_id, session_id, created_at)
+                .valid_until(valid_until)
+        })
+        .await
+}
+
+fn scoped_matrix_lifecycle(
+    db: &support::TestDb,
+    agent: &dyn gents::NodeIdentity,
+    doc_id: String,
+    request_id: String,
+    session_id: String,
+    created_at: String,
+) -> RequestLifecycle {
+    let mut request = support::build_request(doc_id, request_id, session_id, created_at);
+    request.node_did = db.node_identity.did().to_owned();
+    request.agent_did = agent.did().to_owned();
+    request.requester_did = Some(agent.did().to_owned());
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
     );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "forcing terminal persisted state failed: {:?}",
-        resp.errors
-    );
+    lifecycle.bind_managed_agent(agent).unwrap();
+    lifecycle
 }
 
 #[tokio::test]
@@ -678,29 +772,33 @@ async fn production_request_writers_only_reach_contracted_edges() {
 
     for start in START_STATES {
         let db = test_db(&format!("production-edges-{}", start.to_lowercase())).await;
+        let actors = support::agent_requests::RequestActors::new(&db).await;
+        let agent = actors.agent().clone();
+        let access = actors.agent_access.clone();
 
         for writer in WRITERS {
             let request_id = uuid::Uuid::new_v4().to_string();
             let session_id = uuid::Uuid::new_v4().to_string();
-            let created_at = chrono::Utc::now().to_rfc3339();
-            let valid_until = (writer == "claim_after_ttl_lapse")
-                .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+            let created_at = support::agent_requests::canonical_now();
+            let valid_until = (writer == "claim_after_ttl_lapse").then(|| {
+                support::agent_requests::canonical_at(
+                    chrono::Utc::now() - chrono::Duration::seconds(1),
+                )
+            });
             let coalesce =
                 (writer == "coalesce_pending").then(|| coalesce_input("conformance-key"));
-            let doc_id = create_request_with_signed_fields(
-                &db.node,
+            let doc_id = scoped_matrix_request(
+                &actors,
                 &request_id,
                 &session_id,
-                "pending",
                 &created_at,
                 valid_until.as_deref(),
                 coalesce.as_deref(),
-                None,
-                None,
             )
             .await;
-            let mut lifecycle = request_lifecycle_for_case(
+            let mut lifecycle = scoped_matrix_lifecycle(
                 &db,
+                agent.as_ref(),
                 doc_id.clone(),
                 request_id.clone(),
                 session_id.clone(),
@@ -720,46 +818,47 @@ async fn production_request_writers_only_reach_contracted_edges() {
             }
 
             if start == "processing" && matches!(writer, "complete" | "fail" | "interrupt") {
-                crate::support::begin_owned_execution(&mut lifecycle, &db.node)
-                    .await
-                    .unwrap();
+                let writer = gents::DefraStreamWriter::new_managed(
+                    db.node.clone(),
+                    agent.as_ref(),
+                    Duration::ZERO,
+                )
+                .unwrap();
+                lifecycle.begin_owned_execution(&writer).await.unwrap();
             }
             if writer == "claim_after_interrupt" {
-                set_interrupt_requested_at(&db.node, &doc_id, &chrono::Utc::now().to_rfc3339())
+                actors
+                    .set_interrupt_requested_at(&doc_id, &chrono::Utc::now().to_rfc3339())
                     .await;
             }
             if writer == "repair_terminal_requests" {
                 let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-                let result = db.node.execute(&format!(
-                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
-                    escape_graphql_string(&doc_id), escape_graphql_string(&expiry),
-                )).await;
-                assert!(!result.has_errors(), "{:?}", result.errors);
+                actors
+                    .update_request(&doc_id, json!({ "execution_lease_expires_at": expiry }))
+                    .await;
             }
 
             if writer == "coalesce_pending" {
                 let survivor_id = uuid::Uuid::new_v4().to_string();
-                let survivor_created_at =
-                    (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+                let survivor_created_at = support::agent_requests::canonical_at(
+                    chrono::Utc::now() - chrono::Duration::seconds(30),
+                );
                 let survivor_input = coalesce_input("conformance-key");
-                let survivor_doc_id = create_request_with_signed_fields(
-                    &db.node,
+                let survivor_doc_id = scoped_matrix_request(
+                    &actors,
                     &survivor_id,
                     &session_id,
-                    "pending",
                     &survivor_created_at,
                     None,
                     Some(&survivor_input),
-                    None,
-                    None,
                 )
                 .await;
                 let _ = survivor_doc_id;
             }
 
-            force_persisted_lifecycle_state(&db.node, &doc_id, start).await;
+            force_persisted_lifecycle_state(&actors, &doc_id, start).await;
 
-            let before = fetch_request_snapshot(&db.node, &doc_id)
+            let before = fetch_request_snapshot(&actors, &doc_id)
                 .await
                 .lifecycle_state;
             assert_eq!(
@@ -779,7 +878,13 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let _ = lifecycle.claim().await;
                 }
                 "begin_execution" => {
-                    let _ = crate::support::begin_owned_execution(&mut lifecycle, &db.node).await;
+                    let writer = gents::DefraStreamWriter::new_managed(
+                        db.node.clone(),
+                        agent.as_ref(),
+                        Duration::ZERO,
+                    )
+                    .unwrap();
+                    let _ = lifecycle.begin_owned_execution(&writer).await;
                 }
                 "complete" => {
                     let _ = lifecycle
@@ -809,28 +914,34 @@ async fn production_request_writers_only_reach_contracted_edges() {
                         .await;
                 }
                 "repair_terminal_requests" => {
-                    let _ = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID).await;
+                    let _ = RequestLifecycle::repair_terminal_requests_with_identities(
+                        &db.node,
+                        db.node_identity.did(),
+                        std::slice::from_ref(&agent),
+                    )
+                    .await;
                 }
                 "coalesce_pending" => {
-                    let _ = gents::__test_internals::reconcile_coalesced_pending_request(
-                        &db.node,
-                        &session_id,
-                        NODE_DID,
-                        gents::__test_internals::QueueSource::User,
-                        "conformance-key",
+                    let _ = gents::__test_internals::reconcile_coalesced_pending_request_for_with_access(
+                        (&db.node, &access), agent.did(), &session_id, db.node_identity.did(),
+                        gents::__test_internals::QueueSource::User, "conformance-key", None,
                     )
                     .await;
                 }
                 "bind_workspace" => {
-                    let _ = gents::__test_internals::activate_workspace_bound_request(
-                        &db.node, &doc_id,
-                    )
-                    .await;
+                    let _ =
+                        gents::__test_internals::activate_workspace_bound_request_with_identity(
+                            &db.node,
+                            &doc_id,
+                            ::identity::Did::new(agent.did()).unwrap(),
+                            Some(agent.as_ref()),
+                        )
+                        .await;
                 }
                 other => panic!("unhandled writer {other}"),
             }
 
-            let after = fetch_request_snapshot(&db.node, &doc_id)
+            let after = fetch_request_snapshot(&actors, &doc_id)
                 .await
                 .lifecycle_state;
             if after != before {
@@ -892,15 +1003,19 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
 
     for terminal in TERMINAL_STATES {
         let db = test_db(&format!("terminal-irreversibility-{terminal}")).await;
+        let actors = support::agent_requests::RequestActors::new(&db).await;
+        let agent = actors.agent().clone();
 
         for writer in WRITERS {
             let request_id = uuid::Uuid::new_v4().to_string();
             let session_id = uuid::Uuid::new_v4().to_string();
-            let created_at = chrono::Utc::now().to_rfc3339();
+            let created_at = support::agent_requests::canonical_now();
             let doc_id =
-                create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-            let mut lifecycle = request_lifecycle_for_case(
+                scoped_matrix_request(&actors, &request_id, &session_id, &created_at, None, None)
+                    .await;
+            let mut lifecycle = scoped_matrix_lifecycle(
                 &db,
+                agent.as_ref(),
                 doc_id.clone(),
                 request_id.clone(),
                 session_id.clone(),
@@ -911,7 +1026,7 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                 assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             }
 
-            force_terminal_persisted_state(&db.node, &doc_id, terminal).await;
+            force_terminal_persisted_state(&actors, &doc_id, terminal).await;
 
             match writer {
                 "claim" => {
@@ -928,7 +1043,13 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                     let _ = lifecycle.reject_admission("projection rejected").await;
                 }
                 "begin_execution" => {
-                    let _ = crate::support::begin_owned_execution(&mut lifecycle, &db.node).await;
+                    let writer = gents::DefraStreamWriter::new_managed(
+                        db.node.clone(),
+                        agent.as_ref(),
+                        Duration::ZERO,
+                    )
+                    .unwrap();
+                    let _ = lifecycle.begin_owned_execution(&writer).await;
                 }
                 "complete" => {
                     let _ = lifecycle
@@ -958,9 +1079,13 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                         .await;
                 }
                 "repair_terminal_requests" => {
-                    let report = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID)
-                        .await
-                        .expect("terminal repair sweep must succeed");
+                    let report = RequestLifecycle::repair_terminal_requests_with_identities(
+                        &db.node,
+                        db.node_identity.did(),
+                        std::slice::from_ref(&agent),
+                    )
+                    .await
+                    .expect("terminal repair sweep must succeed");
                     assert_eq!(
                         report.repaired, 0,
                         "terminal repair moved a persisted {terminal} request: {report:?}"
@@ -969,7 +1094,7 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                 other => panic!("unhandled writer {other}"),
             };
 
-            let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+            let snap = fetch_request_snapshot(&actors, &doc_id).await;
             assert_eq!(
                 snap.lifecycle_state,
                 parsed_request_state(terminal),
@@ -983,21 +1108,24 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
 #[tokio::test]
 async fn interactive_claim_snapshot_matches_claimed_waiting() {
     let db = test_db("interactive-claim").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    let created_at = support::agent_requests::canonical_now();
+    let doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
 
-    let request = build_request(
+    let request = actors.build_request(
         doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
         created_at,
     );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let mut lifecycle = actors.lifecycle(
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1008,10 +1136,10 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
     assert_lean_transition_is_legal("Request", "pending", "claimed");
 
     assert_eq!(
-        fetch_request_snapshot(&db.node, &doc_id).await,
+        fetch_request_snapshot(&actors, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: actors.agent_did().into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1029,21 +1157,24 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
 #[tokio::test]
 async fn interactive_claim_atomically_pins_session_agent() {
     let db = test_db("interactive-claim-session-projection").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    let created_at = support::agent_requests::canonical_now();
+    let doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
 
-    let request = build_request(
+    let request = actors.build_request(
         doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
         created_at,
     );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let mut lifecycle = actors.lifecycle(
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1053,7 +1184,7 @@ async fn interactive_claim_atomically_pins_session_agent() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
     assert_session_observes_request(
-        &db.node,
+        &actors,
         &session_id,
         &(request_id),
         RequestLifecycleState::Claimed,
@@ -1064,21 +1195,24 @@ async fn interactive_claim_atomically_pins_session_agent() {
 #[tokio::test]
 async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     let db = test_db("interactive-executing").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    let created_at = support::agent_requests::canonical_now();
+    let doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
 
-    let request = build_request(
+    let request = actors.build_request(
         doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
         created_at,
     );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let mut lifecycle = actors.lifecycle(
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1093,10 +1227,10 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     assert_lean_transition_is_legal("Request", "processing", "processing");
 
     assert_eq!(
-        fetch_request_snapshot(&db.node, &doc_id).await,
+        fetch_request_snapshot(&actors, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Processing,
-            agent_id: AGENT_NAME.into(),
+            agent_did: actors.agent_did().into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1110,7 +1244,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
         }
     );
     assert_session_observes_request_with_authoritative_state(
-        &db.node,
+        &actors,
         &session_id,
         &(request_id),
         RequestLifecycleState::Claimed,
@@ -1122,21 +1256,24 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
 #[tokio::test]
 async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     let db = test_db("interactive-fail").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    let created_at = support::agent_requests::canonical_now();
+    let doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
+                .state("pending"),
+        )
+        .await;
 
-    let request = build_request(
+    let request = actors.build_request(
         doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
         created_at,
     );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    let mut lifecycle = actors.lifecycle(
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1155,10 +1292,10 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     assert_lean_transition_is_legal("Request", "claimed", "failed");
 
     assert_eq!(
-        fetch_request_snapshot(&db.node, &doc_id).await,
+        fetch_request_snapshot(&actors, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Failed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: actors.agent_did().into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1172,7 +1309,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
         }
     );
     assert_session_observes_request(
-        &db.node,
+        &actors,
         &session_id,
         &(request_id),
         RequestLifecycleState::Failed,
@@ -1182,20 +1319,20 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 
 #[tokio::test]
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
-    let db = test_db("scheduled-materialize").await;
-    crate::support::fixtures::configure_child_agent(
-        &db.node,
-        NODE_DID,
-        AGENT_NAME,
-        "scheduled-materialize-tools",
-        Vec::new(),
-        false,
+    let db = support::test_db("scheduled-materialize").await;
+    let fixture = support::managed_agent_fixture(&db).await;
+    let agent = &fixture.agent;
+    let access = gents::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
     )
-    .await;
+    .unwrap();
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
+        agent.did(),
+        db.node_identity.clone(),
+        agent.clone(),
         "scheduled prompt body",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1206,10 +1343,10 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     .unwrap();
 
     assert_eq!(
-        fetch_request_snapshot(&db.node, &lifecycle.request().doc_id).await,
+        fetch_request_snapshot_with_access(&access, &lifecycle.request().doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: agent.did().into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),
             retry_parent_request: "".into(),
@@ -1223,27 +1360,29 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         }
     );
 
-    assert_session_observes_request(
-        &db.node,
+    assert_session_observes_request_with_access(
+        &access,
         &lifecycle.request().session_id,
         &(lifecycle.request().request_id.clone()),
         RequestLifecycleState::Claimed,
+        RequestLifecycleState::Claimed,
+        db.node_identity.did(),
+        agent.did(),
     )
     .await;
 }
 
 #[tokio::test]
 async fn scheduled_materialization_persists_trigger_lineage() {
-    let db = test_db("scheduled-materialize-lineage").await;
-    crate::support::fixtures::configure_child_agent(
-        &db.node,
-        NODE_DID,
-        AGENT_NAME,
-        "scheduled-materialize-lineage-tools",
-        Vec::new(),
-        false,
+    let db = support::test_db("scheduled-materialize-lineage").await;
+    let fixture = support::managed_agent_fixture(&db).await;
+    let agent = &fixture.agent;
+    let access = gents::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
     )
-    .await;
+    .unwrap();
     let lineage = TriggerLineage {
         trigger_id: Some("sched-1".into()),
         trigger_kind: Some("schedule".into()),
@@ -1254,8 +1393,9 @@ async fn scheduled_materialization_persists_trigger_lineage() {
 
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
+        agent.did(),
+        db.node_identity.clone(),
+        agent.clone(),
         "scheduled prompt body with lineage",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1266,7 +1406,14 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     .unwrap();
 
     assert_eq!(
-        fetch_request_lineage_snapshot(&db.node, &lifecycle.request().doc_id).await,
+        fetch_request_lineage_with_access(
+            &access,
+            &format!(
+                "_docID: {{_eq: \"{}\"}}",
+                escape_graphql_string(&lifecycle.request().doc_id)
+            )
+        )
+        .await,
         RequestLineageSnapshot {
             caused_by_trigger_id: Some("sched-1".into()),
             caused_by_trigger_kind: Some("schedule".into()),
@@ -1274,24 +1421,25 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     );
 
     assert_eq!(
-        fetch_request_lineage_snapshot_by_tuple(&db.node, "sched-1", "schedule").await,
+        Some(fetch_request_lineage_with_access(&access,
+            "caused_by_trigger_id: {_eq: \"sched-1\"}, caused_by_trigger_kind: {_eq: \"schedule\"}"
+        ).await),
         Some(RequestLineageSnapshot {
             caused_by_trigger_id: Some("sched-1".into()),
             caused_by_trigger_kind: Some("schedule".into()),
         })
     );
 
-    let response = db
-        .node
+    let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ admission_kind admission_signer_did admission_signature }} }}"#,
             escape_graphql_string(&lifecycle.request().doc_id),
         ))
         .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
+    let response = response.unwrap();
+    let row = &response["data"]["AgentRequest"][0];
     assert_eq!(row["admission_kind"], "local-self");
-    assert_eq!(row["admission_signer_did"], NODE_DID);
+    assert_eq!(row["admission_signer_did"], agent.did());
     assert!(row["admission_signature"]
         .as_str()
         .is_some_and(|signature| !signature.is_empty()));
@@ -1391,7 +1539,7 @@ fn row_matches_coalesced_key(row: &QueueRuntimeRow, queue_key: Option<&str>) -> 
 }
 
 async fn fetch_queue_runtime_snapshot(
-    node: &std::sync::Arc<EmbeddedNode>,
+    actors: &support::agent_requests::RequestActors,
     session_id: &str,
     queue_key: Option<&str>,
     generated_ids: &std::collections::BTreeMap<String, usize>,
@@ -1409,15 +1557,13 @@ async fn fetch_queue_runtime_snapshot(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "queue snapshot query failed: {:?}",
-        response.errors
-    );
+    let response = actors
+        .agent_access
+        .execute(&query)
+        .await
+        .expect("queue snapshot query");
     let rows: Vec<QueueRuntimeRow> = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
@@ -1498,13 +1644,14 @@ fn assert_post_queue_snapshot(
 }
 
 fn request_from_parts(
+    actors: &support::agent_requests::RequestActors,
     doc_id: String,
     request_id: usize,
     session_id: &str,
     created_at: &str,
     deadline: Option<String>,
 ) -> gents::AgentRequest {
-    let mut request = build_request(
+    let mut request = actors.build_request(
         doc_id,
         request_id.to_string(),
         session_id.to_string(),
@@ -1515,16 +1662,15 @@ fn request_from_parts(
 }
 
 fn lifecycle_for(
-    node: &std::sync::Arc<EmbeddedNode>,
+    actors: &support::agent_requests::RequestActors,
     request: gents::AgentRequest,
     deadline_duration_secs: u64,
 ) -> RequestLifecycle {
-    RequestLifecycle::new_with_node_did(
-        node.clone(),
-        AGENT_NAME,
-        NODE_DID,
+    actors.lifecycle(
         request,
         deadline_duration_secs,
+        ExecutionOrigin::Interactive,
+        "",
     )
 }
 
@@ -1532,6 +1678,7 @@ async fn drive_active_request_blocks_later_same_session_claim(
     case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-active-blocks").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
     let active_id = case.pre_active_request_id.expect("active request id");
     let pending_id = case
@@ -1542,55 +1689,61 @@ async fn drive_active_request_blocks_later_same_session_claim(
     let active_created_at = "2026-03-23T00:00:10Z";
     let pending_created_at = "2026-03-23T00:00:20Z";
 
-    let active_doc_id = create_request(
-        &db.node,
-        &active_id.to_string(),
-        &session_id,
-        "pending",
-        active_created_at,
-    )
-    .await;
-    let pending_doc_id = create_request(
-        &db.node,
-        &pending_id.to_string(),
-        &session_id,
-        "pending",
-        pending_created_at,
-    )
-    .await;
+    let active_doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(
+                &active_id.to_string(),
+                &session_id,
+                active_created_at,
+            )
+            .state("pending"),
+        )
+        .await;
+    let pending_doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(
+                &pending_id.to_string(),
+                &session_id,
+                pending_created_at,
+            )
+            .state("pending"),
+        )
+        .await;
 
     let active_request = request_from_parts(
+        &actors,
         active_doc_id,
         active_id,
         &session_id,
         active_created_at,
         None,
     );
-    let mut active_lifecycle = lifecycle_for(&db.node, active_request, DEADLINE_SECS);
+    let mut active_lifecycle = lifecycle_for(&actors, active_request, DEADLINE_SECS);
     assert_eq!(
         active_lifecycle.claim().await.unwrap(),
         ClaimOutcome::Claimed
     );
 
     let generated_ids = std::collections::BTreeMap::new();
-    let pre = fetch_queue_runtime_snapshot(&db.node, &session_id, None, &generated_ids).await;
+    let pre = fetch_queue_runtime_snapshot(&actors, &session_id, None, &generated_ids).await;
     assert_pre_queue_snapshot(case, &pre);
 
     let pending_request = request_from_parts(
+        &actors,
         pending_doc_id,
         pending_id,
         &session_id,
         pending_created_at,
         None,
     );
-    let mut pending_lifecycle = lifecycle_for(&db.node, pending_request, DEADLINE_SECS);
+    let mut pending_lifecycle = lifecycle_for(&actors, pending_request, DEADLINE_SECS);
     assert_eq!(
         pending_lifecycle.claim().await.unwrap(),
         ClaimOutcome::Queued
     );
     assert_eq!(case.claimed_request_id, None);
 
-    let post = fetch_queue_runtime_snapshot(&db.node, &session_id, None, &generated_ids).await;
+    let post = fetch_queue_runtime_snapshot(&actors, &session_id, None, &generated_ids).await;
     assert_post_queue_snapshot(case, &post);
 }
 
@@ -1598,44 +1751,50 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
     case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-terminal-allows").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
     let active_id = case.pre_active_request_id.expect("active request id");
     let pending_id = case.claimed_request_id.expect("claimed request id");
     let active_created_at = "2026-03-23T00:00:10Z";
     let pending_created_at = "2026-03-23T00:00:20Z";
 
-    let active_doc_id = create_request(
-        &db.node,
-        &active_id.to_string(),
-        &session_id,
-        "pending",
-        active_created_at,
-    )
-    .await;
-    let pending_doc_id = create_request(
-        &db.node,
-        &pending_id.to_string(),
-        &session_id,
-        "pending",
-        pending_created_at,
-    )
-    .await;
+    let active_doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(
+                &active_id.to_string(),
+                &session_id,
+                active_created_at,
+            )
+            .state("pending"),
+        )
+        .await;
+    let pending_doc_id = actors
+        .create_request(
+            support::agent_requests::RequestSeed::new(
+                &pending_id.to_string(),
+                &session_id,
+                pending_created_at,
+            )
+            .state("pending"),
+        )
+        .await;
 
     let active_request = request_from_parts(
+        &actors,
         active_doc_id,
         active_id,
         &session_id,
         active_created_at,
         None,
     );
-    let mut active_lifecycle = lifecycle_for(&db.node, active_request, DEADLINE_SECS);
+    let mut active_lifecycle = lifecycle_for(&actors, active_request, DEADLINE_SECS);
     assert_eq!(
         active_lifecycle.claim().await.unwrap(),
         ClaimOutcome::Claimed
     );
 
     let generated_ids = std::collections::BTreeMap::new();
-    let pre = fetch_queue_runtime_snapshot(&db.node, &session_id, None, &generated_ids).await;
+    let pre = fetch_queue_runtime_snapshot(&actors, &session_id, None, &generated_ids).await;
     assert_pre_queue_snapshot(case, &pre);
 
     crate::support::begin_owned_execution(&mut active_lifecycle, &db.node)
@@ -1651,19 +1810,20 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
         .unwrap();
 
     let pending_request = request_from_parts(
+        &actors,
         pending_doc_id,
         pending_id,
         &session_id,
         pending_created_at,
         None,
     );
-    let mut pending_lifecycle = lifecycle_for(&db.node, pending_request, DEADLINE_SECS);
+    let mut pending_lifecycle = lifecycle_for(&actors, pending_request, DEADLINE_SECS);
     assert_eq!(
         pending_lifecycle.claim().await.unwrap(),
         ClaimOutcome::Claimed
     );
 
-    let post = fetch_queue_runtime_snapshot(&db.node, &session_id, None, &generated_ids).await;
+    let post = fetch_queue_runtime_snapshot(&actors, &session_id, None, &generated_ids).await;
     assert_post_queue_snapshot(case, &post);
 }
 
@@ -1671,10 +1831,11 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-cancel-drain").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
     let parent_request_id = "queue-deadline-cancel-parent";
     create_queue_request(
-        db.node.as_ref(),
+        &actors,
         parent_request_id,
         &session_id,
         "completed",
@@ -1689,7 +1850,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     let automated_id = case.automated_drained_request_ids[0];
     let user_id = case.preserved_user_pending_request_ids[0];
     create_queue_request(
-        db.node.as_ref(),
+        &actors,
         &automated_id.to_string(),
         &session_id,
         "pending",
@@ -1704,7 +1865,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     )
     .await;
     create_queue_request(
-        db.node.as_ref(),
+        &actors,
         &user_id.to_string(),
         &session_id,
         "pending",
@@ -1718,7 +1879,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
 
     let generated_ids = std::collections::BTreeMap::new();
     let pre = fetch_queue_runtime_snapshot(
-        &db.node,
+        &actors,
         &session_id,
         case.queue_key.as_deref(),
         &generated_ids,
@@ -1726,12 +1887,12 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     .await;
     assert_pre_queue_snapshot(case, &pre);
 
-    gents::interrupt_request(&db.node, parent_request_id)
+    gents::interrupt_request(&db.node, actors.agent().as_ref(), parent_request_id)
         .await
         .unwrap();
 
     let post = fetch_queue_runtime_snapshot(
-        &db.node,
+        &actors,
         &session_id,
         case.queue_key.as_deref(),
         &generated_ids,
@@ -1749,14 +1910,15 @@ async fn drive_claim_preserves_explicit_deadline(
     case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
 ) {
     let db = test_db("queue-deadline-explicit-deadline").await;
+    let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
     let request_id = case.claimed_request_id.expect("claimed request id");
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let created_at = support::agent_requests::canonical_now();
     let explicit_deadline_at =
         chrono::Utc::now() + chrono::Duration::seconds(case.pre_request_deadline.unwrap() as i64);
     let explicit_deadline = explicit_deadline_at.to_rfc3339();
     let doc_id = create_queue_request(
-        db.node.as_ref(),
+        &actors,
         &request_id.to_string(),
         &session_id,
         "pending",
@@ -1768,6 +1930,7 @@ async fn drive_claim_preserves_explicit_deadline(
     )
     .await;
     let request = request_from_parts(
+        &actors,
         doc_id,
         request_id,
         &session_id,
@@ -1777,13 +1940,13 @@ async fn drive_claim_preserves_explicit_deadline(
 
     let before_claim = chrono::Utc::now();
     let mut lifecycle = lifecycle_for(
-        &db.node,
+        &actors,
         request,
         case.synthesized_claim_deadline.unwrap() as u64,
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    let row = fetch_deadline_runtime_row(db.node.as_ref(), request_id).await;
+    let row = fetch_deadline_runtime_row(&actors, request_id).await;
     assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Claimed));
 
     let persisted_deadline = chrono::DateTime::parse_from_rfc3339(&row.deadline).unwrap();
@@ -1805,7 +1968,7 @@ async fn drive_claim_preserves_explicit_deadline(
 
 #[allow(clippy::too_many_arguments)]
 async fn create_queue_request(
-    node: &EmbeddedNode,
+    actors: &support::agent_requests::RequestActors,
     request_id: &str,
     session_id: &str,
     status: &str,
@@ -1815,6 +1978,10 @@ async fn create_queue_request(
     deadline: Option<&str>,
     node_did: Option<&str>,
 ) -> String {
+    assert!(
+        node_did.is_none(),
+        "queue fixtures are owned by the fixture runtime"
+    );
     let lifecycle_state = match status {
         "pending" => "pending",
         "processing" => "processing",
@@ -1825,61 +1992,21 @@ async fn create_queue_request(
         "error" => "failed",
         other => panic!("unsupported queue request status {other}"),
     };
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_created_at = escape_graphql_string(created_at);
-    let escaped_execution_origin = escape_graphql_string(execution_origin);
-    let node_did = escape_graphql_string(node_did.unwrap_or(NODE_DID));
-    let input_field = input
-        .map(|input| serde_json::from_str::<serde_json::Value>(input).expect("request input JSON"))
-        .map(|input| {
-            gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL")
+    let doc_id = actors
+        .create_request(support::agent_requests::RequestSeed {
+            input,
+            content: Some("queue deadline conformance"),
+            execution_origin: Some(execution_origin),
+            ..support::agent_requests::RequestSeed::new(request_id, session_id, created_at)
+                .state(lifecycle_state)
         })
-        .map(|input| format!(r#", input: {input}"#))
-        .unwrap_or_default();
-    let deadline_field = deadline
-        .map(|deadline| format!(r#", deadline: "{}""#, escape_graphql_string(deadline)))
-        .unwrap_or_default();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                purpose: "normal",
-                node_did: "{node_did}",
-                agent_id: "{AGENT_NAME}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "queue deadline conformance",
-                lifecycle_state: "{lifecycle_state}",
-                backend_id: "",
-                execution_origin: "{escaped_execution_origin}",
-                failure_reason: "",
-                created_at: "{escaped_created_at}",
-                retry_count: 0,
-                max_retries: {max_retries},
-                request_hop: 0{input_field}{deadline_field}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create queue request failed: {:?}",
-        response.errors
-    );
-
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 1
-            ) {{ _docID }}
-        }}"#
-    );
-    support::first_row::<support::DocIdRow>(&node.execute(&query).await, "AgentRequest").doc_id
+        .await;
+    if let Some(deadline) = deadline {
+        actors
+            .update_request(&doc_id, json!({ "deadline": deadline }))
+            .await;
+    }
+    doc_id
 }
 
 fn automated_queue_input(queue_key: &str, queued_after_request_id: &str) -> String {
@@ -1906,7 +2033,10 @@ fn user_queue_input() -> String {
     .to_string()
 }
 
-async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> DeadlineRuntimeRow {
+async fn fetch_deadline_runtime_row(
+    actors: &support::agent_requests::RequestActors,
+    request_id: usize,
+) -> DeadlineRuntimeRow {
     let escaped_request_id = escape_graphql_string(&request_id.to_string());
     let query = format!(
         r#"{{
@@ -1916,115 +2046,160 @@ async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> D
             ) {{ lifecycle_state deadline }}
         }}"#
     );
-    support::first_row::<DeadlineRuntimeRow>(&node.execute(&query).await, "AgentRequest")
-}
-
-async fn create_scoped_claim(db: &support::TestDb, node_did: &str) -> (String, String, String) {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = support::create_request_for_agent_with_signed_fields(
-        &db.node,
-        node_did,
-        &request_id,
-        &session_id,
-        "pending",
-        &created_at,
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
-    let mut request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    request.node_did = node_did.to_string();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        db.node.clone(),
-        AGENT_NAME,
-        node_did,
-        request,
-        DEADLINE_SECS,
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    (request_id, doc_id, session_id)
+    let response = actors
+        .agent_access
+        .execute(&query)
+        .await
+        .expect("deadline row");
+    serde_json::from_value(response["data"]["AgentRequest"][0].clone()).expect("deadline row")
 }
 
 #[tokio::test]
 async fn terminal_repair_sweep_ignores_foreign_did_claims() {
     let db = test_db("terminal-repair-scope-foreign").await;
-    let mut claims = Vec::new();
-    let expired =
-        escape_graphql_string(&(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
-    for node_did in [NODE_DID, "did:test:foreign-scope-owner"] {
-        let (_request_id, doc_id, _session_id) = create_scoped_claim(&db, node_did).await;
-        let escaped_doc = escape_graphql_string(&doc_id);
-        let mutation = format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}, input: {{ execution_lease_expires_at: "{expired}" }}) {{ _docID }} }}"#,
-        );
-        gents::ConfigAccess::transact_local_write(
-            &db.node,
-            None,
-            "test.expire_terminal_repair_fixture",
-            |txn| {
-                let mutation = mutation.clone();
-                Box::pin(async move {
-                    txn.execute(&mutation).await?;
-                    Ok::<_, anyhow::Error>(())
-                })
-            },
-        )
-        .await
-        .unwrap();
+    let actors = support::agent_requests::RequestActors::new(&db).await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = support::agent_requests::canonical_now();
+    let own_doc = actors
+        .create_request(support::agent_requests::RequestSeed::new(
+            &request_id,
+            &session_id,
+            &created_at,
+        ))
+        .await;
+    let request = actors.build_request(own_doc.clone(), request_id, session_id, created_at.clone());
+    let mut lifecycle = actors.lifecycle(request, DEADLINE_SECS, ExecutionOrigin::Interactive, "");
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-        claims.push(doc_id);
-    }
-    let foreign_before = fetch_request_snapshot(&db.node, &claims[1]).await;
-    let report = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID)
+    // A replica owned by another node's runtime, visible to the fixture Agent:
+    // the runtime root writes it as it would any replicated row, and the sweep
+    // must still ignore it because the node scope is foreign.
+    let foreign = tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-owner"))
         .await
         .unwrap();
+    let foreign_request_id = uuid::Uuid::new_v4().to_string();
+    let value = json!({
+        "request_id": foreign_request_id,
+        "purpose": "normal",
+        "node_did": gents::NodeIdentity::did(&foreign),
+        "agent_did": actors.agent_did(),
+        "session_id": uuid::Uuid::new_v4().to_string(),
+        "retry_root_request": foreign_request_id,
+        "content": "foreign replica",
+        "lifecycle_state": "pending",
+        "execution_origin": "interactive",
+        "created_at": created_at,
+        "retry_count": 0,
+        "max_retries": 3,
+    });
+    let agent = ::identity::Did::new(actors.agent_did()).unwrap();
+    let foreign_doc = gents::ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did()).unwrap(),
+    )
+    .transact_write("test.foreign_claim_replica", |txn| {
+        let (value, agent) = (&value, &agent);
+        Box::pin(async move {
+            let response = txn
+                .execute_with_variables(
+                    "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                    &json!({"input": value}),
+                )
+                .await?;
+            let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+            txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
+                .await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    })
+    .await
+    .unwrap();
+    actors
+        .set_lifecycle_state(&foreign_doc, RequestLifecycleState::Claimed)
+        .await;
+    let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    for doc_id in [&own_doc, &foreign_doc] {
+        actors
+            .update_request(doc_id, json!({ "execution_lease_expires_at": expired }))
+            .await;
+    }
+    let foreign_before = fetch_request_snapshot(&actors, &foreign_doc).await;
+    let report = RequestLifecycle::repair_terminal_requests_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        std::slice::from_ref(actors.agent()),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.repaired, 1);
     assert_eq!(
-        fetch_request_snapshot(&db.node, &claims[0])
+        fetch_request_snapshot(&actors, &own_doc)
             .await
             .lifecycle_state,
         RequestLifecycleState::Failed,
     );
     assert_eq!(
-        fetch_request_snapshot(&db.node, &claims[1]).await,
+        fetch_request_snapshot(&actors, &foreign_doc).await,
         foreign_before
     );
 }
 
-async fn assert_session_observes_request(
-    node: &EmbeddedNode,
-    session_id: &str,
-    request_id: &str,
-    expected: RequestLifecycleState,
-) {
-    assert_session_observes_request_with_authoritative_state(
-        node, session_id, request_id, expected, expected,
-    )
-    .await;
+async fn fetch_request_snapshot_with_access(
+    access: &gents::ConfigAccess,
+    doc_id: &str,
+) -> RequestSnapshot {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{
+            request_id lifecycle_state agent_did backend_id execution_origin
+            retry_parent_request retry_root_request superseded_by_request retry_count max_retries
+            claimed_at deadline failure_reason
+        }} }}"#,
+            escape_graphql_string(doc_id),
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    row.into()
 }
 
-async fn assert_session_observes_request_with_authoritative_state(
-    node: &EmbeddedNode,
+async fn fetch_request_lineage_with_access(
+    access: &gents::ConfigAccess,
+    filter: &str,
+) -> RequestLineageSnapshot {
+    let response = access.execute(&format!(
+        "{{ AgentRequest(filter: {{{filter}}}, limit: 1) {{ caused_by_trigger_id caused_by_trigger_kind }} }}"
+    )).await.unwrap();
+    serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap()
+}
+
+async fn assert_session_observes_request_with_access(
+    access: &gents::ConfigAccess,
     session_id: &str,
     request_id: &str,
     expected_observation: RequestLifecycleState,
     expected_authoritative: RequestLifecycleState,
+    node_did: &str,
+    agent_did: &str,
 ) {
-    let session = fetch_session_snapshot(node, session_id)
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{ {} }} }}"#,
+            escape_graphql_string(session_id),
+            gents_protocol::session::AGENT_SESSION_FIELDS,
+        ))
         .await
-        .expect("canonical session");
+        .unwrap();
+    let rows = response["data"]["AgentSession"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "exact session must be unambiguous");
+    let session = gents_protocol::session::decode_session_row(&rows[0])
+        .unwrap()
+        .session;
     assert_eq!(session.session_id, session_id);
-    assert_eq!(session.node_did, NODE_DID);
-    assert_eq!(session.agent_id, AGENT_NAME);
+    assert_eq!(session.node_did, node_did);
+    assert_eq!(session.agent_did, agent_did);
     assert!(
         session.closed_at.is_none(),
         "request terminality does not close the session"
@@ -2036,26 +2211,11 @@ async fn assert_session_observes_request_with_authoritative_state(
         .expect("latest request");
     assert_eq!(latest.request_id, request_id);
     assert_eq!(latest.lifecycle_state, expected_observation);
-    let request_id = escape_graphql_string(request_id);
-    let session_id = escape_graphql_string(session_id);
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
-        request_id: {{_eq: "{request_id}"}}, session_id: {{_eq: "{session_id}"}}
-    }}) {{ _docID node_did requester_did agent_id lifecycle_state }} }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "request observation query: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .expect("request rows");
+    let response = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{ _docID node_did requester_did agent_did lifecycle_state }} }}"#,
+        escape_graphql_string(request_id), escape_graphql_string(session_id),
+    )).await.unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "exact request must be unambiguous");
     assert_eq!(
         rows[0]["_docID"].as_str(),
@@ -2067,16 +2227,58 @@ async fn assert_session_observes_request_with_authoritative_state(
     );
     assert_eq!(
         rows[0]["node_did"].as_str(),
-        Some(session.node_did.as_str()),
-        "session observation must reference its owner's request"
+        Some(session.node_did.as_str())
     );
     assert_eq!(
         rows[0]["requester_did"].as_str(),
-        session.requester_did.as_deref(),
-        "absent requester scope is exact, not a wildcard"
+        session.requester_did.as_deref()
     );
     assert_eq!(
-        rows[0]["agent_id"].as_str(),
-        Some(session.agent_id.as_str())
+        rows[0]["agent_did"].as_str(),
+        Some(session.agent_did.as_str())
     );
+}
+
+async fn assert_session_observes_request(
+    actors: &support::agent_requests::RequestActors,
+    session_id: &str,
+    request_id: &str,
+    expected: RequestLifecycleState,
+) {
+    assert_session_observes_request_with_authoritative_state(
+        actors, session_id, request_id, expected, expected,
+    )
+    .await;
+}
+
+async fn assert_session_observes_request_with_authoritative_state(
+    actors: &support::agent_requests::RequestActors,
+    session_id: &str,
+    request_id: &str,
+    expected_observation: RequestLifecycleState,
+    expected_authoritative: RequestLifecycleState,
+) {
+    assert_session_observes_request_with_access(
+        &actors.agent_access,
+        session_id,
+        request_id,
+        expected_observation,
+        expected_authoritative,
+        actors.node_did(),
+        actors.agent_did(),
+    )
+    .await;
+}
+
+async fn activate_workspace_fixture(
+    actors: &support::agent_requests::RequestActors,
+    doc_id: &str,
+) -> anyhow::Result<()> {
+    gents::__test_internals::activate_workspace_bound_request_with_identity(
+        &actors.node,
+        doc_id,
+        actors.agent_did().parse()?,
+        Some(actors.agent().as_ref()),
+    )
+    .await
 }

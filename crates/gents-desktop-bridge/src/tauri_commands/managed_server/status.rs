@@ -2,7 +2,10 @@ use super::authority::suggested_tool_root;
 use super::ensure_allowed;
 use super::native::{native_service, run_native};
 use super::pairing::pairing_is_ready;
-use super::port::{observe_port_readiness, occupied_port_message, PortReadiness};
+use super::port::{
+    observe_port_readiness, occupied_port_message, status_unreadable_error, user_status_signer,
+    PortReadiness,
+};
 use super::preference::load_bound_preference;
 use super::readiness::{
     managed_selection_outdated_message, refused_runtime_store, CRASH_LOOP_RESTARTS,
@@ -39,7 +42,9 @@ where
         None
     };
     let port = match state.policy.node_home.as_deref() {
-        Some(node_home) => observe_port_readiness(node_home).await?,
+        Some(node_home) => {
+            observe_port_readiness(node_home, user_status_signer(state).await.as_ref()).await?
+        }
         None => PortReadiness::NotListening,
     };
     let mut managed = state.managed_server.lock().await;
@@ -71,6 +76,12 @@ where
 
     match port {
         PortReadiness::Ready(external) => status = project_external_status(external, &native),
+        PortReadiness::StatusUnreadable { public, cause } => {
+            let unreadable = status_unreadable_error(&cause);
+            status = project_external_status(public, &native);
+            status.error = Some(unreadable.message);
+            status.error_code = Some(unreadable.code);
+        }
         PortReadiness::Outdated { version } => {
             let selected = run_native(native_service(app, state)?, |service| {
                 service.has_managed_executable()
@@ -151,7 +162,7 @@ pub(super) fn job_sample<'a>(
     last_exit: Option<&'a gents_server::native_service::ServiceExit>,
 ) -> JobSample<'a> {
     match (port, last_exit) {
-        (PortReadiness::Ready(_), _) => JobSample::Ready,
+        (PortReadiness::Ready(_) | PortReadiness::StatusUnreadable { .. }, _) => JobSample::Ready,
         _ if !job_loaded => JobSample::Unloaded,
         (_, Some(exit)) => JobSample::Exited(exit),
         (_, None) => JobSample::Running,

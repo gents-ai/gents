@@ -2,25 +2,25 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "fixture-coordinator",
       "display_name": "Fixture coordinator",
       "description": "A tool-less agent bound to the coordinator slot.",
       "context_id": "fixture-coordinator-context",
-      "inference_profile_id": "gents:inference-slot:coordinator"
+      "inference_profile_id": "gents:inference-slot:coordinator",
+      "agent_slot": "fixture-coordinator"
     },
     {
-      "agent_id": "fixture-worker",
       "display_name": "Fixture worker",
       "description": "A tool-less agent bound to the worker slot.",
       "context_id": "fixture-worker-context",
-      "inference_profile_id": "gents:inference-slot:worker"
+      "inference_profile_id": "gents:inference-slot:worker",
+      "agent_slot": "fixture-worker"
     },
     {
-      "agent_id": "fixture-verifier",
       "display_name": "Fixture verifier",
       "description": "A tool-less agent bound to the verifier slot.",
       "context_id": "fixture-verifier-context",
-      "inference_profile_id": "gents:inference-slot:verifier"
+      "inference_profile_id": "gents:inference-slot:verifier",
+      "agent_slot": "fixture-verifier"
     }
   ],
   "contexts": [
@@ -85,7 +85,7 @@
     {
       "task_id": "fixture-worker-task",
       "display_name": "fixture-worker-task",
-      "agent_id": "fixture-worker",
+      "agent_did": "gents:agent-slot:fixture-worker",
       "prompt_template": "./tasks/fixture_worker_task/prompt.md"
     }
   ]

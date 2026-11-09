@@ -382,6 +382,7 @@ fn freeze_fault_context<'a>(
         caused_by_invocation_id: "inv-1".into(),
         caused_by_correlation: "corr-1".into(),
         documents: docs,
+        route: Default::default(),
     }
 }
 

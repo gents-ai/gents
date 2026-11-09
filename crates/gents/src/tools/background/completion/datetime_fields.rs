@@ -9,7 +9,7 @@ pub(crate) struct AgentToolCallDateTimeRow {
 }
 
 pub(super) async fn agent_tool_call_datetime_update_fragment(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     doc_id: &str,
     omit: &[&str],
 ) -> Result<String> {
@@ -24,19 +24,12 @@ pub(super) async fn agent_tool_call_datetime_update_fragment(
             }}
         }}"#
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "agent_tool_call_datetime_update_fragment",
-    )
-    .await?;
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentToolCall"))
-        .and_then(|v| serde_json::from_value::<Vec<AgentToolCallDateTimeRow>>(v.clone()).ok())
-        .and_then(|mut rows| rows.pop())
-        .unwrap_or_default();
+    let response = access.execute(&query).await?;
+    let mut rows: Vec<AgentToolCallDateTimeRow> =
+        serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
+    let row = rows
+        .pop()
+        .context("background completion tool row not found")?;
 
     let mut fields = Vec::new();
     push_datetime_field(&mut fields, omit, "started_at", row.started_at.as_deref());

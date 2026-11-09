@@ -2,11 +2,10 @@ use std::sync::Arc;
 
 use super::super::*;
 use super::support::*;
-use crate::ensure_runtime_schemas;
 use crate::tools::surface::ToolCeiling;
 
 #[tokio::test]
-async fn builder_rejects_node_without_signing_did() {
+async fn builder_requires_backend_admission_before_checking_node_identity() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let identity = Arc::new(test_identity("builder-unsigned-node"));
 
@@ -18,33 +17,44 @@ async fn builder_rejects_node_without_signing_did() {
         .build()
         .await
     {
-        Ok(_) => panic!("builder should reject an unsigned node"),
+        Ok(_) => panic!("builder should reject a node without backend protection admission"),
         Err(error) => error,
     };
 
-    assert!(error
-        .to_string()
-        .contains("EmbeddedNode configured with a node signing DID"));
+    assert_eq!(
+        error.to_string(),
+        "fresh backend protection provenance is required"
+    );
 }
 
 #[tokio::test]
 async fn builder_includes_custom_tools_in_resolved_tool_surface() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("builder-custom-tools"));
+    let (db, _owner_identity, owner) = test_node("builder-custom-tools").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     insert_backend(
-        &node,
         identity.did(),
+        &owner,
         "builder-backend",
         "http://127.0.0.1:8777/v1",
     )
     .await;
 
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &identity::Did::new(owner.actor_did().expect("signed fixture owner")).unwrap(),
+    )
+    .await
+    .unwrap();
+    let expected_agent_did = binding.agent_did.clone();
     let agent = Gents::builder()
         .node(node.clone())
+        .backend_admission(db.home.backend_admission())
         .identity(identity.clone())
         .tool_ceiling(ToolCeiling::meta_only())
         .agent("policy-ops")
+        .identity_binding(binding)
         .backend_id("builder-backend")
         .system_prompt("You manage policies.")
         .custom_tool(EchoTool)
@@ -54,7 +64,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
         .unwrap();
 
     assert_eq!(agent.node_did(), identity.did());
-    assert_eq!(agent.default_agent_id(), "policy-ops");
+    assert_eq!(agent.default_agent_did(), expected_agent_did);
     assert!(agent.document_runtime_context().is_none());
     assert_eq!(
         agent.agents()[0].tools.custom_tool_names(),
@@ -73,12 +83,13 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
 
 #[tokio::test]
 async fn builder_requires_resolvable_backend_documents() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("builder-missing-backend"));
+    let (db, _owner_identity, _owner) = test_node("builder-missing-backend").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
 
     let error = match Gents::builder()
         .node(node)
+        .backend_admission(db.home.backend_admission())
         .identity(identity)
         .agent("policy-ops")
         .backend_id("missing-backend")
@@ -97,12 +108,12 @@ async fn builder_requires_resolvable_backend_documents() {
 
 #[tokio::test]
 async fn builder_rejects_backend_vetoed_by_measured_health() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("builder-measured-unhealthy"));
+    let (db, _owner_identity, owner) = test_node("builder-measured-unhealthy").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     insert_backend(
-        &node,
         identity.did(),
+        &owner,
         "builder-vetoed-backend",
         "http://127.0.0.1:8778/v1",
     )
@@ -119,6 +130,7 @@ async fn builder_rejects_backend_vetoed_by_measured_health() {
 
     let error = match Gents::builder()
         .node(node)
+        .backend_admission(db.home.backend_admission())
         .identity(identity)
         .backend_health(backend_health)
         .agent("policy-ops")

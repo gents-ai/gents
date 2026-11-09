@@ -54,6 +54,3 @@ impl JobBinding {
             .collect()
     }
 }
-
-#[cfg(test)]
-mod operator_control_conformance;

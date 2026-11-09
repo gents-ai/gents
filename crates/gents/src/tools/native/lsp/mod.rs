@@ -76,7 +76,7 @@ pub struct LspToolConfig {
     pub file: FileToolMode,
     pub workspace: PathBuf,
     pub session_id: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub digest: String,
     pub servers: Vec<CatalogServer>,
     pub constraints: CommandConstraints,
@@ -364,7 +364,7 @@ impl Tool for LspTool {
                         crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
                             .and_then(|context| context.runtime_home),
                     session_id,
-                    agent_id: self.config.agent_id.clone(),
+                    agent_did: self.config.agent_did.clone(),
                     workspace_root: workspace.clone(),
                     server_name: server.name.clone(),
                     config_digest: self.config.digest.clone(),

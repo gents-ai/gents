@@ -1,13 +1,18 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
+use std::sync::Arc;
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::store::graphql::escape_graphql_string;
 
 const SOURCE_SCAN_PAGE_SIZE: usize = 1_000;
 
-pub(crate) async fn load_doc_ids(node: &EmbeddedNode, collection: &str) -> Result<Vec<String>> {
-    load_source_rows(node, collection, None, None)
+pub(crate) async fn load_doc_ids(
+    node: &Arc<EmbeddedNode>,
+    collection: &str,
+    actor: &str,
+) -> Result<Vec<String>> {
+    load_source_rows(node, collection, None, None, actor)
         .await?
         .into_iter()
         .map(|row| document_id(&row).map(str::to_owned))
@@ -22,10 +27,11 @@ fn document_id(row: &Value) -> Result<&str> {
 }
 
 pub(crate) async fn load_source_rows(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     collection: &str,
     field: Option<&str>,
     filter: Option<&str>,
+    actor: &str,
 ) -> Result<Vec<Value>> {
     crate::store::graphql::validate_collection_identifier(collection)?;
     if let Some(field) = field {
@@ -38,6 +44,10 @@ pub(crate) async fn load_source_rows(
     crate::store::graphql::validate_graphql_filter_fragment(base)?;
     let mut after = String::new();
     let mut documents = Vec::new();
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor)?,
+    );
     loop {
         let filter = if after.is_empty() {
             base.to_owned()
@@ -47,16 +57,17 @@ pub(crate) async fn load_source_rows(
                 escape_graphql_string(&after)
             )
         };
-        let response = graphql_with_transaction_retry(
-            node,
+        let response = access.execute(
             &format!(
                 "{{ {collection}(filter: {filter}, order: {{ _docID: ASC }}, limit: {SOURCE_SCAN_PAGE_SIZE}) {{ _docID {} }} }}",
                 field.unwrap_or_default(),
             ),
-            "event.source_scan",
         )
         .await?;
-        let page = rows::<Value>(&response, collection)?;
+        let page = response["data"][collection]
+            .as_array()
+            .context("event source scan omitted its result")?
+            .clone();
         for row in &page {
             let id = document_id(row)?;
             anyhow::ensure!(

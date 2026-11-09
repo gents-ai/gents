@@ -264,10 +264,10 @@ export function WorkerStep({
   const summary = reached?.summary ?? null;
   const name = summary?.title ?? p.name ?? "a session";
   const sessionId = reached?.request.sessionId ?? p.sessionId ?? null;
-  const agentId = summary?.agentId ?? null;
-  const mark = agentId ? (
+  const agentDid = summary?.agentDid ?? null;
+  const mark = agentDid ? (
     <AgentInitials
-      name={agentName(agentId, deployment)}
+      name={agentName(agentDid, deployment)}
       className="size-4 text-[8px]"
     />
   ) : undefined;
