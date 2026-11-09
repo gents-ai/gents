@@ -1,4 +1,0 @@
----- MODULE MCClientSubmissionContentionOwnerUnreachable ----
-EXTENDS ClientSubmissionContention
-
-====

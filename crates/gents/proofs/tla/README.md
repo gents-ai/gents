@@ -41,21 +41,26 @@ See `../README.md` for how this fits the broader formal-verification model.
   drops the cadence premise and loses an admission to back-to-back renewals;
   `StartWitness` reproduces the traced renewal/dispatch-start conflict that
   green absorbs.
-- `ClientSubmissionContention` — a User's signed client submission racing
-  writes to the documents it reads. The reservation
-  (`request.client.reserve_session`) binds the session and selected Agent the
-  User signs; the submission (`request.client.submit`) reads the
-  `AgentSession` document and creates the User-signed `AgentRequest`. The
-  working Agent refreshes the session observation as it publishes each
-  message, so either phase's commit aborts. `NoConflictLoss`, `CreatedOnce`
-  and `EverySubmissionSettles` hold when both phases are signed-conflict
-  rebuilds (Lean `clientSignedWriteMayRetry`: only a confirmed abort
-  re-reads, re-plans and signs a fresh graph; a lost response is reported)
-  and fewer refreshes land in one attempt series than it has attempts.
-  `SingleAttempt` is the found submission race (the busy-session mailbox
-  test); `ReserveSingleAttempt` is the found reservation race ("a partial read
-  lost to a newer merge" in the live backgrounding run); `ShortBudget` shows
-  the overlap premise is load-bearing.
+- `ClientSubmissionContention` — a User's optimistic chat send (Lean
+  `ClientOptimisticSend`) racing writes to the documents it reads. The client
+  picks the request identity, shows the message pending, keeps its payload
+  and sends; a reply confirms it, and a refusal or the client's deadline
+  shows it failed with Retry, which resends under the same identity. Each
+  send is the reservation (`request.client.reserve_session`) and the
+  submission (`request.client.submit`), whose commits abort when the working
+  Agent refreshes the session observation; both are signed-conflict rebuilds
+  (Lean `clientSignedWriteMayRetry`). The runtime's create is idempotent on
+  the request identity (`send_client_request`, the unique `retry_key`).
+  `NoConflictLoss`, `CreatedOnce`, `RetainedUntilConfirmed`,
+  `FailedOffersRetry`, `PendingResolves` and `EverySendSettles` hold under
+  lost replies, refusals and retries racing an earlier send of the same
+  identity. `SingleAttempt` is the found submission race (the busy-session
+  mailbox test); `ReserveSingleAttempt` is the found reservation race ("a
+  partial read lost to a newer merge" in the live backgrounding run);
+  `ShortBudget` shows the overlap premise is load-bearing; `RetryFreshId`
+  retries under a new identity and duplicates the turn; `NoPayload` drops the
+  payload of an unconfirmed message and leaves a failed message with no
+  Retry.
 - `PackUxWatch` — a pack page's live data watch (`desktop_ux_data_watch`)
   racing runtime restarts, window node selection, unwatch, window
   destruction and four runtime hazards (stopped for good, credentials
@@ -456,15 +461,12 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCBackgroundAdmissionContentionUnspaced.cfg` | as green, `RenewalSpaced = FALSE` | `NoConflictLoss` intentionally VIOLATED: two back-to-back renewals and two children exhaust call 2's 4 receipt attempts | 33,653 distinct states before counterexample; 68,174 generated | 25 | <1s |
 | `MCBackgroundAdmissionContentionRenewalWitness.cfg` | green constants | `RenewalNeverLost` intentionally VIOLATED: admission bumps exhaust a renewal poll, which green's re-drive recovers | 286,417 distinct states before counterexample; 580,008 generated | 33 | 1s |
 | `MCBackgroundAdmissionContentionStartWitness.cfg` | green constants | `StartNeverConflicts` intentionally VIOLATED: a renewal commits while call 1's dispatch start is open, the traced conflict | 46 distinct states before counterexample; 94 generated | 7 | <1s |
-| `MCClientSubmissionContention.cfg` | `Publications = 3`, `Attempts = 4`, `LostResponse`, `Recovery`, `BytesLost`, `ReplayIdentical`, `OwnerReachable`, `SetAsideOffered`, no `ReplayRejects`, `UnretainedPolicy = "wait"` | Passes `TypeOK`, `NoConflictLoss`, `CreatedOnce`, `NotDeliveredIsProven`, `NeverBlocked`, `EverySubmissionSettles`, `UnconfirmedResolves` | 314 distinct states; 664 generated | 14 | <1s (OpenJDK 25, 4 workers) |
-| `MCClientSubmissionContentionSingleAttempt.cfg` | `Publications = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: ReserveBegin, ReserveCommit, ClientBegin, AgentPublish, ClientCommit | 16 distinct states; 18 generated | 6 | <1s |
-| `MCClientSubmissionContentionReserveSingleAttempt.cfg` | `Publications = 1`, `ReserveRedrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: ReserveBegin, AgentPublish, ReserveCommit | 17 distinct states; 18 generated | 7 | <1s |
-| `MCClientSubmissionContentionShortBudget.cfg` | `Publications = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four AgentPublish/ReserveCommit rounds | 123 distinct states; 163 generated | 12 | <1s |
-| `MCClientSubmissionContentionFreshReplay.cfg` | `Publications = 1`, `Attempts = 2`, `Recovery`, `ReplayIdentical = FALSE` | `CreatedOnce` intentionally VIOLATED: AgentPublish, ReserveBegin, ReserveCommit, ClientBegin, ClientCommitInFlight, ReconcileRetained (fresh request), OriginalLands | 45 distinct states; 62 generated | 9 | <1s |
-| `MCClientSubmissionContentionUnretained.cfg` | as `FreshReplay` with `ReplayIdentical`, `BytesLost`, `UnretainedPolicy = "refuse"` | `NotDeliveredIsProven` intentionally VIOLATED: AgentPublish, ReserveBegin, ReserveCommit, ClientBegin, ClientCommitInFlight, LoseBytes, CheckUnretained (not delivered while in flight) | 64 distinct states; 100 generated | 10 | <1s |
-| `MCClientSubmissionContentionUnretainedWait.cfg` | as `Unretained` with `UnretainedPolicy = "wait"`, `SetAsideOffered = FALSE` | `CreatedOnce` holds; `UnconfirmedResolves` intentionally VIOLATED: ReserveBegin, ReserveCommit, AgentPublish, ClientBegin, ClientCommitInFlight, OriginalAborts, LoseBytes, then stuttering | 53 distinct states; 101 generated | 9 | <1s |
-| `MCClientSubmissionContentionOwnerUnreachable.cfg` | as `UnretainedWait` with `OwnerReachable = FALSE`, no `BytesLost`, `SetAsideOffered` | `UnconfirmedResolves` intentionally VIOLATED: ReserveBegin, ReserveCommit, AgentPublish, ClientBegin, ClientCommitInFlight, OriginalLands, then stuttering | 33 distinct states; 44 generated | 8 | <1s |
-| `MCClientSubmissionContentionReplayRejectedInFlight.cfg` | as `OwnerUnreachable` with `OwnerReachable`, `ReplayRejects` | `NotDeliveredIsProven` VIOLATED, a reported gap: AgentPublish, ReserveBegin, ReserveCommit, ClientBegin, ClientCommitInFlight, ReplayRejected | 43 distinct states; 60 generated | 9 | <1s |
+| `MCClientSubmissionContention.cfg` | `Publications = 3`, `Attempts = 4`, `Redrive`, `ReserveRedrive`, `LostReply`, `Refusals`, `MaxSends = 3`, no `RetryFreshId`, no `PayloadLost` | Passes `TypeOK`, `NoConflictLoss`, `CreatedOnce`, `RetainedUntilConfirmed`, `FailedOffersRetry`, `PendingResolves`, `EverySendSettles` | 33,960 distinct states; 219,232 generated | 23 | 3s (OpenJDK 25, 4 workers) |
+| `MCClientSubmissionContentionSingleAttempt.cfg` | `Publications = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Compose, ReserveCommit, AgentPublish, SubmitCommit | 36 distinct states; 58 generated | 8 | <1s |
+| `MCClientSubmissionContentionReserveSingleAttempt.cfg` | `Publications = 1`, `ReserveRedrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Compose, AgentPublish, ReserveCommit | 36 distinct states; 58 generated | 8 | <1s |
+| `MCClientSubmissionContentionShortBudget.cfg` | `Publications = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four AgentPublish/ReserveCommit rounds | 237 distinct states; 513 generated | 12 | <1s |
+| `MCClientSubmissionContentionRetryFreshId.cfg` | `Publications = 0`, `LostReply`, `MaxSends = 2`, `RetryFreshId` | `CreatedOnce` intentionally VIOLATED: Compose, Timeout, ReserveCommit, SubmitCommit (reply not yet received), Retry under a new identity, ReserveCommit, SubmitCommit | 48 distinct states before counterexample; 75 generated | 9 | <1s |
+| `MCClientSubmissionContentionNoPayload.cfg` | `Publications = 0`, `LostReply`, `MaxSends = 2`, `PayloadLost` | `FailedOffersRetry` intentionally VIOLATED: Compose, DropPayload, Timeout leaves a failed message with no Retry | 32 distinct states before counterexample; 47 generated | 4 | <1s |
 | `MCSessionHeadObservation.cfg` | `Order = "lean"`, `HeadSeed = TRUE`, `Refusals = TRUE` | Passes `TypeOK`, `HeadFollowsBoundary`, `ReplyObserved` | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationRequestIdTie.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `HeadFollowsBoundary` intentionally VIOLATED: ClaimA, CompleteA, AdmitB, ClaimB leaves the head on A | 77 distinct states before counterexample; 99 generated | 6 | <1s |
 | `MCSessionHeadObservationRequestIdTieLiveness.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: the #3604 schedule; after reopen B completes and every load omits it | 620 distinct states; 1,056 generated | 11 | <1s |
