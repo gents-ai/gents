@@ -91,6 +91,8 @@ pub enum MenuId {
     UxPlugins,
     Packs,
     Profiles,
+    /// The accounts' limits, as the desktop's Usage limits (`ProviderUsage.tsx:329`).
+    Usage,
     /// The selected row's further acts.
     More,
     /// The source's question, as `Update::Ask` titles it.
@@ -121,6 +123,7 @@ impl MenuId {
             MenuId::UxPlugins => "UX Plugins",
             MenuId::Packs => "Packs",
             MenuId::Profiles => "Inference profile",
+            MenuId::Usage => "Usage limits",
             MenuId::More => "Actions",
             MenuId::Ask => "Question",
             MenuId::General => "General",
@@ -1093,6 +1096,7 @@ pub fn menu(id: MenuId) -> (&'static [SidebarRow], &'static str) {
         MenuId::Packs => (&[], " enter open or install · . more · esc back"),
         MenuId::UxPlugins | MenuId::Developer | MenuId::Experimental => (&[], " esc back"),
         MenuId::Profiles => (&[], " enter use · esc back"),
+        MenuId::Usage => (&[], " enter refresh · esc back"),
         MenuId::More => (&[], " enter choose · esc back"),
         MenuId::Ask => (&[], " enter choose · esc cancel"),
         MenuId::General => (&[], " enter change · esc back"),

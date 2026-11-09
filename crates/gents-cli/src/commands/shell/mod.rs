@@ -8,6 +8,7 @@ mod sections;
 mod setup;
 mod source;
 mod tree;
+mod usage;
 mod work;
 
 #[cfg(test)]

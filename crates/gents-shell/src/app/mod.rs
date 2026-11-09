@@ -1232,6 +1232,7 @@ impl App {
         match effect {
             Effect::OpenPicker => self.push_layer(LayerKind::Picker),
             Effect::OpenKeys => self.push_layer(LayerKind::Keys),
+            Effect::OpenMenu(id) => self.push_layer(LayerKind::Menu(id)),
             Effect::ClearTab => {
                 let tab = &self.tabs[self.active];
                 if tab.parent.is_some() {
@@ -3190,6 +3191,16 @@ mod tests {
     }
 
     #[test]
+    fn usage_opens_the_limits_menu_and_reads_it() {
+        let (mut app, intents) = connected();
+        intents.try_iter().for_each(drop);
+        type_text(&mut app, "/usage");
+        press(&mut app, "enter");
+        assert_eq!(top_layer(&app), LayerKind::Menu(MenuId::Usage));
+        assert_eq!(sent(&intents), [Intent::ReadMenu(MenuId::Usage)]);
+    }
+
+    #[test]
     fn clear_starts_a_fresh_session_with_the_same_agent() {
         let (mut app, intents) = cleared();
         let tabs = app.tabs.len();
@@ -3714,7 +3725,7 @@ mod tests {
         for _ in 0..20 {
             press(&mut app, "ctrl-n");
         }
-        assert_eq!(app.slash, Some(9));
+        assert_eq!(app.slash, Some(10));
         type_text(&mut app, "c");
         assert_eq!(app.slash, Some(0));
         press(&mut app, "enter");
@@ -3856,7 +3867,7 @@ mod tests {
         let s = screen(&app);
         assert_eq!(find(&s, " Commands "), Some((3, 4)));
         assert_eq!(find(&s, "/quit"), None);
-        for _ in 0..6 {
+        for _ in 0..7 {
             press(&mut app, "ctrl-n");
         }
         let s = screen(&app);
@@ -3873,7 +3884,7 @@ mod tests {
     fn switch_key_set_is_not_a_slash_command() {
         let mut app = with_right_pane(App::new(Vim, 132, 36));
         type_text(&mut app, "/");
-        assert_eq!(app.slash_matches().len(), 10);
+        assert_eq!(app.slash_matches().len(), 11);
         type_text(&mut app, "switch");
         assert!(app.slash_matches().is_empty());
         assert!(find(&screen(&app), "no matches").is_some());
@@ -4787,7 +4798,7 @@ mod tests {
     fn skills_list_after_the_commands() {
         let (mut app, _intents) = connected();
         type_slash(&mut app, "/");
-        for _ in 0..10 {
+        for _ in 0..11 {
             press(&mut app, "ctrl-n");
         }
         let s = screen(&app);
@@ -4803,7 +4814,7 @@ mod tests {
         type_text(&mut app, "/");
         app.apply(commit_skill("other"));
         let rows = app.slash_matches();
-        assert_eq!(rows.len(), 10);
+        assert_eq!(rows.len(), 11);
         assert!(rows.iter().all(|row| row.name != "commit"));
     }
 

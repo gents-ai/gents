@@ -334,6 +334,8 @@ pub enum MenuAct {
         label: String,
     },
     Pack(PackAct),
+    /// Reads every account's limits from its provider again (`ProviderUsage.tsx:343-356`).
+    RefreshUsage,
 }
 
 /// What a row of the Packs menu does.

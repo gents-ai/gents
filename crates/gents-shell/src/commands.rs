@@ -1,9 +1,10 @@
-use crate::sample::{Scope, View};
+use crate::sample::{MenuId, Scope, View};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
     OpenPicker,
     OpenKeys,
+    OpenMenu(MenuId),
     ClearTab,
     CloseTab,
     ShowSidebar(View),
@@ -67,6 +68,7 @@ pub const COMMANDS: &[Command] = &[
     slash_only("goal", "/goal", "set a goal the agent works toward until it's met", Effect::Goal),
     slash_only("clear", "/clear", "start a new session with this agent", Effect::ClearTab),
     slash_only("jobs", "/jobs", "show background jobs", Effect::ShowSidebar(View::Agents)),
+    slash_only("usage", "/usage", "show your providers' usage limits", Effect::OpenMenu(MenuId::Usage)),
     command(Some("help"), "/help", &[], "show the keys", Effect::OpenKeys),
     command(Some("quit"), "Quit", &["q", "q!", "qa", "wq"], "quit", Effect::Quit),
     slash_only("dismiss", "/dismiss", "dismiss the prompt above", Effect::DismissPrompt),

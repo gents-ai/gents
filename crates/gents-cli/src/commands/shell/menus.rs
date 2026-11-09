@@ -105,6 +105,8 @@ pub(super) async fn read_menu(
         MenuId::Profiles => Ok(Vec::new()),
         // Read by `packs::read`, with the registry search the source holds.
         MenuId::Packs => Ok(Vec::new()),
+        // Read by `usage::read`, which the source also runs for a refresh.
+        MenuId::Usage => Ok(Vec::new()),
     };
     rows.map_err(|error| format!("{error:#}"))
 }
@@ -221,6 +223,7 @@ pub(super) async fn act(
             | PackAct::Info { .. }
             | PackAct::Keyword(_),
         ) => unreachable!("the source runs Packs' acts itself"),
+        MenuAct::RefreshUsage => unreachable!("the source reads usage itself"),
     }
 }
 

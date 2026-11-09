@@ -29,7 +29,7 @@ use super::client::{Client, ClientError, ClientEvent};
 use super::sections::{self, new_id};
 use super::tree::git_changes;
 use super::work::{self, Work};
-use super::{forms, items, menus, packs, prefs, setup};
+use super::{forms, items, menus, packs, prefs, setup, usage};
 use crate::commands::accounts::account_rows;
 use crate::commands::codex::relay::agent_route_target;
 use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
@@ -506,6 +506,10 @@ impl Source {
                 act: MenuAct::Pack(act),
                 ..
             } => self.pack_act(act),
+            Intent::Act {
+                act: MenuAct::RefreshUsage,
+                ..
+            } => self.refresh_usage(),
             Intent::Act { menu, act } => self.act(menu, act),
             Intent::ReadSetup => self.answer_setup(Update::Setup, |access, node| async move {
                 let rows = account_rows(&access, &node, None, Utc::now()).await;
@@ -853,6 +857,18 @@ impl Source {
         });
     }
 
+    /// Every account's limits asked of its provider again, off the chat loop, as the desktop's
+    /// refresh button says "Refreshing…" until they land.
+    fn refresh_usage(&self) {
+        self.tell(Update::Notice("Refreshing…".to_string()));
+        let (work, updates) = (self.work.clone(), self.updates.clone());
+        self.runtime.spawn(async move {
+            let rows = usage::read(&work, true).await;
+            let menu = MenuId::Usage;
+            let _ = updates.send(Input::Runtime(Update::Menu { menu, rows }));
+        });
+    }
+
     /// Off the chat loop, so a slow owner holds up no other intent. A notice the read answers
     /// follows its rows.
     fn read_menu(&self, menu: MenuId) {
@@ -871,6 +887,7 @@ impl Source {
                         Err(off) => (Err(off), None),
                     }
                 }
+                MenuId::Usage => (usage::read(&work, false).await, None),
                 _ => (menus::read_menu(&work, &home, &principal, menu).await, None),
             };
             let _ = updates.send(Input::Runtime(Update::Menu { menu, rows }));
