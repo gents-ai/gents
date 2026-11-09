@@ -220,6 +220,24 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         self.load_message(header_doc_id).await
     }
 
+    pub(crate) async fn load_message_segments(
+        &mut self,
+        header_doc_id: &str,
+    ) -> Result<(
+        gents_protocol::output::TranscriptMessage,
+        Vec<gents_protocol::output::rows::OutputSegmentRow>,
+    )> {
+        let reconstructed = reconstruct_scoped_message_with_facts(
+            ReadAccess::Txn(self.txn),
+            header_doc_id,
+            self.node_did,
+            self.requester_did,
+            &mut self.cache,
+        )
+        .await?;
+        Ok((reconstructed.header.message, reconstructed.segments))
+    }
+
     pub(crate) async fn load_message(
         &mut self,
         header_doc_id: &str,

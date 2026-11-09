@@ -873,7 +873,7 @@ async fn fork_in_txn(
     reader.observe_headers(&headers);
     for origin in &retained {
         copied_tools.extend(message_tool_references(&origin.message));
-        let (resolved, segments) = reader.load_message(&origin.doc_id).await?;
+        let (resolved, segments) = reader.load_message_segments(&origin.doc_id).await?;
         anyhow::ensure!(
             resolved == origin.message,
             "fork origin header changed or conflicts during dependency validation"
