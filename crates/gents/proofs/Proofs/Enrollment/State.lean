@@ -265,6 +265,14 @@ structure RouteReceipt where
   applied : Bool
   deriving DecidableEq, Repr
 
+/-- A local copy already delivered to a node. Revoking a grant cannot erase
+copies held by that node or outside Gents. -/
+structure ReplicatedCopy where
+  holder : Did
+  collection : String
+  documentId : String
+  deriving DecidableEq, Repr
+
 structure State where
   observedOffers : Finset Offer := ∅
   adminPins : Finset NetworkAdminPin := ∅
@@ -276,6 +284,7 @@ structure State where
   memberships : Finset Membership := ∅
   routeReceipts : Finset RouteReceipt := ∅
   appliedRoutes : Finset AppliedRoute := ∅
+  replicatedCopies : Finset ReplicatedCopy := ∅
   deriving DecidableEq
 
 def challengeBindingFor (r : Request) : ChallengeBinding :=
