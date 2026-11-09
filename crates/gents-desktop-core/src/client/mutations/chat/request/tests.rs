@@ -1174,57 +1174,126 @@ async fn chat_send_replays_lean_optimistic_send_traces() -> Result<()> {
     let traces = snapshot["client_optimistic_send_cases"]["traces"]
         .as_array()
         .context("optimistic send traces")?;
+    // The runtime sees only what reaches it: each create the trace commits
+    // or refuses, in order. A dropped create, a lost reply, a deadline, a
+    // retry's client half and a discard never reach it.
     let mut projections = std::collections::BTreeMap::new();
     for trace in traces {
         let actions = trace["actions"].as_array().context("trace actions")?;
-        let wire: Vec<&str> = actions
+        let runtime: Vec<&str> = actions
             .iter()
             .filter_map(|action| action["kind"].as_str())
-            .filter(|kind| matches!(*kind, "compose" | "retry" | "commit" | "refuse"))
+            .filter(|kind| matches!(*kind, "commit" | "refuse"))
             .collect();
         let turns = trace["after"]
             .as_array()
             .and_then(|after| after.last())
             .and_then(|last| last["turns"].as_u64())
             .context("trace turns")?;
-        if let Some(previous) = projections.insert(wire, turns) {
-            assert_eq!(previous, turns, "one wire history has one turn count");
+        if let Some(previous) = projections.insert(runtime, turns) {
+            assert_eq!(previous, turns, "one runtime history has one turn count");
         }
     }
-    assert!(projections.len() > 20, "{}", projections.len());
-    assert!(projections.values().any(|turns| *turns == 1));
+    for history in [
+        &["commit"][..],
+        &["refuse"],
+        &["refuse", "commit"],
+        &["commit", "commit"],
+        &["refuse", "refuse"],
+    ] {
+        assert!(
+            projections.contains_key(history),
+            "the traces exercise {history:?}: {:?}",
+            projections.keys().collect::<Vec<_>>()
+        );
+    }
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let agent = home.publish_chat_agent().await;
     let user = home.user().clone();
     let result = async {
-        for (index, (wire, expected)) in projections.iter().enumerate() {
-            let request_id = format!("optimistic-{index}");
-            let session_id = format!("optimistic-session-{index}");
-            for kind in wire {
-                if *kind != "commit" {
-                    continue;
-                }
-                let submitted = super::submit_request(
+        let send = |request_id: String, session_id: String, cause: Option<&str>| {
+            let access = home.user_access();
+            let user = user.clone();
+            let agent_did = agent.agent_did.clone();
+            let node_did = home.node_did().to_owned();
+            let cause = cause.map(str::to_owned);
+            async move {
+                super::submit_request(
                     &crate::client::ClientStore::default(),
-                    &home.user_access(),
+                    &access,
                     &session_id,
-                    home.node_did(),
+                    &node_did,
                     user.did(),
                     user.as_ref(),
                     AgentRequestAdmissionRecord::client(user.did()),
                     "optimistic send replay",
-                    Some(&agent.agent_did),
+                    Some(&agent_did),
                     SubmitRequestOptions {
-                        request_id: Some(request_id.clone()),
+                        request_id: Some(request_id),
+                        caused_by_source_doc_id: cause,
                         ..SubmitRequestOptions::default()
                     },
                 )
-                .await?;
-                assert_eq!(submitted.request_id, request_id);
+                .await
             }
-            let held = request_count_by_id_for_test(&home.user_access(), &request_id).await?;
-            assert_eq!(held as u64, *expected, "{wire:?}");
+        };
+        // A cause the runtime refuses: no mailbox item has this document ID.
+        let refused_cause = Some("bae-00000000-0000-0000-0000-000000000000");
+        for (index, (history, expected)) in projections.iter().enumerate() {
+            let request_id = format!("optimistic-{index}");
+            let session_id = format!("optimistic-session-{index}");
+            let mut held = false;
+            for kind in history {
+                match *kind {
+                    "commit" => {
+                        let submitted =
+                            send(request_id.clone(), session_id.clone(), None).await?;
+                        assert_eq!(submitted.request_id, request_id, "{history:?}");
+                        held = true;
+                    }
+                    "refuse" => {
+                        // Lean `refuse` never applies to a held identity.
+                        assert!(!held, "{history:?}");
+                        assert!(
+                            send(request_id.clone(), session_id.clone(), refused_cause)
+                                .await
+                                .is_err(),
+                            "{history:?}"
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    request_count_by_id_for_test(&home.user_access(), &request_id).await?,
+                    usize::from(held),
+                    "{history:?}"
+                );
+            }
+            let count = request_count_by_id_for_test(&home.user_access(), &request_id).await?;
+            assert_eq!(count as u64, *expected, "{history:?}");
+            if held {
+                // Lean `held_resend_never_refused`: a resend of a held identity
+                // confirms even when its cause would now be refused.
+                let resent = send(request_id.clone(), session_id.clone(), refused_cause).await?;
+                assert_eq!(resent.request_id, request_id);
+                assert_eq!(
+                    request_count_by_id_for_test(&home.user_access(), &request_id).await?,
+                    1
+                );
+            }
         }
+        // A retry racing its first send still committing (Lean: two creates of
+        // one identity on the wire) is one request, and both replies confirm.
+        let (left, right) = tokio::join!(
+            send("optimistic-raced".into(), "optimistic-raced-session".into(), None),
+            send("optimistic-raced".into(), "optimistic-raced-session".into(), None),
+        );
+        assert_eq!(left?.request_id, "optimistic-raced");
+        assert_eq!(right?.request_id, "optimistic-raced");
+        assert_eq!(
+            request_count_by_id_for_test(&home.user_access(), "optimistic-raced").await?,
+            1
+        );
         Ok::<(), anyhow::Error>(())
     }
     .await;

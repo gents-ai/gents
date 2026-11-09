@@ -12,6 +12,10 @@ pub enum ClientSubmissionError {
     Rejected(#[source] anyhow::Error),
     #[error("client submission commit is unconfirmed")]
     Unconfirmed(#[source] anyhow::Error),
+    /// The request identity is held by a request this send cannot be: another
+    /// signer's, another chat's, or more than one. Resending cannot change it.
+    #[error("client request identity is held by another request")]
+    IdentityConflict(#[source] anyhow::Error),
 }
 
 impl ClientSubmissionError {
@@ -148,6 +152,22 @@ pub(crate) async fn stage_client_request_in_txn(
             && sessions[0]["_docID"] == session
             && sessions[0]["relationships_pending"] == false,
         "client request session relationships are incomplete"
+    );
+    // `AgentRequest.request_id` is only `@index`: a client create never adds
+    // a second request under an identity the actor can already read.
+    let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
+    let held = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#,
+        ))
+        .await?;
+    anyhow::ensure!(
+        held["data"]["AgentRequest"]
+            .as_array()
+            .context("client request identity check omitted rows")?
+            .is_empty(),
+        "client request identity {} is already held",
+        create.request_id
     );
     let input = crate::store::config_client::client_request_input(create)?;
     let response = txn.execute_client_signed_create(
@@ -544,88 +564,220 @@ pub async fn submit_client_request(
         })
 }
 
-/// The owner's idempotency key for a client-authored create: the signer and
+/// The owner's idempotency key for a client-authored send: the signer and
 /// the request identity the client picked when the person sent. The key is
 /// part of the signed create, and `AgentRequest.retry_key` is a unique index,
-/// so the store admits one request per key (Lean
+/// so two concurrent creates of one identity commit once (Lean
 /// `ClientOptimisticSend.create`).
 pub fn client_request_key(signer_did: &str, request_id: &str) -> String {
     format!("client-request:{signer_did}:{request_id}")
 }
 
-/// Send a signed client create, idempotent on its `retry_key`: a repeat of a
-/// key the runtime already holds is the same request, whichever send of it
-/// committed (a retry after a lost reply, two windows, a retry racing the
-/// first send still committing). Returns the request identity held under the
-/// key. A failure with no request under the key is the send's failure; the
-/// caller shows it failed and may resend the same key.
+/// The chat a client send's identity must belong to.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientRequestScope<'a> {
+    pub node_did: &'a str,
+    pub session_id: &'a str,
+    pub requester_did: &'a str,
+    pub request_id: &'a str,
+}
+
+impl<'a> ClientRequestScope<'a> {
+    pub fn of(create: &'a AgentRequestCreate) -> Self {
+        Self {
+            node_did: &create.node_did,
+            session_id: &create.session_id,
+            requester_did: &create.requester_did,
+            request_id: &create.request_id,
+        }
+    }
+}
+
+/// The request the runtime holds under a client send's identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldClientRequest {
+    pub request_id: String,
+    pub session_id: String,
+    pub agent_did: Option<String>,
+}
+
+/// Send a signed client create, idempotent on its request identity (Lean
+/// `ClientOptimisticSend.create`): a repeat of an identity the runtime
+/// already holds is that request, whichever send of it committed (a retry
+/// after a lost reply, two windows, a retry racing the first send still
+/// committing, a send committed before the key existed). Returns the
+/// identity of the held request. A failure with no request under the
+/// identity is the send's failure; the caller shows it failed and may resend
+/// the same identity.
 pub async fn send_client_request(
     access: &ConfigAccess,
     create: &AgentRequestCreate,
 ) -> Result<String, ClientSubmissionError> {
-    let key = create
-        .retry_key
-        .as_deref()
-        .filter(|key| !key.trim().is_empty())
-        .ok_or_else(|| {
-            ClientSubmissionError::Rejected(anyhow::anyhow!(
-                "a client create requires its idempotency key"
-            ))
-        })?;
+    let key = client_request_key(&create.admission.signer_did, &create.request_id);
+    if create.retry_key.as_deref() != Some(key.as_str()) {
+        return Err(ClientSubmissionError::Rejected(anyhow::anyhow!(
+            "a client send's idempotency key must be its request identity's key"
+        )));
+    }
+    let scope = ClientRequestScope::of(create);
+    if let Some(held) = held_client_request(access, scope).await? {
+        return Ok(held.request_id);
+    }
     let error = match submit_client_request(access, create).await {
         Ok(()) => return Ok(create.request_id.clone()),
         Err(error) => error,
     };
-    match held_client_request(access, create, key).await {
-        Ok(Some(request_id)) => Ok(request_id),
+    match held_client_request(access, scope).await {
+        Ok(Some(held)) => Ok(held.request_id),
         Ok(None) => Err(error),
-        Err(read) => Err(ClientSubmissionError::Unconfirmed(
+        Err(ClientSubmissionError::Unconfirmed(read)) => Err(ClientSubmissionError::Unconfirmed(
             anyhow::Error::from(error).context(format!("{read:#}")),
         )),
+        Err(other) => Err(other),
     }
 }
 
-/// The request the runtime holds under `key` for this signer and scope, with
-/// its relationships completed.
-async fn held_client_request(
+/// The request the runtime holds under a client send's identity, with its
+/// relationships completed. It is found by `request_id`, so a request
+/// committed before its idempotency key existed is found too. A request
+/// under the identity that is not this signer's request in `scope` is an
+/// [`ClientSubmissionError::IdentityConflict`], never a retryable failure.
+pub async fn held_client_request(
     access: &ConfigAccess,
-    create: &AgentRequestCreate,
-    key: &str,
-) -> anyhow::Result<Option<String>> {
-    let actor = request_actor(access, create)?;
-    let escaped = crate::store::graphql::escape_graphql_string(key);
+    scope: ClientRequestScope<'_>,
+) -> Result<Option<HeldClientRequest>, ClientSubmissionError> {
+    let actor = access
+        .actor_did()
+        .context("a client request lookup requires an identity")
+        .map_err(ClientSubmissionError::Rejected)?;
+    let found = find_signed_client_request(access, "request_id", scope.request_id, &actor)
+        .await
+        .map_err(ClientSubmissionError::Unconfirmed)?;
+    let (row, pending) = match found {
+        None => return Ok(None),
+        Some(SignedClientRow::Conflict(reason)) => {
+            return Err(ClientSubmissionError::IdentityConflict(anyhow::anyhow!(
+                "request identity {}: {reason}",
+                scope.request_id
+            )))
+        }
+        Some(SignedClientRow::Owned {
+            row,
+            relationships_pending,
+        }) => (row, relationships_pending),
+    };
+    if row.node_did.as_deref() != Some(scope.node_did)
+        || row.session_id.as_deref() != Some(scope.session_id)
+        || row.requester_did.as_deref() != Some(scope.requester_did)
+    {
+        return Err(ClientSubmissionError::IdentityConflict(anyhow::anyhow!(
+            "request identity {} is held by a request in another chat",
+            scope.request_id
+        )));
+    }
+    match pending {
+        Some(false) => {}
+        Some(true) => {
+            let doc = row
+                .doc_id
+                .as_deref()
+                .context("client request lookup omitted document identity")
+                .map_err(ClientSubmissionError::Unconfirmed)?;
+            complete_client_request_relationships(access, doc)
+                .await
+                .map_err(ClientSubmissionError::Unconfirmed)?;
+        }
+        None => {
+            return Err(ClientSubmissionError::Unconfirmed(anyhow::anyhow!(
+                "client request publication marker is unavailable"
+            )))
+        }
+    }
+    Ok(Some(HeldClientRequest {
+        request_id: row.request_id,
+        session_id: row.session_id.unwrap_or_default(),
+        agent_did: row.agent_did,
+    }))
+}
+
+/// A signed client request the actor can read under one lookup field.
+enum SignedClientRow {
+    /// Created and natively owned by the actor, with a valid creation receipt.
+    Owned {
+        row: gents_protocol::row::AgentRequestRow,
+        relationships_pending: Option<bool>,
+    },
+    /// Another signer's or owner's request, or more than one request.
+    Conflict(&'static str),
+}
+
+/// The one signed client request under `field = value`, verified against its
+/// creation receipt and its native document owner. `field` is a code-owned
+/// `AgentRequest` field name.
+async fn find_signed_client_request(
+    access: &ConfigAccess,
+    field: &'static str,
+    value: &str,
+    actor: &str,
+) -> anyhow::Result<Option<SignedClientRow>> {
+    let escaped = crate::store::graphql::escape_graphql_string(value);
     let response = access
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} relationships_pending }} }}"#,
+            r#"{{ AgentRequest(filter: {{ {field}: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} relationships_pending }} }}"#,
             gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let rows = response["data"]["AgentRequest"]
         .as_array()
         .context("client request lookup omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous client request key");
-    let Some(value) = rows.first() else {
-        return Ok(None);
+    let value = match rows.as_slice() {
+        [] => return Ok(None),
+        [value] => value,
+        _ => {
+            return Ok(Some(SignedClientRow::Conflict(
+                "it names more than one request",
+            )))
+        }
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(value.clone())?;
     crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
-    anyhow::ensure!(
-        row.retry_key.as_deref() == Some(key)
-            && row.admission_kind.as_deref() == Some(create.admission.kind.as_str())
-            && row.admission_signer_did.as_deref() == Some(actor.as_str())
-            && row.node_did.as_deref() == Some(create.node_did.as_str())
-            && row.session_id.as_deref() == Some(create.session_id.as_str())
-            && row.requester_did.as_deref() == Some(create.requester_did.as_str()),
-        "the request held under this key belongs to another signer or scope"
-    );
-    if value["relationships_pending"] != false {
-        let doc = row
-            .doc_id
-            .as_deref()
-            .context("client request lookup omitted document identity")?;
-        complete_client_request_relationships(access, doc).await?;
+    if row.admission_kind.as_deref() != Some("client")
+        || row.admission_signer_did.as_deref() != Some(actor)
+    {
+        return Ok(Some(SignedClientRow::Conflict(
+            "it is held by another signer's request",
+        )));
     }
-    Ok(Some(row.request_id))
+    let doc = row
+        .doc_id
+        .clone()
+        .context("client request lookup omitted document identity")?;
+    let owned = access
+        .transact_readonly("request.client.held_owner", |txn| {
+            let doc = doc.as_str();
+            Box::pin(async move {
+                let owners = txn
+                    .document_owners("AgentRequest", &[doc.to_owned()])
+                    .await?;
+                Ok::<_, anyhow::Error>(
+                    owners.len() == 1
+                        && owners[0]
+                            .owner
+                            .as_ref()
+                            .is_some_and(|owner| owner.as_str() == actor),
+                )
+            })
+        })
+        .await?;
+    if !owned {
+        return Ok(Some(SignedClientRow::Conflict(
+            "its request is owned by another identity",
+        )));
+    }
+    Ok(Some(SignedClientRow::Owned {
+        relationships_pending: value["relationships_pending"].as_bool(),
+        row,
+    }))
 }
 
 async fn publish_request_relationships(
@@ -1094,24 +1246,19 @@ pub async fn reconcile_client_retry(
             .actor_did()
             .context("retry recovery requires an identity")?;
         let key = format!("retry:doc:{parent_doc_id}");
-        let escaped = crate::store::graphql::escape_graphql_string(&key);
-        let response = access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} relationships_pending }} }}"#,
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-        )).await?;
-        let rows = response["data"]["AgentRequest"]
-            .as_array()
-            .context("retry recovery omitted rows")?;
-        anyhow::ensure!(rows.len() <= 1, "ambiguous retry recovery");
-        let Some(value) = rows.first() else {
-            return Ok(None);
-        };
-        let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(value.clone())?;
-        crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
+        let (row, relationships_pending) =
+            match find_signed_client_request(access, "retry_key", &key, &actor).await? {
+                None => return Ok(None),
+                Some(SignedClientRow::Conflict(reason)) => {
+                    anyhow::bail!("retry recovery differs from the authenticated signer: {reason}")
+                }
+                Some(SignedClientRow::Owned {
+                    row,
+                    relationships_pending,
+                }) => (row, relationships_pending),
+            };
         anyhow::ensure!(
-            row.admission_kind.as_deref() == Some("client")
-                && row.admission_signer_did.as_deref() == Some(actor.as_str())
-                && row.node_did.as_deref() == Some(node_did)
+            row.node_did.as_deref() == Some(node_did)
                 && row.session_id.as_deref() == Some(session_id)
                 && row.requester_did.as_deref() == Some(requester_did)
                 && row.retry_parent_request_doc_id.as_deref() == Some(parent_doc_id)
@@ -1122,26 +1269,7 @@ pub async fn reconcile_client_retry(
             .doc_id
             .as_deref()
             .context("retry has no document identity")?;
-        access
-            .transact_readonly("request.client.retry_recovery_owner", |txn| {
-                let actor = actor.as_str();
-                Box::pin(async move {
-                    let owners = txn
-                        .document_owners("AgentRequest", &[request_doc.to_owned()])
-                        .await?;
-                    anyhow::ensure!(
-                        owners.len() == 1
-                            && owners[0]
-                                .owner
-                                .as_ref()
-                                .is_some_and(|owner| owner.as_str() == actor),
-                        "retry creator differs from the authenticated signer"
-                    );
-                    Ok::<_, anyhow::Error>(())
-                })
-            })
-            .await?;
-        match value["relationships_pending"].as_bool() {
+        match relationships_pending {
             Some(false) => return Ok(Some(row.request_id)),
             Some(true) => {}
             None => anyhow::bail!("retry publication marker is unavailable"),
@@ -2366,10 +2494,13 @@ mod tests {
         node.shutdown().await.expect("shut down test node");
     }
 
-    /// `ClientOptimisticSend.create`: repeats of one key, rebuilt and re-signed
-    /// or racing each other, are one request.
+    /// `ClientOptimisticSend.create`: repeats of one identity, rebuilt and
+    /// re-signed, racing each other, or following a create committed without
+    /// the key, are one request; a raw create cannot add a second request
+    /// under a held identity; an identity held in another chat is a named
+    /// conflict.
     #[tokio::test]
-    async fn client_send_is_idempotent_on_its_request_key() {
+    async fn client_send_is_idempotent_on_its_request_identity() {
         let home = tempfile::tempdir().unwrap();
         let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
@@ -2378,7 +2509,7 @@ mod tests {
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
         let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
-        let signed = |request_id: &'static str, created_at: &'static str| {
+        let signed_in = |session: &'static str, request_id: &'static str, created_at: &'static str| {
             let access = &access;
             let user = &user;
             let runtime = &runtime;
@@ -2390,7 +2521,7 @@ mod tests {
                     runtime.did(),
                     user.did(),
                     &agent.agent_did,
-                    "idempotent-session",
+                    session,
                     "hello",
                     "interactive",
                     created_at,
@@ -2405,6 +2536,9 @@ mod tests {
                     .unwrap();
                 create
             }
+        };
+        let signed = |request_id: &'static str, created_at: &'static str| {
+            signed_in("idempotent-session", request_id, created_at)
         };
         let count = |request_id: &'static str| {
             let access = &access;
@@ -2440,8 +2574,40 @@ mod tests {
 
         let mut keyless = signed("keyless", "2026-11-04T00:02:00Z").await;
         keyless.retry_key = None;
-        assert!(send_client_request(&access, &keyless).await.is_err());
+        crate::sign_agent_request_create(&user, &mut keyless)
+            .await
+            .unwrap();
+        assert!(matches!(
+            send_client_request(&access, &keyless).await,
+            Err(ClientSubmissionError::Rejected(_))
+        ));
         assert_eq!(count("keyless").await, 0);
+        let mut foreign_key = signed("keyless", "2026-11-04T00:02:01Z").await;
+        foreign_key.retry_key = Some("another-key".into());
+        crate::sign_agent_request_create(&user, &mut foreign_key)
+            .await
+            .unwrap();
+        assert!(send_client_request(&access, &foreign_key).await.is_err());
+        assert_eq!(count("keyless").await, 0);
+
+        // A create committed before the key existed is the held request.
+        submit_client_request(&access, &keyless).await.unwrap();
+        assert_eq!(count("keyless").await, 1);
+        let keyed = signed("keyless", "2026-11-04T00:02:02Z").await;
+        assert_eq!(send_client_request(&access, &keyed).await.unwrap(), "keyless");
+        assert_eq!(count("keyless").await, 1);
+        // The raw create does not admit a second request under a held identity.
+        assert!(submit_client_request(&access, &foreign_key).await.is_err());
+        assert!(submit_client_request(&access, &rebuilt).await.is_err());
+        assert_eq!(count("keyless").await, 1);
+        assert_eq!(count("first").await, 1);
+
+        let elsewhere = signed_in("other-session", "first", "2026-11-04T00:03:00Z").await;
+        assert!(matches!(
+            send_client_request(&access, &elsewhere).await,
+            Err(ClientSubmissionError::IdentityConflict(_))
+        ));
+        assert_eq!(count("first").await, 1);
         node.shutdown().await.expect("shut down test node");
     }
 

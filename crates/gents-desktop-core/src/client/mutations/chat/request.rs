@@ -40,9 +40,12 @@ pub struct SubmitRequestOptions {
     pub retry_key: Option<String>,
 }
 
-/// One signed, idempotent create (`send_client_request`). A failure leaves no
-/// request under the identity unless an earlier send of it committed, so the
-/// caller shows the message failed and may resend the same identity.
+/// One signed, idempotent create (`send_client_request`). A resend of an
+/// identity the runtime already holds returns that request before any other
+/// check, so a held answer to a question the runtime has since claimed still
+/// confirms (Lean `ClientOptimisticSend.held_resend_never_refused`). A failure
+/// leaves no request under the identity, so the caller shows the message
+/// failed and may resend the same identity.
 #[expect(
     clippy::too_many_arguments,
     reason = "admission inputs from separate owners (store, access, identity, admission record)"
@@ -60,6 +63,26 @@ pub async fn submit_request(
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     let request_id = options.request_id.clone();
+    if let Some(request_id) = request_id.as_deref() {
+        let held = gents::request::lifecycle::held_client_request(
+            access,
+            gents::request::lifecycle::ClientRequestScope {
+                node_did,
+                session_id,
+                requester_did,
+                request_id,
+            },
+        )
+        .await?;
+        if let Some(held) = held {
+            return Ok(SubmittedRequest {
+                request_id: held.request_id,
+                session_id: held.session_id,
+                node_did: node_did.to_owned(),
+                agent_did: held.agent_did,
+            });
+        }
+    }
     let (result, create) = prepare_request_submission(
         access,
         store,
@@ -197,7 +220,16 @@ pub async fn resend_request(
         .content
         .as_deref()
         .context("stale request has no content")?;
-    let retry_session_id = Uuid::new_v4().to_string();
+    // The successor's identity is derived from the stale request, so a
+    // repeated resend (a lost reply, a second click) is the same request.
+    let successor = |part: &str| {
+        Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("gents.resend:{stale_node_did}:{stale_request_id}:{part}").as_bytes(),
+        )
+        .to_string()
+    };
+    let retry_session_id = successor("session");
     submit_request(
         store,
         access,
@@ -209,7 +241,7 @@ pub async fn resend_request(
         stale_content,
         stale.agent_did.as_deref(),
         SubmitRequestOptions {
-            request_id: None,
+            request_id: Some(successor("request")),
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
             input: stale.input.unwrap_or_default(),
@@ -272,6 +304,5 @@ mod lean_vocab_test;
 mod tests;
 
 pub(super) mod prepare;
-pub(crate) mod receipt;
 pub(super) mod retry;
 
