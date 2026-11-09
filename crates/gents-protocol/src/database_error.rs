@@ -6,6 +6,8 @@ pub const STORAGE_FULL_CODE: &str = "STORAGE_FULL";
 /// DefraDB's `extensions.code` for a store conflict the caller may replay;
 /// the final, engine-exhausted case carries `TXN_RETRY_EXHAUSTED` instead.
 pub const TXN_CONFLICT_CODE: &str = "TXN_CONFLICT";
+/// DefraDB reports explicit ACP refusal with this structured GraphQL code.
+pub const PERMISSION_DENIED_CODE: &str = "PERMISSION_DENIED";
 
 /// Full storage does not establish whether a mutation committed. A latched
 /// store must be reopened by its existing owner after space is available.
@@ -59,7 +61,14 @@ impl GraphqlFailure {
 
     /// Whether DefraDB reported a store conflict the caller may retry.
     pub fn is_retryable_conflict(&self) -> bool {
-        self.retryable_conflict
+        self.retryable_conflict && !self.is_permission_denied()
+    }
+
+    pub fn is_permission_denied(&self) -> bool {
+        self.errors.as_array().into_iter().flatten().any(|error| {
+            error.pointer("/extensions/code").and_then(Value::as_str)
+                == Some(PERMISSION_DENIED_CODE)
+        })
     }
 }
 
@@ -92,6 +101,24 @@ mod tests {
     #[derive(Debug, thiserror::Error)]
     #[error("outer operation")]
     struct Outer(#[source] GraphqlFailure);
+
+    #[test]
+    fn structured_permission_denial_is_not_a_retryable_conflict() {
+        let denied = GraphqlFailure::new(
+            "write",
+            serde_json::json!([
+                {"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}},
+                {"message":"conflict", "extensions":{"code":"TXN_CONFLICT"}}
+            ]),
+        );
+        assert!(denied.is_permission_denied());
+        assert!(!denied.is_retryable_conflict());
+        let hidden = GraphqlFailure::new(
+            "read",
+            serde_json::json!([{"message":"not found or unavailable"}]),
+        );
+        assert!(!hidden.is_permission_denied());
+    }
 
     #[test]
     fn generated_storage_failures_preserve_recovery_evidence() {

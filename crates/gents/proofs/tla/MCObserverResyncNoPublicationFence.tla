@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncNoPublicationFence ----
+EXTENDS ObserverResync
+
+====

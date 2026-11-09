@@ -11,10 +11,6 @@ import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
-import {
-  forgetUnresolvedSubmission,
-  unresolvedSubmissionFor,
-} from "./unresolvedSubmissions";
 
 type MailboxActionParams = {
   api: DesktopApiAdapter;
@@ -22,13 +18,6 @@ type MailboxActionParams = {
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
 };
-
-export const MAILBOX_DELIVERY_UNKNOWN_HINT =
-  "Your answer may have been delivered. Use Check answer delivery or Resume saved answer to resolve the original answer.";
-
-function mailboxAnswerKey(itemId: string): string {
-  return `mailbox-answer:${itemId}`;
-}
 
 export function createMailboxActions({
   api,
@@ -47,7 +36,7 @@ export function createMailboxActions({
       selection.openMailboxRoute(store, {
         itemId: item.itemId,
         nodeDid: item.targetNodeDid,
-        agentId: item.targetAgentId,
+        agentDid: item.targetAgentDid,
         sessionId: item.sessionId ?? null,
       });
       writeSession(stores.session, null);
@@ -69,14 +58,10 @@ export function createMailboxActions({
         if (
           draft.clientDid !== clientDid ||
           draft.mailbox?.itemId !== itemId ||
-          !draft.result ||
-          draft.result.outcome
+          !draft.confirmed
         )
           continue;
-        try {
-          await api.acknowledgeChatSubmission(draft.result.submissionReceipt!);
-          removeChatDraft(stores.chat, draft);
-        } catch {}
+        removeChatDraft(stores.chat, draft);
       }
       if (selection.acceptsIntent(store, intent))
         selection.releaseMailboxRoute(store, itemId);
@@ -121,51 +106,6 @@ export function createMailboxActions({
         throw new Error(
           "This question has no destination chat. Refresh it before answering.",
         );
-      const earlier = unresolvedSubmissionFor(
-        item.targetNodeDid,
-        item.sessionId,
-        mailboxAnswerKey(item.itemId),
-      );
-      if (earlier) {
-        const sent = await api.sendChatMessage({
-          nodeDid: item.targetNodeDid,
-          agentId: item.targetAgentId,
-          sessionId: earlier.sessionId,
-          content: "",
-          causedBySourceDocId: item.itemId,
-          answer,
-          resolveRequestId: earlier.requestId,
-        });
-        if (
-          sent.nodeDid !== earlier.nodeDid ||
-          sent.sessionId !== earlier.sessionId ||
-          sent.requestId !== earlier.requestId
-        )
-          throw new Error("The reply does not match the earlier saved answer.");
-        if (sent.outcome !== "deliveryUnknown")
-          forgetUnresolvedSubmission(earlier.requestId);
-        if (sent.outcome) {
-          reportFailure(
-            sent.outcome === "notDelivered"
-              ? "Your earlier answer was not delivered. Answer again."
-              : MAILBOX_DELIVERY_UNKNOWN_HINT,
-          );
-          return false;
-        }
-        if (
-          acceptsView() &&
-          stores.client.getState().snapshot?.client?.clientDid === clientDid &&
-          selection.acceptsIntent(store, intent)
-        )
-          selection.releaseMailboxRoute(store, item.itemId);
-        reportFailure(
-          "Your earlier answer was delivered; this retry did not send a different answer.",
-        );
-        void Promise.resolve()
-          .then(refreshSnapshot)
-          .catch(() => {});
-        return true;
-      }
       const question = parseMailboxQuestion(item);
       const summary = [
         ...answer.option_ids.map(
@@ -175,11 +115,11 @@ export function createMailboxActions({
       ]
         .filter(Boolean)
         .join("\n");
-      const sent = await delivery.submit(
+      await delivery.submit(
         {
           clientDid,
           nodeDid: item.targetNodeDid,
-          agentId: item.targetAgentId,
+          agentDid: item.targetAgentDid,
           sessionId: item.sessionId,
           content: "",
           causedBySourceDocId: item.itemId,
@@ -188,16 +128,8 @@ export function createMailboxActions({
         item.sessionId,
         false,
         (result, draft) => applyAnswer(result, draft, intent, acceptsView),
-        { itemId: item.itemId, summary },
+        { nodeDid: item.nodeDid, itemId: item.itemId, summary },
       );
-      if (sent.outcome) {
-        reportFailure(
-          sent.outcome === "notDelivered"
-            ? "Your answer was not delivered. You can answer again."
-            : MAILBOX_DELIVERY_UNKNOWN_HINT,
-        );
-        return false;
-      }
       if (
         acceptsView() &&
         stores.client.getState().snapshot?.client?.clientDid === clientDid
@@ -217,25 +149,28 @@ export function createMailboxActions({
     }
   }
 
-  async function recoverMailboxAnswer(
-    itemId: string,
-    requestId: string,
-    resume = false,
-    acceptsView: () => boolean = () => true,
-  ) {
+  function savedAnswer(itemId: string, requestId: string) {
     const clientDid = stores.client.getState().snapshot?.client?.clientDid;
     const draft = loadChatDrafts().chatDrafts.find(
       (draft) => draft.clientDid === clientDid && draft.requestId === requestId,
     );
     if (draft?.mailbox?.itemId !== itemId)
       throw new Error("The saved answer belongs to another question or client.");
+    return clientDid;
+  }
+
+  /** Resend a failed answer under its original identity. */
+  async function retryMailboxAnswer(
+    itemId: string,
+    requestId: string,
+    acceptsView: () => boolean = () => true,
+  ) {
+    const clientDid = savedAnswer(itemId, requestId);
     const intent = selection.captureIntent(store);
-    const result = await delivery.recover(requestId, resume, (result, draft) =>
+    const result = await delivery.retry(requestId, (result, draft) =>
       applyAnswer(result, draft, intent, acceptsView),
     );
     if (
-      result &&
-      !result.outcome &&
       acceptsView() &&
       stores.client.getState().snapshot?.client?.clientDid === clientDid
     )
@@ -245,10 +180,16 @@ export function createMailboxActions({
     return result;
   }
 
+  async function discardMailboxAnswer(itemId: string, requestId: string) {
+    savedAnswer(itemId, requestId);
+    await delivery.discard(requestId);
+  }
+
   return {
     openMailboxItem,
     dismissMailboxItem,
     answerMailboxQuestion,
-    recoverMailboxAnswer,
+    retryMailboxAnswer,
+    discardMailboxAnswer,
   };
 }

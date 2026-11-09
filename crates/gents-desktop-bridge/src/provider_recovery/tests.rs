@@ -1,31 +1,23 @@
 use super::*;
-use gents::NodeIdentity;
 use serde_json::json;
 use std::sync::Arc;
 
+/// A served runtime the User configures and recovers through its signed
+/// endpoint, as `desktop_provider_recovery_*` reach it.
 struct Fixture {
-    _directory: tempfile::TempDir,
-    identity: gents::KeyIdentity,
+    _runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    identity: Arc<dyn gents::NodeIdentity>,
     access: ConfigAccess,
     scope: ProviderRecoveryRequest,
 }
 
 impl Fixture {
     async fn new(reset: bool) -> Self {
-        let directory = tempfile::tempdir().unwrap();
-        let identity =
-            gents::KeyIdentity::load_or_create(directory.path().join("identity.key"), None)
-                .unwrap();
-        let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        gents::ensure_node(&node, identity.did()).await.unwrap();
-        let access = ConfigAccess::local(node);
+        let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start().await;
+        let identity = runtime.user().clone();
+        let owner = runtime.node_did().to_owned();
+        let access = runtime.user_access();
+        let observer = runtime.runtime_access();
         for (id, name, enabled, model) in [
             ("main", "Work", true, "model-a"),
             ("backup", "Backup", true, "model-a"),
@@ -33,21 +25,34 @@ impl Fixture {
             ("wrong-model", "Wrong model", true, "model-b"),
         ] {
             let backend: gents::InferenceBackend = serde_json::from_value(json!({
-                "node_did": identity.did(), "backend_id": id, "name": name,
+                "node_did": owner, "backend_id": id, "name": name,
                 "provider_kind": "AnthropicApiKey", "endpoint": "https://api.anthropic.com/v1",
                 "enabled": enabled, "auth": {"kind":"api_key", "key":format!("TOKEN-SECRET-{id}")},
             }))
             .unwrap();
-            gents::store::config_client::write_inference_backend_document(&access, &backend)
+            gents::documents::write_inference_backend_document(&access, &backend)
                 .await
                 .unwrap();
-            access
+            // Catalog discovery is the runtime's own observation.
+            observer
                 .transact_write("test.recovery.catalog", |txn| {
                     let backend = &backend;
                     Box::pin(async move {
+                        // Discovery observes the stored connection, whose key
+                        // the runtime moved into a node credential.
+                        let (_, stored) =
+                            gents::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                gents::Collection::InferenceBackend,
+                                &backend.node_did,
+                                &backend.backend_id,
+                            )
+                            .await?
+                            .expect("stored backend");
+                        let stored: gents::InferenceBackend = serde_json::from_value(stored)?;
                         gents::record_model_catalog_in_txn(
                             txn,
-                            backend,
+                            &stored,
                             gents::documents::BackendModelCatalog {
                                 node_did: backend.catalog_scope().map(str::to_owned),
                                 observed_at: chrono::Utc::now().to_rfc3339(),
@@ -68,14 +73,16 @@ impl Fixture {
                 .unwrap();
         }
         let profile = serde_json::from_value(json!({
-            "node_did":identity.did(), "profile_id":"profile-a", "backend_id":"main", "model_name":"model-a",
-        })).unwrap();
-        gents::store::config_client::write_inference_profile_document(&access, &profile)
+            "node_did":owner, "profile_id":"profile-a", "backend_id":"main", "model_name":"model-a",
+        }))
+        .unwrap();
+        gents::documents::write_inference_profile_document(&access, &profile)
             .await
             .unwrap();
-        for name in ["engineer", "reviewer"] {
-            let agent = serde_json::from_value(json!({"node_did":identity.did(), "agent_id":name, "inference_profile_id":"profile-a"})).unwrap();
-            gents::store::config_client::write_agent_document(&access, &agent)
+        let engineer = runtime.provision_agent().await;
+        for binding in [&engineer, &runtime.provision_agent().await] {
+            let agent = serde_json::from_value(runtime.agent_value(binding, "profile-a")).unwrap();
+            gents::documents::write_agent_document(&access, &agent)
                 .await
                 .unwrap();
         }
@@ -87,41 +94,74 @@ impl Fixture {
         let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "stopped",
+            &owner,
             identity.did(),
-            identity.did(),
-            "engineer",
+            &engineer.agent_did,
             "session",
             "Finish the work",
             "interactive",
             "2026-10-23T11:00:00Z",
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                identity.did(),
-            ),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(identity.did()),
         );
-        gents::sign_agent_request_create(&identity, &mut request)
+        let session_doc = gents::request::lifecycle::reserve_goal_session(&access, &request)
             .await
             .unwrap();
-        access
-            .write(
-                "test.recovery.request",
-                &request.graphql_mutation().unwrap(),
-            )
+        request.session_doc_id = Some(session_doc.clone());
+        request.agent_doc_id = Some(runtime.agent_doc_id(&engineer).await);
+        gents::sign_agent_request_create(identity.as_ref(), &mut request)
             .await
             .unwrap();
-        let did = gents::store::graphql::escape_graphql_string(identity.did());
-        let reason = gents::store::graphql::escape_graphql_string(reason);
-        access.write("test.recovery.failed_request", &format!(r#"mutation {{
-            update_AgentRequest(filter: {{request_id: {{_eq: "stopped"}}}}, input: {{lifecycle_state: "failed"}}) {{_docID}}
-            own_call: create_InferenceCall(input: {{call_id: "failed-call", request_id: "stopped", node_did: "{did}",
-                agent_id: "engineer", backend_id: "main", call_kind: "inference", call_state: "failed",
-                attempt: 1, failure_reason: "{reason}", ended_at: "2026-10-23T12:00:00Z"}}) {{_docID}}
-            foreign_call: create_InferenceCall(input: {{call_id: "foreign-call", request_id: "stopped", node_did: "did:key:foreign",
-                agent_id: "engineer", backend_id: "foreign", call_kind: "inference", call_state: "failed",
-                attempt: 2, failure_reason: "unrelated failure", ended_at: "2099-10-23T12:00:00Z"}}) {{_docID}}
-        }}"#)).await.unwrap();
+        gents::request::lifecycle::submit_client_request(&access, &request)
+            .await
+            .unwrap();
+        let request_doc = runtime
+            .user_access()
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "stopped"}}) { _docID } }"#)
+            .await
+            .unwrap()["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // The working Agent records the failed inference calls as session
+        // children, as the admission owner persists them, and the request
+        // lifecycle owner ends the turn failed with the provider's reason.
+        let engineer_did = engineer.agent_did.clone();
+        let calls = [
+            json!({"call_id": "failed-call", "request_id": "stopped", "request_doc_id": request_doc,
+                "session_id": "session", "node_did": owner, "agent_did": engineer_did,
+                "backend_id": "main", "call_kind": "inference", "call_state": "failed", "attempt": 1,
+                "failure_reason": reason, "ended_at": "2026-10-23T12:00:00Z"}),
+            json!({"call_id": "foreign-call", "request_id": "stopped", "request_doc_id": request_doc,
+                "session_id": "session", "node_did": "did:key:foreign", "agent_did": engineer_did,
+                "backend_id": "foreign", "call_kind": "inference", "call_state": "failed", "attempt": 2,
+                "failure_reason": "unrelated failure", "ended_at": "2099-10-23T12:00:00Z"}),
+        ];
+        runtime
+            .agent_access(&engineer)
+            .await
+            .transact_write("test.recovery.failed_calls", |txn| {
+                let (calls, session_doc) = (&calls, &session_doc);
+                Box::pin(async move {
+                    for call in calls {
+                        let response = txn
+                            .execute_with_variables(
+                                "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) {_docID} }",
+                                &json!({"input": call}),
+                            )
+                            .await?;
+                        let doc = gents::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                        txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc)
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        crate::tests::support::reject_admission(&runtime, &engineer, &request_doc, reason).await;
         gents::goal::set_goal_from_access(
             &access,
-            identity.did(),
+            &owner,
             "session",
             Some("Finish the work"),
             None,
@@ -132,7 +172,7 @@ impl Fixture {
         .unwrap();
         gents::goal::set_goal_from_access(
             &access,
-            identity.did(),
+            &owner,
             "session",
             None,
             Some(gents::goal::GoalStatus::UsageLimited),
@@ -142,12 +182,12 @@ impl Fixture {
         .await
         .unwrap();
         let scope = ProviderRecoveryRequest {
-            node_did: identity.did().into(),
+            node_did: owner.clone(),
             session_id: "session".into(),
             request_id: "stopped".into(),
         };
         Self {
-            _directory: directory,
+            _runtime: runtime,
             identity,
             access,
             scope,
@@ -173,7 +213,7 @@ async fn native_plan_excludes_disabled_or_wrong_model_accounts_and_moves_one_pro
         .contains("TOKEN-SECRET"));
     let receipt = apply(
         &fixture.access,
-        &fixture.identity,
+        fixture.identity.as_ref(),
         &ProviderRecoveryApply {
             scope: fixture.scope.clone(),
             action: ProviderRecoveryAction::MoveProfile {
@@ -227,7 +267,7 @@ async fn native_reset_opt_in_is_goal_scoped_and_stale_or_ineligible_actions_do_n
     assert!(matches!(
         apply(
             &fixture.access,
-            &fixture.identity,
+            fixture.identity.as_ref(),
             &setting("stale-goal".into())
         )
         .await
@@ -235,9 +275,13 @@ async fn native_reset_opt_in_is_goal_scoped_and_stale_or_ineligible_actions_do_n
         ProviderRecoveryResult::Stale { .. }
     ));
     assert!(matches!(
-        apply(&fixture.access, &fixture.identity, &setting(goal_id))
-            .await
-            .unwrap(),
+        apply(
+            &fixture.access,
+            fixture.identity.as_ref(),
+            &setting(goal_id)
+        )
+        .await
+        .unwrap(),
         ProviderRecoveryResult::Applied { .. }
     ));
     let view = plan(&fixture.access, &fixture.scope)
@@ -254,7 +298,7 @@ async fn native_reset_opt_in_is_goal_scoped_and_stale_or_ineligible_actions_do_n
         },
     };
     assert!(matches!(
-        apply(&fixture.access, &fixture.identity, &refused)
+        apply(&fixture.access, fixture.identity.as_ref(), &refused)
             .await
             .unwrap(),
         ProviderRecoveryResult::Refused { .. }
@@ -282,7 +326,7 @@ async fn native_resume_publishes_one_goal_continuation_on_the_selected_account()
             with_compaction: false,
         },
     };
-    let receipt = apply(&fixture.access, &fixture.identity, &request)
+    let receipt = apply(&fixture.access, fixture.identity.as_ref(), &request)
         .await
         .unwrap();
     assert!(
@@ -295,7 +339,7 @@ async fn native_resume_publishes_one_goal_continuation_on_the_selected_account()
         ),
         "{receipt:?}"
     );
-    let _ = apply(&fixture.access, &fixture.identity, &request)
+    let _ = apply(&fixture.access, fixture.identity.as_ref(), &request)
         .await
         .unwrap();
     let rows = fixture

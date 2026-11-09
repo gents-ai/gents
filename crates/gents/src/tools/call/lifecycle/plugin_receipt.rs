@@ -138,8 +138,9 @@ mod persistence_tests {
                 ..
             } = fixture;
             let doc_id = tool.doc_id().unwrap().to_owned();
-            let mut replay = ToolCallLifecycle::load_by_doc_id(
+            let mut replay = ToolCallLifecycle::load_by_doc_id_as(
                 node.clone(),
+                tool.actor().clone(),
                 &doc_id,
                 &tool.node_did,
                 &tool.session_id,
@@ -148,6 +149,7 @@ mod persistence_tests {
             .await
             .unwrap()
             .unwrap();
+            replay.inherit_signer(&tool).unwrap();
             let evidence = receipt();
             tool.stage_plugin_receipt(Some(evidence.clone()));
             match terminal {
@@ -168,7 +170,7 @@ mod persistence_tests {
                         .unwrap();
                 }
             }
-            let row = ConfigAccess::local(node.clone()).execute(&format!(
+            let row = ConfigAccess::local_as(node.clone(), tool.actor().clone()).execute(&format!(
                 r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
                 escape_graphql_string(&doc_id),
             )).await.unwrap();
@@ -180,7 +182,7 @@ mod persistence_tests {
             assert_eq!(stored.output_digest.is_some(), terminal == "complete");
             if terminal == "complete" {
                 let presented = load_tool_call_presentation(
-                    &ConfigAccess::local(node.clone()),
+                    &ConfigAccess::local_as(node.clone(), tool.actor().clone()),
                     &doc_id,
                     &tool.node_did,
                     &tool.session_id,
@@ -191,8 +193,9 @@ mod persistence_tests {
                 assert_eq!(presented.result.as_deref(), Some("model output"));
                 replay.stage_plugin_receipt(Some(evidence.clone()));
                 replay.complete("model output").await.unwrap();
-                let mut conflict = ToolCallLifecycle::load_by_doc_id(
+                let mut conflict = ToolCallLifecycle::load_by_doc_id_as(
                     node.clone(),
+                    tool.actor().clone(),
                     &doc_id,
                     &tool.node_did,
                     &tool.session_id,
@@ -201,6 +204,7 @@ mod persistence_tests {
                 .await
                 .unwrap()
                 .unwrap();
+                conflict.inherit_signer(&tool).unwrap();
                 conflict.state = ToolCallState::Running;
                 let mut changed = evidence;
                 changed.input_digest = "conflicting-input".into();
@@ -208,7 +212,7 @@ mod persistence_tests {
                 assert!(conflict.complete("model output").await.is_err());
             }
             drop(request_owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -238,7 +242,7 @@ mod persistence_tests {
         let evidence = receipt();
         child.stage_plugin_receipt(Some(evidence.clone()));
         child.complete("child output").await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(node.clone(), child.actor().clone());
         let rows = access.execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ plugin_execution_receipt terminal_output lifecycle_state }} }}"#,
             escape_graphql_string(child.doc_id().unwrap()),
@@ -273,7 +277,7 @@ mod persistence_tests {
             "running"
         );
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -300,7 +304,7 @@ mod persistence_tests {
             escape_graphql_string(tool.request_doc_id.as_deref().unwrap()),
         )).await.unwrap();
         tool.complete("plugin output").await.unwrap();
-        let row = ConfigAccess::local(node.clone()).execute(&format!(
+        let row = ConfigAccess::local_as(node.clone(), tool.actor().clone()).execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
             escape_graphql_string(tool.doc_id().unwrap()),
         )).await.unwrap();
@@ -316,7 +320,7 @@ mod persistence_tests {
             receipt()
         );
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -338,8 +342,9 @@ mod persistence_tests {
             ..
         } = fixture;
         let doc_id = winner.doc_id().unwrap().to_owned();
-        let mut loser = ToolCallLifecycle::load_by_doc_id(
+        let mut loser = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            winner.actor().clone(),
             &doc_id,
             &winner.node_did,
             &winner.session_id,
@@ -348,6 +353,7 @@ mod persistence_tests {
         .await
         .unwrap()
         .unwrap();
+        loser.inherit_signer(&winner).unwrap();
         winner
             .cancel_during_run(CancelCause::Interrupted)
             .await
@@ -355,7 +361,7 @@ mod persistence_tests {
         loser.stage_plugin_receipt(Some(receipt()));
         loser.complete("late plugin success").await.unwrap();
         assert_eq!(loser.state, ToolCallState::Cancelled);
-        let row = ConfigAccess::local(node.clone()).execute(&format!(
+        let row = ConfigAccess::local_as(node.clone(), loser.actor().clone()).execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
             escape_graphql_string(&doc_id),
         )).await.unwrap();
@@ -365,7 +371,7 @@ mod persistence_tests {
         );
         assert!(row["data"]["AgentToolCall"][0]["plugin_execution_receipt"].is_null());
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }

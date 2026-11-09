@@ -59,8 +59,8 @@
                 "target_key": "task_id",
                 "expect": [
                   {
-                    "field": "agent_id",
-                    "matches": "(^|:)engineer$"
+                    "field": "agent_did",
+                    "equals": "gents:agent-slot:engineer"
                   },
                   {
                     "field": "emit_outcome",
@@ -103,7 +103,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -198,7 +198,7 @@
           },
           "fields": [
             "task_id",
-            "agent_id",
+            "agent_did",
             "prompt_template",
             "emit_outcome",
             "enabled"
@@ -214,7 +214,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",

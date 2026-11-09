@@ -4,10 +4,29 @@ use super::schema_fields::{
     validate_output_obligation_count_fields, IntrospectedFields,
 };
 use super::ConfigApplyTxn;
-use crate::tools::builtin::defra_query::SchemaField;
+use crate::store::config_client::schema_introspection::{is_aggregate_pseudo_field, SchemaField};
 use crate::Collection;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) fn changed_configuration_keys(
+    plan: &DesiredStateApplyPlan,
+    owner: &str,
+) -> Result<BTreeSet<(Collection, String)>> {
+    let mut changed = BTreeSet::new();
+    for document in plan.documents() {
+        let (document_owner, id) = document_identity(document.collection, &document.add)?;
+        if document_owner == owner {
+            changed.insert((document.collection, id.to_owned()));
+        }
+    }
+    for (collection, document_owner, id) in plan.removals() {
+        if document_owner == owner {
+            changed.insert((*collection, id.clone()));
+        }
+    }
+    Ok(changed)
+}
 
 pub(crate) async fn validate_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
@@ -63,7 +82,7 @@ pub(crate) async fn validate_desired_state_plan(
                 .into_iter()
                 .map(|((collection, _), value)| (collection, value)),
         )?;
-        references.validate()?;
+        references.validate_affected(&changed_configuration_keys(plan, owner)?)?;
         validate_outcome_source_fields(txn, plan, owner, &references, &mut introspected).await?;
         validate_advertised_profiles(txn, plan, owner, &references).await?;
         validate_trigger_document_fields(txn, plan, owner, &references, &mut introspected).await?;
@@ -163,21 +182,9 @@ pub fn validate_event_trigger_document_fields(
             else {
                 continue;
             };
-            let own_field = |name: &String| {
-                !name.starts_with('_')
-                    && !crate::tools::builtin::defra_query::schema::is_aggregate_pseudo_field(name)
-            };
-            let resolved_native_route_field = task.emit_outcome
-                && source.group.is_none()
-                && matches!(
-                    source.source_collection.as_str(),
-                    "CallbackResult" | "WorkspaceReceipt"
-                )
-                && matches!(name.as_str(), "handoff_id" | "reply_session_id" | "attempt");
-            if name.starts_with('_')
-                || declared.contains_key(name) && own_field(name)
-                || resolved_native_route_field
-            {
+            let own_field =
+                |name: &String| !name.starts_with('_') && !is_aggregate_pseudo_field(name);
+            if name.starts_with('_') || declared.contains_key(name) && own_field(name) {
                 continue;
             }
             anyhow::bail!(
@@ -242,7 +249,7 @@ pub(super) async fn validate_outcome_source_fields(
             written.insert((document.collection, id.to_owned()));
         }
     }
-    for (trigger_id, task_id, event_source_id, collection, per_document) in
+    for (trigger_id, task_id, event_source_id, collection, _) in
         references.outcome_event_deliveries()
     {
         if !written.contains(&(Collection::Trigger, trigger_id.clone()))
@@ -255,12 +262,6 @@ pub(super) async fn validate_outcome_source_fields(
             continue;
         };
         let declared = fields.get("handoff_id");
-        if declared.is_none()
-            && per_document
-            && matches!(collection.as_str(), "CallbackResult" | "WorkspaceReceipt")
-        {
-            continue;
-        }
         let message = match declared {
             Some(declared) if declared.named_type() == "String" => continue,
             Some(declared) => format!(

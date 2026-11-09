@@ -54,6 +54,17 @@ pub fn desktop_allowed_dirs_remove(
     view(&home)
 }
 
+/// Plugin approval prompts belong to the native windows that subscribed to
+/// them: only such a window may read the pending queue or answer from it.
+fn window_subscribed(state: &DesktopAppState, window: &str) -> bool {
+    state
+        .bridge
+        .lock()
+        .expect("desktop bridge lock poisoned")
+        .approvals_prompt_subscriptions
+        .contains_window(window)
+}
+
 #[tauri::command]
 pub fn desktop_plugin_approvals_pending<R>(
     window: WebviewWindow<R>,
@@ -62,13 +73,7 @@ pub fn desktop_plugin_approvals_pending<R>(
 where
     R: Runtime,
 {
-    let subscribed = state
-        .bridge
-        .lock()
-        .expect("desktop bridge lock poisoned")
-        .approvals_prompt_subscriptions
-        .contains_window(window.label());
-    let pending = if subscribed {
+    let pending = if window_subscribed(&state, window.label()) {
         approval::pending_requests(&home(&state)?).map_err(failed)?
     } else {
         Vec::new()
@@ -79,11 +84,21 @@ where
 }
 
 #[tauri::command]
-pub fn desktop_plugin_approval_decide(
+pub fn desktop_plugin_approval_decide<R>(
+    window: WebviewWindow<R>,
     id: String,
     decision: String,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
+    if !window_subscribed(&state, window.label()) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::PermissionDenied,
+            "Only a window showing plugin approval prompts can answer them.",
+        ));
+    }
     let answer = crate::plugin_access::answer(&decision)?;
     approval::decide(&home(&state)?, &id, answer).map_err(failed)
 }

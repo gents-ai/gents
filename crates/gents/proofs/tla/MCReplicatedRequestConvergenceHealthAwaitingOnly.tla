@@ -1,4 +1,0 @@
----- MODULE MCReplicatedRequestConvergenceHealthAwaitingOnly ----
-EXTENDS ReplicatedRequestConvergence
-
-====

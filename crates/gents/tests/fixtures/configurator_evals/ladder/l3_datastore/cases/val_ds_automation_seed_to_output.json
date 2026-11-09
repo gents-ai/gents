@@ -2,6 +2,11 @@
   "case_id": "val-ds-automation-seed-to-output",
   "split": "validation",
   "reducer": "all",
+  "fixtures": {
+    "seed_schemas": [
+      "type EvalAutomationInput {\n  correlation: String\n  message: String\n}"
+    ]
+  },
   "stages": [
     {
       "stage_id": "configure",
@@ -29,7 +34,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -85,7 +90,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",

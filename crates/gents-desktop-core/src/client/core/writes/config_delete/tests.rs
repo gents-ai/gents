@@ -7,7 +7,7 @@ fn task(task_id: &str) -> Task {
     serde_json::from_value(json!({
         "task_id": task_id,
         "node_did": "did:key:amy",
-        "agent_id": "default",
+        "agent_did": "default",
         "prompt_template": "run"
     }))
     .expect("task")

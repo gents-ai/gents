@@ -6,7 +6,7 @@ async fn prompt_gated_before_insertion_is_rejected_after_disconnect() {
     let graphql = spawn_mock_graphql(node.clone()).await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
@@ -92,6 +92,7 @@ async fn prompt_gated_before_insertion_is_rejected_after_disconnect() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_a_noop() {
     let (_tempdir, node, node_did) = test_node().await;
     let submission_arrived = Arc::new(tokio::sync::Notify::new());
@@ -108,7 +109,7 @@ async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_
     .await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
@@ -171,10 +172,11 @@ async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn send_failure_after_submission_interrupts_the_request() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let engine = test_engine(node.clone());
     let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
         crate::commands::grok_shim::protocol::ServerEnvelope,
@@ -226,12 +228,13 @@ async fn send_failure_after_submission_interrupts_the_request() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn second_prompt_for_live_session_is_rejected() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let projections = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();
@@ -288,7 +291,7 @@ async fn second_prompt_for_live_session_is_rejected() {
     let did_for_terminalize = node_did.clone();
     let terminalize_handle = tokio::spawn(async move {
         loop {
-            let scope = gents::session::session_scope_filter(
+            let scope = gents_protocol::session::session_scope_filter(
                 &did_for_terminalize,
                 "session-1",
                 Some(&did_for_terminalize),

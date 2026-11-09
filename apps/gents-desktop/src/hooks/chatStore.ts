@@ -30,7 +30,6 @@ export type ChatState = {
   goalCommandsInFlight: ReadonlySet<string>;
   chatDrafts: ChatDraft[];
   chatDraftError: string | null;
-  chatRequestsInFlight: ReadonlySet<string>;
 };
 
 export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
@@ -51,7 +50,6 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       ...loadGoalDrafts(),
       goalCommandsInFlight: new Set(),
       ...loadChatDrafts(),
-      chatRequestsInFlight: new Set(),
       ...initial,
     })),
   );

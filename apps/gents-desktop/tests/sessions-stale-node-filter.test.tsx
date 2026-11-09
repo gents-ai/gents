@@ -20,7 +20,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   title: "Greeting",
   previewText: null,
   status: "completed",
-  agentId: null,
+  agentDid: null,
   taskId: null,
   taskName: null,
   triggerId: null,

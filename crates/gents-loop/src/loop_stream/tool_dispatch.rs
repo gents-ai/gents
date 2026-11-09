@@ -327,7 +327,7 @@ where
             let scoped = async {
                 match input.scope {
                 Some(scope) => crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
-                    scope.requester_did, scope.node_did, scope.agent_id, scope.request_id,
+                    scope.requester_did, scope.node_did, scope.agent_did, scope.request_id,
                     crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                         scope.deadline_at, token.clone(), scope.workspace_cwd, scope.live_output,
                         scope.session_id, scope.correlation, scope.source_fields, scope.background, execute,

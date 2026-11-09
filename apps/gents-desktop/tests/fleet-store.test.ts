@@ -36,7 +36,7 @@ const read = (parentTitle = "parent") =>
           nodeDid: "a",
           source: "enrollment",
           label: "home",
-          agents: [{ agentId: "a:default" }],
+          agents: [{ agentDid: "a:default" }],
           sessions: [
             session("a", "parent", undefined, parentTitle),
             session("a", "local-worker", "parent"),

@@ -51,7 +51,7 @@ pub(super) async fn entry(value: &Value, identities: &[KeyIdentity]) -> AgentReq
         format!("request-{}", value["doc"]),
         identity.did(),
         identity.did(),
-        "agent",
+        identity.did(),
         format!("session-{}", value["session"]),
         "follow up",
         "interactive",

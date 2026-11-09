@@ -25,7 +25,7 @@ import type { Tools } from "./Tools.js";
 import type { Trigger } from "./Trigger.js";
 
 /**
- * Canonical authored document bundle for packs; the
+ * Canonical materialized document bundle for packs; the
  * loader fills missing root node_did from PackInstallOptions and explicit
  * owners must match. Validate ownership, references, unknown authoring keys,
  * and resource bounds before persistence.

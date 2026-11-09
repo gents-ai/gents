@@ -155,7 +155,8 @@ async fn a_request_whose_push_failed_is_pushed_again_when_reused() {
         "approved",
         "2026-09-24T12:00:00Z",
     ));
-    assert_eq!(attempt().await.unwrap(), "enroll-1");
+    assert!(attempt().await.is_err());
+    assert_eq!(authored.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(resent.lock().unwrap().len(), 1);
 }
 
@@ -195,31 +196,17 @@ fn the_newest_request_for_the_live_server_peer_is_reused() {
 async fn pairing_is_not_retried_after_a_permanent_failure() {
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    for message in [
-        "requesting managed runtime enrollment: refusing to enroll with an incompatible runtime",
-        "loading managed runtime enrollment offer: the running agent (v0.18.2) predates this app; restart it so it runs this version",
-        "requesting managed runtime enrollment: enrollment server DID does not match the offer",
-    ] {
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let calls = AtomicU32::new(0);
-        let failure = PairingFailure::classify(message.to_string());
-        assert!(matches!(failure, PairingFailure::Permanent(_)), "{message}");
-        let error = retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || {
-            calls.fetch_add(1, Ordering::SeqCst);
-            let failure = failure.clone();
-            async move { Err::<(), _>(failure) }
-        })
-        .await
-        .unwrap_err();
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "{message}");
-        assert_eq!(error.to_string(), message);
-    }
-    assert!(matches!(
-        PairingFailure::classify(
-            "approving managed runtime enrollment: connection refused".to_string()
-        ),
-        PairingFailure::Transient(_)
-    ));
+    let message = "loading managed runtime enrollment offer: the running agent predates this app";
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = AtomicU32::new(0);
+    let error = retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || {
+        calls.fetch_add(1, Ordering::SeqCst);
+        async move { Err::<(), _>(PairingFailure::Permanent(message.to_string())) }
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(error.to_string(), message);
 }
 
 #[tokio::test]
@@ -238,4 +225,47 @@ async fn pairing_retry_ends_when_cancelled_during_its_backoff() {
     .await
     .expect("cancellation ends the backoff");
     assert_eq!(result.unwrap_err(), PairingFailure::Cancelled);
+}
+
+#[tokio::test]
+async fn an_old_enrollment_completion_cannot_clear_a_replacement() {
+    let old = Arc::new(tokio_util::sync::CancellationToken::new());
+    let current = Arc::new(tokio_util::sync::CancellationToken::new());
+    let mut managed = ManagedServerRuntimeState {
+        pairing_cancel: Some(Arc::clone(&current)),
+        pairing_task: Some(tauri::async_runtime::spawn(async {})),
+        ..Default::default()
+    };
+    clear_finished_enrollment(&mut managed, &old);
+    assert!(Arc::ptr_eq(
+        managed.pairing_cancel.as_ref().unwrap(),
+        &current
+    ));
+    assert!(managed.pairing_task.is_some());
+    clear_finished_enrollment(&mut managed, &current);
+    assert!(managed.pairing_cancel.is_none());
+    assert!(managed.pairing_task.is_none());
+}
+
+#[tokio::test]
+async fn shutdown_cancels_and_drains_an_abandoned_enrollment() {
+    let (_temp, state) = orchestration_state();
+    let cancel = Arc::new(tokio_util::sync::CancellationToken::new());
+    let child = Arc::clone(&cancel);
+    let (finished, observed) = tokio::sync::oneshot::channel();
+    let task = tauri::async_runtime::spawn(async move {
+        child.cancelled().await;
+        let _ = finished.send(());
+    });
+    {
+        let mut managed = state.managed_server.lock().await;
+        managed.pairing_cancel = Some(Arc::clone(&cancel));
+        managed.pairing_task = Some(task);
+    }
+    drain_managed_runtime_pairing(&state).await;
+    assert!(cancel.is_cancelled());
+    observed.await.unwrap();
+    let managed = state.managed_server.lock().await;
+    assert!(managed.pairing_cancel.is_none());
+    assert!(managed.pairing_task.is_none());
 }

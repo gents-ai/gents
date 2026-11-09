@@ -17,7 +17,7 @@ pub struct EnrollmentRouteReceiptRecord {
     pub member_did: String,
     pub member_peer: String,
     pub server_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub authorization_sequence: u64,
     pub authorization_expires_at: String,
     pub direction: EnrollmentRouteReceiptDirection,
@@ -56,7 +56,7 @@ impl EnrollmentRouteReceiptRecord {
                 &self.member_did,
                 &self.member_peer,
                 &self.server_peer,
-                &self.owner_agent,
+                &self.owner_node_did,
                 sequence.as_str(),
                 &self.authorization_expires_at,
                 self.direction.as_str(),
@@ -101,8 +101,8 @@ impl EnrollmentRouteReceiptRecord {
         if self.server_peer != request.server_peer {
             return Err(EnrollmentError::ReceiptServerPeerMismatch);
         }
-        if self.owner_agent != request.owner_agent {
-            return Err(EnrollmentError::ReceiptOwnerAgentMismatch);
+        if self.owner_node_did != request.owner_node_did {
+            return Err(EnrollmentError::ReceiptOwnerNodeMismatch);
         }
         if self.authorization_sequence != decision.authorization_sequence {
             return Err(EnrollmentError::ReceiptSequenceMismatch);

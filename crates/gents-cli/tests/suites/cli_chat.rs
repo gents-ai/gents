@@ -141,7 +141,7 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
         "expected first chat turn to contain {expected_reply}, got:\n{first_stdout}"
     );
 
-    let (_request_id, session_id, _agent_id) =
+    let (_request_id, session_id, _agent_did) =
         wait_for_request(&graphql, &node_did, &first_prompt).await?;
 
     let second_stdout = run_cli_text(
@@ -545,7 +545,7 @@ async fn interactive_input_drains_while_provider_is_held(
         if exit_command { writeln!(stdin, "/exit")?; }
         stdin.flush()?;
         drop(stdin);
-        let query = format!(r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }} }}) {{ _docID request_id content session_id agent_id input lifecycle_state superseded_by_request superseded_by_request_doc_id failure_reason terminal_output }} }}"#, escape_graphql_string(&node));
+        let query = format!(r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }} }}) {{ _docID request_id content session_id agent_did input lifecycle_state superseded_by_request superseded_by_request_doc_id failure_reason terminal_output }} }}"#, escape_graphql_string(&node));
         let seeded = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let value = graphql_query(&graphql, &query).await?;

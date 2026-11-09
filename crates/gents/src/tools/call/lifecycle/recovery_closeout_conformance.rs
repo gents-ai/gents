@@ -1,7 +1,9 @@
 use crate::tools::call::lifecycle::admission_fixture::{
-    complete_child, published_admission, published_session_message, PublishedAdmissionOptions,
+    complete_child_managed_verified, published_admission, published_session_message,
+    PublishedAdmissionOptions,
 };
-use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
+use gents_protocol::tool_call::AwaitMode;
 
 #[cfg(unix)]
 mod background_owner;
@@ -10,6 +12,18 @@ mod fixtures;
 mod kill;
 
 use fixtures::{completion_obligations, remove_parent, settle, update, update_request};
+
+pub(super) fn recovery_identities(
+    admission: &crate::tools::call::lifecycle::admission_fixture::PublishedAdmission,
+) -> Vec<std::sync::Arc<dyn crate::store::identity::NodeIdentity>> {
+    let signer = admission
+        .tool
+        .access()
+        .expect("fixture tool access")
+        .managed_agent_signer()
+        .expect("fixture managed Agent signer");
+    vec![std::sync::Arc::new(signer)]
+}
 
 #[tokio::test]
 async fn generated_native_missing_parent_restart_cases_defer() {
@@ -35,28 +49,35 @@ async fn generated_native_missing_parent_restart_cases_defer() {
         .await
         .expect("publish accepted restart call");
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
-        remove_parent(&admission.node, admission.tool.request_doc_id().unwrap()).await;
+        let access = admission.tool.access().unwrap();
+        remove_parent(&admission.client, admission.tool.request_doc_id().unwrap()).await;
         if case.deadline_expired {
             update(
-                &admission.node,
+                &access,
                 &tool_doc_id,
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
             )
             .await;
         }
-        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
-            .await
-            .unwrap();
+        let report = ToolCallLifecycle::recover_all(
+            &admission.node,
+            &admission.node_did,
+            &recovery_identities(&admission),
+        )
+        .await
+        .unwrap();
         assert_eq!(report.tool_calls_recovered, 0, "{name}");
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = admission.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#)).await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
+        let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#)).await.unwrap();
         assert_eq!(
-            response.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
-            "running",
+            response["data"]["AgentToolCall"][0]["lifecycle_state"], "running",
             "{name}"
         );
-        admission.node.shutdown().await;
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
     }
 }
@@ -79,20 +100,25 @@ fn assert_notification_reason(
 /// goal controller tests use, producing an unreadable assignment observation
 /// (`parsed_status` resolves the document but cannot parse the status).
 async fn seed_goal_status(
-    node: &crate::defra_node::EmbeddedNode,
+    access: &crate::ConfigAccess,
     goal: &crate::goal::GoalDocument,
     fields: &str,
 ) {
     let doc_id = crate::store::graphql::escape_graphql_string(&goal.doc_id);
     let node_did = crate::store::graphql::escape_graphql_string(&goal.node_did);
-    let response = node.execute(&format!(
-        r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
-    ))
-    .await;
-    assert!(
-        !response.has_errors(),
-        "seed Goal status: {:?}",
-        response.errors
+    let response = access
+        .write(
+            "fixture.goal.seed_status",
+            &format!(
+                r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .expect("seed Goal status as its owning Agent");
+    assert_eq!(
+        response["data"]["update_Goal"].as_array().map(Vec::len),
+        Some(1),
+        "seed Goal status must change the Agent's Goal: {response}"
     );
 }
 
@@ -146,21 +172,28 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
             let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
             let response = admission
-                .node
+                .tool
+                .access()
+                .unwrap()
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state tool_failure_class }} }}"#
                 ))
-                .await;
-            assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-            let row = &response.data.unwrap()["AgentToolCall"][0];
+                .await
+                .unwrap();
+            let row = &response["data"]["AgentToolCall"][0];
             assert_eq!(
                 row["lifecycle_state"],
                 case.terminal_state.as_str(),
                 "{name}"
             );
             assert_eq!(row["tool_failure_class"], "external", "{name}");
-            let (notifications, _) =
-                completion_obligations(&admission.node, &session_id, &admission.node_did).await;
+            let (notifications, _) = completion_obligations(
+                &admission.tool.access().unwrap(),
+                &session_id,
+                &admission.node_did,
+                admission.tool.requester_did(),
+            )
+            .await;
             assert_eq!(
                 notifications.len(),
                 1,
@@ -168,7 +201,11 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             );
             assert_notification_reason(&notifications[0], case);
             assert_eq!(settle(&admission).await, 0, "{name}: fails closed once");
-            admission.node.shutdown().await;
+            admission
+                .node
+                .shutdown()
+                .await
+                .expect("shut down test node");
             std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
             continue;
         }
@@ -195,56 +232,99 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     let doc_id = crate::store::graphql::escape_graphql_string(
                         &message.caused_request_doc_id,
                     );
-                    let response = admission.node.execute(&format!(
-                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
-                    ))
-                    .await;
-                    assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-                    response.data.unwrap()["AgentRequest"][0]["session_id"]
+                    let response = admission
+                        .tool
+                        .access()
+                        .unwrap()
+                        .execute(&format!(
+                            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
+                        ))
+                        .await
+                        .unwrap();
+                    response["data"]["AgentRequest"][0]["session_id"]
                         .as_str()
                         .expect("the caused request names its session")
                         .to_owned()
                 };
                 if name != "session_message_request_completed_no_goal_to_completed" {
-                    let response = crate::ConfigAccess::local(admission.node.clone())
+                    let access = admission.tool.access().unwrap();
+                    let response = access
                         .execute(&format!(
                             r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{{}}}}}"#,
                             crate::store::graphql::escape_graphql_string(
                                 &message.caused_request_doc_id
                             ),
-                            crate::request::admission::SIGNED_REQUEST_FIELDS,
+                            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
                         ))
                         .await
                         .unwrap();
                     let caller: gents_protocol::row::AgentRequestRow =
                         serde_json::from_value(response["data"]["AgentRequest"][0].clone())
                             .unwrap();
-                    crate::goal::create_goal_for_request(
+                    let created = crate::goal::create_goal_for_request_from_access(
                         &admission.node,
+                        Some(&access),
                         &caller,
                         "Handoff assignment",
                         None,
                     )
                     .await
                     .expect("bind the modeled Goal to its physical caused request");
+                    let goal = created.goal();
+                    assert_eq!(
+                        goal.assignment_root_request_doc_id.as_deref(),
+                        Some(message.caused_request_doc_id.as_str())
+                    );
+                    let modeled = tokio::task::spawn_blocking(|| {
+                        crate::lean_vocab_test::lean_contract_snapshot()
+                            .goal_link_cases
+                            .iter()
+                            .find(|case| {
+                                case.collection == "Goal"
+                                    && case.actor == "agent"
+                                    && case.mode == "fresh"
+                                    && case.commit
+                            })
+                            .unwrap()
+                            .clone()
+                    })
+                    .await
+                    .unwrap();
+                    let escaped = crate::store::graphql::escape_graphql_string(&goal.doc_id);
+                    let visible = access.execute(&format!(r#"{{ Goal(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ creator_did agent_did parent_linked }} }}"#)).await.unwrap();
+                    let selected = caller.agent_did.as_deref().unwrap();
+                    assert_eq!(visible["data"]["Goal"][0]["creator_did"], selected);
+                    assert_eq!(visible["data"]["Goal"][0]["agent_did"], selected);
+                    assert_eq!(
+                        visible["data"]["Goal"][0]["parent_linked"],
+                        modeled.initial.linked
+                    );
+                    let owners = access
+                        .transact_readonly("test.closeout_goal_owner", |txn| {
+                            let doc = &goal.doc_id;
+                            Box::pin(async move {
+                                txn.document_owners("Goal", std::slice::from_ref(doc)).await
+                            })
+                        })
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        owners[0].owner.as_ref().map(|owner| owner.as_str()),
+                        Some(selected)
+                    );
                 }
                 match name {
                     // The reasonless success form must be produced by an
                     // actually-complete assignment, not by a missing Goal:
                     // those are different production paths.
                     "session_message_request_completed_to_completed" => {
-                        crate::test_support::install_test_agent(
-                            &admission.node,
-                            &admission.node_did,
-                            "general",
-                        )
-                        .await;
-                        crate::goal::set_goal(
-                            &admission.node,
+                        crate::goal::set_goal_from_access(
+                            &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,
                             Some("done"),
                             Some(crate::goal::GoalStatus::Complete),
+                            None,
                             None,
                         )
                         .await
@@ -256,38 +336,32 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     // the canonical read resolves the document but cannot
                     // parse its status into the vocabulary.
                     "session_message_request_completed_unknown_goal_to_completed" => {
-                        crate::test_support::install_test_agent(
-                            &admission.node,
-                            &admission.node_did,
-                            "general",
-                        )
-                        .await;
-                        let goal = crate::goal::set_goal(
-                            &admission.node,
+                        let goal = crate::goal::set_goal_from_access(
+                            &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,
                             Some("hold"),
                             Some(crate::goal::GoalStatus::Active),
                             None,
+                            None,
                         )
                         .await
                         .expect("persist a Goal in the caused session");
-                        seed_goal_status(&admission.node, &goal, r#"status: "corrupted-status""#)
-                            .await;
-                    }
-                    "session_message_request_completed_live_goal_to_completed" => {
-                        crate::test_support::install_test_agent(
-                            &admission.node,
-                            &admission.node_did,
-                            "general",
+                        seed_goal_status(
+                            &admission.tool.access().unwrap(),
+                            &goal,
+                            r#"status: "corrupted-status""#,
                         )
                         .await;
-                        crate::goal::set_goal(
-                            &admission.node,
+                    }
+                    "session_message_request_completed_live_goal_to_completed" => {
+                        crate::goal::set_goal_from_access(
+                            &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,
                             Some("hold"),
                             Some(crate::goal::GoalStatus::Active),
+                            None,
                             None,
                         )
                         .await
@@ -295,14 +369,8 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     }
                     "session_message_request_completed_blocked_goal_to_completed"
                     | "session_message_request_completed_stopped_goal_to_completed" => {
-                        crate::test_support::install_test_agent(
-                            &admission.node,
-                            &admission.node_did,
-                            "general",
-                        )
-                        .await;
-                        crate::goal::set_goal(
-                            &admission.node,
+                        crate::goal::set_goal_from_access(
+                            &admission.tool.access().unwrap(),
                             &admission.node_did,
                             &caused_session_id,
                             Some("hold"),
@@ -316,17 +384,24 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                                 },
                             ),
                             None,
+                            None,
                         )
                         .await
                         .expect("persist a blocked Goal in the caused session");
                     }
                     other => panic!("{other}: unhandled completed session-message case"),
                 }
-                complete_child(
+                complete_child_managed_verified(
                     &admission.node,
                     &message.caused_request_id,
-                    &admission.node_did,
                     "done",
+                    &admission
+                        .tool
+                        .access()
+                        .unwrap()
+                        .managed_agent_signer()
+                        .unwrap(),
+                    admission.runtime.clone(),
                 )
                 .await;
                 None
@@ -339,7 +414,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         };
         if let Some(state) = caused_state {
             update_request(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &message.caused_request_doc_id,
                 &format!(r#"lifecycle_state: "{state}""#),
             )
@@ -349,13 +424,15 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission
-            .node
+            .tool
+            .access()
+            .unwrap()
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state cancel_cause tool_failure_class }} }}"#
             ))
-            .await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-        let row = &response.data.unwrap()["AgentToolCall"][0];
+            .await
+            .unwrap();
+        let row = &response["data"]["AgentToolCall"][0];
         assert_eq!(
             row["lifecycle_state"],
             case.terminal_state.as_str(),
@@ -373,8 +450,13 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         // side effect is actually skipped.
         assert_eq!(row["status"], "completed", "{name}");
         let session_id = admission.tool.session_id().to_owned();
-        let (notifications, _) =
-            completion_obligations(&admission.node, &session_id, &admission.node_did).await;
+        let (notifications, _) = completion_obligations(
+            &admission.tool.access().unwrap(),
+            &session_id,
+            &admission.node_did,
+            admission.tool.requester_did(),
+        )
+        .await;
         assert_eq!(notifications.len(), 1, "{name}");
         // F3: the notification reason must be validated against the modeled
         // handoff for the case, not only against the raw suffix: each
@@ -388,7 +470,12 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         );
         assert_notification_reason(&notifications[0], case);
         assert_eq!(settle(admission).await, 0, "{name}");
-        message.admission.node.shutdown().await;
+        message
+            .admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         std::fs::remove_dir_all(&message.admission.path).expect("remove exact recovery fixture");
     }
 }
@@ -422,7 +509,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         let parent_doc_id = admission.tool.request_doc_id().unwrap().to_owned();
         if case.parent_terminal == Some(true) {
             update_request(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &parent_doc_id,
                 r#"lifecycle_state: "completed""#,
             )
@@ -430,7 +517,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         if case.parent_interrupted == Some(true) {
             update_request(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &parent_doc_id,
                 r#"lifecycle_state: "interrupted""#,
             )
@@ -438,15 +525,16 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         if case.deadline_expired == Some(true) {
             update(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &tool_doc_id,
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
             )
             .await;
         }
         if case.owner_session_stopped == Some(true) {
-            crate::session::stop_session(
+            crate::session::stop_session_with_access(
                 &admission.node,
+                &admission.tool.access().unwrap(),
                 &admission.node_did,
                 admission.tool.session_id(),
                 admission.tool.requester_did(),
@@ -467,6 +555,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,
+            &recovery_identities(&admission),
             &registry,
         )
         .await
@@ -483,13 +572,15 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         assert!(registry.process_record_list().is_empty(), "{name}");
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission
-            .node
+            .tool
+            .access()
+            .unwrap()
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state cancel_cause tool_failure_class }} }}"#
             ))
-            .await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-        let row = &response.data.unwrap()["AgentToolCall"][0];
+            .await
+            .unwrap();
+        let row = &response["data"]["AgentToolCall"][0];
         assert_eq!(row["status"], "completed", "{name}");
         assert_eq!(
             row["lifecycle_state"],
@@ -511,8 +602,13 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             other => panic!("{name}: unsupported Lean recovery cause {other:?}"),
         }
         let session_id = format!("session-{fixture_name}");
-        let (notifications, wakes) =
-            completion_obligations(&admission.node, &session_id, &admission.node_did).await;
+        let (notifications, wakes) = completion_obligations(
+            &admission.tool.access().unwrap(),
+            &session_id,
+            &admission.node_did,
+            admission.tool.requester_did(),
+        )
+        .await;
         if let Some(reason) = case.notification_reason.as_deref() {
             assert_eq!(notifications.len(), 1, "{name}");
             assert!(
@@ -527,12 +623,17 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         let second = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,
+            &recovery_identities(&admission),
             &registry,
         )
         .await
         .unwrap();
         assert_eq!(second.tool_calls_terminalized, 0, "{name}");
-        admission.node.shutdown().await;
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
     }
 }
@@ -553,16 +654,17 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         .await
         .expect("publish accepted native background call");
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
-        remove_parent(&admission.node, admission.tool.request_doc_id().unwrap()).await;
+        remove_parent(&admission.client, admission.tool.request_doc_id().unwrap()).await;
         assert_eq!(case.deadline_expired, Some(true), "{name}");
         update(
-            &admission.node,
+            &admission.tool.access().unwrap(),
             &tool_doc_id,
             r#"deadline_at: "2020-01-01T00:00:00Z""#,
         )
         .await;
-        let error = match ToolCallLifecycle::load_by_doc_id(
+        let error = match ToolCallLifecycle::load_by_doc_id_as(
             admission.node.clone(),
+            admission.tool.actor().clone(),
             &tool_doc_id,
             &admission.node_did,
             admission.tool.session_id(),
@@ -583,22 +685,31 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,
+            &recovery_identities(&admission),
             &registry,
         )
         .await
         .unwrap();
         assert_eq!(report.tool_calls_terminalized, 0, "{name}");
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = admission.node.execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
-        )).await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
+        let response = admission
+            .tool
+            .access()
+            .unwrap()
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
+            ))
+            .await
+            .unwrap();
         assert_eq!(
-            response.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
-            "running",
+            response["data"]["AgentToolCall"][0]["lifecycle_state"], "running",
             "{name}"
         );
-        admission.node.shutdown().await;
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
     }
 }
@@ -632,6 +743,7 @@ async fn generated_background_completion_recovery_uses_accepted_native_call() {
     let report = ToolCallLifecycle::reconcile_background_completion_side_effects(
         &admission.node,
         &admission.node_did,
+        &recovery_identities(&admission),
     )
     .await
     .unwrap();
@@ -639,15 +751,25 @@ async fn generated_background_completion_recovery_uses_accepted_native_call() {
     let second = ToolCallLifecycle::reconcile_background_completion_side_effects(
         &admission.node,
         &admission.node_did,
+        &recovery_identities(&admission),
     )
     .await
     .unwrap();
     assert!(second.is_noop(), "{}", case.name);
     let session_id = format!("session-{fixture_name}");
-    let (notifications, wakes) =
-        completion_obligations(&admission.node, &session_id, &admission.node_did).await;
+    let (notifications, wakes) = completion_obligations(
+        &admission.tool.access().unwrap(),
+        &session_id,
+        &admission.node_did,
+        admission.tool.requester_did(),
+    )
+    .await;
     assert_eq!(notifications.len(), 1, "{}", case.name);
     assert_eq!(wakes.len(), 1, "{}", case.name);
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
 }

@@ -17,6 +17,27 @@ pub fn load_pack_config(
         .context("pack has no configuration")?;
     let bytes = read_asset(path).with_context(|| format!("reading pack config {path}"))?;
     let value: Value = serde_json::from_slice(&bytes).context("parsing pack config JSON")?;
+    load_pack_config_value(manifest, options, value, read_asset, environment)
+}
+
+pub(super) fn load_pack_config_value(
+    manifest: &PackManifest,
+    options: &PackInstallOptions,
+    value: Value,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<PackConfig> {
+    let path = match manifest.config.as_deref() {
+        Some(path) => path,
+        None if matches!(
+            manifest.metadata.kind,
+            super::PackKind::Plugins | super::PackKind::Assets
+        ) =>
+        {
+            ""
+        }
+        None => anyhow::bail!("pack has no configuration"),
+    };
     let mut config = decode_pack_config(value, Some(options), environment, &|_, _, reference| {
         let mut prompt = reference.to_owned();
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
@@ -29,11 +50,11 @@ pub fn load_pack_config(
 }
 
 pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> {
-    if let Some(default) = &config.node.default_agent_id {
+    if let Some(default) = &config.node.default_agent_did {
         anyhow::bail!(
-            "pack node sets default_agent_id {default:?}; a pack must not choose \
+            "pack node sets default_agent_did {default:?}; a pack must not choose \
              the default agent. Remove it from the pack: the user selects the default \
-             (\"Make default\" in the desktop, or default_agent_id in the \
+             (\"Make default\" in the desktop, or default_agent_did in the \
              node of their own `gents config apply` root)"
         );
     }
@@ -262,7 +283,7 @@ fn hydrate_eval_cases(
     Ok(())
 }
 
-fn interpolate_values(
+pub(super) fn interpolate_values(
     value: &mut Value,
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Result<()> {

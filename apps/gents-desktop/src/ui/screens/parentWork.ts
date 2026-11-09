@@ -45,7 +45,7 @@ export function useParentWork(provenance: SessionProvenanceView | null): ParentW
       return {
         sessionId: link.sessionId,
         summary,
-        agentName: summary ? agentName(summary.agentId, deployment) : null,
+        agentName: summary ? agentName(summary.agentDid, deployment) : null,
       };
     };
     const byRequest = new Map(

@@ -4,7 +4,7 @@ use super::{
     AGENT_REQUEST_NAME,
 };
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
 use rapidhash::{HashSetExt, RapidHashSet};

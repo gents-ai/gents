@@ -39,12 +39,19 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "delegates": {
                     "targets": "targets",
                     "agents": [
                       "checking-helper"
                     ]
+                  }
+                },
+                {
+                  "agent_did": "checking-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
                   }
                 }
               ]
@@ -65,7 +72,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -118,7 +125,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         }
       ]
@@ -158,7 +165,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "delegates": {
                     "targets": "targets",
                     "agents": [
@@ -167,7 +174,7 @@
                   }
                 },
                 {
-                  "agent_id": "coordinator",
+                  "agent_did": "coordinator",
                   "delegates": {
                     "targets": "targets",
                     "agents": [
@@ -177,6 +184,13 @@
                   "source_match": {
                     "field": "display_name",
                     "matches": "(?i)\\bcoordinator\\b"
+                  }
+                },
+                {
+                  "agent_did": "checking-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
                   }
                 }
               ]
@@ -197,7 +211,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -250,7 +264,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         }
       ]
@@ -311,8 +325,6 @@
             "links": [
               {
                 "capture": "helper-request",
-                "key": "agent_id",
-                "id": "checking-helper",
                 "field": "caused_by_parent_tool_call_doc_id",
                 "target_capture": "delegation_calls",
                 "target_key": "_docID",
@@ -325,7 +337,23 @@
                     "field": "completion_notification_delivered_at",
                     "matches": "^[0-9]{4}-"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "content",
+                  "contains": "PONG-7391"
+                },
+                "exact": true
+              },
+              {
+                "capture": "helper-request",
+                "source_match": {
+                  "field": "content",
+                  "contains": "PONG-7391"
+                },
+                "field": "session_id",
+                "target_capture": "helper-session",
+                "target_key": "session_id",
+                "exact": true
               }
             ]
           },
@@ -346,19 +374,42 @@
       "capture": [
         {
           "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "helper-session",
           "collection": "AgentSession",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
-              "_like": "%:checking-helper"
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             }
           },
           "fields": [
             "session_id",
-            "agent_id",
+            "agent_did",
             "node_did"
           ]
         },
@@ -370,8 +421,17 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
-              "_like": "%:checking-helper"
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^checking[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
             "purpose": {
               "_eq": "normal"
@@ -379,7 +439,7 @@
           },
           "fields": [
             "request_id",
-            "agent_id",
+            "agent_did",
             "session_id",
             "content",
             "lifecycle_state",
@@ -400,6 +460,9 @@
                 "agent_new",
                 "agent_message"
               ]
+            },
+            "request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [

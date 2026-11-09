@@ -784,7 +784,8 @@ mod tests {
     #[tokio::test]
     async fn diagnostics_reads_actual_scoped_head_across_requesters_without_session_cache(
     ) -> Result<()> {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await?);
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
+        crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
         node.add_collection(gents_protocol::schemas::AGENT_REQUEST)
             .await?;
         node.add_collection(gents_protocol::schemas::AGENT_MESSAGE)
@@ -794,7 +795,7 @@ mod tests {
         let mut failed = serde_json::json!({
             "node_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",
             "purpose":"normal",
-            "agent_id":"general", "input":input(), "execution_origin":"scheduled",
+            "agent_did":"general", "input":input(), "execution_origin":"scheduled",
             "lifecycle_state":"failed", "created_at":"2026-08-12T00:00:00Z",
             "terminalized_at":"2026-08-12T00:00:05Z", "retry_count":0, "max_retries":3
         });
@@ -804,7 +805,7 @@ mod tests {
             serde_json::json!({
                 "node_did":"foreign-owner", "requester_did":"requester-z", "request_id":"foreign-later",
                 "purpose":"normal",
-                "session_id":"shared-session", "agent_id":"general", "execution_origin":"interactive",
+                "session_id":"shared-session", "agent_did":"general", "execution_origin":"interactive",
                 "lifecycle_state":"completed", "created_at":"2026-08-14T00:00:00Z"
             }),
         ] {

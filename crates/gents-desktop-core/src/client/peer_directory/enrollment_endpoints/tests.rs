@@ -26,7 +26,7 @@ async fn approve(
 }
 
 #[tokio::test]
-async fn enrollment_endpoint_survives_pending_approval_and_reopen_without_operator_authority(
+async fn enrollment_endpoint_survives_pending_approval_and_reopen_without_local_runtime_custody(
 ) -> Result<()> {
     let home = tempfile::tempdir()?;
     let path = home.path().join("peers.json");
@@ -40,7 +40,7 @@ async fn enrollment_endpoint_survives_pending_approval_and_reopen_without_operat
     let record = approve(&mut directory, "peer", "did:key:node", "digest").await?;
     assert_eq!(record.graphql.as_deref(), Some(ENDPOINT));
     assert!(record.local_node_home.is_none());
-    assert!(record.operator_graphql().is_none());
+    assert_eq!(record.operator_graphql(), Some(ENDPOINT));
     assert!(!record.is_managed_runtime());
     assert!(!record.pairing_ready);
     assert!(directory.enrollment_endpoints.is_empty());
@@ -48,7 +48,7 @@ async fn enrollment_endpoint_survives_pending_approval_and_reopen_without_operat
     let mut directory = PeerDirectory::open_writer(&path).await?;
     let again = approve(&mut directory, "peer", "did:key:node", "digest").await?;
     assert_eq!(again.graphql.as_deref(), Some(ENDPOINT));
-    assert!(again.operator_graphql().is_none());
+    assert_eq!(again.operator_graphql(), Some(ENDPOINT));
     Ok(())
 }
 

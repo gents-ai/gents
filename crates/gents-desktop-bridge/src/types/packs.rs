@@ -207,7 +207,7 @@ pub struct DynamicWorkflowSummary {
     pub runs: u64,
     #[ts(type = "number")]
     pub last_run_at: u64,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub latest_address: String,
     pub promoted_as: Vec<String>,
 }

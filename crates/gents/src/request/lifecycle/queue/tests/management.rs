@@ -3,13 +3,23 @@ use crate::lean_vocab_test::LeanQueueManagementOperation;
 use crate::store::config_client::ConfigAccess;
 use rapidhash::{HashMapExt, RapidHashMap};
 
+/// Seeds an Agent-owned row through the Agent's own signed access.
+async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) -> serde_json::Value {
+    db.agent_access
+        .transact_write(operation, |txn| {
+            Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(mutation).await?) })
+        })
+        .await
+        .unwrap()
+}
+
 async fn queue_image(
     db: &TestDb,
     session_id: &str,
     active: Option<&super::folding::ActiveTurn>,
 ) -> crate::lean_vocab_test::QueueImage {
-    crate::lean_vocab_test::native_queue_image(
-        &db.node,
+    crate::lean_vocab_test::native_queue_image_with_access(
+        &db.agent_access,
         db.node_did(),
         session_id,
         active.map_or(&[], |turn| turn.lifecycle.folded_selection()),
@@ -71,32 +81,31 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 id.to_string(),
                 db.node_did(),
-                db.node_did(),
-                TEST_AGENT_ID,
+                db.agent_did(),
+                db.agent_did(),
                 &session_id,
                 format!("message {id}"),
                 "interactive",
                 format!("2026-09-01T00:00:{arrival:02}Z"),
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                    db.node_did(),
+                    db.agent_did(),
                 ),
             )
         };
         if let Some(active) = case.before.active {
             let mut create = signed(active, 0);
-            crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+            crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut create)
                 .await
                 .unwrap();
-            let response = ConfigAccess::write_local_response(
-                &db.node,
+            let response = agent_write(
+                &db,
                 "test.management.active",
                 &create.graphql_mutation().unwrap(),
             )
-            .await
-            .unwrap();
+            .await;
             bound.insert(
                 active,
-                extract_single_doc_id(&response, "create_AgentRequest").unwrap(),
+                crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap(),
             );
             names.insert(active, active.to_string());
         }
@@ -111,7 +120,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 create.valid_until = ttl(entry)
                     .filter(|ttl| *ttl != "malformed")
                     .map(str::to_owned);
-                crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+                crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut create)
                     .await
                     .unwrap();
                 let mut mutation = create.graphql_mutation().unwrap();
@@ -122,11 +131,8 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                         1,
                     );
                 }
-                let response =
-                    ConfigAccess::write_local_response(&db.node, "test.management.seed", &mutation)
-                        .await
-                        .unwrap();
-                extract_single_doc_id(&response, "create_AgentRequest").unwrap()
+                let response = agent_write(&db, "test.management.seed", &mutation).await;
+                crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
             };
             bound.insert(entry.request_id, id);
         }
@@ -169,17 +175,30 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 })
                 .collect(),
         };
-        let caller_did = match caller {
-            Some(1) => db.node_did(),
-            Some(2) => "did:test:fold-foreign-requester",
-            _ => panic!("unsupported caller in {}", case.name),
-        };
-        let access = ConfigAccess::local(db.node.clone());
+        let user_key = crate::store::identity::KeyIdentity::load_or_create(
+            db._tempdir.path().join("other-user.key"),
+            None,
+        )
+        .unwrap();
+        // Modeled requester 1 is the Agent that authored its own queued work;
+        // it edits through its managed signer.
+        let (signer, access): (&dyn crate::store::identity::NodeIdentity, ConfigAccess) =
+            match caller {
+                Some(1) => (db.agent_identity.as_ref(), db.agent_access.clone()),
+                Some(2) => (
+                    &user_key,
+                    ConfigAccess::local_as(
+                        db.node.clone(),
+                        ::identity::Did::new(user_key.did().to_owned()).unwrap(),
+                    ),
+                ),
+                _ => panic!("unsupported caller in {}", case.name),
+            };
         let state_query = format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID content input admission_signature lifecycle_state valid_until }} }}"#,
             escape_graphql_string(&session_id),
         );
-        let snapshot = pending_user_queue(&access, db.node_did(), &session_id, caller_did)
+        let snapshot = pending_user_queue(&access, db.node_did(), &session_id, signer.did())
             .await
             .unwrap();
         let mut observed = snapshot
@@ -197,7 +216,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             &access,
             db.node_did(),
             &session_id,
-            caller_did,
+            signer.did(),
             &observed,
         )
         .await
@@ -238,12 +257,12 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             .clone();
         let result = replace_pending_user_messages(
             &access,
-            db.identity.as_ref(),
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(caller_did),
+            signer,
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(signer.did()),
             PendingEditActor {
                 node_did: db.node_did(),
                 session_id: &session_id,
-                requester_did: caller_did,
+                requester_did: signer.did(),
             },
             edit,
             &replacements
@@ -326,10 +345,13 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 bound.insert(replacement.request_id, id.clone());
             }
             for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
-                let row = crate::request::binding::load_agent_request_by_doc_id(&db.node, id)
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let row = crate::request::binding::load_agent_request_by_doc_id_with_access(
+                    &db.agent_access,
+                    id,
+                )
+                .await
+                .unwrap()
+                .unwrap();
                 assert_eq!(
                     row.content,
                     format!("message {}", replacement.request_id),

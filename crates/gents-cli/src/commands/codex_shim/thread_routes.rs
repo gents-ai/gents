@@ -1,17 +1,10 @@
-use std::path::PathBuf;
-
-use anyhow::{Context, Result};
-use gents::session::{fork, ForkBoundary, ForkError, ForkParams};
 use gents_codex_protocol as codex;
 use serde_json::{json, Value};
 
-use super::bound_behavior::load_bound_model_selection_id_for_state;
 use super::history_projection::load_thread_turns;
 use super::protocol::absolute_path;
-use super::store::query_node_json;
 use super::thread_projection::{
-    codex_thread_json, codex_thread_json_with_turns, list_codex_threads_for_sources,
-    load_codex_thread, store_forked_codex_thread, thread_response_json, CodexThreadRecord,
+    codex_thread_json, list_codex_threads_for_sources, CodexThreadRecord,
 };
 use super::{ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS};
 
@@ -19,66 +12,6 @@ use super::{ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS};
 pub(super) struct ThreadRouteError {
     pub(super) code: i64,
     pub(super) message: String,
-}
-
-pub(super) async fn fork_thread_response(
-    state: &ShimState,
-    params: codex::ThreadForkParams,
-) -> std::result::Result<(CodexThreadRecord, Value), ThreadRouteError> {
-    if params.path.is_some() {
-        return Err(invalid_params(
-            "thread/fork by rollout path is unavailable for GENTS-backed Codex threads",
-        ));
-    }
-    if params.sandbox.is_some() && params.permissions.is_some() {
-        return Err(invalid_params(
-            "`permissions` cannot be combined with `sandbox`",
-        ));
-    }
-
-    let source = load_codex_thread(state, &params.thread_id)
-        .await
-        .map_err(internal_error)?
-        .ok_or_else(|| invalid_params(format!("unknown Codex thread `{}`", params.thread_id)))?;
-    let fork_at_user_turn = count_user_messages(state, &params.thread_id)
-        .await
-        .map_err(internal_error)?;
-    let outcome = fork(
-        &state.node,
-        ForkParams {
-            source_session_id: &params.thread_id,
-            boundary: ForkBoundary::UserTurn(fork_at_user_turn),
-            caller_node_did: state.node_did.as_ref(),
-            caller_requester_did: Some(state.local_requester_did()),
-            target_agent_id: None,
-        },
-    )
-    .await
-    .map_err(map_fork_error)?;
-
-    let cwd = params
-        .cwd
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(|cwd| resolve_cwd(&source.cwd, cwd))
-        .unwrap_or_else(|| source.cwd.clone());
-    let record = store_forked_codex_thread(state, &source, &outcome.session_id, &cwd)
-        .await
-        .map_err(internal_error)?;
-    let turns = if params.exclude_turns {
-        Vec::new()
-    } else {
-        load_thread_turns(state, &record)
-            .await
-            .map_err(internal_error)?
-    };
-    let thread = codex_thread_json_with_turns(&record, turns);
-    let bound_model_id =
-        load_bound_model_selection_id_for_state(&state.node, &state.node_did, &state.agent_id)
-            .await
-            .map_err(internal_error)?;
-    let response = thread_response_json(&record, thread, &bound_model_id);
-    Ok((record, response))
 }
 
 pub(super) async fn list_threads_response(
@@ -303,43 +236,6 @@ fn thread_sort_timestamp(record: &CodexThreadRecord, sort_key: codex::ThreadSort
     .unwrap_or_default()
 }
 
-async fn count_user_messages(state: &ShimState, thread_id: &str) -> Result<u32> {
-    let scope = gents::session::session_scope_filter(
-        &state.node_did,
-        thread_id,
-        Some(state.local_requester_did()),
-    );
-    let response = query_node_json(
-        &state.node,
-        &format!(
-            "{{AgentMessage(filter:{{{scope}}}){{{}}}}}",
-            gents::session::canonical_rows::AGENT_MESSAGE_FIELDS
-        ),
-    )
-    .await?;
-    let rows = response
-        .pointer("/data/AgentMessage")
-        .and_then(Value::as_array)
-        .context("thread user-turn count omitted messages")?;
-    let count = rows
-        .iter()
-        .map(gents::session::is_user_turn)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|is_user| *is_user)
-        .count();
-    u32::try_from(count).context("user turn count exceeds u32")
-}
-
-fn resolve_cwd(source_cwd: &std::path::Path, cwd: &str) -> PathBuf {
-    let cwd = PathBuf::from(cwd);
-    if cwd.is_absolute() {
-        cwd
-    } else {
-        source_cwd.join(cwd)
-    }
-}
-
 fn source_filter_allows_cli(source_kinds: Option<&[codex::ThreadSourceKind]>) -> bool {
     source_kinds
         .filter(|kinds| !kinds.is_empty())
@@ -450,22 +346,6 @@ fn field_snippet(value: &str, needle: &str) -> Option<String> {
 
 fn contains_case_insensitive(value: &str, needle: &str) -> bool {
     value.to_lowercase().contains(&needle.to_lowercase())
-}
-
-fn map_fork_error(err: ForkError) -> ThreadRouteError {
-    let code = match err {
-        ForkError::ForkCopyFailed(_) => JSONRPC_INTERNAL_ERROR,
-        ForkError::ForkSourceNotFound(_)
-        | ForkError::ForkNotSameAgent
-        | ForkError::ForkSourceBusy
-        | ForkError::ForkAtUserTurnOutOfRange(_, _)
-        | ForkError::ForkAgentNotFound(_)
-        | ForkError::ForkMessageNotEditable(_) => JSONRPC_INVALID_PARAMS,
-    };
-    ThreadRouteError {
-        code,
-        message: err.to_string(),
-    }
 }
 
 fn invalid_params(message: impl Into<String>) -> ThreadRouteError {

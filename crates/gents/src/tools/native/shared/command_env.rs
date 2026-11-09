@@ -1,3 +1,4 @@
+use crate::documents::callback::is_secret_env_name;
 use rapidhash::RapidHashMap;
 
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -49,12 +50,4 @@ where
     env.insert("CLICOLOR".to_string(), "0".to_string());
     env.insert("TERM".to_string(), "dumb".to_string());
     env
-}
-
-pub(crate) fn is_secret_env_name(key: &str) -> bool {
-    let key = key.to_ascii_uppercase();
-    key.contains("KEY")
-        || key.contains("SECRET")
-        || key.contains("TOKEN")
-        || key.contains("PASSWORD")
 }

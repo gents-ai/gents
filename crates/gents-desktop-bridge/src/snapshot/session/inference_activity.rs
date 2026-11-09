@@ -27,7 +27,7 @@ pub(crate) async fn read_activity(
     node: &str,
     session: &str,
     request_id: &str,
-) -> Option<String> {
+) -> anyhow::Result<Option<String>> {
     if request.request_id != request_id
         || request.node_did.as_deref() != Some(node)
         || request.session_id.as_deref() != Some(session)
@@ -36,9 +36,9 @@ pub(crate) async fn read_activity(
             Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
         )
     {
-        return None;
+        return Ok(None);
     }
-    let activity = match active_generation(request, node, session, request_id) {
+    match active_generation(request, node, session, request_id) {
         Some(generation) => {
             let key = gents::observe::inference_observation::InferenceKey {
                 node: node.to_owned(),
@@ -46,16 +46,43 @@ pub(crate) async fn read_activity(
                 request: request_id.to_owned(),
                 generation: generation.to_owned(),
             };
-            match core.read_inference_activity(&key).await {
-                Ok(Some(InferenceActivity::Working)) => "working",
-                Ok(Some(InferenceActivity::Waiting)) => "waiting",
-                Ok(Some(InferenceActivity::Retrying)) => "retrying",
-                Ok(Some(InferenceActivity::AwaitingProvider)) => "awaiting_provider",
-                Ok(None) => return None,
-                _ => "unavailable",
-            }
+            project_activity(core.read_inference_activity(&key).await)
         }
-        None => return None,
+        None => Ok(None),
+    }
+}
+
+fn project_activity(
+    activity: anyhow::Result<Option<InferenceActivity>>,
+) -> anyhow::Result<Option<String>> {
+    let activity = match activity {
+        Ok(Some(InferenceActivity::Working)) => "working",
+        Ok(Some(InferenceActivity::Waiting)) => "waiting",
+        Ok(Some(InferenceActivity::Retrying)) => "retrying",
+        Ok(Some(InferenceActivity::AwaitingProvider)) => "awaiting_provider",
+        Ok(Some(InferenceActivity::Unavailable)) => "unavailable",
+        Ok(None) => return Ok(None),
+        Err(error) => {
+            let classified = crate::error::BridgeError::classify_transport_error(error);
+            if classified.code == crate::error::BridgeErrorCode::PermissionDenied {
+                return Err(classified.into());
+            }
+            "unavailable"
+        }
     };
-    Some(activity.to_owned())
+    Ok(Some(activity.to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_activity_is_distinct_from_hidden_activity() {
+        assert_eq!(
+            project_activity(Ok(Some(InferenceActivity::Unavailable))).unwrap(),
+            Some("unavailable".to_owned())
+        );
+        assert_eq!(project_activity(Ok(None)).unwrap(), None);
+    }
 }

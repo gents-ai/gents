@@ -40,8 +40,10 @@ impl StageReview {
                     "detail": "Stage did not complete; configuration was not graded."});
                 }
                 match registry.get(&c.check) {
-                    Some(check) => {
-                        let v = check.evaluate(&c.params, stage);
+                    Some(_) => {
+                        let v = registry
+                            .evaluate_bound(&c.check, &c.params, stage)
+                            .expect("registered check");
                         json!({"check": c.check, "kind": v.kind, "score_bp": v.score_bp,
                         "raw": v.raw, "feedback": v.feedback})
                     }

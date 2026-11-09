@@ -13,7 +13,6 @@ use gents::eval::optimization::{
 };
 use gents::eval::runner::embedded::EmbeddedExecutor;
 use gents::eval::runner::RunOptions;
-use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
@@ -46,7 +45,8 @@ pub(crate) async fn dispatch(
         gents::DocumentRuntimeOptions::default(),
         ctx.runs_dir(),
         ctx.runtime.clone(),
-    );
+    )
+    .with_evaluator_identity(ctx.evaluator.clone(), ctx.client_signing.clone());
     let registry = CheckRegistry::builtin();
     let cancel = if matches!(command, OptimizationCommand::Run(_)) {
         cancel_on_ctrl_c(
@@ -122,25 +122,32 @@ async fn behavior_proposer(
 ) -> Result<AgentProposer<LiveTurn>> {
     let resolved = resolve_pack_source(pack, args.registry.as_deref(), &ctx.home_dir).await?;
     let slot = single_slot(resolved.manifest())?;
-    let agent_id = proposer_agent_id(pack, slot, agent)?;
+    let agent_slot = proposer_agent_slot(pack, slot, agent)?;
     let config = pack_config(&resolved, &ctx.owner)?;
-    ensure_tool_less(&config, &ctx.owner, &agent_id)?;
+    ensure_tool_less(&config, &ctx.owner, &agent_slot)?;
     let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
             "start `gents server` for this home and retry: an agent proposer runs on a served home"
         );
     };
-    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &ctx.owner)?;
+
     let preamble = subject_preamble(subject_dir, subject_agent, &args.target)?;
-    let profile = args.proposer_profile.clone().unwrap_or_else(|| {
-        default_inference_profile_id_for_agent(&default_agent_id_for_node(&ctx.owner))
-    });
-    install_pack_slot(&ctx.access, &ctx.owner, &resolved, &slot.name, &profile).await?;
+    let profile = match &args.proposer_profile {
+        Some(profile) => profile.clone(),
+        None => ctx.default_inference_profile().await?,
+    };
+    let installed =
+        install_pack_slot(&ctx.access, &ctx.owner, &resolved, &slot.name, &profile).await?;
+    let agent_did = installed
+        .agents
+        .get(&agent_slot)
+        .context("installed proposer has no selected agent binding")?
+        .clone();
     Ok(AgentProposer::with_preamble(
         LiveTurn {
             graphql: graphql.clone(),
             node_did: ctx.owner.clone(),
-            agent_id,
+            agent_did,
             session_id: uuid::Uuid::new_v4().to_string(),
             timeout_secs: args.proposer_timeout_secs,
             poll_secs: 1,
@@ -151,16 +158,15 @@ async fn behavior_proposer(
 }
 
 fn ensure_tool_less(
-    config: &gents::documents::PackConfig,
+    authored: &gents::pack::AuthoredPackConfig,
     owner: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
-    let agent = config
-        .agents
-        .iter()
-        .find(|agent| agent.agent_id == agent_id)
-        .with_context(|| format!("the proposer pack has no agent {agent_id}"))?;
-    let context = agent.context_id.as_deref().and_then(|id| {
+    let agent = authored
+        .agent(agent_did)
+        .with_context(|| format!("the proposer pack has no agent {agent_did}"))?;
+    let config = &authored.documents;
+    let context = agent["context_id"].as_str().and_then(|id| {
         config
             .contexts
             .iter()
@@ -173,18 +179,24 @@ fn ensure_tool_less(
             .tools
             .iter()
             .find(|tools| tools.tools_id == id)
-            .with_context(|| format!("agent {agent_id} names unknown tools {id}"))?,
+            .with_context(|| format!("agent {agent_did} names unknown tools {id}"))?,
         None => &no_tools,
     };
-    let active = config
-        .agents
-        .iter()
-        .map(|agent| &agent.agent_id)
-        .chain(config.agent_targets.iter().map(|target| &target.agent_id))
-        .cloned()
+    let active = authored.value["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|agent| agent["agent_slot"].as_str())
+        .map(|slot| format!("gents:agent-slot:{slot}"))
+        .chain(
+            config
+                .agent_targets
+                .iter()
+                .map(|target| target.agent_did.clone()),
+        )
         .collect();
     let mut names = gents::AgentToolSurfaceConfig::from_tools_documents(
-        agent_id,
+        agent_did,
         tools,
         &config.datastore_tool_surfaces,
         &config.agent_targets,
@@ -206,18 +218,18 @@ fn ensure_tool_less(
     );
     anyhow::ensure!(
         names.is_empty(),
-        "proposer agent {agent_id} has tools {names:?}; a proposer must be tool-less"
+        "proposer agent {agent_did} has tools {names:?}; a proposer must be tool-less"
     );
     let skills = context.map_or(&[][..], |context| &context.skill_ids[..]);
     anyhow::ensure!(
         skills.is_empty(),
-        "proposer agent {agent_id} has skills {skills:?}; a proposer must be tool-less"
+        "proposer agent {agent_did} has skills {skills:?}; a proposer must be tool-less"
     );
     Ok(())
 }
 
-fn subject_preamble(subject_dir: &Path, agent_id: &str, target: &JobTarget) -> Result<String> {
-    let dossier = crate::commands::eval::init::dossier::render(subject_dir, Some(agent_id))?;
+fn subject_preamble(subject_dir: &Path, agent_did: &str, target: &JobTarget) -> Result<String> {
+    let dossier = crate::commands::eval::init::dossier::render(subject_dir, Some(agent_did))?;
     let instruction = match target {
         JobTarget::Context => "this agent's system prompt".to_owned(),
         JobTarget::Task(task_id) => format!(
@@ -235,7 +247,7 @@ fn subject_preamble(subject_dir: &Path, agent_id: &str, target: &JobTarget) -> R
     ))
 }
 
-fn proposer_agent_id(
+fn proposer_agent_slot(
     pack: &str,
     slot: &gents::pack::PackInferenceSlot,
     agent: Option<&str>,
@@ -272,7 +284,7 @@ async fn run(
     let subject =
         resolve_subject_pack(&ctx.home_dir, &args.subject.pack, args.registry.as_deref()).await?;
     let baseline_pack = subject.directory().to_path_buf();
-    let agent_id = match &args.subject.agent {
+    let agent_slot = match &args.subject.agent {
         Some(agent) => agent.clone(),
         None => subject.default_agent()?,
     };
@@ -290,13 +302,17 @@ async fn run(
     let request = JobRequest {
         job_id: job_id.clone(),
         owner: ctx.owner.clone(),
-        evaluator_did: ctx.owner.clone(),
-        agent_id,
+        evaluator_did: ctx
+            .access
+            .actor_did()
+            .context("optimization requires a caller identity")?,
+        agent_slot,
         target: args.target.clone(),
         definition_id: args.definition_id.clone(),
-        inference_profile_id: args.profile.clone().unwrap_or_else(|| {
-            default_inference_profile_id_for_agent(&default_agent_id_for_node(&ctx.owner))
-        }),
+        inference_profile_id: match &args.profile {
+            Some(profile) => profile.clone(),
+            None => ctx.default_inference_profile().await?,
+        },
         baseline_pack,
         trials_per_case: args.trials,
         budgets: Budgets {
@@ -328,7 +344,7 @@ async fn run(
                 pack,
                 agent.as_deref(),
                 &request.baseline_pack,
-                &request.agent_id,
+                &request.agent_slot,
             )
             .await?;
             Box::new(proposer)
@@ -438,14 +454,9 @@ async fn promote(
     let policy = load_job(&ctx.access, &ctx.owner, &args.job_id)
         .await?
         .map(|job| job.origin.policy);
-    let promotion = gents::eval::optimization::promote(
-        &ctx.access,
-        &ctx.owner,
-        &args.job_id,
-        &args.digest,
-        &ctx.owner,
-    )
-    .await?;
+    let promotion =
+        gents::eval::optimization::promote(&ctx.access, &ctx.owner, &args.job_id, &args.digest)
+            .await?;
     if let Some(policy) = &policy {
         render::uncalibrated_banner(policy, out)?;
     }
@@ -466,14 +477,7 @@ async fn revert(
     args: &OptimizationDigestArgs,
     out: &mut dyn Write,
 ) -> Result<()> {
-    gents::eval::optimization::revert(
-        &ctx.access,
-        &ctx.owner,
-        &args.job_id,
-        &args.digest,
-        &ctx.owner,
-    )
-    .await?;
+    gents::eval::optimization::revert(&ctx.access, &ctx.owner, &args.job_id, &args.digest).await?;
     writeln!(
         out,
         "reverted job {}; Reverted is final, and a further promotion is a new job",

@@ -10,9 +10,7 @@ def disagreementCount (s : ReconcileState) : Nat :=
   match s.desired with
   | none => 0
   | some desired =>
-      (desired.collections \ s.actual.collections).card +
       (desired.replicators \ s.actual.replicators).card +
-      (s.applied.collections \ desired.collections).card +
       (s.applied.replicators \ desired.replicators).card +
       if desired.hasWiring && !s.actual.connected then 1 else 0
 
@@ -26,20 +24,15 @@ theorem converged_disagreementCount_zero
       simp [disagreementCount, h_desired]
   | some desired =>
     simp [h_desired] at h
-    rcases h with ⟨h_desired_collections, h_desired_replicators,
-      h_applied_collections, h_applied_replicators, h_connected⟩
+    rcases h with ⟨h_desired_replicators, h_applied_replicators, h_connected⟩
     by_cases h_has_wiring : desired.hasWiring = true
     · have h_actual_connected : s.actual.connected = true := h_connected h_has_wiring
       simp [disagreementCount, h_desired, h_has_wiring, h_actual_connected,
-        Finset.sdiff_eq_empty_iff_subset.mpr h_desired_collections,
         Finset.sdiff_eq_empty_iff_subset.mpr h_desired_replicators,
-        Finset.sdiff_eq_empty_iff_subset.mpr h_applied_collections,
         Finset.sdiff_eq_empty_iff_subset.mpr h_applied_replicators
       ]
     · simp [disagreementCount, h_desired, h_has_wiring,
-        Finset.sdiff_eq_empty_iff_subset.mpr h_desired_collections,
         Finset.sdiff_eq_empty_iff_subset.mpr h_desired_replicators,
-        Finset.sdiff_eq_empty_iff_subset.mpr h_applied_collections,
         Finset.sdiff_eq_empty_iff_subset.mpr h_applied_replicators
       ]
 
@@ -60,14 +53,11 @@ def noReconcileOpEnabled (s : ReconcileState) : Prop :=
   match s.desired with
   | none => True
   | some desired =>
-      (∀ c, c ∈ desired.collections → c ∈ s.actual.collections) ∧
-      (∀ c, c ∈ s.actual.collections → c ∈ s.applied.collections → c ∈ desired.collections) ∧
       (∀ r, r ∈ desired.replicators → r ∈ s.actual.replicators) ∧
       (∀ r, r ∈ s.actual.replicators → r ∈ s.applied.replicators → r ∈ desired.replicators) ∧
       (desired.hasWiring = true → s.actual.connected = true)
 
 def managedWiringUnchanged (pre post : ReconcileState) : Prop :=
-  post.actual.collections = pre.actual.collections ∧
   post.actual.replicators = pre.actual.replicators ∧
   post.applied = pre.applied
 
@@ -81,11 +71,8 @@ theorem reconcile_idempotent_on_converged
       simp [h_desired]
   | some desired =>
       simp [h_desired] at h ⊢
-      rcases h with ⟨h_desired_collections, h_desired_replicators,
-        h_applied_collections, h_applied_replicators, h_connected⟩
-      refine ⟨?_, ?_, ?_, ?_, h_connected⟩
-      · exact fun c hc => h_desired_collections hc
-      · exact fun c _hc_actual hc_applied => h_applied_collections hc_applied
+      rcases h with ⟨h_desired_replicators, h_applied_replicators, h_connected⟩
+      refine ⟨?_, ?_, h_connected⟩
       · exact fun r f cs hr => h_desired_replicators hr
       · exact fun r f cs _hr_actual hr_applied => h_applied_replicators hr_applied
 
@@ -113,21 +100,11 @@ theorem no_flap_on_converged_step
   | peerDisconnected h_connected h_post =>
       subst h_post
       simp [managedWiringUnchanged, disconnectedState]
-  | reconcileInstall desired target h_desired h_target h_missing h_connected h_post =>
-      exfalso
-      unfold ReconcileState.converged at h
-      simp [h_desired] at h
-      exact h_missing (h.1 h_target)
-  | reconcileTeardown desired target h_desired h_actual h_not_desired h_applied h_post =>
-      exfalso
-      unfold ReconcileState.converged at h
-      simp [h_desired] at h
-      exact h_not_desired (h.2.2.1 h_applied)
   | reconcileInstallReplicator desired target h_desired h_target h_missing h_connected h_post =>
       exfalso
       unfold ReconcileState.converged at h
       simp [h_desired] at h
-      exact h_missing (h.2.1 h_target)
+      exact h_missing (h.1 h_target)
   | reconcileInstallReplicatorFailed desired target h_desired h_target h_missing h_connected h_post =>
       subst h_post
       simp [managedWiringUnchanged]
@@ -135,7 +112,7 @@ theorem no_flap_on_converged_step
       exfalso
       unfold ReconcileState.converged at h
       simp [h_desired] at h
-      exact h_not_desired (h.2.2.2.1 h_applied)
+      exact h_not_desired (h.2.1 h_applied)
   | crash h_post =>
       subst h_post
       simp [managedWiringUnchanged]
@@ -257,7 +234,7 @@ theorem dial_failure_is_nonconverging_fixpoint
   · intro hc
     unfold ReconcileState.converged at hc
     simp only [h_desired] at hc
-    obtain ⟨_, _, _, _, h_conn⟩ := hc
+    obtain ⟨_, _, h_conn⟩ := hc
     have hco := h_conn h_wiring
     rw [h_disconnected] at hco
     simp at hco
@@ -278,7 +255,7 @@ theorem partial_applied_replicator_stuck
   · intro hc
     unfold ReconcileState.converged at hc
     simp only [h_desired] at hc
-    obtain ⟨_, h_repl, _, _, _⟩ := hc
+    obtain ⟨h_repl, _, _⟩ := hc
     exact h_missing (h_repl h_target)
   · exact Transition.reconcileInstallReplicator desired r h_desired h_target h_missing h_connected rfl
   · exact Transition.reconcileInstallReplicatorFailed desired r h_desired h_target h_missing h_connected rfl

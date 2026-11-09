@@ -64,6 +64,11 @@ fn malformed(message: impl std::fmt::Display) -> JobReadError {
 
 fn unavailable(error: impl Into<anyhow::Error>) -> JobReadError {
     let error = error.into();
+    if crate::store::config_client::TransactionFailure::config_client_error(&error)
+        .is_some_and(crate::store::config_client::ConfigClientError::is_permission_denied)
+    {
+        return JobReadError::PermissionDenied;
+    }
     JobReadError::Unavailable {
         message: format!("{error:#}; retry when the node answers"),
     }

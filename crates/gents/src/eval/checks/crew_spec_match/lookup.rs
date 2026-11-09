@@ -18,9 +18,10 @@ pub(super) fn lookup(row: &Value, field: &str) -> Value {
 
 pub(super) fn is_id(stored: &str, id: &str) -> bool {
     stored == id
-        || stored
-            .strip_suffix(id)
-            .is_some_and(|scope| scope.ends_with(':'))
+        || (!id.starts_with("did:")
+            && stored
+                .strip_suffix(id)
+                .is_some_and(|scope| scope.ends_with(':')))
 }
 
 pub(super) fn find<'a>(rows: &'a [Value], key: &str, id: &str) -> Option<&'a Value> {
