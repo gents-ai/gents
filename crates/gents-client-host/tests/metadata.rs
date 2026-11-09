@@ -1,11 +1,16 @@
 use std::process::Command;
 
+#[path = "support/homes.rs"]
+mod homes;
+
 #[test]
 fn artifact_description_does_not_open_a_client_store() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("unopened-client");
+    let homes = homes::ProcessHomes::under(temp.path());
     let output = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .arg("--describe")
+        .envs(homes.env())
         .env("GENTS_DESKTOP_HOME", &home)
         .env("GENTS_HOME", &home)
         .current_dir(temp.path())
@@ -43,6 +48,7 @@ fn artifact_description_does_not_open_a_client_store() {
 fn artifact_description_cannot_be_combined_with_a_store_operation() {
     let temp = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(homes::ProcessHomes::under(temp.path()).env())
         .args(["--describe", "--home"])
         .arg(temp.path().join("unopened-client"))
         .output()
@@ -56,6 +62,7 @@ fn runtime_key_unlock_does_not_initialize_a_missing_home() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("missing-runtime");
     let output = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(homes::ProcessHomes::under(temp.path()).env())
         .arg("--unlock-runtime-keys")
         .arg(&home)
         .output()
@@ -68,8 +75,10 @@ fn runtime_key_unlock_does_not_initialize_a_missing_home() {
 #[test]
 fn runtime_key_unlock_cannot_be_combined_with_another_helper_role() {
     let temp = tempfile::tempdir().unwrap();
+    let homes = homes::ProcessHomes::under(temp.path());
     for role in ["--serve", "--stdio", "--describe", "--editor-store"] {
         let output = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+            .envs(homes.env())
             .arg("--unlock-runtime-keys")
             .arg(temp.path().join("missing-runtime"))
             .arg(role)
@@ -85,8 +94,11 @@ fn runtime_key_unlock_cannot_be_combined_with_another_helper_role() {
 fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().canonicalize().unwrap();
+    let process = tempfile::tempdir().unwrap();
+    let homes = homes::ProcessHomes::under(process.path());
     let executable = env!("CARGO_BIN_EXE_gents-client-host");
     let initialized = Command::new(executable)
+        .envs(homes.env())
         .args([
             "init",
             "--identity-only",
@@ -113,6 +125,7 @@ fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
     let encryption = std::fs::read(&encryption_path).unwrap();
     let unlock = || {
         Command::new(executable)
+            .envs(homes.env())
             .arg("--unlock-runtime-keys")
             .arg(&home)
             .output()

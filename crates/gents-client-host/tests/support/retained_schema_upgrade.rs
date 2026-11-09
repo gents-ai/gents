@@ -187,6 +187,12 @@ pub(super) async fn replace_when_requested(
 
 async fn start(binary: &Path, paths: &DesktopPaths) -> Result<Child> {
     let mut child = Command::new(binary)
+        .envs(
+            super::support::homes::ProcessHomes::under(
+                paths.root().parent().context("client home parent")?,
+            )
+            .env(),
+        )
         .env("GENTS_HOME", paths.root().join("unused-runtime"))
         .env("GENTS_DESKTOP_HOME", paths.root())
         .env_remove("GENTS_SYSTEM_LOG")

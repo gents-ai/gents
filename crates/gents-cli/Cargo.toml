@@ -141,6 +141,7 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
+gents = { path = "../gents", features = ["test-home-guard"] }
 acp.workspace = true
 crypto.workspace = true
 db.workspace = true

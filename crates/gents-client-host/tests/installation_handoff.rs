@@ -78,6 +78,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
     let original_record = std::fs::read(paths.store_encryption_path()).unwrap();
     let log = std::fs::File::create(directory.path().join("previous.log")).unwrap();
     let mut previous = Command::new(previous_binary)
+        .envs(support::homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--serve", "--home"])
         .arg(paths.root())
         .stdin(Stdio::null())
@@ -92,6 +93,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
     drop(connection);
 
     let mut attachment = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(support::homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::piped())

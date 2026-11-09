@@ -14,6 +14,9 @@ use tokio::process::Command;
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
+#[path = "support/homes.rs"]
+mod homes;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_full_listener_reports_a_retryable_initialization_failure_without_retiring_its_clients() {
     let directory = tempfile::tempdir().unwrap();
@@ -48,6 +51,7 @@ async fn a_full_listener_reports_a_retryable_initialization_failure_without_reti
         clients.push(client);
     }
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::piped())

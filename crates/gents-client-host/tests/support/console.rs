@@ -161,7 +161,10 @@ async fn console_interrupt_releases_the_native_installation() -> Result<()> {
     seed.shutdown().await?;
     drop(seed);
     let mut command = Command::new(env!("CARGO_BIN_EXE_gents-client-host"));
-    command.args(["--serve", "--home"]).arg(paths.root());
+    command
+        .envs(super::support::homes::ProcessHomes::under(temp.path()).env())
+        .args(["--serve", "--home"])
+        .arg(paths.root());
     let log = temp.path().join("console.log");
     let mut child = ConsoleChild::spawn(&command, &log)?;
     tokio::time::timeout(Duration::from_secs(30), async {

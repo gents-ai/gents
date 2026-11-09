@@ -18,8 +18,25 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
         .unwrap_or_else(default_home_dir)
 }
 
+#[cfg(not(test))]
 fn default_home_dir() -> PathBuf {
     gents::store::local::home::default_home_dir().unwrap_or_else(|_| PathBuf::from(".gents"))
+}
+
+/// Unit tests share the operator's process environment, so they cannot select
+/// a runtime home through it; a command they run without `--home` resolves
+/// this throwaway home.
+#[cfg(test)]
+fn default_home_dir() -> PathBuf {
+    unit_test_homes().path().join("runtime")
+}
+
+#[cfg(test)]
+fn unit_test_homes() -> &'static tempfile::TempDir {
+    static ROOT: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
+        tempfile::tempdir().expect("creating the unit tests' throwaway homes")
+    });
+    &ROOT
 }
 
 pub(crate) fn is_default_home(home_dir: &Path) -> bool {
@@ -247,8 +264,19 @@ fn home_graphql_endpoint_with_paths(
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.
 pub(crate) fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
-    Ok(cli_identity_paths_under(
-        &gents_desktop_core::client::DesktopPaths::discover()?,
+    Ok(cli_identity_paths_under(&desktop_paths()?))
+}
+
+#[cfg(not(test))]
+fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+    gents_desktop_core::client::DesktopPaths::discover()
+}
+
+/// Unit tests share one throwaway CLI client home; see [`default_home_dir`].
+#[cfg(test)]
+fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+    Ok(gents_desktop_core::client::DesktopPaths::from_root(
+        unit_test_homes().path().join("desktop"),
     ))
 }
 

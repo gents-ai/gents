@@ -922,8 +922,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }),
     )?;
     let node_home = root.join("runtime");
+    let homes = support::homes::ProcessHomes::under(root);
     let mut init = Command::new(&cli);
     init.current_dir(root)
+        .envs(homes.env())
         .env_remove("GENTS_SYSTEM_LOG")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
@@ -1019,7 +1021,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         did
     };
     let mut host_command = Command::new(&host_binary);
-    host_command.args(["--serve", "--home"]).arg(paths.root());
+    host_command
+        .envs(homes.env())
+        .args(["--serve", "--home"])
+        .arg(paths.root());
     if journey.editor_scenario().is_some()
         || matches!(
             journey,
@@ -1105,6 +1110,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .context("runtime did not observe the enrollment request")??;
         let approved = Command::new(&cli)
             .current_dir(root)
+            .envs(homes.env())
             .args(["p2p", "enrollment", "approve", pending_id, "--home"])
             .arg(&node_home)
             .kill_on_drop(true)
@@ -2691,7 +2697,10 @@ impl EditRecoveryHost<'_> {
             .await
             .context("stopping the retained-history helper")?;
         let mut command = Command::new(self.binary);
-        command.args(["--serve", "--home"]).arg(self.paths.root());
+        command
+            .envs(support::homes::ProcessHomes::under(self.root).env())
+            .args(["--serve", "--home"])
+            .arg(self.paths.root());
         if self.editor_store {
             command.arg("--editor-store");
         }
@@ -2969,6 +2978,7 @@ fn runtime_server_command(binary: &Path, root: &Path, home: &Path, port: u16) ->
     let mut command = Command::new(binary);
     command
         .current_dir(root)
+        .envs(support::homes::ProcessHomes::under(root).env())
         .env_remove("GENTS_SYSTEM_LOG")
         .args(["server", "--home"])
         .arg(home)
@@ -2999,6 +3009,7 @@ async fn run_editor_journey(
         "The extension checkout has no tests/editor.mjs"
     );
     let mut editor = Command::new("node");
+    editor.envs(support::homes::ProcessHomes::under(root).env());
     if scenario == "full" && std::env::var("GENTS_VSCODE_STARTUP_CUSTODY").as_deref() == Ok("file")
     {
         let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
@@ -3213,6 +3224,12 @@ async fn wait_for_status(child: &mut Child, cli: &Path, home: &Path, port: u16) 
                 "runtime exited before readiness"
             );
             let output = Command::new(cli)
+                .envs(
+                    support::homes::ProcessHomes::under(
+                        home.parent().context("runtime home parent")?,
+                    )
+                    .env(),
+                )
                 .args(["status", "--home"])
                 .arg(home)
                 .arg("--graphql")

@@ -294,6 +294,24 @@ pub async fn ensure_configured_root_published(
     configured_root_coverage(&policy, configured_root)
 }
 
+/// [`ensure_configured_root_published`] through a running Node's
+/// configuration access, as `node_did`'s principal, for a caller that must
+/// refuse a root before it replaces that runtime.
+pub async fn ensure_root_published_for_node(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    configured_root: &Path,
+) -> Result<()> {
+    let policy = access
+        .transact_readonly("workspace_root.configured", |txn| {
+            Box::pin(async move {
+                load_workspace_root_policy_in_txn(txn, Some(configured_root), node_did).await
+            })
+        })
+        .await?;
+    configured_root_coverage(&policy, configured_root)
+}
+
 pub(crate) fn configured_root_coverage(
     policy: &WorkspaceRootPolicy,
     configured_root: &Path,

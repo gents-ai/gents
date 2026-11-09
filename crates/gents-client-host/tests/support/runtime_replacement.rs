@@ -27,6 +27,12 @@ pub async fn refuse_busy(binary: &Path, home: &Path) -> Result<()> {
     let output = tokio::time::timeout(
         Duration::from_secs(30),
         Command::new(binary)
+            .envs(
+                super::support::homes::ProcessHomes::under(
+                    home.parent().context("runtime home parent")?,
+                )
+                .env(),
+            )
             .args(["prepare-runtime", "--home"])
             .arg(home)
             .kill_on_drop(true)
@@ -230,6 +236,7 @@ impl Fixture<'_> {
                 == p2p_secret
         );
         let reused = Command::new(self.binary)
+            .envs(super::support::homes::ProcessHomes::under(self.root).env())
             .args(["prepare-runtime", "--home"])
             .arg(self.home)
             .kill_on_drop(true)
@@ -279,6 +286,7 @@ impl Fixture<'_> {
                     "original runtime exited before authenticated replacement"
                 );
                 let mut child = Command::new(self.binary)
+                    .envs(super::support::homes::ProcessHomes::under(self.root).env())
                     .args(["prepare-runtime", "--home"])
                     .arg(self.home)
                     .stdin(Stdio::null())

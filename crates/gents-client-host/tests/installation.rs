@@ -37,6 +37,7 @@ async fn check_shared_installation(home: &str) {
     drop(seed);
     let log = std::fs::File::create(dir.path().join("server.log")).unwrap();
     let mut server = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(support::homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .arg("--serve")
         .arg("--home")
         .arg(paths.root())
