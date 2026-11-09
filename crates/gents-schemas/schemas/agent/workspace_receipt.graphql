@@ -14,4 +14,7 @@ type WorkspaceReceipt @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6
     diff_artifact: String
     unresolved_conflicts: String
     integration_instructions: String
+    handoff_id: String @immutable
+    reply_session_id: String @immutable
+    attempt: Int @immutable
 }

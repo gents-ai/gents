@@ -18,4 +18,7 @@ type IsolatedWorkspace @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d
     binding_revision: String
     caused_by_invocation_id: String @index @immutable
     caused_by_correlation: String @index @immutable
+    handoff_id: String @immutable
+    reply_session_id: String @immutable
+    attempt: Int @immutable
 }

@@ -13,4 +13,7 @@ type CallbackResult
     work_unit_id: String @index
     caused_by_correlation: String @index @immutable
     created_at: String @index
+    handoff_id: String @immutable
+    reply_session_id: String @immutable
+    attempt: Int @immutable
 }

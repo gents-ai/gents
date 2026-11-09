@@ -131,6 +131,24 @@ macro_rules! updated_at_upgrade {
     };
 }
 
+/// Native workflow documents carry the handoff route their producer stamps
+/// (Lean `Triggers.NativeRoute`); existing rows keep null route columns.
+const HANDOFF_ROUTE_FIELDS: [&str; 3] = ["handoff_id", "reply_session_id", "attempt"];
+
+macro_rules! handoff_route_patch {
+    ($name:literal) => {
+        concat!(
+            r#"[{"op":"add","path":"/"#,
+            $name,
+            r#"/Fields/-","value":{"Name":"handoff_id","Kind":"String","Immutable":true}},{"op":"add","path":"/"#,
+            $name,
+            r#"/Fields/-","value":{"Name":"reply_session_id","Kind":"String","Immutable":true}},{"op":"add","path":"/"#,
+            $name,
+            r#"/Fields/-","value":{"Name":"attempt","Kind":"Int","Immutable":true}}]"#
+        )
+    };
+}
+
 /// DefraDB field positions are persistent identifiers. Existing RC1 lineages
 /// append fields through versioned patches; fresh stores retain the current
 /// canonical roots. Only these exact source and destination versions qualify.
@@ -173,6 +191,46 @@ pub(crate) fn include_existing_by_version(
         Ok(get_version(name)?.or_else(|| canonical_root(name).map(str::to_owned)))
     };
     for (name, root, target, id, patch, fields) in [
+        (
+            "Task",
+            "bafyreieh67b32auhf33bkdltep2gh6gmrb5wgs2sd7vxexmqxno45jnmdm",
+            "bafyreifpyagnw5qkrsko323nlukdzoixgmzalbzcf5nn3urrmxtouopr6e",
+            "task-add-declared-outcome-readers",
+            r#"[{"op":"add","path":"/Task/Fields/-","value":{"Name":"outcome_readers","Kind":"JSON"}}]"#,
+            &["outcome_readers"][..],
+        ),
+        (
+            "RepositoryPlacement",
+            "bafyreieks33oeixd4h4sdqfmli3fyuksjo3bkw7povukuak6xvavl7sbxq",
+            "bafyreidwzvocwv4nkgwr326qyd4ofkw74dm4zl4wbesbmfzmbkdseqq3zy",
+            "repository-placement-add-declared-readers",
+            r#"[{"op":"add","path":"/RepositoryPlacement/Fields/-","value":{"Name":"readers","Kind":"JSON"}}]"#,
+            &["readers"][..],
+        ),
+        (
+            "CallbackResult",
+            "bafyreiay7i7erfmg4o56oqrzbbwrohw253x7yme4plut46t4tgpzujdcq4",
+            "bafyreiavdoikuwav2vgp4lxpnulwqlm6tvlqkmw7tugwb7gtjs5twd7kpq",
+            "callback-result-add-handoff-route",
+            handoff_route_patch!("CallbackResult"),
+            &HANDOFF_ROUTE_FIELDS[..],
+        ),
+        (
+            "IsolatedWorkspace",
+            "bafyreidyccgfeed6jazx6ssevrlcvucqby5q5nknzpulvu2aiciehqpkpq",
+            "bafyreies2644xt5ywgfr2gzjwug2rpmlq6c25fsbcqu7tgwb7u6pfkuvxe",
+            "isolated-workspace-add-handoff-route",
+            handoff_route_patch!("IsolatedWorkspace"),
+            &HANDOFF_ROUTE_FIELDS[..],
+        ),
+        (
+            "WorkspaceReceipt",
+            "bafyreiecsdzgs6zctavbmm7hom5saefv3k23qmrfmnbeguriji346ofnnq",
+            "bafyreifdy3cjtrymcygl4cjfnoaouaru5gnuccthaw246i4t2lqahy3mky",
+            "workspace-receipt-add-handoff-route",
+            handoff_route_patch!("WorkspaceReceipt"),
+            &HANDOFF_ROUTE_FIELDS[..],
+        ),
         (
             "InferenceBackend",
             "bafyreihvtdq5hp7qrehkfhgkdtqql6v6mq4podhdnfrpbrcy4x3xasddwy",

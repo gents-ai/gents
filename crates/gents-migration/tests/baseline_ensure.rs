@@ -1155,6 +1155,97 @@ async fn starter_columns_preserve_each_supported_session_lineage() {
     }
 }
 
+/// Native workflow documents gain immutable handoff route columns and
+/// configuration gains declared reader policy; an existing store keeps its
+/// collection, field positions and rows, and its existing rows read nulls.
+#[tokio::test]
+async fn added_route_and_reader_columns_preserve_existing_rows() {
+    const ROUTE: &[(&str, bool)] = &[("handoff_id", true), ("reply_session_id", true), ("attempt", true)];
+    for (name, sdl, create, added) in [
+        (
+            schemas::CALLBACK_RESULT_NAME,
+            schemas::CALLBACK_RESULT,
+            r#"mutation {create_CallbackResult(input: {result_id: "retained", owner_node_did: "owner", invocation_id: "inv"}) {_docID}}"#,
+            ROUTE,
+        ),
+        (
+            schemas::ISOLATED_WORKSPACE_NAME,
+            schemas::ISOLATED_WORKSPACE,
+            r#"mutation {create_IsolatedWorkspace(input: {workspace_id: "retained", owner_node_did: "owner"}) {_docID}}"#,
+            ROUTE,
+        ),
+        (
+            schemas::WORKSPACE_RECEIPT_NAME,
+            schemas::WORKSPACE_RECEIPT,
+            r#"mutation {create_WorkspaceReceipt(input: {receipt_id: "retained", workspace_id: "ws"}) {_docID}}"#,
+            ROUTE,
+        ),
+        (
+            schemas::TASK_NAME,
+            schemas::TASK,
+            r#"mutation {create_Task(input: {task_id: "retained", node_did: "owner"}) {_docID}}"#,
+            &[("outcome_readers", false)][..],
+        ),
+        (
+            schemas::REPOSITORY_PLACEMENT_NAME,
+            schemas::REPOSITORY_PLACEMENT,
+            r#"mutation {create_RepositoryPlacement(input: {repository_id: "retained", node_did: "owner"}) {_docID}}"#,
+            &[("readers", false)][..],
+        ),
+    ] {
+        let node = fresh_node().await;
+        let old = sdl
+            .lines()
+            .filter(|line| {
+                !added
+                    .iter()
+                    .any(|(field, _)| line.trim_start().starts_with(&format!("{field}:")))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        node.add_collection(&old).await.unwrap();
+        let before = node.get_collection(name).unwrap().unwrap();
+        let created = node.execute(create).await;
+        assert!(!created.has_errors(), "{name}: {created:?}");
+        let query = format!("{{{name} {{_docID}}}}");
+        let retained = node.execute(&query).await;
+        ensure_migrations(&node).await.unwrap();
+        let after = node.get_collection(name).unwrap().unwrap();
+        assert_eq!(after.collection_id, before.collection_id, "{name}");
+        for field in &before.fields {
+            assert_eq!(
+                after
+                    .fields
+                    .iter()
+                    .find(|next| next.name == field.name)
+                    .unwrap()
+                    .id,
+                field.id,
+                "{name}.{}",
+                field.name
+            );
+        }
+        for (field, immutable) in added {
+            assert!(
+                after
+                    .fields
+                    .iter()
+                    .any(|next| next.name == *field && next.immutable == *immutable),
+                "{name}.{field}"
+            );
+        }
+        assert_eq!(node.execute(&query).await.data, retained.data, "{name}");
+        let selection = added.iter().map(|(field, _)| *field).collect::<Vec<_>>().join(" ");
+        let values = node.execute(&format!("{{{name} {{{selection}}}}}")).await;
+        let row = values.data.unwrap()[name][0].clone();
+        for (field, _) in added {
+            assert!(row[*field].is_null(), "{name}.{field}: {row}");
+        }
+        assert_eq!(ensure_migrations(&node).await.unwrap().steps_applied, 0, "{name}");
+        node.shutdown().await.expect("shut down test node");
+    }
+}
+
 #[tokio::test]
 async fn tool_file_content_schema_pin_matches() {
     let node = fresh_node().await;

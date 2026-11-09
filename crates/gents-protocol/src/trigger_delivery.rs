@@ -116,6 +116,45 @@ pub struct FireOutcome {
     pub created_at: String,
 }
 
+/// The handoff route a native workflow document (CallbackResult,
+/// IsolatedWorkspace, WorkspaceReceipt) carries so that an outcome-enabled
+/// consumer reads it from the observed document alone, never from the
+/// producer's CallbackInvocation (Lean `Triggers.NativeRoute`). Its fields are
+/// the same `handoff_id`, `reply_session_id` and `attempt` columns authored
+/// collections declare.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffRoute {
+    #[serde(default)]
+    pub handoff_id: Option<String>,
+    #[serde(default)]
+    pub reply_session_id: Option<String>,
+    #[serde(default)]
+    pub attempt: Option<i64>,
+}
+
+impl HandoffRoute {
+    /// Lean `stamp (projectRoute fields)` over a JSON object: a frozen
+    /// invocation input or an observed document. A blank or absent handoff
+    /// carries no route; a blank reply session is absent.
+    pub fn from_fields(fields: &serde_json::Value) -> Self {
+        let non_blank = |field: &str| {
+            fields
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        };
+        let Some(handoff_id) = non_blank("handoff_id") else {
+            return Self::default();
+        };
+        Self {
+            handoff_id: Some(handoff_id),
+            reply_session_id: non_blank("reply_session_id"),
+            attempt: fields.get("attempt").and_then(serde_json::Value::as_i64),
+        }
+    }
+}
+
 /// Position in DefraDB's receiving-node document-arrival journal. Each
 /// per-document consumer (trigger or callback binding) checkpoints
 /// independently in a non-branchable runtime document. Advancement requires a

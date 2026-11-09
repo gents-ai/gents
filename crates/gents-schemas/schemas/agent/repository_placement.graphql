@@ -7,4 +7,5 @@ type RepositoryPlacement @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d
     enabled: Boolean @index
     updated_at: DateTime @index(direction: DESC)
     tags: [String]
+    readers: JSON
 }
