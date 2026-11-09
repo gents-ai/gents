@@ -4,7 +4,8 @@ import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
 import { errorWords } from "../../../lib/reasonText";
 import { Notice } from "../../components/Notice";
-import { useApp } from "@/app/AppContext";
+import { useApp, useView } from "@/app/AppContext";
+import { writeDraft } from "../../../hooks/draftStore";
 import { workspace } from "@/app/workspace";
 import { StorageFullRecovery } from "./StorageFullRecovery";
 import { navigate } from "@/lib/router";
@@ -99,7 +100,8 @@ function SavedMessage({
   status: SendStatus;
   disabled: boolean;
 }) {
-  const { actions, stores } = useApp();
+  const { actions, stores, drafts } = useApp();
+  const draftKey = useView((view) => view.draftKey);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -147,7 +149,13 @@ function SavedMessage({
     try {
       if (draft.mailbox)
         await actions.discardMailboxAnswer(draft.mailbox.itemId, draft.requestId);
-      else await actions.discardChatMessage(draft.requestId);
+      else {
+        await actions.discardChatMessage(draft.requestId);
+        /* the composer gave the text to the saved message when it was sent,
+           so discarding hands it back unless something new was typed since */
+        const text = chatDraftRequest(draft).content;
+        if (text) writeDraft(drafts, draftKey, (current) => current || text);
+      }
     } catch (error) {
       if (mounted.current)
         setError(error instanceof Error ? error.message : String(error));

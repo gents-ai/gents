@@ -98,6 +98,26 @@ it("discards a failed message without sending it", async () => {
   expect(f.app.drafts.getState().drafts.newer).toBe("Keep this newer draft");
 });
 
+it("hands a discarded message's text back to an empty composer", async () => {
+  const f = fixture();
+  const key = f.app.view.getState().draftKey;
+  fireEvent.click(await screen.findByRole("button", { name: "Discard message" }));
+  await waitFor(() =>
+    expect(f.app.drafts.getState().drafts[key]).toBe("Original message"),
+  );
+});
+
+it("leaves text typed since the send in the composer when the message is discarded", async () => {
+  const f = fixture();
+  const key = f.app.view.getState().draftKey;
+  act(() => f.app.drafts.setState({ drafts: { [key]: "Something new" } }));
+  fireEvent.click(await screen.findByRole("button", { name: "Discard message" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull(),
+  );
+  expect(f.app.drafts.getState().drafts[key]).toBe("Something new");
+});
+
 it("keeps a failed retry saved with its new cause", async () => {
   const f = fixture();
   f.control.mockRejectedValueOnce(new Error("The selected agent was removed"));
