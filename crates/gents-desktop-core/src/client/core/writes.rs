@@ -53,6 +53,15 @@ async fn observe_submitted_request(
     receipt
 }
 
+/// A chat send replies as soon as the runtime holds its request. The reply
+/// never waits on a node reload: the person's send deadline would count that
+/// read, and its failure would present a held message as failed. The window
+/// keeps the saved message until the observer's reload shows it.
+fn acknowledge_submitted_request(store: &ObservedStore, receipt: &SubmittedRequest) {
+    store.set_focused_request_id(Some(receipt.request_id.clone()));
+    store.request_resync(Some(&receipt.node_did));
+}
+
 /// A committed write is reported as saved even when its projection refresh
 /// fails: an error here would present a durable change as failed and invite
 /// the person to repeat it. The observer reloads the node instead.

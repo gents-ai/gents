@@ -15,7 +15,7 @@ pub async fn desktop_session_goal(
     crate::commands::session_goal(&core, &node_did, &session_id)
         .await
         .map(Some)
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -123,7 +123,7 @@ pub async fn desktop_tool_file_changes(
         None,
     )
     .await
-    .map_err(|error| BridgeError::untyped(error.to_string()))
+    .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -149,7 +149,7 @@ pub async fn desktop_session_reload(
         })?;
     core.reload_session(&session_id, &node_did)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -189,7 +189,7 @@ pub async fn desktop_session_live_delta(
             &base_reasoning_hash,
         )
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?,
+        .map_err(BridgeError::classify_transport_error)?,
     ))
 }
 
@@ -278,10 +278,11 @@ pub async fn desktop_request_timeline(
     let timeline = core
         .request_timeline(&node_did, &request_id)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let value =
-        serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))?;
-    serde_json::from_value(value).map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)?;
+    let value = serde_json::to_value(&timeline)
+        .map_err(|error| BridgeError::classify_transport_error(error.into()))?;
+    serde_json::from_value(value)
+        .map_err(|error| BridgeError::classify_transport_error(error.into()))
 }
 
 #[tauri::command]

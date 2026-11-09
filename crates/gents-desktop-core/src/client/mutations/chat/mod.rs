@@ -4,7 +4,8 @@ mod session;
 
 pub use request::retry::retry_request;
 pub use request::{
-    resend_request, submit_request, submit_task_request, SubmitRequestOptions, SubmittedRequest,
+    held_request, resend_request, submit_request, submit_task_request, SubmitRequestOptions,
+    SubmittedRequest,
 };
 pub use session::rename_session;
 

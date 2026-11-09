@@ -101,11 +101,13 @@ async fn interrupt_treats_finished_requests_as_stopped_and_refuses_non_user_caus
     assert!(interrupt_request(core, &invalid)
         .await
         .unwrap_err()
+        .to_string()
         .contains("userCancelled"));
     assert!(
         interrupt_request(core, &user_cancel("done", None))
             .await
             .unwrap_err()
+            .to_string()
             .contains("Select the hosting runtime"),
         "the owner never falls back to the core's shared selection"
     );

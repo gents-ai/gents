@@ -1,4 +1,5 @@
 mod cause_derivation;
+mod chat_resend;
 mod config_denial;
 mod file_change_review;
 mod operations_interrupt;

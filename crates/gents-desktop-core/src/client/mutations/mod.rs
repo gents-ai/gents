@@ -5,8 +5,8 @@ mod manage;
 mod setup;
 
 pub use chat::{
-    rename_session, resend_request, retry_request, submit_request, submit_task_request,
-    SubmitRequestOptions, SubmittedRequest,
+    held_request, rename_session, resend_request, retry_request, submit_request,
+    submit_task_request, SubmitRequestOptions, SubmittedRequest,
 };
 pub use manage::{
     delete_agent_context_on, delete_agent_on, delete_event_source_on, delete_inference_backend_on,

@@ -96,6 +96,16 @@ pub async fn send_chat_message(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
+    let requested_session_id = request
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let (Some(request_id), Some(session_id)) = (request_id.as_deref(), requested_session_id) {
+        if let Some(held) = core.held_send(session_id, &node_did, request_id).await? {
+            return Ok(held.into());
+        }
+    }
 
     let captured_context = request.captured_context.unwrap_or_default();
     let attachments = request.attachments.unwrap_or_default();
@@ -129,11 +139,6 @@ pub async fn send_chat_message(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
-    let requested_session_id = request
-        .session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
     let session_id = requested_session_id
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().to_string());

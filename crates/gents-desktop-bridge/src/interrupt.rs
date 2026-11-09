@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use anyhow::{bail, Context, Result};
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
@@ -28,7 +29,7 @@ async fn resolve(
     access: &ConfigAccess,
     request_id: &str,
     node_did: Option<&str>,
-) -> Result<Target, String> {
+) -> Result<Target> {
     let node_clause = node_did
         .map(str::trim)
         .filter(|did| !did.is_empty())
@@ -43,7 +44,7 @@ async fn resolve(
     let response = access
         .execute(&query)
         .await
-        .map_err(|error| format!("request {request_id} lookup failed: {error:#}"))?;
+        .with_context(|| format!("request {request_id} lookup failed"))?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
@@ -51,16 +52,8 @@ async fn resolve(
         .unwrap_or_default();
     let row = match rows.as_slice() {
         [row] => row,
-        [] => {
-            return Err(format!(
-                "request {request_id} not found in AgentRequest collection"
-            ))
-        }
-        _ => {
-            return Err(format!(
-                "request {request_id} is ambiguous: more than one physical request carries it"
-            ))
-        }
+        [] => bail!("request {request_id} not found in AgentRequest collection"),
+        _ => bail!("request {request_id} is ambiguous: more than one physical request carries it"),
     };
     let text = |field: &str| {
         row.get(field)
@@ -69,8 +62,8 @@ async fn resolve(
             .map(ToOwned::to_owned)
     };
     Ok(Target {
-        doc_id: text("_docID").ok_or("interrupt target missing physical identity")?,
-        node_did: text("node_did").ok_or("interrupt target missing node identity")?,
+        doc_id: text("_docID").context("interrupt target missing physical identity")?,
+        node_did: text("node_did").context("interrupt target missing node identity")?,
         requester_did: text("requester_did"),
         interrupt_requested_at: text("interrupt_requested_at"),
         terminal: RequestLifecycleState::is_terminal_str(text("lifecycle_state").as_deref()),
@@ -82,20 +75,18 @@ async fn resolve(
 pub async fn interrupt_request(
     core: &Arc<ClientCore>,
     req: &DesktopInterruptRequest,
-) -> Result<InterruptRequestResult, String> {
+) -> Result<InterruptRequestResult> {
     if req.cause != "userCancelled" {
-        return Err(format!(
+        bail!(
             "operator may only authentically produce cause=\"userCancelled\", got {:?}",
             req.cause
-        ));
+        );
     }
     let node_did = req
         .node_did
         .clone()
-        .ok_or("Select the hosting runtime before interrupting a request.")?;
-    let access = core
-        .operator_access(&node_did)
-        .map_err(|error| error.to_string())?;
+        .context("Select the hosting runtime before interrupting a request.")?;
+    let access = core.operator_access(&node_did)?;
     let target = resolve(&access, &req.request_id, Some(&node_did)).await?;
     let result = |interrupt_requested_at, already_interrupted| InterruptRequestResult {
         request_id: req.request_id.clone(),
@@ -118,10 +109,10 @@ pub async fn interrupt_request(
         target.requester_did.as_deref(),
     )
     .await
-    .map_err(|error| format!("interrupt of {} failed: {error:#}", req.request_id))?;
+    .with_context(|| format!("interrupt of {} failed", req.request_id))?;
     let observed = resolve(&access, &req.request_id, Some(&node_did)).await?;
     if observed.doc_id != target.doc_id {
-        return Err("interrupt readback changed physical request identity".into());
+        bail!("interrupt readback changed physical request identity");
     }
     let latched = observed.interrupt_requested_at;
     Ok(result(latched, false))

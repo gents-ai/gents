@@ -64,23 +64,14 @@ pub async fn submit_request(
 ) -> Result<SubmittedRequest> {
     let request_id = options.request_id.clone();
     if let Some(request_id) = request_id.as_deref() {
-        let held = gents::request::lifecycle::held_client_request(
-            access,
-            gents::request::lifecycle::ClientRequestScope {
-                node_did,
-                session_id,
-                requester_did,
-                request_id,
-            },
-        )
-        .await?;
-        if let Some(held) = held {
-            return Ok(SubmittedRequest {
-                request_id: held.request_id,
-                session_id: held.session_id,
-                node_did: node_did.to_owned(),
-                agent_did: held.agent_did,
-            });
+        let scope = gents::request::lifecycle::ClientRequestScope {
+            node_did,
+            session_id,
+            requester_did,
+            request_id,
+        };
+        if let Some(held) = held_request(access, scope).await? {
+            return Ok(held);
         }
     }
     let (result, create) = prepare_request_submission(
@@ -102,6 +93,24 @@ pub async fn submit_request(
         request_id: held,
         ..result
     })
+}
+
+/// The request the runtime already holds under a send's identity, as that
+/// send's confirmation.
+pub async fn held_request(
+    access: &ConfigAccess,
+    scope: gents::request::lifecycle::ClientRequestScope<'_>,
+) -> Result<Option<SubmittedRequest>> {
+    Ok(
+        gents::request::lifecycle::held_client_request(access, scope)
+            .await?
+            .map(|held| SubmittedRequest {
+                request_id: held.request_id,
+                session_id: held.session_id,
+                node_did: scope.node_did.to_owned(),
+                agent_did: held.agent_did,
+            }),
+    )
 }
 
 #[cfg(test)]

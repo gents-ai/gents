@@ -276,7 +276,13 @@ impl ClientCore {
         )
         .await
         .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
-        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
+        .map_err(|error| {
+            if gents::store::config_client::TransactionFailure::permission_denied(&error) {
+                error
+            } else {
+                anyhow::anyhow!("{}", strip_cli_operator_hints(&format!("{error:#}")))
+            }
+        })?;
         Ok(timeline)
     }
 }

@@ -460,7 +460,7 @@ impl ClientHost {
                 encode(
                     crate::interrupt::interrupt_request(&self.core, &request)
                         .await
-                        .map_err(BridgeError::untyped)?,
+                        .map_err(BridgeError::classify_transport_error)?,
                 )
             }
             ClientCommand::ProcessControl { request } => {

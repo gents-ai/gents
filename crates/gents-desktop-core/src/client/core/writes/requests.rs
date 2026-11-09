@@ -2,10 +2,19 @@ use anyhow::{Context, Result};
 use gents_protocol::row::AgentRequestRow;
 
 use super::{
-    agent_did_for_write, ensure_peer_chat_ready, find_request_in_scope, observe_submitted_request,
-    ClientCore,
+    acknowledge_submitted_request, agent_did_for_write, ensure_peer_chat_ready,
+    find_request_in_scope, observe_submitted_request, ClientCore,
 };
 use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
+use crate::client::peer_directory::PeerRecord;
+
+/// Who signs a send to a chat and whose requester scope it belongs to.
+struct SendAuthority {
+    peer_record: Option<PeerRecord>,
+    signer: std::sync::Arc<dyn gents::store::identity::NodeIdentity>,
+    admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
+    requester_did: String,
+}
 
 fn request_in_scope(
     rows: &[AgentRequestRow],
@@ -46,18 +55,12 @@ impl ClientCore {
         mut options: SubmitRequestOptions,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        let peer_record = self.peer_record_for_chat_write(node_did)?;
-        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
-        let (signer, admission, requester_did) = self
-            .request_authority(node_did, peer_record.as_ref())
-            .await?;
-        let requester_did = gents::session::client_requester_scope(
-            &self.session_queue_access(node_did)?,
-            node_did,
-            session_id,
-            &requester_did,
-        )
-        .await?;
+        let SendAuthority {
+            peer_record,
+            signer,
+            admission,
+            requester_did,
+        } = self.send_authority(session_id, node_did).await?;
         // Queue preparation captures assignment intent before signing; a later
         // replacement must not change an already prepared unassigned message.
         if options.input.queue.is_none() {
@@ -83,13 +86,7 @@ impl ClientCore {
         .await
         {
             Ok(result) => {
-                let node = result.node_did.clone();
-                let result = observe_submitted_request(
-                    &self.store,
-                    result,
-                    self.refresh_written_node(&node),
-                )
-                .await;
+                acknowledge_submitted_request(&self.store, &result);
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -101,6 +98,54 @@ impl ClientCore {
             }
             Err(error) => Err(self.record_mutation_error("submit request", error)),
         }
+    }
+
+    /// The request the runtime already holds under a send's identity
+    /// (Lean `ClientOptimisticSend.held_resend_never_refused`). A resend asks
+    /// this before any check that a new send must pass, so a send that landed
+    /// confirms even when its question has closed or its folder is gone.
+    pub async fn held_send(
+        &self,
+        session_id: &str,
+        node_did: &str,
+        request_id: &str,
+    ) -> Result<Option<SubmittedRequest>> {
+        let SendAuthority { requester_did, .. } = self.send_authority(session_id, node_did).await?;
+        let held = mutations::held_request(
+            &self.session_queue_access(node_did)?,
+            gents::request::lifecycle::ClientRequestScope {
+                node_did,
+                session_id,
+                requester_did: &requester_did,
+                request_id,
+            },
+        )
+        .await?;
+        if let Some(held) = held.as_ref() {
+            acknowledge_submitted_request(&self.store, held);
+        }
+        Ok(held)
+    }
+
+    async fn send_authority(&self, session_id: &str, node_did: &str) -> Result<SendAuthority> {
+        let peer_record = self.peer_record_for_chat_write(node_did)?;
+        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
+        let (signer, admission, actor_did) = self
+            .request_authority(node_did, peer_record.as_ref())
+            .await?;
+        let requester_did = gents::session::client_requester_scope(
+            &self.session_queue_access(node_did)?,
+            node_did,
+            session_id,
+            &actor_did,
+        )
+        .await?;
+        Ok(SendAuthority {
+            peer_record,
+            signer,
+            admission,
+            requester_did,
+        })
     }
 
     pub fn request_in_scope(

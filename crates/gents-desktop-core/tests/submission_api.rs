@@ -123,7 +123,15 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
         core.store().focused_request_id(),
         Some(submitted.request_id.clone())
     );
-    assert_eq!(core.store().snapshot().requests.len(), 1);
+    // The send replied without reading its node; the observer's reload shows it.
+    let mut version = core.store().subscribe();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while core.store().snapshot().requests.len() != 1 {
+            version.changed().await.expect("store open");
+        }
+    })
+    .await
+    .context("the observer did not show the sent request")?;
     Arc::new(core).shutdown().await?;
     runtime.shutdown().await;
     Ok(())

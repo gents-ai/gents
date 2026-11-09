@@ -275,11 +275,11 @@ where
             target: "gents_desktop::interrupt",
             request_id = %request.request_id,
             node_did = %request.node_did.as_deref().unwrap_or(""),
-            error,
+            error = %format!("{error:#}"),
             "desktop interrupt action failed"
         ),
     }
-    result.map_err(|error| BridgeError::untyped(error.to_string()))
+    result.map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]

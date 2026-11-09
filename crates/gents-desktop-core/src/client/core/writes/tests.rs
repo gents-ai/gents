@@ -132,6 +132,29 @@ async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync()
     assert!(store.snapshot().requests.is_empty());
 }
 
+#[test]
+fn a_send_replies_at_once_and_hands_the_node_reload_to_the_observer() {
+    let (store, _version) = ObservedStore::new(ClientStore::default());
+    let mut wake = store.subscribe_resync_requests();
+    let receipt = SubmittedRequest {
+        request_id: "held-request".into(),
+        session_id: "held-session".into(),
+        node_did: "did:test:node".into(),
+        agent_did: None,
+    };
+    let before = store.projection_revision();
+    acknowledge_submitted_request(&store, &receipt);
+    assert_eq!(store.focused_request_id().as_deref(), Some("held-request"));
+    assert!(wake.has_changed().unwrap());
+    wake.borrow_and_update();
+    assert_eq!(
+        store.take_resync_requests(),
+        (false, vec!["did:test:node".to_owned()])
+    );
+    assert_eq!(store.projection_revision(), before);
+    assert!(store.snapshot().requests.is_empty());
+}
+
 #[tokio::test]
 async fn committed_write_survives_refresh_failure_and_requests_scoped_resync() {
     let (store, _version) = ObservedStore::new(ClientStore::default());
