@@ -1,7 +1,7 @@
 use super::*;
 use crate::store::identity::KeyIdentity;
 use gents_protocol::file_image_hydration::FILE_IMAGE_RECEIPT_VERSION;
-use gents_protocol::session_hydration::HydrationRequest;
+use gents_protocol::file_inventory::FileInventoryRequest;
 
 #[tokio::test]
 async fn file_image_read_grant_matches_signed_receipt_contract() {
@@ -48,7 +48,7 @@ async fn file_image_read_grant_matches_signed_receipt_contract() {
         }
         let mut demand = FileImageDemand {
             inventory_reference: None,
-            admission: HydrationRequest {
+            admission: FileInventoryRequest {
                 request_key: String::new(),
                 peer_id: "peer".into(),
                 requester_did: text("requester").into(),

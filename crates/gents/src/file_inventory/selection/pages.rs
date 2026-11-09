@@ -1,29 +1,29 @@
 use super::*;
 use crate::store::graphql::CURSOR_PAGE_SIZE;
-use gents_protocol::session_hydration::SessionHydrationCollection;
+use crate::file_inventory::SessionCollection;
 
 pub(super) const PAGE_SIZE: usize = CURSOR_PAGE_SIZE;
 
-fn fields(collection: SessionHydrationCollection) -> &'static str {
+fn fields(collection: SessionCollection) -> &'static str {
     match collection {
-        SessionHydrationCollection::AgentRequest => {
+        SessionCollection::AgentRequest => {
             "_docID request_id requester_did node_did session_id lifecycle_state terminal_output"
         }
-        SessionHydrationCollection::AgentMessage => AGENT_MESSAGE_FIELDS,
-        SessionHydrationCollection::AgentToolCall => HYDRATION_TOOL_CALL_FIELDS,
-        SessionHydrationCollection::AgentOutputSegment => AGENT_OUTPUT_SEGMENT_FIELDS,
-        SessionHydrationCollection::CompactionEntry => "_docID requester_did node_did session_id",
+        SessionCollection::AgentMessage => AGENT_MESSAGE_FIELDS,
+        SessionCollection::AgentToolCall => SESSION_TOOL_CALL_FIELDS,
+        SessionCollection::AgentOutputSegment => AGENT_OUTPUT_SEGMENT_FIELDS,
+        SessionCollection::CompactionEntry => "_docID requester_did node_did session_id",
     }
 }
 
 #[cfg(test)]
 pub(super) fn page_query(
-    collection: SessionHydrationCollection,
+    collection: SessionCollection,
     filter: &str,
     after: Option<&str>,
 ) -> String {
     crate::store::graphql::cursor_query(
-        hydration_collection_name(collection),
+        session_collection_name(collection),
         fields(collection),
         filter,
         after,
@@ -32,12 +32,12 @@ pub(super) fn page_query(
 
 pub(super) async fn load_rows(
     txn: &ConfigApplyTxn<'_>,
-    collection: SessionHydrationCollection,
+    collection: SessionCollection,
     filter: &str,
 ) -> Result<Vec<serde_json::Value>> {
     Ok(txn
         .cursor_rows(
-            hydration_collection_name(collection),
+            session_collection_name(collection),
             fields(collection),
             filter,
         )
@@ -48,7 +48,7 @@ pub(super) async fn load_rows(
 /// index and scan the node's whole segment history. The equivalent nested
 /// conjunction keeps this bounded cursor on the session index.
 pub(super) fn session_filter(
-    collection: SessionHydrationCollection,
+    collection: SessionCollection,
     scope: &SessionScope,
 ) -> Result<String> {
     let requester = scope
@@ -57,7 +57,7 @@ pub(super) fn session_filter(
         .filter(|value| !value.is_empty())
         .context("canonical page scope omitted requester")?;
     Ok(
-        if collection == SessionHydrationCollection::AgentOutputSegment {
+        if collection == SessionCollection::AgentOutputSegment {
             format!(
                 r#"session_id: {{ _eq: "{}" }}, _or: [{{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}]"#,
                 escape_graphql_string(&scope.session_id),
@@ -80,15 +80,15 @@ pub(super) async fn load_session_rows(
 ) -> Result<defra_node::QueryResponse> {
     let mut data = serde_json::Map::new();
     for collection in [
-        SessionHydrationCollection::AgentRequest,
-        SessionHydrationCollection::AgentMessage,
-        SessionHydrationCollection::AgentToolCall,
-        SessionHydrationCollection::AgentOutputSegment,
-        SessionHydrationCollection::CompactionEntry,
+        SessionCollection::AgentRequest,
+        SessionCollection::AgentMessage,
+        SessionCollection::AgentToolCall,
+        SessionCollection::AgentOutputSegment,
+        SessionCollection::CompactionEntry,
     ] {
         let rows = load_rows(txn, collection, &session_filter(collection, scope)?).await?;
         data.insert(
-            hydration_collection_name(collection).to_owned(),
+            session_collection_name(collection).to_owned(),
             serde_json::Value::Array(rows),
         );
     }

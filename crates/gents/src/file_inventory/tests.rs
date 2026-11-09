@@ -4,7 +4,7 @@ use gents_protocol::file_changes::{FileChangeImages, FileImage, FilePermissions,
 use gents_protocol::file_inventory::{
     FileChangeMetadata, FileImageMetadata, FileInventoryAdmission,
 };
-use gents_protocol::session_hydration::HydrationRequest;
+use gents_protocol::file_inventory::FileInventoryRequest;
 use serde_json::Value;
 
 fn text(value: &Value) -> String {
@@ -149,7 +149,7 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
             .unwrap();
         let reader_access = ConfigAccess::local_as(node.clone(), reader_did.clone());
         let mut admission = FileInventoryAdmission {
-            request: HydrationRequest {
+            request: FileInventoryRequest {
                 request_key: name.into(),
                 peer_id: "direct-reader".into(),
                 requester_did: reader.did().into(),
@@ -262,7 +262,6 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
             let direct = gents_protocol::file_inventory::DirectFileInventoryRequest {
                 node_did: tool.node_did().to_owned(),
                 session_id: tool.session_id().to_owned(),
-                peer_id: "direct-reader".into(),
                 action: Default::default(),
             };
             assert!(super::read_direct_inventory(&access, &direct)

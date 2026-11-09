@@ -1033,11 +1033,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_source_projection_cases,
         ),
         (
-            "file_image_hydration_cases",
-            "FileImageHydrationCases",
-            &snapshot.file_image_hydration_cases,
-        ),
-        (
             "file_image_hydration_route_cases",
             "FileImageHydrationRouteCases",
             &snapshot.file_image_hydration_route_cases,
@@ -1051,16 +1046,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "file_review_subscription_cases",
             "FileReviewSubscriptionCases",
             &snapshot.file_review_subscription_cases,
-        ),
-        (
-            "file_image_hydration_completion_cases",
-            "FileImageHydrationCompletionCases",
-            &snapshot.file_image_hydration_completion_cases,
-        ),
-        (
-            "file_image_attempt_cases",
-            "FileImageAttemptCases",
-            &snapshot.file_image_attempt_cases,
         ),
         (
             "stored_file_image_access_cases",
@@ -2380,46 +2365,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.callback_cases.is_empty() {
         emitted.insert(("callback_cases".to_string(), "CallbackCases".to_string()));
     }
-    if !snapshot.session_hydration_decision_cases.is_empty() {
+    if !snapshot.file_inventory_closure_cases.is_empty() {
         emitted.insert((
-            "session_hydration_cases".to_string(),
-            "SessionHydrationDecisionCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_closure_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_closure_cases".to_string(),
-            "SessionHydrationClosureCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_apply_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_apply_cases".to_string(),
-            "SessionHydrationApplyCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_progress_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_progress_cases".to_string(),
-            "SessionHydrationProgressCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_durable_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_durable_cases".to_string(),
-            "SessionHydrationDurableCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_start_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_start_cases".to_string(),
-            "SessionHydrationStartCases".to_string(),
-        ));
-    }
-    if !snapshot.session_hydration_admission_cases.is_empty() {
-        emitted.insert((
-            "session_hydration_admission_cases".to_string(),
-            "SessionHydrationAdmissionCases".to_string(),
+            "file_inventory_closure_cases".to_string(),
+            "FileInventoryClosureCases".to_string(),
         ));
     }
     if !snapshot.enrollment_cases.is_empty() {

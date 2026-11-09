@@ -1,5 +1,7 @@
 use super::*;
-use crate::runtime::agent::p2p_reconcile::session_hydration::SessionReadObservation;
+use crate::file_inventory::admission::{
+    AppliedPairingRoute, SessionOwner, SessionReadObservation, VerifiedActiveMembership,
+};
 use gents_protocol::file_image_hydration::FileImageInventoryReference;
 use gents_protocol::file_inventory::{
     FileInventoryBinding, FileInventoryCursor, FileInventoryEntry, FileInventoryOrdinal,
@@ -19,8 +21,8 @@ fn rows<'a>(value: &'a Value, field: &str) -> &'a [Value] {
     value[field].as_array().unwrap()
 }
 
-fn request(value: &Value) -> super::super::super::session_hydration::HydrationRequest {
-    super::super::super::session_hydration::HydrationRequest {
+fn request(value: &Value) -> gents_protocol::file_inventory::FileInventoryRequest {
+    gents_protocol::file_inventory::FileInventoryRequest {
         request_key: text(value, "key"),
         peer_id: text(value, "peer"),
         requester_did: text(value, "requester"),
@@ -112,7 +114,7 @@ fn generated_inventory_images_keep_reader_root_snapshot_and_source_distinct() {
             }),
         };
         let input = &case["catalog"];
-        let catalog = HydrationCatalog {
+        let catalog = InventoryCatalog {
             applied_pairing_routes: rows(input, "applied_pairing_routes")
                 .iter()
                 .map(|row| AppliedPairingRoute {
@@ -175,7 +177,7 @@ fn generated_inventory_images_keep_reader_root_snapshot_and_source_distinct() {
         let read_scope = &observed["scope"];
         let read = InventoryImageReadObservation {
             admission: FileInventoryAdmission {
-                request: super::super::super::session_hydration::HydrationRequest {
+                request: gents_protocol::file_inventory::FileInventoryRequest {
                     request_key: page_demand.admission.request.request_key.clone(),
                     peer_id: text(read_scope, "peer"),
                     requester_did: text(read_scope, "requester"),
@@ -238,12 +240,6 @@ fn generated_inventory_images_keep_reader_root_snapshot_and_source_distinct() {
             serde_json::to_value(delivery).unwrap(),
             case["delivery_documents"],
             "{}",
-            case["name"]
-        );
-        assert_eq!(
-            select_file_images(&demand, &catalog, &tools, &images),
-            FileImageSelection::Rejected,
-            "a bound image must not use the legacy selector: {}",
             case["name"]
         );
     }

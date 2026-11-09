@@ -114,8 +114,6 @@ mod request_lifecycle;
 mod request_owner_scope;
 #[path = "conformance/session_control.rs"]
 mod session_control;
-#[path = "conformance/session_hydration.rs"]
-mod session_hydration;
 #[path = "conformance/startup_readiness.rs"]
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]

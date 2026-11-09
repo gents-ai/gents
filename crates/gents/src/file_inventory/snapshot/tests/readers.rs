@@ -115,7 +115,7 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
         .unwrap();
     let mut admission = FileInventoryAdmission {
         session_doc_id: session.doc_id,
-        request: HydrationRequest {
+        request: FileInventoryRequest {
             request_key: "shared-reader-inventory".into(),
             peer_id: "independent-reader-peer".into(),
             requester_did: reader.did().into(),

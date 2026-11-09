@@ -6,12 +6,12 @@ use crate::store::graphql::required_rows;
 use gents_protocol::session::SessionScope;
 
 #[cfg(test)]
-pub(super) async fn load_hydration_selection(
+pub(super) async fn load_session_selection(
     node: &Arc<EmbeddedNode>,
-    request: &HydrationRequest,
-) -> Result<HydrationSelection> {
-    ConfigAccess::transact_local_readonly(node, None, "session_hydration.selection", |txn| {
-        Box::pin(load_hydration_selection_in_txn(txn, request))
+    request: &FileInventoryRequest,
+) -> Result<SessionSelection> {
+    ConfigAccess::transact_local_readonly(node, None, "file_inventory.selection", |txn| {
+        Box::pin(load_session_selection_in_txn(txn, request))
     })
     .await
 }
@@ -20,10 +20,10 @@ pub(super) async fn load_hydration_selection(
 /// snapshot. Inventory enumeration must additionally establish bounded complete
 /// membership and current projection owners before certifying coverage.
 #[cfg(test)]
-pub(super) async fn load_hydration_selection_in_txn(
+pub(super) async fn load_session_selection_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    request: &HydrationRequest,
-) -> Result<HydrationSelection> {
+    request: &FileInventoryRequest,
+) -> Result<SessionSelection> {
     let scope = SessionScope {
         node_did: request.node_did.clone(),
         session_id: request.session_id.clone(),
@@ -37,7 +37,7 @@ pub(super) async fn load_hydration_selection_in_txn(
 pub(super) async fn load_canonical_selection_in_txn(
     txn: &ConfigApplyTxn<'_>,
     scope: &SessionScope,
-) -> Result<HydrationSelection> {
+) -> Result<SessionSelection> {
     let requester = scope
         .requester_did
         .as_deref()
@@ -123,10 +123,10 @@ pub(super) async fn load_canonical_selection_in_txn(
         observe_tool_call(row, &mut bases, &mut effects);
     }
     for collection in [
-        gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest,
-        gents_protocol::session_hydration::SessionHydrationCollection::CompactionEntry,
+        crate::file_inventory::SessionCollection::AgentRequest,
+        crate::file_inventory::SessionCollection::CompactionEntry,
     ] {
-        let name = hydration_collection_name(collection);
+        let name = session_collection_name(collection);
         bases.extend(
             required_rows::<TranscriptRow>(&response, name)?
                 .into_iter()
@@ -159,7 +159,7 @@ pub(super) async fn load_canonical_selection_in_txn(
         .iter()
         .filter(|row| {
             row.collection
-                == gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall
+                == crate::file_inventory::SessionCollection::AgentToolCall
         })
         .map(|row| row.doc_id.as_str())
         .collect::<BTreeSet<_>>();
@@ -217,11 +217,11 @@ pub(super) async fn load_canonical_selection_in_txn(
             .iter()
             .find(|row| {
                 row.collection
-                    == gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest
+                    == crate::file_inventory::SessionCollection::AgentRequest
                     && row.doc_id == request_id
             })
             .context("terminal hydration request missing from authorized base rows")?;
-        documents.insert(HydrationDocument {
+        documents.insert(SessionDocument {
             collection: row.collection,
             doc_id: row.doc_id.clone(),
             requester_did: row.requester_did.clone(),
@@ -229,7 +229,7 @@ pub(super) async fn load_canonical_selection_in_txn(
             session_id: row.session_id.clone(),
         });
     }
-    Ok(HydrationSelection {
+    Ok(SessionSelection {
         documents,
         publications: canonical.publications,
         headers: root_headers,
@@ -367,7 +367,7 @@ async fn load_request_segments(
         let filter = gents_protocol::output::rows::request_output_segments_filter(&request_id);
         let values = pages::load_rows(
             txn,
-            gents_protocol::session_hydration::SessionHydrationCollection::AgentOutputSegment,
+            crate::file_inventory::SessionCollection::AgentOutputSegment,
             &filter,
         )
         .await?;
@@ -409,18 +409,18 @@ async fn load_referenced_bases(
         requester_did,
     } = input;
     use gents_protocol::output::{MessageBlock, MessagePublication, OutputSource};
-    use gents_protocol::session_hydration::SessionHydrationCollection;
+    use crate::file_inventory::SessionCollection;
     let mut wanted = BTreeSet::new();
     for row in headers
         .iter()
         .filter(|row| !copied.headers.contains(&row.doc_id))
     {
         if let Some(id) = &row.message.request_doc_id {
-            wanted.insert((SessionHydrationCollection::AgentRequest, id.clone()));
+            wanted.insert((SessionCollection::AgentRequest, id.clone()));
         }
         if let MessagePublication::ToolDelivery { tool_call_doc_id } = &row.message.publication {
             wanted.insert((
-                SessionHydrationCollection::AgentToolCall,
+                SessionCollection::AgentToolCall,
                 tool_call_doc_id.clone(),
             ));
         }
@@ -433,7 +433,7 @@ async fn load_referenced_bases(
             } = block
             {
                 wanted.insert((
-                    SessionHydrationCollection::AgentToolCall,
+                    SessionCollection::AgentToolCall,
                     tool_call_doc_id.clone(),
                 ));
             }
@@ -445,7 +445,7 @@ async fn load_referenced_bases(
     {
         if let OutputSource::ToolCall { tool_call_doc_id } = &row.segment.source {
             wanted.insert((
-                SessionHydrationCollection::AgentToolCall,
+                SessionCollection::AgentToolCall,
                 tool_call_doc_id.clone(),
             ));
         }
@@ -456,22 +456,22 @@ async fn load_referenced_bases(
         if bases
             .iter()
             .any(|row| row.collection == collection && row.doc_id == doc_id)
-            || (collection == SessionHydrationCollection::AgentToolCall
+            || (collection == SessionCollection::AgentToolCall
                 && effects.iter().any(|row| row.document.doc_id == doc_id))
         {
             continue;
         }
-        let name = hydration_collection_name(collection);
+        let name = session_collection_name(collection);
         let id = escape_graphql_string(&doc_id);
-        let fields = if collection == SessionHydrationCollection::AgentToolCall {
-            HYDRATION_TOOL_CALL_FIELDS
+        let fields = if collection == SessionCollection::AgentToolCall {
+            SESSION_TOOL_CALL_FIELDS
         } else {
             "_docID requester_did node_did session_id"
         };
         let response = txn.execute_local_response(&format!(
             r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}, limit: 2) {{ {fields} }} }}"#
         )).await?;
-        if collection == SessionHydrationCollection::AgentToolCall {
+        if collection == SessionCollection::AgentToolCall {
             let found = required_rows::<gents_protocol::row::AgentToolCallRow>(&response, name)?;
             anyhow::ensure!(
                 found.len() == 1,
@@ -501,7 +501,7 @@ async fn load_referenced_bases(
     Ok(())
 }
 
-pub(super) const HYDRATION_TOOL_CALL_FIELDS: &str = "_docID tool_call_key requester_did node_did session_id request_doc_id tool_call_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output";
+pub(super) const SESSION_TOOL_CALL_FIELDS: &str = "_docID tool_call_key requester_did node_did session_id request_doc_id tool_call_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output";
 
 fn observe_tool_call(
     row: gents_protocol::row::AgentToolCallRow,
@@ -512,7 +512,7 @@ fn observe_tool_call(
         return;
     };
     let document = ScopedDocument {
-        collection: gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall,
+        collection: crate::file_inventory::SessionCollection::AgentToolCall,
         doc_id,
         requester_did: row.requester_did.unwrap_or_default(),
         node_did: row.node_did.unwrap_or_default(),
@@ -543,7 +543,7 @@ pub(super) async fn load_effect_children(
         .iter()
         .filter(|row| {
             row.collection
-                == gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall
+                == crate::file_inventory::SessionCollection::AgentToolCall
                 && row.session_id != scope.session_id
         })
         .map(|row| row.doc_id.as_str())
@@ -567,7 +567,7 @@ pub(super) async fn load_effect_children(
         );
         let values = pages::load_rows(
             txn,
-            gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall,
+            crate::file_inventory::SessionCollection::AgentToolCall,
             &filter,
         )
         .await?;

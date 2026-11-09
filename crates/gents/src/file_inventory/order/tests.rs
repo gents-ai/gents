@@ -1,11 +1,12 @@
 use super::*;
-use crate::runtime::agent::p2p_reconcile::session_hydration::HydrationDocument;
-use crate::runtime::agent::p2p_reconcile::session_hydration_closure::CanonicalPublicationOrigin;
+use crate::file_inventory::SessionDocument;
+use crate::file_inventory::closure::CanonicalPublicationOrigin;
 use gents_protocol::file_inventory::{FileChangeMetadata, FileImageMetadata};
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::output::{OutputOutcome, PayloadRef, TranscriptMessage};
-use gents_protocol::session_hydration::{HydrationRequest, SessionHydrationCollection};
+use crate::file_inventory::SessionCollection;
+use gents_protocol::file_inventory::FileInventoryRequest;
 use serde_json::{json, Value};
 
 // These labels bind metadata representations; source admission and capture
@@ -21,7 +22,7 @@ fn text(value: &Value) -> String {
 fn admission(value: &Value) -> FileInventoryAdmission {
     FileInventoryAdmission {
         session_doc_id: document(&value["native_session"]),
-        request: HydrationRequest {
+        request: FileInventoryRequest {
             request_key: text(&value["key"]),
             peer_id: text(&value["peer"]),
             requester_did: text(&value["requester"]),
@@ -199,7 +200,7 @@ fn segment(value: &Value, selected: &Value) -> gents_protocol::output::rows::Out
     }
 }
 
-fn selection(case: &Value) -> HydrationSelection {
+fn selection(case: &Value) -> SessionSelection {
     let selected = &case["snapshot"];
     let headers = case["closure"]["messages"]
         .as_array()
@@ -216,7 +217,7 @@ fn selection(case: &Value) -> HydrationSelection {
                 .iter()
                 .find(|row| row.doc_id == document(&value["id"]))
                 .unwrap();
-            HydrationDocument {
+            SessionDocument {
                 collection: serde_json::from_value(value["collection"].clone()).unwrap(),
                 doc_id: row.doc_id.clone(),
                 node_did: row.message.node_did.clone(),
@@ -254,7 +255,7 @@ fn selection(case: &Value) -> HydrationSelection {
         .collect::<Vec<_>>();
     let mut publications = Vec::new();
     for row in &documents {
-        if row.collection != SessionHydrationCollection::AgentMessage {
+        if row.collection != SessionCollection::AgentMessage {
             continue;
         }
         let loaded = lookup_message(
@@ -300,7 +301,7 @@ fn selection(case: &Value) -> HydrationSelection {
         }
     }
     drop(observed_segments);
-    HydrationSelection {
+    SessionSelection {
         documents,
         headers,
         output_segments,

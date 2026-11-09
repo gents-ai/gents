@@ -1,4 +1,4 @@
-use super::super::session_hydration::HYDRATION_COLLECTIONS;
+use super::admission::SESSION_COLLECTIONS;
 use super::{selection::load_canonical_selection_in_txn, *};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::required_rows;
@@ -11,7 +11,7 @@ use gents_protocol::file_inventory::{
     FileInventoryCoverage, FileInventoryCursor, FileInventoryEntry, FileInventoryPage,
     FILE_INVENTORY_PAGE_LIMIT,
 };
-use gents_protocol::session_hydration::SessionHydrationCollection;
+use crate::file_inventory::SessionCollection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -102,7 +102,7 @@ struct ToolFact {
     accepted_header_doc_id: Option<String>,
     execution_generation: Option<String>,
     capture: Capture,
-    order: Option<super::inventory_order::Window>,
+    order: Option<super::order::Window>,
 }
 
 /// Enumeration uses the source actor to establish complete membership, then
@@ -153,7 +153,7 @@ struct CopiedFactsInput<'a> {
     reader: Option<&'a identity::Did>,
     owner: &'a str,
     scope: &'a gents_protocol::session::SessionScope,
-    selected: &'a HydrationSelection,
+    selected: &'a SessionSelection,
     native: &'a [ToolFact],
 }
 
@@ -176,7 +176,7 @@ async fn load_copied_facts(
         .documents
         .iter()
         .filter(|document| {
-            document.collection == SessionHydrationCollection::AgentMessage
+            document.collection == SessionCollection::AgentMessage
                 && document.session_id == *session_id
         })
         .map(|document| document.doc_id.as_str())
@@ -458,7 +458,7 @@ impl FileInventorySnapshot {
         }
         let selected = load_canonical_selection_in_txn(txn, &scope).await?;
         if let Some(reader) = &reader {
-            for collection in HYDRATION_COLLECTIONS {
+            for collection in SESSION_COLLECTIONS {
                 let documents = selected
                     .documents
                     .iter()
@@ -468,7 +468,7 @@ impl FileInventorySnapshot {
                 require_reader_visibility(
                     txn,
                     reader,
-                    hydration_collection_name(*collection),
+                    session_collection_name(*collection),
                     &documents,
                 )
                 .await?;
@@ -483,7 +483,7 @@ impl FileInventorySnapshot {
         let mut pending = 0;
         let mut unknown = 0;
         for document in &selected.documents {
-            if document.collection != SessionHydrationCollection::AgentToolCall {
+            if document.collection != SessionCollection::AgentToolCall {
                 continue;
             }
             let tool = load_tool_call_read_in_txn(
@@ -626,7 +626,7 @@ impl FileInventorySnapshot {
             let fact = facts
                 .last()
                 .expect("the observed tool fact was just retained");
-            admissions.push(super::inventory_order::Admission {
+            admissions.push(super::order::Admission {
                 document: fact.tool_call_doc_id.clone(),
                 request: fact.request_doc_id.clone(),
                 scope: fact.scope.clone(),
@@ -664,7 +664,7 @@ impl FileInventorySnapshot {
                         .expect("validated image projection"),
                     change: change.clone(),
                 }));
-                admissions.push(super::inventory_order::Admission {
+                admissions.push(super::order::Admission {
                     document: fact.tool_call_doc_id.clone(),
                     request: fact.request_doc_id.clone(),
                     scope: fact.scope.clone(),
@@ -689,7 +689,7 @@ impl FileInventorySnapshot {
             session_doc_id: session.doc_id,
         };
         let publications =
-            super::inventory_order::Publications::new(admission, &actual, &selected, &admissions);
+            super::order::Publications::new(admission, &actual, &selected, &admissions);
         for (fact, observed) in facts.iter_mut().zip(&admissions) {
             fact.order = publications.window(observed);
         }
@@ -697,7 +697,7 @@ impl FileInventorySnapshot {
             .iter()
             .map(|fact| fact.order.clone())
             .collect::<Vec<_>>();
-        super::inventory_order::project(&mut entries, &ordering);
+        super::order::project(&mut entries, &ordering);
         apply_request_coverage(&facts, &mut entries);
         anyhow::ensure!(
             coherent_inventory_entries(&entries),

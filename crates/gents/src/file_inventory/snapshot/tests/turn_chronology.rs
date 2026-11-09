@@ -226,7 +226,7 @@ async fn check_turn_chronology(retry: bool) {
     .unwrap();
     let admission = FileInventoryAdmission {
         session_doc_id: session.doc_id,
-        request: HydrationRequest {
+        request: FileInventoryRequest {
             request_key: format!("turn-inventory-{name}"),
             peer_id: "fixture-peer".into(),
             requester_did: original.requester_did.clone().unwrap(),

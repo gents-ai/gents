@@ -59,6 +59,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("TitleText", WorkspaceTest("crates/gents/src/session/title_text.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Eval", Module("conformance/eval.rs")),
+        (
+            "FileInventory",
+            WorkspaceTest("crates/gents/src/file_inventory/snapshot/tests.rs"),
+        ),
         ("Fleet", Module("conformance/fleet.rs")),
         ("GoalAutomation", Module("conformance/goals.rs")),
         ("Goals", Module("conformance/goals.rs")),
@@ -104,10 +108,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         ("ScopeTemplates", Module("conformance/scope_templates.rs")),
         ("SelfConfig", Module("conformance/self_config.rs")),
-        (
-            "SessionHydration",
-            Module("conformance/session_hydration.rs"),
-        ),
         ("SessionRecovery", WorkspaceTest("crates/gents-desktop-core/src/client/mutations/chat/request/tests.rs")),
         (
             "Skills",

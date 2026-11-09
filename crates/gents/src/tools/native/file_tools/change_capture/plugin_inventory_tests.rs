@@ -125,7 +125,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
                     .unwrap();
                 Ok::<_, anyhow::Error>(gents_protocol::file_inventory::FileInventoryAdmission {
                     session_doc_id: session.doc_id,
-                    request: gents_protocol::session_hydration::HydrationRequest {
+                    request: gents_protocol::file_inventory::FileInventoryRequest {
                         request_key: "plugin-inventory".into(),
                         peer_id: "fixture-peer".into(),
                         node_did: parent.node_did().into(),

@@ -40,7 +40,7 @@ fn removed_authority_collections_are_absent_from_schema_and_replication_inventor
 }
 
 #[test]
-fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
+fn pairing_inventory_and_cli_sources_cannot_reference_removed_authorities() {
     let production = [
         include_str!("../../src/runtime/agent/p2p_reconcile/engine.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/desired.rs"),
@@ -50,7 +50,8 @@ fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/store.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/sweep.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/enrollment_reconcile.rs"),
-        include_str!("../../src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs"),
+        include_str!("../../src/file_inventory.rs"),
+        include_str!("../../src/file_inventory/selection.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/mod.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/network.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/pairings.rs"),
@@ -61,7 +62,7 @@ fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
     for removed in REMOVED_COLLECTIONS {
         assert!(
             !production.contains(removed),
-            "removed authority {removed} returned to hydration, repair, or CLI production code"
+            "removed authority {removed} returned to pairing, inventory, or CLI production code"
         );
     }
 }

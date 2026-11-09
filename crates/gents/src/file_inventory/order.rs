@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::tools::call::lifecycle::ToolCallState;
 
-use super::HydrationSelection;
+use super::SessionSelection;
 
 #[cfg(test)]
 mod tests;
@@ -56,7 +56,7 @@ impl<'a> Publications<'a> {
     pub fn new(
         expected: &FileInventoryAdmission,
         actual: &FileInventoryAdmission,
-        selected: &HydrationSelection,
+        selected: &SessionSelection,
         tools: &'a [Admission],
     ) -> Self {
         if expected != actual {
@@ -72,7 +72,7 @@ impl<'a> Publications<'a> {
             .iter()
             .filter(|row| {
                 row.collection
-                    == gents_protocol::session_hydration::SessionHydrationCollection::AgentMessage
+                    == crate::file_inventory::SessionCollection::AgentMessage
                     && row.session_id == expected.request.session_id
             })
             .map(|row| row.doc_id.as_str())

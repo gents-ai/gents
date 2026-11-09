@@ -1,4 +1,4 @@
-use super::session_hydration::HydrationDocument;
+use super::SessionDocument;
 use anyhow::anyhow;
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::reconstruction::{
@@ -10,12 +10,12 @@ use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputSource, OutputWriter, PayloadRef, ReconstructionError,
     SourceClose,
 };
-use gents_protocol::session_hydration::SessionHydrationCollection;
+use crate::file_inventory::SessionCollection;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopedDocument {
-    pub collection: SessionHydrationCollection,
+    pub collection: SessionCollection,
     pub doc_id: String,
     pub requester_did: String,
     pub node_did: String,
@@ -23,8 +23,8 @@ pub struct ScopedDocument {
 }
 
 impl ScopedDocument {
-    fn into_hydration(self) -> HydrationDocument {
-        HydrationDocument {
+    fn into_selected(self) -> SessionDocument {
+        SessionDocument {
             collection: self.collection,
             doc_id: self.doc_id,
             requester_did: self.requester_did,
@@ -111,7 +111,7 @@ fn reconstruction_failure(error: ReconstructionError) -> CanonicalClosureError {
 #[cfg(test)]
 pub fn build_canonical_closure(
     input: CanonicalClosureInput<'_>,
-) -> ClosureResult<BTreeSet<HydrationDocument>> {
+) -> ClosureResult<BTreeSet<SessionDocument>> {
     build_selection(input, None)
 }
 
@@ -123,7 +123,7 @@ pub struct CanonicalPublicationOrigin {
 }
 
 pub struct CanonicalClosureSelection {
-    pub documents: BTreeSet<HydrationDocument>,
+    pub documents: BTreeSet<SessionDocument>,
     pub publications: Vec<CanonicalPublicationOrigin>,
 }
 
@@ -143,7 +143,7 @@ pub fn build_canonical_selection(
 fn build_selection(
     input: CanonicalClosureInput<'_>,
     mut publications: Option<&mut Vec<CanonicalPublicationOrigin>>,
-) -> ClosureResult<BTreeSet<HydrationDocument>> {
+) -> ClosureResult<BTreeSet<SessionDocument>> {
     let headers = input
         .headers
         .iter()
@@ -169,7 +169,7 @@ fn build_selection(
         .retained_bases
         .iter()
         .cloned()
-        .map(ScopedDocument::into_hydration)
+        .map(ScopedDocument::into_selected)
         .collect::<BTreeSet<_>>();
     for root_id in input.root_header_ids {
         let root = lookup_message(
@@ -240,7 +240,7 @@ fn collect_fork_copy(
     root: ObservedMessage<'_>,
     copies: &[ObservedSegment<'_>],
     segments: &[ObservedSegment<'_>],
-    selected: &mut BTreeSet<HydrationDocument>,
+    selected: &mut BTreeSet<SessionDocument>,
 ) -> ClosureResult<()> {
     let references = root.message.payload_references();
     let physical = segments
@@ -267,16 +267,16 @@ fn collect_fork_copy(
         root.message,
     )
     .map_err(reconstruction_failure)?;
-    selected.insert(HydrationDocument {
-        collection: SessionHydrationCollection::AgentMessage,
+    selected.insert(SessionDocument {
+        collection: SessionCollection::AgentMessage,
         doc_id: root.doc_id.to_owned(),
         requester_did: root.message.requester_did.clone().unwrap_or_default(),
         node_did: root.message.node_did.clone(),
         session_id: root.message.session_id.clone(),
     });
     for row in physical {
-        selected.insert(HydrationDocument {
-            collection: SessionHydrationCollection::AgentOutputSegment,
+        selected.insert(SessionDocument {
+            collection: SessionCollection::AgentOutputSegment,
             doc_id: row.doc_id.to_owned(),
             requester_did: row.segment.requester_did.clone().unwrap_or_default(),
             node_did: row.segment.node_did.clone(),
@@ -289,8 +289,8 @@ fn collect_fork_copy(
 fn collect_effect_children(
     input: &CanonicalClosureInput<'_>,
     segments: &[ObservedSegment<'_>],
-    bases: &BTreeMap<(SessionHydrationCollection, &str), &ScopedDocument>,
-    selected: &mut BTreeSet<HydrationDocument>,
+    bases: &BTreeMap<(SessionCollection, &str), &ScopedDocument>,
+    selected: &mut BTreeSet<SessionDocument>,
 ) -> ClosureResult<()> {
     let decoded = input
         .tool_effects
@@ -313,7 +313,7 @@ fn collect_effect_children(
         .collect::<BTreeSet<_>>();
     let parents = selected
         .iter()
-        .filter(|document| document.collection == SessionHydrationCollection::AgentToolCall)
+        .filter(|document| document.collection == SessionCollection::AgentToolCall)
         .map(|document| document.doc_id.clone())
         .collect::<BTreeSet<_>>();
     let children = decoded
@@ -340,7 +340,7 @@ fn collect_effect_children(
     }
     for (_, row) in children {
         let child = row.document.doc_id.as_str();
-        selected.insert(row.document.clone().into_hydration());
+        selected.insert(row.document.clone().into_selected());
         let source = OutputSource::ToolEffectArguments {
             tool_call_doc_id: child.to_owned(),
         };
@@ -405,7 +405,7 @@ fn collect_origin_chain(
     root_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
-    selected: &mut BTreeSet<HydrationDocument>,
+    selected: &mut BTreeSet<SessionDocument>,
 ) -> ClosureResult<()> {
     let mut id = root_id.to_owned();
     let mut visited = BTreeSet::new();
@@ -417,8 +417,8 @@ fn collect_origin_chain(
         }
         let row = lookup_message(headers, denied, &id, node_did, requester_did)
             .map_err(origin_failure)?;
-        selected.insert(HydrationDocument {
-            collection: SessionHydrationCollection::AgentMessage,
+        selected.insert(SessionDocument {
+            collection: SessionCollection::AgentMessage,
             doc_id: row.doc_id.to_owned(),
             requester_did: row.message.requester_did.clone().unwrap_or_default(),
             node_did: row.message.node_did.clone(),
@@ -436,12 +436,12 @@ fn collect_origin_chain(
 fn collect_message_dependencies(
     message: ObservedMessage<'_>,
     segments: &[ObservedSegment<'_>],
-    bases: &BTreeMap<(SessionHydrationCollection, &str), &ScopedDocument>,
-    selected: &mut BTreeSet<HydrationDocument>,
+    bases: &BTreeMap<(SessionCollection, &str), &ScopedDocument>,
+    selected: &mut BTreeSet<SessionDocument>,
 ) -> ClosureResult<()> {
     if let Some(id) = message.message.request_doc_id.as_deref() {
         retain_base(
-            SessionHydrationCollection::AgentRequest,
+            SessionCollection::AgentRequest,
             id,
             bases,
             selected,
@@ -449,7 +449,7 @@ fn collect_message_dependencies(
     }
     if let MessagePublication::ToolDelivery { tool_call_doc_id } = &message.message.publication {
         retain_base(
-            SessionHydrationCollection::AgentToolCall,
+            SessionCollection::AgentToolCall,
             tool_call_doc_id,
             bases,
             selected,
@@ -463,7 +463,7 @@ fn collect_message_dependencies(
             | MessageBlock::ToolResult {
                 tool_call_doc_id, ..
             } => retain_base(
-                SessionHydrationCollection::AgentToolCall,
+                SessionCollection::AgentToolCall,
                 tool_call_doc_id,
                 bases,
                 selected,
@@ -483,7 +483,7 @@ fn collect_message_dependencies(
         };
         if let Some(tool_call_doc_id) = tool_call_doc_id {
             retain_base(
-                SessionHydrationCollection::AgentToolCall,
+                SessionCollection::AgentToolCall,
                 tool_call_doc_id,
                 bases,
                 selected,
@@ -496,8 +496,8 @@ fn collect_message_dependencies(
 fn retain_reference_extent<'a>(
     reference: &PayloadRef,
     segments: &[ObservedSegment<'a>],
-    bases: &BTreeMap<(SessionHydrationCollection, &str), &ScopedDocument>,
-    selected: &mut BTreeSet<HydrationDocument>,
+    bases: &BTreeMap<(SessionCollection, &str), &ScopedDocument>,
+    selected: &mut BTreeSet<SessionDocument>,
 ) -> ClosureResult<ObservedSegment<'a>> {
     let closing = segments
         .iter()
@@ -519,7 +519,7 @@ fn retain_reference_extent<'a>(
         )));
     };
     retain_base(
-        SessionHydrationCollection::AgentRequest,
+        SessionCollection::AgentRequest,
         &closing.segment.request_doc_id,
         bases,
         selected,
@@ -530,8 +530,8 @@ fn retain_reference_extent<'a>(
             && (row.doc_id == closing.doc_id
                 || row.segment.ordinal.is_some_and(|ordinal| ordinal < *extent))
     }) {
-        selected.insert(HydrationDocument {
-            collection: SessionHydrationCollection::AgentOutputSegment,
+        selected.insert(SessionDocument {
+            collection: SessionCollection::AgentOutputSegment,
             doc_id: row.doc_id.to_owned(),
             requester_did: row.segment.requester_did.clone().unwrap_or_default(),
             node_did: row.segment.node_did.clone(),
@@ -542,17 +542,17 @@ fn retain_reference_extent<'a>(
 }
 
 fn retain_base(
-    collection: SessionHydrationCollection,
+    collection: SessionCollection,
     doc_id: &str,
-    bases: &BTreeMap<(SessionHydrationCollection, &str), &ScopedDocument>,
-    selected: &mut BTreeSet<HydrationDocument>,
+    bases: &BTreeMap<(SessionCollection, &str), &ScopedDocument>,
+    selected: &mut BTreeSet<SessionDocument>,
 ) -> ClosureResult<()> {
     let document = bases.get(&(collection, doc_id)).ok_or_else(|| {
         CanonicalClosureError::MissingObservation(anyhow!(
             "missing authorized {collection:?} dependency {doc_id}"
         ))
     })?;
-    selected.insert((*document).clone().into_hydration());
+    selected.insert((*document).clone().into_selected());
     Ok(())
 }
 
@@ -566,13 +566,13 @@ mod tests {
     };
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
-    fn modeled_collection(name: &str) -> SessionHydrationCollection {
+    fn modeled_collection(name: &str) -> SessionCollection {
         match name {
-            "AgentRequest" => SessionHydrationCollection::AgentRequest,
-            "AgentMessage" => SessionHydrationCollection::AgentMessage,
-            "AgentToolCall" => SessionHydrationCollection::AgentToolCall,
-            "AgentOutputSegment" => SessionHydrationCollection::AgentOutputSegment,
-            "CompactionEntry" => SessionHydrationCollection::CompactionEntry,
+            "AgentRequest" => SessionCollection::AgentRequest,
+            "AgentMessage" => SessionCollection::AgentMessage,
+            "AgentToolCall" => SessionCollection::AgentToolCall,
+            "AgentOutputSegment" => SessionCollection::AgentOutputSegment,
+            "CompactionEntry" => SessionCollection::CompactionEntry,
             other => panic!("unknown modeled hydration collection {other}"),
         }
     }
@@ -580,11 +580,11 @@ mod tests {
     #[test]
     fn generated_modeled_closure_input_selects_exact_native_manifest() {
         fn assert_input(
-            input: &crate::lean_vocab_test::LeanSessionHydrationClosureInput,
+            input: &crate::lean_vocab_test::LeanSessionClosureInput,
             expected_documents: Option<
-                &Vec<crate::lean_vocab_test::LeanSessionHydrationDocumentKey>,
+                &Vec<crate::lean_vocab_test::LeanSessionClosureDocumentKey>,
             >,
-        ) -> Option<BTreeSet<HydrationDocument>> {
+        ) {
             let request = &input.request;
             let target_session = request.session.as_str();
             let agent = request.node.as_str();
@@ -652,7 +652,7 @@ mod tests {
                     },
                 })
                 .collect::<Vec<_>>();
-            let owner = |modeled: &crate::lean_vocab_test::LeanSessionHydrationOwner| {
+            let owner = |modeled: &crate::lean_vocab_test::LeanSessionClosureOwner| {
                 modeled.owner.unwrap().to_string()
             };
             let segments = input
@@ -740,7 +740,7 @@ mod tests {
                 .iter()
                 .map(|effect| ToolEffectRow {
                     document: ScopedDocument {
-                        collection: SessionHydrationCollection::AgentToolCall,
+                        collection: SessionCollection::AgentToolCall,
                         doc_id: effect.id.to_string(),
                         requester_did: requester.into(),
                         node_did: agent.into(),
@@ -863,7 +863,7 @@ mod tests {
                     result.is_err(),
                     "modeled rejected closure passed native owner"
                 );
-                return None;
+                return;
             };
             let closure = result.expect("modeled closure must pass native owner");
             let selected = closure
@@ -880,111 +880,9 @@ mod tests {
                 })
                 .collect::<BTreeSet<_>>();
             assert_eq!(selected, expected);
-            Some(closure)
         }
 
-        let case = crate::lean_vocab_test::lean_session_hydration_decision_cases()
-            .iter()
-            .find(|case| case.name == "admitted")
-            .expect("modeled admitted hydration case");
-        let closure = assert_input(
-            &case.closure_input,
-            case.expected_selected_documents.as_ref(),
-        )
-        .expect("admitted modeled closure");
-
-        use super::super::session_hydration::{
-            decide_hydration, AppliedPairingRoute, HydrationCatalog, HydrationRequest,
-            HydrationVerdict, SessionOwner, VerifiedActiveMembership,
-        };
-        for case in crate::lean_vocab_test::lean_session_hydration_decision_cases() {
-            let modeled_request = &case.closure_input.request;
-            let request = HydrationRequest::from_row(
-                modeled_request.key.clone(),
-                modeled_request.requester.clone(),
-                modeled_request.node.clone(),
-                modeled_request.session.clone(),
-            )
-            .expect("modeled hydration request key");
-            let mut catalog = HydrationCatalog {
-                applied_pairing_routes: BTreeSet::from([AppliedPairingRoute {
-                    peer_id: request.peer_id.clone(),
-                    requester_did: if case.pairing_requester_matches {
-                        request.requester_did.clone()
-                    } else {
-                        "did:key:requester-2".into()
-                    },
-                    node_did: if case.pairing_node_matches {
-                        request.node_did.clone()
-                    } else {
-                        "did:key:agent-2".into()
-                    },
-                }]),
-                selected_network_id: "network-1".into(),
-                verified_active_memberships: BTreeSet::from([VerifiedActiveMembership {
-                    network_id: if case.membership_network_matches {
-                        "network-1".into()
-                    } else {
-                        "network-2".into()
-                    },
-                    member_did: request.requester_did.clone(),
-                }]),
-                sessions: BTreeSet::from([SessionOwner {
-                    session_doc_id: None,
-                    session_id: request.session_id.clone(),
-                    requester_did: request.requester_did.clone(),
-                    node_did: request.node_did.clone(),
-                }]),
-                session_reads: BTreeSet::new(),
-                documents: closure.iter().cloned().collect(),
-                authorized_reference_closure: closure
-                    .iter()
-                    .filter(|document| document.session_id != request.session_id)
-                    .map(|document| {
-                        gents_protocol::session_hydration::SessionHydrationDocumentKey {
-                            collection: document.collection,
-                            doc_id: document.doc_id.clone(),
-                        }
-                    })
-                    .collect(),
-            };
-            if !case.paired {
-                catalog.applied_pairing_routes.clear();
-            }
-            if !case.active_member {
-                catalog.verified_active_memberships.clear();
-            }
-            if !case.owns_session {
-                catalog.sessions.clear();
-            }
-            match decide_hydration(&request, &catalog) {
-                HydrationVerdict::Admit(documents) => {
-                    assert!(case.expected_admit, "{} unexpectedly admitted", case.name);
-                    let actual = documents
-                        .iter()
-                        .map(|document| (document.collection, document.doc_id.clone()))
-                        .collect::<BTreeSet<_>>();
-                    let expected = case
-                        .expected_selected_documents
-                        .as_ref()
-                        .expect("admitted modeled manifest")
-                        .iter()
-                        .map(|document| {
-                            (
-                                modeled_collection(&document.collection),
-                                document.id.to_string(),
-                            )
-                        })
-                        .collect::<BTreeSet<_>>();
-                    assert_eq!(actual, expected, "{} composed manifest", case.name);
-                }
-                HydrationVerdict::Reject(_) => {
-                    assert!(!case.expected_admit, "{} unexpectedly rejected", case.name);
-                }
-            }
-        }
-
-        let cases = crate::lean_vocab_test::lean_session_hydration_closure_cases();
+        let cases = crate::lean_vocab_test::lean_file_inventory_closure_cases();
         for name in [
             "fork_copy_without_origin",
             "fork_copy_preferred_over_visible_origin",
@@ -996,86 +894,7 @@ mod tests {
             );
         }
         for case in cases {
-            let Some(closure) = assert_input(
-                &case.closure_input,
-                case.expected_closure_documents.as_ref(),
-            ) else {
-                assert!(!case.expected_selected, "{}", case.name);
-                continue;
-            };
-            let selection = &case.selection_request;
-            let request = HydrationRequest::from_row(
-                selection.key.clone(),
-                selection.requester.clone(),
-                selection.node.clone(),
-                selection.session.clone(),
-            )
-            .expect("modeled selection request key");
-            let closure_request = &case.closure_input.request;
-            let catalog = HydrationCatalog {
-                applied_pairing_routes: BTreeSet::from([AppliedPairingRoute {
-                    peer_id: closure_request.peer.clone(),
-                    requester_did: closure_request.requester.clone(),
-                    node_did: closure_request.node.clone(),
-                }]),
-                selected_network_id: "network-1".into(),
-                verified_active_memberships: BTreeSet::from([VerifiedActiveMembership {
-                    network_id: "network-1".into(),
-                    member_did: closure_request.requester.clone(),
-                }]),
-                sessions: BTreeSet::from([SessionOwner {
-                    session_doc_id: None,
-                    session_id: closure_request.session.clone(),
-                    requester_did: closure_request.requester.clone(),
-                    node_did: closure_request.node.clone(),
-                }]),
-                session_reads: BTreeSet::new(),
-                documents: closure.iter().cloned().collect(),
-                authorized_reference_closure: closure
-                    .iter()
-                    .filter(|document| document.session_id != closure_request.session)
-                    .map(|document| {
-                        gents_protocol::session_hydration::SessionHydrationDocumentKey {
-                            collection: document.collection,
-                            doc_id: document.doc_id.clone(),
-                        }
-                    })
-                    .collect(),
-            };
-            match decide_hydration(&request, &catalog) {
-                HydrationVerdict::Admit(documents) => {
-                    assert!(
-                        case.expected_selected,
-                        "{} unexpectedly admitted",
-                        case.name
-                    );
-                    let actual = documents
-                        .iter()
-                        .map(|document| (document.collection, document.doc_id.clone()))
-                        .collect::<BTreeSet<_>>();
-                    let expected = case
-                        .expected_selected_documents
-                        .as_ref()
-                        .expect("selected modeled manifest")
-                        .iter()
-                        .map(|document| {
-                            (
-                                modeled_collection(&document.collection),
-                                document.id.to_string(),
-                            )
-                        })
-                        .collect::<BTreeSet<_>>();
-                    assert_eq!(actual, expected, "{} selected manifest", case.name);
-                }
-                HydrationVerdict::Reject(_) => {
-                    assert!(
-                        !case.expected_selected,
-                        "{} unexpectedly rejected",
-                        case.name
-                    );
-                    assert!(case.expected_selected_documents.is_none(), "{}", case.name);
-                }
-            }
+            assert_input(&case.closure_input, case.expected_closure_documents.as_ref());
         }
     }
 }

@@ -79,10 +79,6 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
     assert!(!cases.is_empty());
     let schemas = [
         (
-            "SessionHydrationRequest",
-            gents_protocol::schemas::SESSION_HYDRATION_REQUEST,
-        ),
-        (
             "FileImageHydrationRequest",
             gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST,
         ),
@@ -106,9 +102,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
         );
         node.add_collection_as(&context, schema).await?;
         let mut input = json!({"request_key": format!("request-{name}"), "requester_did": user.did(), "node_did":runtime.did(), "session_id":"session", "status":"pending"});
-        if name != "SessionHydrationRequest" {
-            input["peer_id"] = json!("peer");
-        }
+        input["peer_id"] = json!("peer");
         if name == "FileImageHydrationRequest" || name == "FileInventoryImageRequest" {
             input["request_doc_id"] = json!("request");
             input["tool_call_doc_id"] = json!("tool");

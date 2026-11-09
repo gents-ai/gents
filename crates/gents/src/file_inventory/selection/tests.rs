@@ -8,7 +8,7 @@ async fn canonical_selection_reuses_the_callers_read_snapshot() {
     let node = Arc::new(builder.build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let did = node.node_identity_did().unwrap().to_owned();
-    let request = HydrationRequest {
+    let request = FileInventoryRequest {
         request_key: "atomic-peer:atomic-session".into(),
         peer_id: "atomic-peer".into(),
         requester_did: did.clone(),
@@ -19,7 +19,7 @@ async fn canonical_selection_reuses_the_callers_read_snapshot() {
         let request = &request;
         let writer = Arc::clone(&node);
         Box::pin(async move {
-            let before = load_hydration_selection_in_txn(txn, request).await?;
+            let before = load_session_selection_in_txn(txn, request).await?;
             assert!(before.documents.is_empty());
             let did = escape_graphql_string(&request.node_did);
             tokio::spawn(async move {
@@ -36,7 +36,7 @@ async fn canonical_selection_reuses_the_callers_read_snapshot() {
                 .await
             })
             .await??;
-            let after = load_hydration_selection_in_txn(txn, request).await?;
+            let after = load_session_selection_in_txn(txn, request).await?;
             assert_eq!(
                 after.documents, before.documents,
                 "a concurrent commit must not change the selected read snapshot"
@@ -46,10 +46,10 @@ async fn canonical_selection_reuses_the_callers_read_snapshot() {
     })
     .await
     .unwrap();
-    let fresh = load_hydration_selection(&node, &request).await.unwrap();
+    let fresh = load_session_selection(&node, &request).await.unwrap();
     assert_eq!(fresh.documents.len(), 1);
     assert!(fresh.documents.iter().all(|document| document.collection
-        == gents_protocol::session_hydration::SessionHydrationCollection::CompactionEntry));
+        == crate::file_inventory::SessionCollection::CompactionEntry));
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -67,14 +67,14 @@ fn missing_authorized_roots_do_not_certify_empty_selection() {
 
 #[tokio::test]
 async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
-    use gents_protocol::session_hydration::SessionHydrationCollection;
+    use crate::file_inventory::SessionCollection;
     let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
         .await
         .unwrap();
     let node = Arc::new(builder.build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let did = node.node_identity_did().unwrap().to_owned();
-    let request = HydrationRequest {
+    let request = FileInventoryRequest {
         request_key: "paged-peer:paged-session".into(),
         peer_id: "paged-peer".into(),
         requester_did: did.clone(),
@@ -134,7 +134,7 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
                 );
                 let response = txn
                     .execute_local_response(&pages::page_query(
-                        SessionHydrationCollection::CompactionEntry,
+                        SessionCollection::CompactionEntry,
                         &filter,
                         None,
                     ))
@@ -145,12 +145,12 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
                 )?;
                 assert_eq!(first.len(), pages::PAGE_SIZE);
                 assert!(next.is_some());
-                let selected = load_hydration_selection_in_txn(txn, request).await?;
+                let selected = load_session_selection_in_txn(txn, request).await?;
                 assert!(selected
                     .documents
                     .iter()
                     .all(|document| document.collection
-                        == SessionHydrationCollection::CompactionEntry));
+                        == SessionCollection::CompactionEntry));
                 let actual = selected
                     .documents
                     .iter()
@@ -169,20 +169,20 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
 
 #[tokio::test]
 async fn hydration_segment_selection_uses_the_session_index() {
-    use gents_protocol::session_hydration::SessionHydrationCollection;
+    use crate::file_inventory::SessionCollection;
     let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
         .await
         .unwrap();
     let node = Arc::new(builder.build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let request = HydrationRequest {
+    let request = FileInventoryRequest {
         request_key: "plan-test".into(),
         peer_id: "peer-1".into(),
         session_id: "session-1".into(),
         node_did: "did:key:agent-1".into(),
         requester_did: "did:key:requester-1".into(),
     };
-    let collection = SessionHydrationCollection::AgentOutputSegment;
+    let collection = SessionCollection::AgentOutputSegment;
     let scope = gents_protocol::session::SessionScope {
         node_did: request.node_did,
         session_id: request.session_id,
@@ -201,7 +201,7 @@ async fn hydration_segment_selection_uses_the_session_index() {
 }
 
 #[tokio::test]
-async fn generated_terminal_selections_preserve_superseded_session_hydration() -> Result<()> {
+async fn generated_terminal_selections_preserve_superseded_requests() -> Result<()> {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let did = node.node_identity_did().unwrap().to_owned();
@@ -226,7 +226,7 @@ async fn generated_terminal_selections_preserve_superseded_session_hydration() -
             )
             .await?;
         let physical = gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?;
-        let request = HydrationRequest {
+        let request = FileInventoryRequest {
             request_key: format!("peer:{session}"),
             peer_id: "peer".into(),
             requester_did: did.clone(),
@@ -264,7 +264,7 @@ async fn generated_terminal_selections_preserve_superseded_session_hydration() -
             case["selection"],
             "observing output must not rewrite its durable selection"
         );
-        let selected = load_hydration_selection(&node, &request).await;
+        let selected = load_session_selection(&node, &request).await;
         assert_eq!(
             selected.is_ok(),
             case["hydration_admitted"].as_bool().unwrap(),
@@ -273,7 +273,7 @@ async fn generated_terminal_selections_preserve_superseded_session_hydration() -
         );
         if let Ok(selected) = selected {
             assert!(selected.documents.iter().any(|document| document.collection
-                == gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest
+                == crate::file_inventory::SessionCollection::AgentRequest
                 && document.doc_id == physical));
             assert!(
                 selected.headers.is_empty(),

@@ -431,8 +431,6 @@ fn assert_step(state: &EnrollmentState, step: &LeanEnrollmentTraceStep, context:
         assert!(!step.server_route_present, "{context}");
         assert!(!step.current_approval, "{context}");
         assert!(!step.ready, "{context}");
-        assert!(!step.client_hydration_admits, "{context}");
-        assert!(!step.server_hydration_admits, "{context}");
         return;
     }
 
@@ -453,16 +451,6 @@ fn assert_step(state: &EnrollmentState, step: &LeanEnrollmentTraceStep, context:
         "{context}"
     );
     assert_eq!(state.enrollment_ready(&request), step.ready, "{context}");
-    assert_eq!(
-        state.hydration_admits(&request, EnrollmentRouteDirection::ClientToServer),
-        step.client_hydration_admits,
-        "{context}"
-    );
-    assert_eq!(
-        state.hydration_admits(&request, EnrollmentRouteDirection::ServerToClient),
-        step.server_hydration_admits,
-        "{context}"
-    );
 
     if has_decision {
         let decision = decision(step);

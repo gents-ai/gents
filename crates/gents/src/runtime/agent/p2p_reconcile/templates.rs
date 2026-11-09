@@ -234,6 +234,9 @@ pub fn scope_filter(scope: &Scope, local_did: &str) -> PairingFilters {
 }
 
 #[cfg(test)]
+mod file_route_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeSet;

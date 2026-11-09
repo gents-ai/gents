@@ -181,10 +181,10 @@ pub(super) async fn push_documents_to_peer(
         .collect::<Vec<_>>();
     admin.require_protocol_collections(&collections)?;
     let p2p = crate::store::identity::node_p2p(node)
-        .context("embedded node has no P2P transport for hydration delivery")?;
+        .context("embedded node has no P2P transport for document delivery")?;
     p2p.push_documents_to_peer(peer_id, documents)
         .await
-        .with_context(|| format!("push hydration documents to peer {peer_id}"))
+        .with_context(|| format!("push documents to peer {peer_id}"))
 }
 
 fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminError {

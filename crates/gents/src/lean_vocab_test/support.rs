@@ -221,11 +221,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) file_inventory_order_resolution_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_comparison_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_entry_cases: Vec<serde_json::Value>,
-    pub(crate) file_image_hydration_cases: Vec<serde_json::Value>,
     pub(crate) file_image_hydration_route_cases: Vec<serde_json::Value>,
     pub(crate) file_review_subscription_cases: Vec<serde_json::Value>,
-    pub(crate) file_image_hydration_completion_cases: Vec<serde_json::Value>,
-    pub(crate) file_image_attempt_cases: Vec<serde_json::Value>,
     pub(crate) stored_file_image_access_cases: Vec<serde_json::Value>,
     pub(crate) file_image_read_grant_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
@@ -405,13 +402,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_submission_cases: Vec<LeanGoalSubmissionCase>,
     pub(crate) goal_continuation_materialization_cases:
         Vec<LeanGoalContinuationMaterializationCase>,
-    pub(crate) session_hydration_decision_cases: Vec<LeanSessionHydrationDecisionCase>,
-    pub(crate) session_hydration_closure_cases: Vec<LeanSessionHydrationClosureCase>,
-    pub(crate) session_hydration_apply_cases: Vec<LeanSessionHydrationApplyCase>,
-    pub(crate) session_hydration_progress_cases: Vec<LeanSessionHydrationProgressCase>,
-    pub(crate) session_hydration_durable_cases: Vec<LeanSessionHydrationDurableCase>,
-    pub(crate) session_hydration_start_cases: Vec<LeanSessionHydrationStartCase>,
-    pub(crate) session_hydration_admission_cases: Vec<LeanSessionHydrationAdmissionCase>,
+    pub(crate) file_inventory_closure_cases: Vec<LeanSessionClosureCase>,
     pub(crate) enrollment_cases: Vec<LeanEnrollmentCase>,
     pub(crate) enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
     pub(crate) enrollment_pending_request_cases: Vec<serde_json::Value>,
@@ -2271,44 +2262,29 @@ pub(crate) struct LeanGoalContinuationMaterializationCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationDecisionCase {
-    pub(crate) name: String,
-    pub(crate) paired: bool,
-    pub(crate) pairing_requester_matches: bool,
-    pub(crate) pairing_node_matches: bool,
-    pub(crate) active_member: bool,
-    pub(crate) membership_network_matches: bool,
-    pub(crate) owns_session: bool,
-    pub(crate) expected_admit: bool,
-    pub(crate) expected_selected_count: usize,
-    pub(crate) closure_input: LeanSessionHydrationClosureInput,
-    pub(crate) expected_selected_documents: Option<Vec<LeanSessionHydrationDocumentKey>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationDocumentKey {
+pub(crate) struct LeanSessionClosureDocumentKey {
     pub(crate) collection: String,
     pub(crate) id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationPayloadRef {
+pub(crate) struct LeanSessionClosurePayloadRef {
     pub(crate) close_id: u64,
     pub(crate) stream: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationMessage {
+pub(crate) struct LeanSessionClosureMessage {
     pub(crate) id: u64,
     pub(crate) session: u64,
     pub(crate) request: Option<u64>,
     pub(crate) origin: Option<u64>,
     pub(crate) tool_delivery: Option<u64>,
-    pub(crate) refs: Vec<LeanSessionHydrationPayloadRef>,
+    pub(crate) refs: Vec<LeanSessionClosurePayloadRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationOwner {
+pub(crate) struct LeanSessionClosureOwner {
     pub(crate) kind: String,
     #[serde(default)]
     pub(crate) owner: Option<u64>,
@@ -2321,35 +2297,35 @@ pub(crate) struct LeanSessionHydrationOwner {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationTool {
+pub(crate) struct LeanSessionClosureTool {
     pub(crate) id: String,
     pub(crate) name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationEffect {
+pub(crate) struct LeanSessionClosureEffect {
     pub(crate) id: u64,
     pub(crate) parent: Option<u64>,
     pub(crate) ordinal: Option<u32>,
     pub(crate) spawned: bool,
     pub(crate) tool_call_id: String,
-    pub(crate) terminal: Option<LeanSessionHydrationPayloadRef>,
+    pub(crate) terminal: Option<LeanSessionClosurePayloadRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationSegment {
+pub(crate) struct LeanSessionClosureSegment {
     pub(crate) id: u64,
     pub(crate) kind: String,
-    pub(crate) tool: Option<LeanSessionHydrationTool>,
+    pub(crate) tool: Option<LeanSessionClosureTool>,
     pub(crate) request: u64,
-    pub(crate) source: LeanSessionHydrationOwner,
-    pub(crate) writer: LeanSessionHydrationOwner,
+    pub(crate) source: LeanSessionClosureOwner,
+    pub(crate) writer: LeanSessionClosureOwner,
     pub(crate) payload: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationAccess {
-    pub(crate) key: LeanSessionHydrationDocumentKey,
+pub(crate) struct LeanSessionClosureAccess {
+    pub(crate) key: LeanSessionClosureDocumentKey,
     pub(crate) state: String,
     pub(crate) peer: String,
     pub(crate) requester: String,
@@ -2359,7 +2335,7 @@ pub(crate) struct LeanSessionHydrationAccess {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationRequest {
+pub(crate) struct LeanSessionClosureRequest {
     pub(crate) key: String,
     pub(crate) peer: String,
     pub(crate) requester: String,
@@ -2369,100 +2345,24 @@ pub(crate) struct LeanSessionHydrationRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationClosureInput {
-    pub(crate) request: LeanSessionHydrationRequest,
+pub(crate) struct LeanSessionClosureInput {
+    pub(crate) request: LeanSessionClosureRequest,
     pub(crate) roots: Vec<u64>,
-    pub(crate) messages: Vec<LeanSessionHydrationMessage>,
-    pub(crate) segments: Vec<LeanSessionHydrationSegment>,
-    pub(crate) access: Vec<LeanSessionHydrationAccess>,
+    pub(crate) messages: Vec<LeanSessionClosureMessage>,
+    pub(crate) segments: Vec<LeanSessionClosureSegment>,
+    pub(crate) access: Vec<LeanSessionClosureAccess>,
     pub(crate) denied_headers: Vec<u64>,
     pub(crate) denied_segments: Vec<u64>,
-    pub(crate) bases: Vec<LeanSessionHydrationDocumentKey>,
-    pub(crate) observed_effects: Vec<LeanSessionHydrationEffect>,
+    pub(crate) bases: Vec<LeanSessionClosureDocumentKey>,
+    pub(crate) observed_effects: Vec<LeanSessionClosureEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct LeanSessionHydrationClosureCase {
+pub(crate) struct LeanSessionClosureCase {
     pub(crate) name: String,
-    pub(crate) expected_selected: bool,
-    pub(crate) selection_request: LeanSessionHydrationRequest,
-    pub(crate) closure_input: LeanSessionHydrationClosureInput,
-    pub(crate) expected_closure_documents: Option<Vec<LeanSessionHydrationDocumentKey>>,
-    pub(crate) expected_selected_documents: Option<Vec<LeanSessionHydrationDocumentKey>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationApplyCase {
-    pub(crate) name: String,
-    pub(crate) admitted: bool,
-    pub(crate) request: LeanSessionHydrationRequest,
-    pub(crate) input_documents: Option<Vec<LeanSessionHydrationDocumentKey>>,
-    pub(crate) delivery_confirmed: bool,
-    pub(crate) terminal_write: String,
-    pub(crate) expected_served: bool,
-    pub(crate) expected_rejected: bool,
-    pub(crate) expected_attempted_count: usize,
-    pub(crate) expected_confirmed_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationProgressCase {
-    pub(crate) name: String,
-    pub(crate) prev_session: String,
-    pub(crate) prev_node: String,
-    pub(crate) session: String,
-    pub(crate) node: String,
-    pub(crate) prev_phase: String,
-    pub(crate) prev_merged: usize,
-    pub(crate) prev_served: Option<usize>,
-    pub(crate) merged: usize,
-    pub(crate) served: Option<usize>,
-    pub(crate) served_matches: bool,
-    pub(crate) failed: bool,
-    pub(crate) begin_request: bool,
-    pub(crate) expected_phase: String,
-    pub(crate) expected_merged: usize,
-    pub(crate) expected_covered: usize,
-    pub(crate) expected_retry_admit: bool,
-    pub(crate) expected_complete: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationDurableCase {
-    pub(crate) name: String,
-    pub(crate) status: String,
-    pub(crate) merged: usize,
-    pub(crate) served: Option<usize>,
-    pub(crate) served_matches: bool,
-    pub(crate) expected_phase: String,
-    pub(crate) expected_merged: usize,
-    pub(crate) expected_covered: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationStartCase {
-    pub(crate) name: String,
-    pub(crate) foreign_header: bool,
-    pub(crate) owned_session: bool,
-    pub(crate) has_documents: bool,
-    pub(crate) nonterminal_request: bool,
-    pub(crate) expected_start: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSessionHydrationAdmissionCase {
-    pub(crate) name: String,
-    pub(crate) action: String,
-    pub(crate) request: String,
-    pub(crate) phase: String,
-    pub(crate) session_matches: bool,
-    pub(crate) node_matches: bool,
-    pub(crate) foreign_header: bool,
-    pub(crate) owned_session: bool,
-    pub(crate) has_documents: bool,
-    pub(crate) nonterminal_request: bool,
-    pub(crate) expected_admit: bool,
+    pub(crate) closure_input: LeanSessionClosureInput,
+    pub(crate) expected_closure_documents: Option<Vec<LeanSessionClosureDocumentKey>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -2578,8 +2478,6 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) current_approval: bool,
     pub(crate) peer_admitted: bool,
     pub(crate) ready: bool,
-    pub(crate) client_hydration_admits: bool,
-    pub(crate) server_hydration_admits: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -4211,35 +4109,8 @@ pub(crate) fn lean_goal_continuation_materialization_cases(
     &lean_contract_snapshot().goal_continuation_materialization_cases
 }
 
-pub(crate) fn lean_session_hydration_decision_cases() -> &'static [LeanSessionHydrationDecisionCase]
-{
-    &lean_contract_snapshot().session_hydration_decision_cases
-}
-
-pub(crate) fn lean_session_hydration_closure_cases() -> &'static [LeanSessionHydrationClosureCase] {
-    &lean_contract_snapshot().session_hydration_closure_cases
-}
-
-pub(crate) fn lean_session_hydration_apply_cases() -> &'static [LeanSessionHydrationApplyCase] {
-    &lean_contract_snapshot().session_hydration_apply_cases
-}
-
-pub(crate) fn lean_session_hydration_progress_cases() -> &'static [LeanSessionHydrationProgressCase]
-{
-    &lean_contract_snapshot().session_hydration_progress_cases
-}
-
-pub(crate) fn lean_session_hydration_durable_cases() -> &'static [LeanSessionHydrationDurableCase] {
-    &lean_contract_snapshot().session_hydration_durable_cases
-}
-
-pub(crate) fn lean_session_hydration_start_cases() -> &'static [LeanSessionHydrationStartCase] {
-    &lean_contract_snapshot().session_hydration_start_cases
-}
-
-pub(crate) fn lean_session_hydration_admission_cases(
-) -> &'static [LeanSessionHydrationAdmissionCase] {
-    &lean_contract_snapshot().session_hydration_admission_cases
+pub(crate) fn lean_file_inventory_closure_cases() -> &'static [LeanSessionClosureCase] {
+    &lean_contract_snapshot().file_inventory_closure_cases
 }
 
 pub(crate) fn lean_enrollment_cases() -> &'static [LeanEnrollmentCase] {

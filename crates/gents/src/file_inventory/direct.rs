@@ -2,11 +2,10 @@ use super::FileInventorySnapshot;
 use crate::store::config_client::ConfigAccess;
 use anyhow::{ensure, Context, Result};
 use gents_protocol::file_inventory::{
-    DirectFileInventoryRequest, FileInventoryAdmission, FileInventoryCursor,
+    DirectFileInventoryRequest, FileInventoryAdmission, FileInventoryCursor, FileInventoryRequest,
     FileInventoryObservation, FileInventoryReadAction, FileInventorySnapshotView,
     FileInventoryViewCursor,
 };
-use gents_protocol::session_hydration::HydrationRequest;
 
 /// Read one native snapshot using the authenticated client's actor. Owner
 /// observations use the same embedded transaction as the selected documents.
@@ -17,8 +16,8 @@ pub async fn read_direct_inventory(
     let node_did = request.node_did.trim();
     let session_id = request.session_id.trim();
     ensure!(
-        !node_did.is_empty() && !session_id.is_empty() && !request.peer_id.trim().is_empty(),
-        "file inventory requires exact node, session, and reader route"
+        !node_did.is_empty() && !session_id.is_empty(),
+        "file inventory requires exact node and session"
     );
     let session = access
         .transact_readonly("file_inventory.client_scope", |txn| {
@@ -33,9 +32,10 @@ pub async fn read_direct_inventory(
         return Ok(None);
     };
     let admission = FileInventoryAdmission {
-        request: HydrationRequest {
+        request: FileInventoryRequest {
             request_key: format!("direct:{session_id}"),
-            peer_id: request.peer_id.clone(),
+            // A direct read has no peer route.
+            peer_id: String::new(),
             requester_did: access
                 .actor_did()
                 .context("file inventory requires an authenticated reader")?,

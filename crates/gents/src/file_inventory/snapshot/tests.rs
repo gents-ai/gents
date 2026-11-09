@@ -104,7 +104,7 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
         .unwrap();
     let mut admission = FileInventoryAdmission {
         session_doc_id: session.doc_id,
-        request: HydrationRequest {
+        request: FileInventoryRequest {
             request_key: "inventory-source-unknown".into(),
             peer_id: "fixture-peer".into(),
             requester_did: requester.clone(),
@@ -240,7 +240,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
         .unwrap();
         let admission = FileInventoryAdmission {
             session_doc_id: session.doc_id,
-            request: HydrationRequest {
+            request: FileInventoryRequest {
                 request_key: name.into(),
                 peer_id: "fixture-peer".into(),
                 requester_did: scope.requester_did.clone(),
@@ -655,7 +655,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
                 .unwrap();
                 FileInventoryAdmission {
                     session_doc_id: session.doc_id,
-                    request: HydrationRequest {
+                    request: FileInventoryRequest {
                         request_key: format!("fork-inventory-{session_id}"),
                         peer_id: "fixture-peer".into(),
                         node_did: did,
@@ -1111,7 +1111,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
     .unwrap();
     let admission = FileInventoryAdmission {
         session_doc_id: session.doc_id,
-        request: HydrationRequest {
+        request: FileInventoryRequest {
             request_key: "inventory-terminal-chronology".into(),
             peer_id: "fixture-peer".into(),
             requester_did: requester,
