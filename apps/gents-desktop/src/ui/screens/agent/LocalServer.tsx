@@ -11,7 +11,13 @@ import {
   ManagedRuntimeAuthorityPicker,
   ManagedRuntimeAuthorityReview,
 } from "@/components/ManagedRuntimeAuthority";
-import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
+import {
+  authoritiesEqual,
+  authorityForSelection,
+  authorityRefusalText,
+  authorityRestartPlan,
+  type AuthorityRestartPlan,
+} from "@/lib/managedRuntimeAuthority";
 import {
   LOGIN_ITEMS_PATH,
   describeManagedServerWait,
@@ -105,6 +111,10 @@ export function LocalServer() {
     useState<ManagedServerAuthorityInput["toolCeiling"]>("readwrite");
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<Extract<
+    AuthorityRestartPlan,
+    { kind: "refused" }
+  > | null>(null);
   useEffect(() => actions.watchLocalServer(), [actions]);
   if (!actions.localServerOffers.status) return null;
   const act = async (label: string, run: () => Promise<unknown>) => {
@@ -135,24 +145,39 @@ export function LocalServer() {
     setToolCeiling(status.effectiveToolCeiling ?? "readwrite");
     setSelectedDirectory(status.effectiveToolRoot ?? home);
     setAuthorityError(null);
+    setRefusal(null);
     setEditingAuthority(true);
+  };
+  const keepCurrentFolder = () => {
+    const current = status?.effectiveToolRoot ?? null;
+    if (current) setSelectedDirectory(current);
+    else setToolCeiling("meta-only");
+    setAuthorityError(null);
+    setRefusal(null);
   };
   const restartWithAuthority = async () => {
     if (!authority || !actions.localServerOffers.restart) return;
+    const engineer = localNode ? engineerAgentOf(localNode) : undefined;
+    const plan = authorityRestartPlan({
+      rootChanged:
+        !!authority.toolRoot && authority.toolRoot !== status?.effectiveToolRoot,
+      nodeObserved: !!status?.nodeDid && !!localNode,
+      agentPresent: !!engineer,
+    });
+    if (plan.kind === "refused") {
+      setRefusal(plan);
+      setAuthorityError(authorityRefusalText(plan));
+      return;
+    }
     setBusy(true);
     setAuthorityError(null);
+    setRefusal(null);
     try {
-      if (authority.toolRoot && authority.toolRoot !== status?.effectiveToolRoot) {
-        const engineer = localNode ? engineerAgentOf(localNode) : undefined;
-        if (!status?.nodeDid || !engineer) {
-          throw new Error(
-            "The Engineer agent is not available on this runtime, so the workspace folder cannot be published.",
-          );
-        }
+      if (plan.kind === "publishThenRestart") {
         await actions.selectAgentWorkspaceRoot(
-          status.nodeDid,
-          engineer.agentDid,
-          authority.toolRoot,
+          status!.nodeDid!,
+          engineer!.agentDid,
+          authority.toolRoot!,
         );
       }
       let next = await actions.restartLocalServer(name, authority);
@@ -300,8 +325,14 @@ export function LocalServer() {
             home={home}
             toolCeiling={toolCeiling}
             toolRoot={selectedDirectory}
-            onCeilingChange={setToolCeiling}
-            onRootChange={setSelectedDirectory}
+            onCeilingChange={(ceiling) => {
+              setRefusal(null);
+              setToolCeiling(ceiling);
+            }}
+            onRootChange={(root) => {
+              setRefusal(null);
+              setSelectedDirectory(root);
+            }}
             validateRoot={actions.validateLocalServerRoot}
             error={authorityError}
             onError={setAuthorityError}
@@ -315,6 +346,11 @@ export function LocalServer() {
             >
               Cancel
             </Button>
+            {refusal?.nextActions.includes("keepCurrentFolder") ? (
+              <Button variant="outline" disabled={busy} onClick={keepCurrentFolder}>
+                Keep current folder
+              </Button>
+            ) : null}
             <Button
               variant="brand"
               disabled={busy || !authority}
