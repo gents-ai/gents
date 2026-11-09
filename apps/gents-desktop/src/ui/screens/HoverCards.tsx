@@ -12,7 +12,15 @@ import { cn } from "@gents/ui/lib/utils";
 import { href, navigate, type Route } from "@/lib/router";
 import { useApp } from "@/app/AppContext";
 import { agentReadiness } from "@/lib/agent-readiness";
-import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
+import {
+  access,
+  agentName,
+  bashAccess,
+  didTail,
+  fileAccess,
+  nameShared,
+  network,
+} from "./behavior";
 import { agentOf, backendOf } from "@/lib/agents";
 import { ProviderLogo } from "./ProviderLogo";
 import { useProviderUsage } from "../hooks/useProviders";
@@ -348,6 +356,7 @@ export function AgentHoverCard({
     : [];
   const summary = description || b.description || undefined;
   const tasks = deployment.tasks.filter((t) => t.agentDid === b.agentDid).length;
+  const sharesName = nameShared(b.agentDid, deployment);
   const settings: Route = {
     name: "agent",
     nodeDid: deployment.nodeDid,
@@ -364,8 +373,11 @@ export function AgentHoverCard({
         data-testid="agent-hover-card"
       >
         <CardTitle name={agentName(agentDid, deployment)} to={settings}>
-          {b.isDefault && (
-            <span className="shrink-0 text-xs text-muted-foreground">Default</span>
+          {(sharesName || b.isDefault) && (
+            <span className="flex shrink-0 gap-2 text-xs text-muted-foreground">
+              {sharesName && <span>{didTail(b.agentDid)}</span>}
+              {b.isDefault && <span>Default</span>}
+            </span>
           )}
         </CardTitle>
         {summary && (
