@@ -18,7 +18,6 @@ use crate::eval::optimization::policy::Decision;
 use crate::eval::optimization::proposer::ScriptedProposer;
 use crate::eval::optimization::subject::{baseline_text, materialize_candidate, materialize_pack};
 use crate::eval::optimization::target::JobTarget;
-use crate::eval::runner::freeze::tests::OWNER;
 use crate::eval::runner::ScriptedExecutor;
 
 #[tokio::test]
@@ -252,7 +251,9 @@ async fn assert_twin_after_cancel_inside(
         ),
         "{partial:#?}"
     );
-    let trials = load_trials(harness.access(), OWNER, &run_id).await.unwrap();
+    let trials = load_trials(harness.access(), harness.owner(), &run_id)
+        .await
+        .unwrap();
     assert_eq!(trials.len(), 1, "one trial launched, then abandoned");
     assert!(trials[0].completion.is_none());
 
@@ -314,7 +315,7 @@ async fn a_job_created_without_frozen_resumes_to_the_journal_of_its_twin() {
     let twin = harness.request("unfrozen-a", DEFINITION, budgets(1_000));
     let uninterrupted = settle(&harness, &twin, &executor, &proposer).await;
     assert_eq!(uninterrupted.state, JobState::ReadyToPromote);
-    let origin = load_job(harness.access(), OWNER, "unfrozen-a")
+    let origin = load_job(harness.access(), harness.owner(), "unfrozen-a")
         .await
         .unwrap()
         .unwrap()
@@ -323,20 +324,20 @@ async fn a_job_created_without_frozen_resumes_to_the_journal_of_its_twin() {
     let resumed = harness.request("unfrozen-b", DEFINITION, budgets(1_000));
     let source = materialize_pack(
         &resumed.baseline_pack,
-        OWNER,
+        harness.owner(),
         "monitor",
         &JobTarget::Context,
     )
     .unwrap();
     let copy = materialize_candidate(
         &source,
-        OWNER,
+        harness.owner(),
         &baseline_text(&source).unwrap(),
         &baseline_dir(&resumed.jobs_dir, "unfrozen-b"),
     )
     .unwrap();
     assert_eq!(copy.digest, origin.subject.pack_digest);
-    create_job(harness.access(), "unfrozen-b", OWNER, &origin)
+    create_job(harness.access(), "unfrozen-b", harness.owner(), &origin)
         .await
         .unwrap();
     assert!(journal(&harness, "unfrozen-b").await.is_empty());

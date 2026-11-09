@@ -10,4 +10,8 @@ assets?: Array<string> | null, documents?: Array<EvalFixtureDocument> | null, fi
 /**
  * App-collection SDL to install in the trial before its documents.
  */
-schemas?: Array<string> | null, };
+schemas?: Array<string> | null,
+/**
+ * Authored SDL for signing stage seeds; the trial does not install it.
+ */
+seed_schemas?: Array<string> | null, };

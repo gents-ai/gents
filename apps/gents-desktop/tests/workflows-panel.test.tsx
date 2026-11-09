@@ -11,7 +11,7 @@ const summary = (over: Partial<DynamicWorkflowSummary>): DynamicWorkflowSummary 
   handle: "rome_debate",
   runs: 3,
   last_run_at: 1_760_000_000_000,
-  agent_id: "agent-1",
+  agent_did: "agent-1",
   latest_address: "session-1:call-1",
   promoted_as: [],
   ...over,

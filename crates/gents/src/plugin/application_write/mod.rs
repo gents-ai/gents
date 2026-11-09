@@ -7,11 +7,10 @@ use std::collections::BTreeSet;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
+use gents_protocol::plugin::WRITE_TOOL_NAME;
 
 mod plugin_writes;
-pub use plugin_writes::apply_plugin_writes_in_txn;
-
-pub const WRITE_TOOL_NAME: &str = "write";
+pub use plugin_writes::{apply_plugin_writes_in_txn, apply_signed_plugin_writes_in_txn};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -220,44 +219,27 @@ impl WriteTool {
             filter,
             input,
         };
-        match &self.access {
-            ConfigAccess::Local(local) => {
-                let node = local.node();
-                if preview {
-                    ConfigAccess::transact_local_readonly(
-                        node,
-                        self.actor.clone(),
-                        "application_write",
-                        |txn| Box::pin(self.in_transaction(txn, args, plan.clone())),
-                    )
-                    .await
-                } else {
-                    ConfigAccess::transact_local_write(
-                        node,
-                        self.actor.clone(),
-                        "application_write",
-                        |txn| Box::pin(self.in_transaction(txn, args, plan.clone())),
-                    )
-                    .await
-                }
-            }
-            ConfigAccess::Graphql(_) => {
-                if preview {
-                    self.access
-                        .transact_readonly("application_write", |txn| {
-                            Box::pin(self.in_transaction(txn, args, plan.clone()))
-                        })
-                        .await
-                } else {
-                    self.access
-                        .transact_write("application_write", |txn| {
-                            Box::pin(self.in_transaction(txn, args, plan.clone()))
-                        })
-                        .await
-                }
-            }
+        if let Some(actor) = &self.actor {
+            ensure!(
+                self.access.actor_did().as_deref() == Some(actor.as_str()),
+                "application write actor mismatch"
+            );
+        }
+        if preview {
+            self.access
+                .transact_readonly("application_write", |txn| {
+                    Box::pin(self.in_transaction(txn, args, plan.clone()))
+                })
+                .await
+        } else {
+            self.access
+                .transact_write("application_write", |txn| {
+                    Box::pin(self.in_transaction(txn, args, plan.clone()))
+                })
+                .await
         }
     }
+
     async fn in_transaction(
         &self,
         txn: &ConfigApplyTxn<'_>,

@@ -16,7 +16,7 @@ pub(super) async fn ensure_session_document(
                 session_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
             }}
         }}"#
     );
@@ -32,15 +32,15 @@ pub(super) async fn ensure_session_document(
         .unwrap_or_default();
     if let Some(existing) = rows
         .iter()
-        .filter_map(|row| row.get("agent_id").and_then(Value::as_str))
+        .filter_map(|row| row.get("agent_did").and_then(Value::as_str))
         .map(str::trim)
         .find(|value| !value.is_empty())
     {
-        if existing != config.agent_id.as_ref() {
+        if existing != config.agent_did.as_ref() {
             anyhow::bail!(
                 "session {session_id:?} already exists with agent {existing:?}; the \
                  Grok shim is bound to {:?} and will not rewrite session identity",
-                config.agent_id
+                config.agent_did
             );
         }
     }
@@ -70,7 +70,7 @@ pub(super) async fn ensure_session_document(
         "session belongs to a different immutable requester_did"
     );
     let escaped_node_did = escape_graphql_string(&config.node_did);
-    let escaped_agent_id = escape_graphql_string(&config.agent_id);
+    let escaped_agent_did = escape_graphql_string(&config.agent_did);
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let escaped_created_at = escape_graphql_string(&created_at);
     if rows.is_empty() {
@@ -80,7 +80,7 @@ pub(super) async fn ensure_session_document(
                     session_id: "{escaped_session_id}",
                     node_did: "{escaped_node_did}",
                     requester_did: "{escaped_node_did}",
-                    agent_id: "{escaped_agent_id}",
+                    agent_did: "{escaped_agent_did}",
                     created_at: "{escaped_created_at}"
                 }}) {{ _docID }}
             }}"#

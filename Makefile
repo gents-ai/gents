@@ -274,7 +274,7 @@ live-cli:
 	$(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-agent:
-	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live -- --ignored --nocapture --test-threads=1
+	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-desktop-smoke:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:chat

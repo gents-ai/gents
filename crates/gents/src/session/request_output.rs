@@ -13,7 +13,7 @@ use gents_protocol::transcript::present_message;
 
 use crate::store::config_client::ConfigAccess;
 
-use super::canonical_rows::{
+use gents_protocol::output::rows::{
     decode_scoped_canonical_rows, decode_scoped_request_output_segments,
     decode_transcript_message_row, request_output_facts_query, OutputSegmentRow,
     TranscriptMessageRow,
@@ -87,6 +87,16 @@ fn native_presentation(message: &gents_protocol::message::Message) -> CanonicalP
         reasoning_markdown: presentation.reasoning_markdown,
         selected_source: None,
     }
+}
+
+/// Whether a canonical read failed only because its output is still
+/// arriving (an unseen header or an incomplete reconstruction), the state a
+/// reader may wait out.
+pub(crate) fn canonical_read_loading(error: &anyhow::Error) -> bool {
+    matches!(
+        classify_terminal_read_error(error),
+        Some(CanonicalRequestOutput::Loading)
+    )
 }
 
 fn classify_terminal_read_error(error: &anyhow::Error) -> Option<CanonicalRequestOutput> {

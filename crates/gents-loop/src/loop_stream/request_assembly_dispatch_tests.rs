@@ -44,6 +44,7 @@ fn claude_config_without_compactor(calibration: ContextCalibration) -> LoopConfi
         additional_params: None,
         structured_output: None,
         tool_choice: None,
+        configuration_guard: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),

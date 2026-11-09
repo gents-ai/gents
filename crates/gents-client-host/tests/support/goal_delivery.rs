@@ -1,6 +1,38 @@
 use super::*;
 use gents_protocol::goal_control::{SessionGoalControl, SessionGoalControlReceipt};
 
+pub(super) fn receipt_for(
+    data: &Value,
+    control: &Value,
+    command: &SessionGoalControl,
+) -> Result<SessionGoalControlReceipt> {
+    let command_doc_id = control["_docID"]
+        .as_str()
+        .context("Goal command document")?;
+    let receipts = data["data"]["AgentSessionGoalReceipt"]
+        .as_array()
+        .context("Goal receipts")?;
+    let matching = receipts
+        .iter()
+        .filter(|row| row["command_doc_id"] == command_doc_id)
+        .collect::<Vec<_>>();
+    ensure!(
+        matching.len() == 1,
+        "Goal command must have exactly one receipt"
+    );
+    ensure!(
+        matching[0]["command_id"] == command.command_id,
+        "Goal receipt command identity differs"
+    );
+    let receipt: SessionGoalControlReceipt = serde_json::from_str(
+        matching[0]["receipt_json"]
+            .as_str()
+            .context("signed Goal receipt")?,
+    )?;
+    receipt.validate_for(command)?;
+    Ok(receipt)
+}
+
 pub(super) const IMAGE_DATA: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
 
@@ -19,7 +51,7 @@ pub(super) async fn exercise(
     let session = uuid::Uuid::new_v4().to_string();
     let request = json!({
         "clientDid":client_did,"commandId":command,"nodeDid":node,"sessionId":session,
-        "sessionDocId":null,"expected":null,"agentId":agent,"cwd":null,
+        "sessionDocId":null,"expected":null,"agentDid":agent,"cwd":null,
         "action":{"kind":"create","objective":"Return the fixture response.","tokenBudget":"1000"},
         "attachments":[{"name":"goal.png","mediaType":"image/png","data":IMAGE_DATA}],
         "capturedContext":[{"kind":"file","source":"editor","capturedAt":chrono::Utc::now().to_rfc3339(),
@@ -36,10 +68,12 @@ pub(super) async fn exercise(
     *id += 1;
     let query = format!(
         r#"{{
-        AgentSessionGoalControl(filter:{{command_id:{{_eq:"{}"}}}}){{_docID intent_json receipt_json}}
+        AgentSessionGoalControl(filter:{{command_id:{{_eq:"{}"}}}}){{_docID intent_json}}
+        AgentSessionGoalReceipt(filter:{{command_id:{{_eq:"{}"}}}}){{command_doc_id command_id receipt_json}}
         AgentRequest(filter:{{node_did:{{_eq:"{}"}},session_id:{{_eq:"{}"}},purpose:{{_eq:"normal"}}}})
             {{_docID request_id session_id content input admission_signature created_at valid_until}}
     }}"#,
+        gents::store::graphql::escape_graphql_string(&command),
         gents::store::graphql::escape_graphql_string(&command),
         gents::store::graphql::escape_graphql_string(node),
         gents::store::graphql::escape_graphql_string(&session)
@@ -54,12 +88,11 @@ pub(super) async fn exercise(
             .as_str()
             .context("signed command")?,
     )?;
-    let receipt: SessionGoalControlReceipt = serde_json::from_str(
-        controls[0]["receipt_json"]
-            .as_str()
-            .context("signed receipt")?,
-    )?;
-    receipt.validate_for(&signed)?;
+    let receipt = receipt_for(&admitted, &controls[0], &signed)?;
+    ensure!(
+        signed.agent_did == agent,
+        "Goal command selected another agent"
+    );
     ensure!(
         identity
             .verify(
@@ -71,7 +104,11 @@ pub(super) async fn exercise(
     );
     ensure!(
         identity
-            .verify(node, &receipt.signing_payload()?, &receipt.signature)
+            .verify(
+                &signed.agent_did,
+                &receipt.signing_payload()?,
+                &receipt.signature
+            )
             .await?
     );
     let first = signed

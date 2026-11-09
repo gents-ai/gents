@@ -35,7 +35,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -89,7 +89,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -199,7 +199,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -257,7 +257,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",

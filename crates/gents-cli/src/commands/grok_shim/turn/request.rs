@@ -25,10 +25,7 @@ impl TurnManager {
         _prompt_id: &str,
     ) -> Result<gents_protocol::row::AgentRequestRow> {
         let content = prompt_text(request);
-        let graphql = gents::store::config_client::GraphqlEndpoint::as_principal(
-            self.config.graphql.clone(),
-            self.config.actor.to_string(),
-        );
+        let graphql = &self.config.graphql;
         let stable_request_id = uuid::Uuid::new_v4().to_string();
         let options = crate::RequestSubmitOptions::default();
         let submitted = if let Some(super::super::goals::GoalCommand::Create {
@@ -39,54 +36,59 @@ impl TurnManager {
             crate::create_goal_backed_agent_request_local(
                 &self.node,
                 self.config.actor.clone(),
-                &graphql,
+                graphql,
                 &self.config.node_did,
                 &objective,
                 token_budget,
                 &request.session_id,
-                &self.config.agent_id,
+                &self.config.agent_did,
                 stable_request_id.clone(),
                 options,
             )
             .await
         } else {
-            // The shim owns the destination node, so it binds the canonical
-            // Goal directly; the signed remote observation exists for callers
-            // that cannot read it, and lags a session the shim just opened.
             let mut options = options;
-            let (node_did, agent_id) = (&*self.config.node_did, &*self.config.agent_id);
+            let (node_did, agent_did) = (&*self.config.node_did, &*self.config.agent_did);
             let session_id = &*request.session_id;
+            let access =
+                gents::ConfigAccess::local_as(self.node.clone(), self.config.actor.clone());
+            let requester_did = gents::session::client_requester_scope(
+                &access,
+                node_did,
+                session_id,
+                self.config.actor.as_str(),
+            )
+            .await?;
             options.input = Some(
-                gents::ConfigAccess::local(self.node.clone())
+                access
                     .transact_readonly("grok.prompt.goal_input", |txn| {
                         Box::pin(gents::goal::prepare_goal_input_in_txn(
                             txn,
                             node_did,
                             session_id,
-                            agent_id,
-                            Some(node_did),
+                            agent_did,
+                            Some(&requester_did),
                             Default::default(),
                         ))
                     })
                     .await?,
             );
             let prepared = crate::request_helpers::prepare_agent_request_with_input(
-                &graphql,
+                graphql,
                 &self.config.node_did,
                 &content,
                 Some(&request.session_id),
-                Some(&self.config.agent_id),
+                Some(&self.config.agent_did),
                 Some(stable_request_id.clone()),
                 options,
             )
             .await?;
-            let result = crate::request_helpers::submit_prepared_agent_request_committed(
-                &graphql, &prepared,
-            )
-            .await;
+            let result =
+                crate::request_helpers::submit_prepared_agent_request_committed(graphql, &prepared)
+                    .await;
             if result.is_err() {
                 if let Ok(Some(row)) =
-                    crate::request_helpers::matching_prepared_receipt(&graphql, &prepared.create)
+                    crate::request_helpers::matching_prepared_receipt(graphql, &prepared.create)
                         .await
                 {
                     self.interrupt_submitted(&row).await;
@@ -107,6 +109,7 @@ impl TurnManager {
         if row.is_err() {
             if let Err(error) = gents::interrupt_request_by_doc_id(
                 &self.node,
+                self.config.agent_signer.as_ref(),
                 &submitted.request_doc_id,
                 &submitted.node_did,
                 submitted.requester_did.as_deref(),
@@ -132,7 +135,7 @@ impl TurnManager {
             .unwrap_or_default();
         let query = format!(
             "{{AgentRequest(filter: {{{physical_filter} {}, request_id: {{_eq: \"{}\"}}}},limit:2) {{{}}}}}",
-            gents::session::public_request_filter(&gents::session::session_scope_filter(agent, session, requester)),
+            gents::session::public_request_filter(&gents_protocol::session::session_scope_filter(agent, session, requester)),
             escape_graphql_string(request),
             gents::SIGNED_REQUEST_FIELDS
         );
@@ -326,7 +329,7 @@ impl TurnManager {
             .doc_id
             .as_deref()
             .context("terminal projection physical request missing")?;
-        let scope = gents::session::session_scope_filter(
+        let scope = gents_protocol::session::session_scope_filter(
             request
                 .node_did
                 .as_deref()

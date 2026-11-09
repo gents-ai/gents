@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::escape_graphql_string;
@@ -364,6 +364,36 @@ pub enum EventGroupCount {
 }
 
 impl EventSource {
+    pub(crate) fn group_projection(&self) -> (Option<usize>, Option<String>, Option<u64>, usize) {
+        let Some(group) = self.group.as_ref() else {
+            return (None, None, None, 1);
+        };
+        let expected_count = match group.expected_count {
+            Some(EventGroupCount::Fixed(count)) => usize::try_from(count).ok(),
+            Some(EventGroupCount::SourceField { .. }) => None,
+            None => None,
+        };
+        let expected_count_field = match &group.expected_count {
+            Some(EventGroupCount::Fixed(_)) => None,
+            Some(EventGroupCount::SourceField { source_field }) => Some(source_field.clone()),
+            None => None,
+        };
+        let group_timeout_secs = group
+            .timeout_secs
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0);
+        let group_min_count = group
+            .min_count
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(1);
+        (
+            expected_count,
+            expected_count_field,
+            group_timeout_secs,
+            group_min_count,
+        )
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         crate::store::graphql::validate_collection_identifier(&self.source_collection)?;
         anyhow::ensure!(
@@ -388,7 +418,7 @@ impl EventSource {
     }
 
     pub fn validate_group(&self) -> anyhow::Result<()> {
-        use crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
+        use super::automation::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let correlation_field = self
             .correlation_field
             .as_deref()
@@ -475,4 +505,8 @@ impl EventSource {
         }
         Ok(())
     }
+}
+
+pub(crate) fn outcome_source_allowed(source_collection: &str, emit_outcome: bool) -> bool {
+    source_collection != "FireOutcome" || !emit_outcome
 }

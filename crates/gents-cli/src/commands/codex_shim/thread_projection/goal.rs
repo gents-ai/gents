@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use gents_codex_protocol as codex;
 
 use gents::goal::{
-    delete_goals_for_session, load_canonical_goal, refresh_goal_usage, set_goal, GoalDocument,
-    GoalStatus,
+    delete_goals_for_session_from_access, load_canonical_goal_in_txn, session_token_usage,
+    set_goal_from_access, GoalDocument, GoalStatus,
 };
 
 use crate::commands::codex_shim::ShimState;
@@ -13,6 +13,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
     state: &ShimState,
     params: &codex::ThreadGoalSetParams,
 ) -> Result<Option<codex::ThreadGoal>> {
+    let actor = client_actor(state)?;
     if super::storage::load_scoped_session(state, &params.thread_id)
         .await?
         .is_none()
@@ -20,53 +21,89 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
         return Ok(None);
     }
     let status = params.status.map(codex_status_to_goal_status);
-    let goal = set_goal(
-        &state.node,
+    let goal = set_goal_from_access(
+        &gents::ConfigAccess::Graphql(state.graphql.clone()),
         state.node_did.as_ref(),
         &params.thread_id,
         params.objective.as_deref(),
         status,
         params.token_budget,
+        None,
     )
     .await?;
-    enrich(state, goal).await
+    enrich(state, &actor, goal).await
 }
 
 pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<codex::ThreadGoal>> {
+    let actor = client_actor(state)?;
     if super::storage::load_scoped_session(state, thread_id)
         .await?
         .is_none()
     {
         return Ok(None);
     }
-    let Some(goal) = load_canonical_goal(&state.node, state.node_did.as_ref(), thread_id).await?
-    else {
+    let Some(goal) = load_goal(state, thread_id).await? else {
         return Ok(None);
     };
-    enrich(state, goal).await
+    enrich(state, &actor, goal).await
 }
 
 pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<bool> {
+    client_actor(state)?;
     if super::storage::load_scoped_session(state, thread_id)
         .await?
         .is_none()
     {
         return Ok(false);
     }
-    Ok(delete_goals_for_session(&state.node, state.node_did.as_ref(), thread_id).await? > 0)
+    let access = gents::ConfigAccess::Graphql(state.graphql.clone());
+    Ok(
+        delete_goals_for_session_from_access(&access, state.node_did.as_ref(), thread_id).await?
+            > 0,
+    )
 }
 
-async fn enrich(state: &ShimState, mut goal: GoalDocument) -> Result<Option<codex::ThreadGoal>> {
-    refresh_goal_usage(&state.node, &goal).await?;
-    goal = load_canonical_goal(&state.node, state.node_did.as_ref(), &goal.session_id)
+fn client_actor(state: &ShimState) -> Result<identity::Did> {
+    let actor = gents::ConfigAccess::Graphql(state.graphql.clone())
+        .actor_did()
+        .context("Codex goal access requires an authenticated client identity")?;
+    anyhow::ensure!(
+        actor != state.node_did.as_ref(),
+        "Codex goal access requires a client identity, not the node identity"
+    );
+    identity::Did::new(actor).context("invalid Codex client identity")
+}
+
+/// The session's canonical Goal as the operator reads it.
+async fn load_goal(state: &ShimState, session_id: &str) -> Result<Option<GoalDocument>> {
+    let node_did = state.node_did.as_ref();
+    state
+        .reader
+        .transact_readonly("codex.goal.read", |txn| {
+            Box::pin(async move { load_canonical_goal_in_txn(txn, node_did, session_id).await })
+        })
+        .await
+}
+
+/// The operator's client holds no authority to rewrite the Goal's usage
+/// fields, so it presents the session's charged usage read as that operator.
+async fn enrich(
+    state: &ShimState,
+    actor: &identity::Did,
+    mut goal: GoalDocument,
+) -> Result<Option<codex::ThreadGoal>> {
+    goal = load_goal(state, &goal.session_id).await?.unwrap_or(goal);
+    let charged = session_token_usage(&state.node, actor, &goal.node_did, &goal.session_id)
         .await?
-        .unwrap_or(goal);
+        .saturating_sub(goal.token_usage_baseline.unwrap_or_default().max(0))
+        .max(0);
+    goal.tokens_used = Some(goal.tokens_used.unwrap_or_default().max(charged));
     let snapshot = gents::goal::snapshot(&goal, Utc::now());
     let Some(status) = goal_status_to_codex(&snapshot.status)? else {
         return Ok(None);

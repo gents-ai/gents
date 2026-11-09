@@ -18,7 +18,7 @@ use crate::Collection;
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct FailedCall {
     pub(crate) backend_id: Option<String>,
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
     pub(crate) call_kind: Option<String>,
     pub(crate) failure_reason: Option<String>,
     pub(crate) queued_at: Option<String>,
@@ -64,11 +64,11 @@ pub(crate) fn blocked_turn_from(
     ) {
         return None;
     }
-    let agent_id = call
-        .and_then(|call| call.agent_id.as_deref())
-        .or(request.agent_id.as_deref())
+    let agent_did = call
+        .and_then(|call| call.agent_did.as_deref())
+        .or(request.agent_did.as_deref())
         .unwrap_or_default();
-    let profiles = references.agent_profiles(agent_id);
+    let profiles = references.agent_profiles(agent_did);
     let stopped_by_call = call.and_then(|call| {
         let text = call.failure_reason.as_deref()?;
         let (reason, resets_at) = match classify_provider_limit(text, now) {
@@ -83,7 +83,7 @@ pub(crate) fn blocked_turn_from(
             },
         };
         let backend_id = call.backend_id.as_deref();
-        let profile = served_profile(references, agent_id, call);
+        let profile = served_profile(references, agent_did, call);
         let started_at = call
             .started_at
             .as_deref()
@@ -146,10 +146,10 @@ pub(crate) fn blocked_turn_from(
 
 pub(crate) fn served_profile(
     references: &ConfigReferences,
-    agent_id: &str,
+    agent_did: &str,
     call: &FailedCall,
 ) -> Option<String> {
-    let profiles = references.agent_profiles(agent_id);
+    let profiles = references.agent_profiles(agent_did);
     let served = if call.call_kind.as_deref() == Some("compaction") {
         profiles.last()
     } else {
@@ -315,7 +315,7 @@ pub(crate) async fn last_failed_call_in_txn(
                 filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _eq: "{request_id}" }}, call_state: {{ _eq: "failed" }} }},
                 order: [{{ ended_at: DESC }}, {{ attempt: DESC }}],
                 limit: 1
-            ) {{ backend_id agent_id call_kind failure_reason queued_at started_at }}
+            ) {{ backend_id agent_did call_kind failure_reason queued_at started_at }}
         }}"#
     );
     let response = txn.execute(&query).await?;

@@ -9,7 +9,7 @@ pub(super) use canonical_recovery::request_segments;
 
 #[cfg(test)]
 pub(crate) use canonical_recovery::{
-    recover_expired_generation_with_facts, RecoveryResult, RecoverySelectionChoice,
+    recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
     RecoverySelectionRejected,
 };
 
@@ -20,15 +20,16 @@ struct ActiveRequestRecoveryReport {
 }
 
 impl RequestLifecycle {
-    pub async fn recover_all(
+    pub async fn recover_all_with_identities(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
+        identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
     ) -> Result<RecoveryReport> {
-        let active = recover_active_requests(node, node_did).await?;
-        crate::triggers::engine::durable::recover_outcomes(node, node_did).await?;
-        let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, node_did)
-            .await?
-            .redriven;
+        let active = recover_active_requests(node, node_did, identities).await?;
+        let background_wakes_redriven =
+            Self::redrive_failed_background_wakeups_with_identities(node, node_did, identities)
+                .await?
+                .redriven;
         Ok(RecoveryReport {
             responses_recovered: active.responses_recovered,
             requests_recovered: active.requests.repaired,
@@ -36,213 +37,38 @@ impl RequestLifecycle {
         })
     }
 
-    /// Owner-scoped terminal-convergence re-drive (#664).
-    ///
-    /// Under `agent-target-host` replication a routed `AgentRequest` is replicated
-    /// to its `requester_did` peer. Safety already holds (the watcher
-    /// `node_did` filter never lets that peer claim a foreign replica), but
-    /// liveness depends on the terminal head reaching that peer. DefraDB
-    /// reports whether a replicator acknowledged a document's current heads,
-    /// so a request that every replicator carrying it acknowledged is retired
-    /// without re-assertion. Local-only requests, whose requester is
-    /// absent or the owner itself, are excluded: no peer acts on their request
-    /// state (#683).
-    ///
-    /// DefraDB authors no block for an unchanged field, so a re-assert is a
-    /// write of the attempts counter alone. Its composite block has the
-    /// terminal block as a DAG ancestor, so pushing it re-delivers the terminal
-    /// state to a peer that missed it.
-    ///
-    /// BOUNDED. An unacknowledged peer may stay offline indefinitely, so each
-    /// re-assert atomically advances the persisted `terminal_redrive_attempts`
-    /// counter, and eligibility stops at [`TERMINAL_REDRIVE_CAP`] across process
-    /// restarts. An acknowledged request is retired by writing the cap, so the
-    /// candidate query never rescans it. Candidate ordering is
-    /// `terminalized_at ASC`, not request creation time; exhausted rows leave the
-    /// query, so bounded batches eventually cover an arbitrarily old request
-    /// that terminalized late. A peer unavailable through the whole budget is
-    /// repaired by a bounded full replicator replay when the pairing reconnects
-    /// without acknowledging; that path authors no request delta.
-    ///
-    /// `node_did` MUST be the runtime's own DID: only the owner re-asserts its
-    /// own documents; peers stay passive (a peer-authored delta to a foreign doc
-    /// would fork the CRDT, not converge it). Only the attempts counter is
-    /// written.
-    pub async fn redrive_terminal_convergence(
+    pub async fn repair_terminal_requests_with_identities(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
-    ) -> Result<TerminalRedriveReport> {
-        let escaped_node_did = escape_graphql_string(node_did);
-        let terminal_states = RequestLifecycleState::terminal_graphql_list();
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        node_did: {{ _eq: "{escaped_node_did}" }},
-                        _and: [
-                            {{ requester_did: {{ _neq: null }} }},
-                            {{ requester_did: {{ _neq: "{escaped_node_did}" }} }}
-                        ],
-                        lifecycle_state: {{ _in: {terminal_states} }},
-                        terminal_redrive_attempts: {{ _lt: {cap} }}
-                    }},
-                    order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}],
-                    limit: {limit}
-                ) {{
-                    _docID
-                    request_id
-                    requester_did
-                    lifecycle_state
-                    terminal_redrive_attempts
-                }}
-            }}"#,
-            limit = TERMINAL_REDRIVE_BATCH_LIMIT,
-            cap = TERMINAL_REDRIVE_CAP,
-        );
-
-        let resp = crate::store::graphql::graphql_with_transaction_retry(
-            node,
-            &query,
-            "querying terminal requests to re-drive",
-        )
-        .await?;
-
-        let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
-
-        let mut candidates: Vec<(String, String, String, RequestLifecycleState, u32)> = Vec::new();
-        for row in rows {
-            let doc_id = row
-                .doc_id
-                .context("terminal AgentRequest is missing _docID")?;
-            let requester_did = row
-                .requester_did
-                .context("routed AgentRequest is missing requester_did")?;
-            let lifecycle_state = row
-                .lifecycle_state
-                .context("terminal AgentRequest is missing lifecycle_state")?;
-            let attempts = row
-                .terminal_redrive_attempts
-                .context("terminal AgentRequest is missing terminal_redrive_attempts")
-                .and_then(|attempts| {
-                    u32::try_from(attempts)
-                        .context("terminal AgentRequest terminal_redrive_attempts must fit in u32")
-                })?;
-            candidates.push((
-                doc_id,
-                row.request_id,
-                requester_did,
-                lifecycle_state,
-                attempts,
-            ));
-        }
-
-        let acknowledged = if candidates.is_empty() || node.p2p_arc().is_none() {
-            std::collections::BTreeSet::new()
-        } else {
-            let documents = candidates
-                .iter()
-                .map(|(doc_id, _, requester_did, _, _)| (doc_id.clone(), requester_did.clone()))
-                .collect::<Vec<_>>();
-            crate::runtime::agent::p2p_reconcile::EmbeddedRemoteP2pAdmin::new(std::sync::Arc::clone(node))
-                .requester_acknowledged("AgentRequest", &documents)
-                .await
-                .unwrap_or_else(|error| {
-                    tracing::debug!(%error, "replication acknowledgement unavailable; re-driving every terminal candidate");
-                    std::collections::BTreeSet::new()
-                })
-        };
-
-        let mut report = TerminalRedriveReport {
-            scanned: candidates.len(),
-            ..Default::default()
-        };
-        for (doc_id, request_id, _, lifecycle_state, attempts) in &candidates {
-            let is_acknowledged = acknowledged.contains(doc_id);
-            let next_attempts = if is_acknowledged {
-                TERMINAL_REDRIVE_CAP
-            } else {
-                attempts.saturating_add(1)
-            };
-            let escaped_doc_id = escape_graphql_string(doc_id);
-            let escaped_lifecycle_state = escape_graphql_string(lifecycle_state.as_str());
-            let mutation = format!(
-                r#"mutation {{
-                    update_AgentRequest(
-                        docID: "{escaped_doc_id}", filter: {{
-                            _docID: {{ _eq: "{escaped_doc_id}" }},
-                            node_did: {{ _eq: "{escaped_node_did}" }},
-                            _and: [
-                                {{ requester_did: {{ _neq: null }} }},
-                                {{ requester_did: {{ _neq: "{escaped_node_did}" }} }}
-                            ],
-                            lifecycle_state: {{ _eq: "{escaped_lifecycle_state}" }},
-                            terminal_redrive_attempts: {{ _eq: {attempts} }}
-                        }},
-                        input: {{ terminal_redrive_attempts: {next_attempts} }}
-                    ) {{ _docID }}
-                }}"#,
-            );
-
-            let resp = crate::store::config_client::ConfigAccess::write_local(
-                node,
-                "lifecycle.redrive_terminal",
-                &mutation,
-            )
-            .await;
-            let resp = match resp {
-                Ok(resp) => resp,
-                Err(error) => {
-                    tracing::warn!(doc_id = %doc_id, request_id = %request_id, lifecycle_state = %lifecycle_state, %error, "failed to re-drive terminal request convergence");
-                    report.failed += 1;
-                    continue;
-                }
-            };
-
-            let updated = resp
-                .pointer("/data/update_AgentRequest")
-                .is_some_and(response_has_documents);
-            if !updated {
-                continue;
-            }
-            if is_acknowledged {
-                report.acknowledged += 1;
-                continue;
-            }
-            report.reasserted += 1;
-            tracing::debug!(
-                doc_id = %doc_id,
-                request_id = %request_id,
-                lifecycle_state = %lifecycle_state,
-                terminal_redrive_attempts = next_attempts,
-                "re-asserted terminal request state to converge replicas"
-            );
-        }
-
-        Ok(report)
-    }
-
-    pub async fn repair_terminal_requests(
-        node: &std::sync::Arc<EmbeddedNode>,
-        node_did: &str,
+        identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
     ) -> Result<TerminalRepairReport> {
-        Ok(recover_active_requests(node, node_did).await?.requests)
+        Ok(recover_active_requests(node, node_did, identities)
+            .await?
+            .requests)
     }
 }
 
 async fn recover_active_requests(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
+    identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
 ) -> Result<ActiveRequestRecoveryReport> {
+    let accesses = configured_agent_accesses(node, node_did, identities)?;
     let active_states = RequestLifecycleState::graphql_list([
         RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
     ]);
     let escaped_node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
+    let mut rows = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (actor, access) in &accesses {
+        let escaped_agent_did = escape_graphql_string(actor);
+        let query = format!(
+            r#"{{
             AgentRequest(
                 filter: {{
                     node_did: {{ _eq: "{escaped_node_did}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     lifecycle_state: {{ _in: {active_states} }}
                 }}
             ) {{
@@ -250,21 +76,28 @@ async fn recover_active_requests(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 interrupt_requested_at
                 execution_generation
                 execution_lease_expires_at
             }}
         }}"#
-    );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "querying active requests for recovery",
-    )
-    .await?;
-    let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
+        );
+        let response = access.execute(&query).await?;
+        let agent_rows: Vec<AgentRequestRow> =
+            serde_json::from_value(response["data"]["AgentRequest"].clone())
+                .context("decoding active requests for recovery")?;
+        for row in agent_rows {
+            let doc_id = row
+                .doc_id
+                .as_ref()
+                .context("active AgentRequest is missing _docID")?;
+            if seen.insert(doc_id.clone()) {
+                rows.push(row);
+            }
+        }
+    }
     let now = chrono::Utc::now();
     let mut report = ActiveRequestRecoveryReport {
         requests: TerminalRepairReport {
@@ -346,8 +179,15 @@ async fn recover_active_requests(
             continue;
         }
 
+        let agent_did = row
+            .agent_did
+            .as_deref()
+            .context("request is missing agent DID")?;
+        let access = accesses
+            .get(agent_did)
+            .context("request agent signer unavailable")?;
         match canonical_recovery::recover_expired_generation(
-            node,
+            access,
             row,
             expected_generation,
             expected_expiry,
@@ -365,8 +205,8 @@ async fn recover_active_requests(
                 // Failed recovery rolled back. Revoke only the same observed
                 // lease tuple; a renewal/recovery winner makes this lose. This
                 // metadata-only escape never repairs or chooses payload twins.
-                match super::execution_lease::revoke_execution_preserving_output(
-                    node,
+                match super::execution_lease::revoke_execution_preserving_output_with_access(
+                    access,
                     row,
                     super::RequestTerminalOutcome::Dead,
                     &format!("canonical output integrity failure: {error}"),
@@ -424,4 +264,41 @@ fn definitive_output_corruption(error: &anyhow::Error) -> bool {
                 | ReconstructionError::InvalidStructure { .. }
         )
     )
+}
+
+/// Resolve only identities provided by the validated runtime snapshot.
+pub(super) fn configured_agent_accesses(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
+) -> Result<std::collections::BTreeMap<String, crate::ConfigAccess>> {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "recovery node identity mismatch"
+    );
+    let mut accesses = std::collections::BTreeMap::new();
+    for identity in identities {
+        let did = identity.did();
+        anyhow::ensure!(
+            did != node_did,
+            "runtime identity cannot recover agent work"
+        );
+        let actor = identity::Did::new(did)?;
+        let access = match crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            actor,
+            identity.as_ref(),
+        ) {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(agent_did = %did, %error, "agent recovery signing capability unavailable");
+                continue;
+            }
+        };
+        anyhow::ensure!(
+            accesses.insert(did.to_owned(), access).is_none(),
+            "duplicate recovery agent identity"
+        );
+    }
+    Ok(accesses)
 }

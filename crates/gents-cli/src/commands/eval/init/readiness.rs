@@ -68,17 +68,17 @@ mod tests {
     const AUTHOR: &str = "eval-author";
 
     fn observation(router_generation: u64, assigned: bool, ready: bool) -> Value {
-        let mut agents = vec![json!({"agent_id": "default", "state": "ready", "reason": null})];
+        let mut agents = vec![json!({"agent_did": "default", "state": "ready", "reason": null})];
         if assigned {
             agents.push(
-                json!({"agent_id": AUTHOR, "state": if ready {"ready"} else {"unavailable"},
+                json!({"agent_did": AUTHOR, "state": if ready {"ready"} else {"unavailable"},
                 "reason": if ready {Value::Null} else {json!("backend_not_configured")}}),
             );
         }
         json!({"data": {"NodeReadiness": [{"node_did": OWNER, "updated_at": "2026-10-16T00:00:00Z",
             "snapshot_json": json!({"format_version": gents_protocol::row::NODE_READINESS_FORMAT_VERSION,
                 "process_state": "ready", "active_generation": 2, "router_generation": router_generation,
-                "default_agent_id": "default", "agents": agents}).to_string()}]}})
+                "default_agent_did": "default", "agents": agents}).to_string()}]}})
     }
 
     async fn server(

@@ -11,6 +11,8 @@ use std::time::Duration;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
+pub mod homes;
+
 pub struct Attachment {
     child: Child,
     input: Option<FramedWrite<ChildStdin, LengthDelimitedCodec>>,
@@ -44,10 +46,12 @@ impl Attachment {
     }
 
     pub async fn start_with_binary(paths: &DesktopPaths, binary: &Path) -> Self {
+        let homes = homes::ProcessHomes::under(paths.root().parent().expect("client home parent"));
         let mut child = Command::new(binary)
             .arg("--stdio")
             .arg("--home")
             .arg(paths.root())
+            .envs(homes.env())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

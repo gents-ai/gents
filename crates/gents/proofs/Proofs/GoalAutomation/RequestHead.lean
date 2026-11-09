@@ -41,7 +41,12 @@ def inScope (s : Scope) (r : Row) : Bool :=
 /-- Cheap qualification/binding checks precede cryptographic validation. The
 shared Goal physical-edge helper checks original parent/child signatures,
 owner/session, exact physical parent pair, typed signed Goal continuation
-facts and original deterministic request/retry identity. Historical omission
+facts and original deterministic request/retry identity. The child receipt may
+be selected-agent runtime local-control or an explicit Client resume. A Client
+signer is its acting user; requester provenance, selected agent and physical
+parent remain bound to the same session. The receipt does not grant data access;
+native document ACP owns that decision (policy wiring remains #3485).
+Historical omission
 of inherited source fields does not erase a signed physical edge. Fresh
 typed-resume receipt checks remain stricter; this ordering projection does
 not authorize publication. -/

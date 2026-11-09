@@ -124,6 +124,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let config = BridgeConfig {
             home: HomePolicy::FixedRoot(temporary.path().join("desktop")),
+            bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
             ..Default::default()
         };
         let app = tauri::test::mock_builder()
@@ -218,6 +219,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let config = BridgeConfig {
             home: HomePolicy::FixedRoot(temporary.path().join("desktop")),
+            bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
             ..Default::default()
         };
         let mut context = tauri::test::mock_context(tauri::test::noop_assets());

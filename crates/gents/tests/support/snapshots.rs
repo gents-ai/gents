@@ -1,15 +1,80 @@
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
-use super::{first_optional_row, first_row};
+/// Snapshot readers run as a named actor: ACP-governed rows are visible only to
+/// their related actors. The raw node reader remains for unpoliced collections.
+pub trait SnapshotReader {
+    fn read_data(&self, query: &str) -> impl std::future::Future<Output = serde_json::Value>;
+}
+
+impl SnapshotReader for EmbeddedNode {
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        let response = self.execute(query).await;
+        assert!(
+            !response.has_errors(),
+            "snapshot query failed: {:?}",
+            response.errors
+        );
+        response.data.unwrap_or_default()
+    }
+}
+
+impl<T> SnapshotReader for std::sync::Arc<T>
+where
+    T: SnapshotReader + ?Sized,
+{
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        self.as_ref().read_data(query).await
+    }
+}
+
+impl SnapshotReader for gents::ConfigAccess {
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        let mut response = self.execute(query).await.expect("snapshot query as actor");
+        response["data"].take()
+    }
+}
+
+impl SnapshotReader for super::agent_requests::RequestActors {
+    async fn read_data(&self, query: &str) -> serde_json::Value {
+        self.agent_access.read_data(query).await
+    }
+}
+
+fn data_rows(data: &serde_json::Value, key: &str) -> Vec<serde_json::Value> {
+    data.get(key)
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn first_data_row<T>(data: &serde_json::Value, key: &str) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
+    let row = data_rows(data, key)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("missing row for {key}"));
+    serde_json::from_value(row).unwrap_or_else(|err| panic!("decode {key} failed: {err}"))
+}
+
+fn first_optional_data_row<T>(data: &serde_json::Value, key: &str) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    data_rows(data, key).into_iter().next().map(|row| {
+        serde_json::from_value(row).unwrap_or_else(|err| panic!("decode {key} failed: {err}"))
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
     pub lifecycle_state: RequestLifecycleState,
-    pub agent_id: String,
+    pub agent_did: String,
     pub backend_id: String,
     pub execution_origin: String,
     pub retry_parent_request: String,
@@ -28,7 +93,7 @@ impl From<AgentRequestRow> for RequestSnapshot {
             lifecycle_state: row
                 .lifecycle_state
                 .expect("request snapshot is missing lifecycle_state"),
-            agent_id: row.agent_id.unwrap_or_default(),
+            agent_did: row.agent_did.unwrap_or_default(),
             backend_id: row.backend_id.unwrap_or_default(),
             execution_origin: row.execution_origin.unwrap_or_default(),
             retry_parent_request: row.retry_parent_request.unwrap_or_default(),
@@ -63,7 +128,7 @@ pub struct RuntimeSnapshot {
     pub reconcile_phase: String,
     pub active_generation: i64,
     pub router_generation: i64,
-    pub default_agent_id: String,
+    pub default_agent_did: String,
     pub last_reconcile_result: String,
     pub last_reconcile_error: String,
 }
@@ -83,7 +148,10 @@ struct RuntimeDiagnosticSnapshot {
     last_reconcile_error: String,
 }
 
-pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> RequestSnapshot {
+pub async fn fetch_request_snapshot<R>(node: &R, doc_id: &str) -> RequestSnapshot
+where
+    R: SnapshotReader + ?Sized,
+{
     let doc_id = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -93,7 +161,7 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
             ) {{
                 request_id
                 lifecycle_state
-                agent_id
+                agent_did
                 backend_id
                 execution_origin
                 retry_parent_request
@@ -107,14 +175,14 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    first_row::<AgentRequestRow>(&resp, "AgentRequest").into()
+    let data = node.read_data(&query).await;
+    first_data_row::<AgentRequestRow>(&data, "AgentRequest").into()
 }
 
-pub async fn fetch_request_lineage_snapshot(
-    node: &EmbeddedNode,
-    doc_id: &str,
-) -> RequestLineageSnapshot {
+pub async fn fetch_request_lineage_snapshot<R>(node: &R, doc_id: &str) -> RequestLineageSnapshot
+where
+    R: SnapshotReader + ?Sized,
+{
     let doc_id = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -128,19 +196,22 @@ pub async fn fetch_request_lineage_snapshot(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    let row = first_row::<AgentRequestRow>(&resp, "AgentRequest");
+    let data = node.read_data(&query).await;
+    let row = first_data_row::<AgentRequestRow>(&data, "AgentRequest");
     RequestLineageSnapshot {
         caused_by_trigger_id: row.caused_by_trigger_id,
         caused_by_trigger_kind: row.caused_by_trigger_kind,
     }
 }
 
-pub async fn fetch_request_lineage_snapshot_by_tuple(
-    node: &EmbeddedNode,
+pub async fn fetch_request_lineage_snapshot_by_tuple<R>(
+    node: &R,
     trigger_id: &str,
     trigger_kind: &str,
-) -> Option<RequestLineageSnapshot> {
+) -> Option<RequestLineageSnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let trigger_id = escape_graphql_string(trigger_id);
     let trigger_kind = escape_graphql_string(trigger_kind);
     let query = format!(
@@ -160,10 +231,12 @@ pub async fn fetch_request_lineage_snapshot_by_tuple(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    first_optional_row::<AgentRequestRow>(&resp, "AgentRequest").map(|row| RequestLineageSnapshot {
-        caused_by_trigger_id: row.caused_by_trigger_id,
-        caused_by_trigger_kind: row.caused_by_trigger_kind,
+    let data = node.read_data(&query).await;
+    first_optional_data_row::<AgentRequestRow>(&data, "AgentRequest").map(|row| {
+        RequestLineageSnapshot {
+            caused_by_trigger_id: row.caused_by_trigger_id,
+            caused_by_trigger_kind: row.caused_by_trigger_kind,
+        }
     })
 }
 
@@ -182,7 +255,10 @@ impl From<AgentRequestRow> for RequestSnapshotRaw {
     }
 }
 
-pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> RequestSnapshotRaw {
+pub async fn fetch_request_snapshot_raw<R>(node: &R, doc_id: &str) -> RequestSnapshotRaw
+where
+    R: SnapshotReader + ?Sized,
+{
     let doc_id = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -196,23 +272,26 @@ pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> Re
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    first_row::<AgentRequestRow>(&resp, "AgentRequest").into()
+    let data = node.read_data(&query).await;
+    first_data_row::<AgentRequestRow>(&data, "AgentRequest").into()
 }
 
 /// Fixture-only lookup: callers seed unique session labels; ambiguity fails
 /// instead of choosing a row. This is not a runtime scope/authorization
 /// selector.
-pub async fn fetch_session_snapshot(
-    node: &EmbeddedNode,
+pub async fn fetch_session_snapshot<R>(
+    node: &R,
     session_id: &str,
-) -> Option<gents_protocol::session::AgentSession> {
+) -> Option<gents_protocol::session::AgentSession>
+where
+    R: SnapshotReader + ?Sized,
+{
     let session_id = escape_graphql_string(session_id);
-    let response = node
-        .execute(&format!(
+    let data = node
+        .read_data(&format!(
             r#"{{
         AgentSession(filter: {{session_id: {{_eq: "{session_id}"}}}}, limit: 2) {{
-            session_id node_did requester_did agent_id created_at closed_at tags
+            session_id node_did requester_did agent_did created_at closed_at tags
             title
             provenance
             observation
@@ -220,17 +299,7 @@ pub async fn fetch_session_snapshot(
     }}"#
         ))
         .await;
-    assert!(
-        !response.has_errors(),
-        "canonical session query: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentSession"))
-        .and_then(|v| v.as_array())
-        .expect("session rows");
+    let rows = data_rows(&data, "AgentSession");
     assert!(
         rows.len() <= 1,
         "fixture expected one session label, found {}",
@@ -240,49 +309,60 @@ pub async fn fetch_session_snapshot(
         .map(|row| serde_json::from_value(row.clone()).expect("canonical AgentSession"))
 }
 
-pub async fn fetch_runtime_snapshot(
-    node: &EmbeddedNode,
-    node_did: &str,
-) -> Option<RuntimeSnapshot> {
+fn runtime_snapshot_query(node_did: &str) -> String {
     let node_did = escape_graphql_string(node_did);
-    let query = format!(
+    format!(
         r#"{{
-            NodeReadiness(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                limit: 1
-            ) {{
-                node_did
-                snapshot_json
-                updated_at
+            NodeReadiness(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, limit: 1) {{
+                node_did snapshot_json updated_at
             }}
-            NodeRuntime(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                limit: 1
-            ) {{
-                reconcile_phase
-                last_reconcile_result
-                last_reconcile_error
+            NodeRuntime(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, limit: 1) {{
+                reconcile_phase last_reconcile_result last_reconcile_error
             }}
         }}"#
-    );
-    let resp = node.execute(&query).await;
-    let diagnostic = first_optional_row::<RuntimeDiagnosticSnapshot>(&resp, "NodeRuntime")?;
-    let readiness_row = first_optional_row::<gents_protocol::node_readiness::NodeReadinessRow>(
-        &resp,
-        "NodeReadiness",
-    )?;
+    )
+}
+
+fn decode_runtime_snapshot(data: &serde_json::Value, node_did: &str) -> Option<RuntimeSnapshot> {
+    let diagnostic: RuntimeDiagnosticSnapshot =
+        serde_json::from_value(data.pointer("/NodeRuntime/0")?.clone()).ok()?;
+    let row: gents_protocol::node_readiness::NodeReadinessRow =
+        serde_json::from_value(data.pointer("/NodeReadiness/0")?.clone()).ok()?;
     let readiness =
-        gents_protocol::node_readiness::decode_node_readiness_snapshot(&readiness_row, &node_did)
-            .ok()?;
+        gents_protocol::node_readiness::decode_node_readiness_snapshot(&row, node_did).ok()?;
     Some(RuntimeSnapshot {
         process_state: readiness.process_state.as_str().to_string(),
         reconcile_phase: diagnostic.reconcile_phase,
         active_generation: i64::try_from(readiness.active_generation).unwrap_or(i64::MAX),
         router_generation: i64::try_from(readiness.router_generation).unwrap_or(i64::MAX),
-        default_agent_id: readiness.default_agent_id,
+        default_agent_did: readiness.default_agent_did,
         last_reconcile_result: diagnostic.last_reconcile_result,
         last_reconcile_error: diagnostic.last_reconcile_error,
     })
+}
+
+pub async fn fetch_runtime_snapshot(
+    node: &EmbeddedNode,
+    node_did: &str,
+) -> Option<RuntimeSnapshot> {
+    let response = node.execute(&runtime_snapshot_query(node_did)).await;
+    assert!(
+        !response.has_errors(),
+        "query failed: {:?}",
+        response.errors
+    );
+    decode_runtime_snapshot(response.data.as_ref()?, node_did)
+}
+
+pub async fn fetch_runtime_snapshot_as(
+    access: &gents::ConfigAccess,
+    node_did: &str,
+) -> Option<RuntimeSnapshot> {
+    let response = access
+        .execute(&runtime_snapshot_query(node_did))
+        .await
+        .expect("read runtime snapshot as held user");
+    decode_runtime_snapshot(response.get("data")?, node_did)
 }
 
 pub async fn fetch_node_readiness_snapshot(
@@ -361,22 +441,56 @@ pub async fn fetch_message_snapshots_for_session(
         )
         .await
         .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
-        let role = serde_json::to_value(header.role)
-            .expect("serialize message role")
-            .as_str()
-            .expect("message role string")
-            .to_owned();
-        snapshots.push(MessageSnapshot {
-            message_key: header.message_key,
-            session_id: header.session_id,
-            sequence: header.sequence,
-            role,
-            content: gents_protocol::transcript::present_message(&native).body_markdown,
-            timestamp: header.created_at,
-            native,
-        });
+        snapshots.push(message_snapshot(header, native));
     }
     snapshots
+}
+
+/// The session's transcript as `access` reconstructs it.
+pub async fn fetch_message_snapshots_for_session_as(
+    access: &gents::ConfigAccess,
+    session_id: &str,
+) -> Vec<MessageSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let data = access
+        .read_data(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, order: {{ sequence: ASC }}) {{ _docID node_did requester_did }} }}"#
+        ))
+        .await;
+    let mut snapshots = Vec::new();
+    for row in data["AgentMessage"].as_array().expect("message rows") {
+        let header_id = row["_docID"].as_str().expect("physical message identity");
+        let (header, native) = gents::session::load_canonical_message(
+            access,
+            header_id,
+            row["node_did"].as_str().expect("message principal"),
+            row["requester_did"].as_str(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
+        snapshots.push(message_snapshot(header, native));
+    }
+    snapshots
+}
+
+fn message_snapshot(
+    header: gents_protocol::output::TranscriptMessage,
+    native: gents_protocol::message::Message,
+) -> MessageSnapshot {
+    let role = serde_json::to_value(header.role)
+        .expect("serialize message role")
+        .as_str()
+        .expect("message role string")
+        .to_owned();
+    MessageSnapshot {
+        message_key: header.message_key,
+        session_id: header.session_id,
+        sequence: header.sequence,
+        role,
+        content: gents_protocol::transcript::present_message(&native).body_markdown,
+        timestamp: header.created_at,
+        native,
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
@@ -441,8 +555,14 @@ impl ToolCallSnapshot {
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
+        self.try_load_result_as(&gents::store::config_client::ConfigAccess::local(node))
+            .await
+    }
+
+    /// The call's exact invocation reply as `access` reads it.
+    pub async fn try_load_result_as(&self, access: &gents::ConfigAccess) -> anyhow::Result<String> {
         let message = gents::tools::call::lifecycle::load_tool_call_result(
-            &gents::store::config_client::ConfigAccess::local(node),
+            access,
             &self.doc_id,
             &self.node_did,
             &self.session_id,
@@ -456,8 +576,17 @@ impl ToolCallSnapshot {
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
+        self.try_load_arguments_as(&gents::store::config_client::ConfigAccess::local(node))
+            .await
+    }
+
+    /// The call's exact arguments as `access` reads them.
+    pub async fn try_load_arguments_as(
+        &self,
+        access: &gents::ConfigAccess,
+    ) -> anyhow::Result<String> {
         gents::tools::call::lifecycle::load_tool_call_arguments(
-            &gents::store::config_client::ConfigAccess::local(node),
+            access,
             &self.doc_id,
             &self.node_did,
             &self.session_id,
@@ -499,10 +628,37 @@ pub async fn fetch_tool_call_payloads_for_request(
     payloads
 }
 
-pub async fn fetch_tool_call_snapshots_for_session(
-    node: &EmbeddedNode,
+/// [`fetch_tool_call_payloads_for_request`] read as `access`, one of the
+/// call's related actors or the node's native admin.
+pub async fn fetch_tool_call_payloads_for_request_as(
+    access: &gents::ConfigAccess,
+    request_id: &str,
+) -> Vec<ToolCallPayload> {
+    let filter = format!(
+        r#"request_id: {{ _eq: "{}" }}"#,
+        escape_graphql_string(request_id)
+    );
+    let mut payloads = Vec::new();
+    for call in fetch_tool_call_snapshots(access, &filter).await {
+        payloads.push(ToolCallPayload {
+            tool_call_id: call.tool_call_id.clone(),
+            arguments: call.try_load_arguments_as(access).await.ok(),
+            result: call.try_load_result_as(access).await.ok(),
+            tool_name: call.tool_name,
+            status: call.status,
+            lifecycle_state: call.lifecycle_state,
+        });
+    }
+    payloads
+}
+
+pub async fn fetch_tool_call_snapshots_for_session<R>(
+    node: &R,
     session_id: &str,
-) -> Vec<ToolCallSnapshot> {
+) -> Vec<ToolCallSnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let filter = format!(
         r#"session_id: {{ _eq: "{}" }}"#,
         escape_graphql_string(session_id)
@@ -510,7 +666,10 @@ pub async fn fetch_tool_call_snapshots_for_session(
     fetch_tool_call_snapshots(node, &filter).await
 }
 
-async fn fetch_tool_call_snapshots(node: &EmbeddedNode, filter: &str) -> Vec<ToolCallSnapshot> {
+async fn fetch_tool_call_snapshots<R>(node: &R, filter: &str) -> Vec<ToolCallSnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let query = format!(
         r#"{{
             AgentToolCall(
@@ -525,13 +684,7 @@ async fn fetch_tool_call_snapshots(node: &EmbeddedNode, filter: &str) -> Vec<Too
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "fetch_tool_call_snapshots failed: {:?}",
-        resp.errors
-    );
-    let data = resp.data.expect("data");
+    let data = node.read_data(&query).await;
     serde_json::from_value(data["AgentToolCall"].clone()).expect("parse ToolCallSnapshot")
 }
 
@@ -587,10 +740,13 @@ pub struct CompactionEntrySnapshot {
     pub created_at: String,
 }
 
-pub async fn fetch_compaction_entry_snapshots_for_session(
-    node: &EmbeddedNode,
+pub async fn fetch_compaction_entry_snapshots_for_session<R>(
+    node: &R,
     session_id: &str,
-) -> Vec<CompactionEntrySnapshot> {
+) -> Vec<CompactionEntrySnapshot>
+where
+    R: SnapshotReader + ?Sized,
+{
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -602,12 +758,21 @@ pub async fn fetch_compaction_entry_snapshots_for_session(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "fetch_compaction_entry_snapshots failed: {:?}",
-        resp.errors
-    );
-    let data = resp.data.expect("data");
+    let data = node.read_data(&query).await;
     serde_json::from_value(data["CompactionEntry"].clone()).expect("parse CompactionEntrySnapshot")
+}
+
+/// The verified signer of `cid`, read under document ACP as `reader`: a
+/// private row's block is visible only to an actor its policy admits, so an
+/// anonymous node read of it fails closed.
+pub async fn verified_block_signer_as(node: &EmbeddedNode, reader: &str, cid: &str) -> String {
+    let (block, signature) = node
+        .authorized_signed_block_bytes(cid, Some(reader))
+        .await
+        .unwrap_or_else(|error| panic!("read {cid} as {reader}: {error:#}"));
+    let block = defra_core::block::Block::from_dag_cbor(&block).expect("decode signed block");
+    let signature =
+        defra_core::block::Signature::from_dag_cbor(&signature).expect("decode block signature");
+    db::block::verify::verified_signature_signer_did(&block, &signature)
+        .unwrap_or_else(|error| panic!("verify {cid}: {error}"))
 }

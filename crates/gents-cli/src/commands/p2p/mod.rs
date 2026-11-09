@@ -1,7 +1,5 @@
 mod access;
-mod collections;
 mod connect;
-mod documents;
 pub(crate) mod enrollment_admin;
 mod network;
 mod output;
@@ -13,8 +11,8 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::{
-    P2pAdminCommand, P2pCollectionsCommand, P2pCommand, P2pDocumentsCommand, P2pEnrollmentCommand,
-    P2pNetworkCommand, P2pPairingsCommand, P2pReplicatorsCommand, P2pTemplatesCommand,
+    P2pAdminCommand, P2pCommand, P2pEnrollmentCommand, P2pNetworkCommand, P2pPairingsCommand,
+    P2pReplicatorsCommand, P2pTemplatesCommand,
 };
 
 pub(crate) use output::{
@@ -28,11 +26,15 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
         P2pCommand::Diagnose(args) => connect::p2p_diagnose(args).await,
         P2pCommand::Pairings { command } => match command {
             P2pPairingsCommand::List(args) => pairings::p2p_pairings_list(args).await,
+            P2pPairingsCommand::ReaderTargets(args) => pairings::pairing_reader_targets(args).await,
+            P2pPairingsCommand::GrantReader(args) => pairings::pairing_reader(args, true).await,
+            P2pPairingsCommand::RevokeReader(args) => pairings::pairing_reader(args, false).await,
         },
         P2pCommand::Enrollment { command } => match command {
             P2pEnrollmentCommand::Pending(args) => {
                 enrollment_admin::pending_enrollments(args).await
             }
+            P2pEnrollmentCommand::Grant(args) => enrollment_admin::grant_pending_client(args).await,
             P2pEnrollmentCommand::Approve(args) => {
                 enrollment_admin::decide_enrollment(
                     args,
@@ -65,31 +67,12 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
         },
         P2pCommand::Admin { command } => match command {
             P2pAdminCommand::Connect(args) => connect::p2p_connect(args).await,
-            P2pAdminCommand::Collections { command } => match command {
-                P2pCollectionsCommand::List(args) => collections::p2p_collections_list(args).await,
-                P2pCollectionsCommand::Add(args) => collections::p2p_collections_add(args).await,
-                P2pCollectionsCommand::Remove(args) => {
-                    collections::p2p_collections_remove(args).await
-                }
-                P2pCollectionsCommand::SyncBranchable(args) => {
-                    collections::p2p_collections_sync_branchable(args).await
-                }
-                P2pCollectionsCommand::SyncVersions(args) => {
-                    collections::p2p_collections_sync_versions(args).await
-                }
-            },
             P2pAdminCommand::Replicators { command } => match command {
                 P2pReplicatorsCommand::List(args) => replicators::p2p_replicators_list(args).await,
                 P2pReplicatorsCommand::Add(args) => replicators::p2p_replicators_add(args).await,
                 P2pReplicatorsCommand::Remove(args) => {
                     replicators::p2p_replicators_remove(args).await
                 }
-            },
-            P2pAdminCommand::Documents { command } => match command {
-                P2pDocumentsCommand::List(args) => documents::p2p_documents_list(args).await,
-                P2pDocumentsCommand::Add(args) => documents::p2p_documents_add(args).await,
-                P2pDocumentsCommand::Remove(args) => documents::p2p_documents_remove(args).await,
-                P2pDocumentsCommand::Sync(args) => documents::p2p_documents_sync(args).await,
             },
         },
     }

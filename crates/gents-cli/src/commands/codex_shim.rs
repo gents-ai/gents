@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents_codex_protocol as codex;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
@@ -54,7 +54,7 @@ mod state;
 
 #[allow(unused_imports)]
 pub(crate) use server::{
-    bind_codex_shim, resolve_codex_shim_agent_id, BoundCodexShim, CodexShimBindArgs,
+    bind_codex_shim, resolve_codex_shim_agent_did, BoundCodexShim, CodexShimBindArgs,
     CodexShimBindError,
 };
 #[cfg(test)]

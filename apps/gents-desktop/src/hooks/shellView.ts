@@ -67,7 +67,7 @@ function viewOf(inputs: ViewInputs): ShellView {
     sentTurns: inputs.sentTurns,
     draftKey: selection.sessionId
       ? sessionDraftKey(selection.nodeDid, selection.sessionId)
-      : JSON.stringify(["new", selection.nodeDid, projection.agentReadiness.agentId]),
+      : JSON.stringify(["new", selection.nodeDid, projection.agentReadiness.agentDid]),
   };
 }
 

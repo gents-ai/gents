@@ -34,6 +34,12 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             AgentCommand::Create(args) => behavior::agent_create(args).await,
             AgentCommand::Clone(args) => behavior::agent_clone(args).await,
             AgentCommand::Disable(args) => behavior::agent_disable(args).await,
+            AgentCommand::GrantSelfConfig(args) => {
+                behavior::agent_self_config_permission(args, true).await
+            }
+            AgentCommand::RevokeSelfConfig(args) => {
+                behavior::agent_self_config_permission(args, false).await
+            }
             AgentCommand::List(args) => crud::config_list(crud::AGENT_SPEC, args).await,
             AgentCommand::Show(args) => behavior::agent_show(args).await,
             AgentCommand::Rm(args) => crud::config_rm(crud::AGENT_SPEC, args).await,
@@ -76,6 +82,12 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::WorkspaceRoot { command } => match command {
             WorkspaceRootCommand::Set(args) => workspace_root::workspace_root_set(args).await,
+            WorkspaceRootCommand::GrantReader(args) => {
+                workspace_root::workspace_root_grant_reader(args).await
+            }
+            WorkspaceRootCommand::RevokeReader(args) => {
+                workspace_root::workspace_root_revoke_reader(args).await
+            }
             WorkspaceRootCommand::List(args) => workspace_root::workspace_root_list(args).await,
             WorkspaceRootCommand::Show(args) => workspace_root::workspace_root_show(args).await,
             WorkspaceRootCommand::Rm(args) => workspace_root::workspace_root_rm(args).await,

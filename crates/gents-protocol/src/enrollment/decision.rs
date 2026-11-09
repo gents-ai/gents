@@ -47,7 +47,7 @@ pub struct EnrollmentDecisionRecord {
     pub admin_did: String,
     pub candidate_did: String,
     pub candidate_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub decision: EnrollmentDecisionKind,
     pub authorization_sequence: u64,
     pub authorization_expires_at: String,
@@ -71,7 +71,7 @@ impl EnrollmentDecisionRecord {
                 &self.admin_did,
                 &self.candidate_did,
                 &self.candidate_peer,
-                &self.owner_agent,
+                &self.owner_node_did,
                 self.decision.as_str(),
                 sequence.as_str(),
                 &self.authorization_expires_at,
@@ -105,8 +105,8 @@ impl EnrollmentDecisionRecord {
         if self.candidate_peer != request.candidate_peer {
             return Err(EnrollmentError::DecisionCandidatePeerMismatch);
         }
-        if self.owner_agent != request.owner_agent {
-            return Err(EnrollmentError::DecisionOwnerAgentMismatch);
+        if self.owner_node_did != request.owner_node_did {
+            return Err(EnrollmentError::DecisionOwnerNodeMismatch);
         }
         if self.signer_did != request.admin_did {
             return Err(EnrollmentError::DecisionSignerMismatch);

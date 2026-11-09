@@ -14,12 +14,15 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::session;
-use crate::session::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables, OutputSegmentRow,
-    TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+use crate::store::config_client::session_children::{
+    output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::{escape_graphql_string, response_has_documents};
+use gents_protocol::output::rows::{
+    OutputSegmentRow, TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryResult {
@@ -55,7 +58,7 @@ pub(in crate::request::lifecycle) async fn request_segments(
 ) -> Result<Vec<OutputSegmentRow>> {
     let value = txn
         .execute_local_response(
-            &crate::session::canonical_rows::request_output_segments_query(request_doc_id),
+            &gents_protocol::output::rows::request_output_segments_query(request_doc_id),
         )
         .await?;
     let rows = value
@@ -64,12 +67,13 @@ pub(in crate::request::lifecycle) async fn request_segments(
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
         .context("AgentOutputSegment query omitted rows")?;
-    crate::session::canonical_rows::decode_scoped_request_output_segments(
+    gents_protocol::output::rows::decode_scoped_request_output_segments(
         rows,
         agent,
         Some(session_id),
         requester,
     )
+    .map_err(anyhow::Error::from)
 }
 
 async fn validate_selection(
@@ -179,13 +183,13 @@ fn selection_from_choice(
 }
 
 pub(super) async fn recover_expired_generation(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    access: &ConfigAccess,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
 ) -> Result<RecoveryResult> {
-    recover_expired_generation_with_facts(
-        node,
+    recover_expired_generation_with_access_and_facts(
+        access,
         observed,
         expected_generation,
         expected_expiry,
@@ -197,12 +201,40 @@ pub(super) async fn recover_expired_generation(
     .await
 }
 
+#[cfg(test)]
 #[expect(
     clippy::too_many_arguments,
-    reason = "called from the lean_vocab_test native adapter with this shape"
+    reason = "the conformance adapter supplies deterministic recovery facts"
 )]
-pub(crate) async fn recover_expired_generation_with_facts(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+pub(crate) async fn recover_expired_generation_with_access_for_test(
+    access: &ConfigAccess,
+    observed: &AgentRequestRow,
+    expected_generation: &str,
+    expected_expiry: &str,
+    fresh_generation: String,
+    observed_now: DateTime<Utc>,
+    selection_choice: Option<RecoverySelectionChoice>,
+    expected_outcome: Option<RequestLifecycleState>,
+) -> Result<RecoveryResult> {
+    recover_expired_generation_with_access_and_facts(
+        access,
+        observed,
+        expected_generation,
+        expected_expiry,
+        fresh_generation,
+        observed_now,
+        selection_choice,
+        expected_outcome,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "recovery facts are supplied by the conformance adapter"
+)]
+async fn recover_expired_generation_with_access_and_facts(
+    access: &ConfigAccess,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
@@ -216,9 +248,27 @@ pub(crate) async fn recover_expired_generation_with_facts(
         .as_deref()
         .context("missing request document")?
         .to_owned();
-    ConfigAccess::transact_local_idempotent(
-        node,
-        None,
+    let actor = identity::Did::new(
+        observed
+            .agent_did
+            .clone()
+            .context("request is missing agent DID")?,
+    )?;
+    let node_did = observed
+        .node_did
+        .as_deref()
+        .context("request is missing node DID")?
+        .to_owned();
+    let session_id = observed
+        .session_id
+        .as_deref()
+        .context("request is missing session ID")?
+        .to_owned();
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(actor.as_str()),
+        "recovery access actor mismatch"
+    );
+    let result = access.transact_idempotent(
         IdempotentTransactionRetry::Standard,
         "lifecycle.recover_expired_generation",
         move |txn| {
@@ -367,7 +417,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                             source: source.clone(), writer: writer.clone(), ordinal: None, runs: Vec::new(), payload: String::new(),
                             close: Some(plan.close.clone()), created_at: timestamp.clone(),
                         };
-                        let response = txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &output_segment_create_variables(&closing)?).await?;
+                        let response = txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &output_segment_bound_variables(txn, &closing).await?).await?;
                         let id = created_doc_id(&response, "AgentOutputSegment")?;
                         let blocks = plan.retained_blocks(&id)?;
                         segments.push(OutputSegmentRow { doc_id: id.clone(), segment: closing });
@@ -402,7 +452,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     blocks, created_at: timestamp.clone(),
                 };
                 *next_sequence = next_sequence.checked_add(1).context("recovery transcript sequence overflow")?;
-                let response = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?).await?;
+                let response = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_bound_variables(txn, &message).await?).await?;
                 let doc_id = created_doc_id(&response, "AgentMessage")?;
                 published.push(TranscriptMessageRow { doc_id, message });
             }
@@ -513,5 +563,13 @@ pub(crate) async fn recover_expired_generation_with_facts(
             }
             Ok(RecoveryResult::Won { published: published.len() })
         })},
-    ).await
+    ).await?;
+    crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+        access,
+        &node_did,
+        &actor,
+        &session_id,
+    )
+    .await?;
+    Ok(result)
 }

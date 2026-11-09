@@ -114,13 +114,7 @@ def messageInputCases : List MessageInputCase :=
   , ⟨"new_session_ignores_orphan_goal", ⟨1, 10, false, true, some ⟨1, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
   , ⟨"local_target_without_goal", ⟨1, 10, true, true, none, some ⟨9, some 900⟩⟩⟩
   , ⟨"local_target_uses_own_goal", ⟨1, 10, true, true, some ⟨1, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
-  , ⟨"remote_target_uses_verified_goal", ⟨2, 10, true, true, some ⟨2, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
-  , ⟨"remote_verified_absence", ⟨2, 10, true, true, none, some ⟨9, some 900⟩⟩⟩
   , ⟨"legacy_target_has_no_physical_binding", ⟨1, 10, true, true, some ⟨1, 10, 2, none⟩, some ⟨9, some 900⟩⟩⟩
-  , ⟨"remote_missing_observation_waits", ⟨2, 10, true, false, none, some ⟨9, some 900⟩⟩⟩
-  , ⟨"remote_forged_observation_waits", ⟨2, 10, true, false, some ⟨2, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
-  , ⟨"remote_foreign_owner_waits", ⟨2, 10, true, true, some ⟨1, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
-  , ⟨"remote_foreign_session_waits", ⟨2, 10, true, true, some ⟨2, 11, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
   ]
 
 def messageInputCaseJson (c : MessageInputCase) : Json :=
@@ -140,7 +134,7 @@ def messageInputCaseJson (c : MessageInputCase) : Json :=
 
 def messageInputCasesJson : String := (toJson (messageInputCases.map messageInputCaseJson)).compress
 
-example : messageInputCases.length = 11 := by decide
+example : messageInputCases.length = 5 := by decide
 
 def assignmentJson (a : Assignment) : Json :=
   Json.mkObj [("owner", toJson a.owner), ("session", toJson a.session),

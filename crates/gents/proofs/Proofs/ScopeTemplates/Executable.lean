@@ -8,11 +8,9 @@ namespace Delivery
 
 def toContract : Delivery → String
   | .push => "push"
-  | .replicate => "replicate"
 
 def fromContract? : String → Option Delivery
   | "push" => some .push
-  | "replicate" => some .replicate
   | _ => none
 
 theorem fromContract_toContract (d : Delivery) :
@@ -22,8 +20,6 @@ theorem fromContract_toContract (d : Delivery) :
 end Delivery
 
 inductive ScopeKind where
-  | peerDid
-  | unscoped
   | perCollection
   | clientRoute
   deriving DecidableEq, Repr
@@ -31,20 +27,14 @@ inductive ScopeKind where
 namespace ScopeKind
 
 def ofScope : Scope → ScopeKind
-  | .peerDid _ => .peerDid
-  | .unscoped => .unscoped
   | .perCollection _ => .perCollection
   | .clientRoute => .clientRoute
 
 def toContract : ScopeKind → String
-  | .peerDid => "peerDid"
-  | .unscoped => "unscoped"
   | .perCollection => "perCollection"
   | .clientRoute => "clientRoute"
 
 def fromContract? : String → Option ScopeKind
-  | "peerDid" => some .peerDid
-  | "unscoped" => some .unscoped
   | "perCollection" => some .perCollection
   | "clientRoute" => some .clientRoute
   | _ => none

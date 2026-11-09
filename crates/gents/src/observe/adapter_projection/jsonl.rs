@@ -100,7 +100,7 @@ pub fn adapter_projection_jsonl_records(
                     participant
                         .node_did
                         .clone()
-                        .or_else(|| participant.agent_id.clone())
+                        .or_else(|| participant.agent_did.clone())
                         .unwrap_or_else(|| participant.role.clone()),
                     serde_json::to_value(participant).unwrap_or(Value::Null),
                 ));

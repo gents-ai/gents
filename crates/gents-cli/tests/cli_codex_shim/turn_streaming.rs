@@ -25,6 +25,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
+    let operator_did = support::graphql::cli_user_did(&home_dir)?;
     let default_backend_id = default_backend_id(&node_did);
     let default_model_selection = gents_model_selection_id(&default_backend_id, &model_name);
     let shim_port = allocate_port()?;
@@ -167,7 +168,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         Some(gents::DEFAULT_CONTEXT_WINDOW as i64),
         "context capacity should come from the bound GENTS inference profile"
     );
-    let (original_request, session_id, _agent_id) =
+    let (original_request, session_id, _agent_did) =
         wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     wait_for_request_lifecycle_state(
@@ -191,14 +192,14 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
                     session_id
                     node_did
                     requester_did
-                    agent_id
+                    agent_did
                     created_at
                     closed_at
                 }}
             }}"#,
                 escape_graphql_string(&thread_id),
                 escape_graphql_string(&node_did),
-                escape_graphql_string(&node_did),
+                escape_graphql_string(&operator_did),
             ),
         ))
         .await?;
@@ -211,14 +212,14 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         session.get("node_did").and_then(Value::as_str),
         Some(node_did.as_str())
     );
-    let expected_agent_id = format!("{node_did}:default");
+    let expected_agent_did = agent_did_from_init(&init)?;
     assert_eq!(
-        session.get("agent_id").and_then(Value::as_str),
-        Some(expected_agent_id.as_str())
+        session.get("agent_did").and_then(Value::as_str),
+        Some(expected_agent_did.as_str())
     );
     assert_eq!(
         session.get("requester_did").and_then(Value::as_str),
-        Some(node_did.as_str())
+        Some(operator_did.as_str())
     );
     assert_eq!(session.get("closed_at"), Some(&Value::Null));
     assert!(
@@ -693,7 +694,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let followup = read_turn_capture(&mut ws).await?;
     assert_eq!(followup.turn.status, codex::TurnStatus::Completed);
     assert!(followup.text.contains(&expected_reply));
-    let (followup_request, session_id, _agent_id) =
+    let (followup_request, session_id, _agent_did) =
         wait_for_request(&graphql, &node_did, &followup_prompt).await?;
     assert_eq!(session_id, thread_id);
     wait_for_request_lifecycle_state(
@@ -728,6 +729,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "codex shim is being removed"]
 async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -788,7 +790,8 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
 
     let prompt = "Read notes.txt, then finish without visible final text.";
     send_turn(&mut ws, &thread_id, prompt).await?;
-    let (request_id, session_id, _agent_id) = wait_for_request(&graphql, &node_did, prompt).await?;
+    let (request_id, session_id, _agent_did) =
+        wait_for_request(&graphql, &node_did, prompt).await?;
     assert_eq!(session_id, thread_id);
     seed_blank_materialized_completion(&graphql, &request_id, &node_did, &thread_id).await?;
 

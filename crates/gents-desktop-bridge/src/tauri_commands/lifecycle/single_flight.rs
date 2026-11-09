@@ -138,13 +138,8 @@ pub(super) async fn run_detached_client_start<R>(
         Ok((core, _lifecycle_guard)) => {
             let core = Arc::new(core);
             #[cfg(any(unix, windows))]
-            let mut client_host = client_listener.map(|listener| {
-                crate::host::ClientHostService::with_accounts(
-                    core.clone(),
-                    listener,
-                    state.pending_oauth_credentials.clone(),
-                )
-            });
+            let mut client_host = client_listener
+                .map(|listener| crate::host::ClientHostService::start(core.clone(), listener));
             let orphan = {
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
                 let orphan = if bridge.core.is_none() {

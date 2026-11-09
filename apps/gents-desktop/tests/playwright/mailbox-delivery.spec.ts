@@ -34,14 +34,18 @@ for (const colorScheme of ["light", "dark"] as const) {
         nodeDid: "did:key:z6MkBombadilAgent",
         requestId: "original-answer",
         sessionId: "session-intro",
-        agentId: "default",
+        agentDid: "default",
         content: "",
         causedBySourceDocId: "mailbox-question",
         answer: { option_ids: ["local"], free_text: "Keep this local" },
       },
       "session-intro",
       false,
-      { itemId: "mailbox-question", summary: "This computer\nKeep this local" },
+      {
+        nodeDid: "did:key:z6MkBombadilAgent",
+        itemId: "mailbox-question",
+        summary: "This computer\nKeep this local",
+      },
     );
     await page.evaluate(({ key, value }) => localStorage.setItem(key, value), {
       key: chatDraftKey(draft),
@@ -60,29 +64,21 @@ for (const colorScheme of ["light", "dark"] as const) {
     const box = await panel.boundingBox();
     expect(box!.height).toBeLessThan(160);
     expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-    await panel.getByRole("button", { name: "Check answer delivery" }).focus();
+    await panel.getByRole("button", { name: "Retry answer" }).focus();
     await page.keyboard.press("Tab");
-    await expect(
-      panel.getByRole("button", { name: "Resume saved answer" }),
-    ).toBeFocused();
-    await panel.getByRole("button", { name: "Check answer delivery" }).click();
-    await expect(panel.getByRole("alert")).toHaveText(
-      "Delivery is still unconfirmed. Check again or resume the saved answer.",
-    );
+    await expect(panel.getByRole("button", { name: "Discard answer" })).toBeFocused();
     await panel.getByRole("button", { name: /Show details/ }).click();
     await expect(panel.getByText("Keep this local", { exact: false })).toBeVisible();
     await panel.screenshot({
       path: info.outputPath(`mailbox-answer-${colorScheme}.png`),
     });
-    await panel.getByRole("button", { name: "Resume saved answer" }).click();
+    await panel.getByRole("button", { name: "Retry answer" }).click();
     /* confirmed, the dialog moves on: past the only item, it closes */
     await expect(dialog).toHaveCount(0);
     await page.reload();
     await openMailbox(page);
     const reopened = await openQuestion(page);
     await expect(reopened.getByTestId("question-panel")).toHaveCount(0);
-    await expect(
-      reopened.getByRole("button", { name: "Resume saved answer" }),
-    ).toHaveCount(0);
+    await expect(reopened.getByRole("button", { name: "Retry answer" })).toHaveCount(0);
   });
 }

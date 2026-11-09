@@ -123,36 +123,6 @@ pub struct MailboxWriteReceipt {
     pub item: MailboxItem,
 }
 
-pub(super) async fn request_provenance(
-    node: &EmbeddedNode,
-    request_id: &str,
-    context: &MailboxStampContext,
-) -> Result<gents_protocol::row::AgentRequestRow> {
-    let response = graphql_with_transaction_retry(node, &format!(
-        "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id node_did requester_did agent_id session_id caused_by_source_doc_id}} }}",
-        escape_graphql_string(request_id)), "mailbox request provenance").await?;
-    let mut values: Vec<gents_protocol::row::AgentRequestRow> = rows(&response, "AgentRequest")?;
-    anyhow::ensure!(
-        values.len() == 1,
-        "notification requires exactly one current request"
-    );
-    let request = values.remove(0);
-    anyhow::ensure!(
-        request.node_did.as_deref() == Some(context.node_did.as_str())
-            && request.requester_did.as_deref() == Some(context.requester_did.as_str())
-            && request
-                .agent_id
-                .as_deref()
-                .is_none_or(|id| id == context.agent_id)
-            && request
-                .session_id
-                .as_ref()
-                .is_none_or(|id| Some(id) == context.session_id.as_ref()),
-        "notification request provenance does not match its execution context"
-    );
-    Ok(request)
-}
-
 fn validate_existing_notification(
     item: &MailboxItem,
     context: &MailboxStampContext,
@@ -162,7 +132,7 @@ fn validate_existing_notification(
         item.requester_did == context.requester_did
             && item.node_did == context.node_did
             && item.target_node_did == context.node_did
-            && item.target_agent_id == context.agent_id
+            && item.target_agent_did == context.agent_did
             && item.source_id == args.source_id
             && item.source_kind == args.source_kind.as_str()
             && item.kind == args.kind.as_str(),
@@ -175,22 +145,41 @@ fn validate_existing_notification(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) async fn reuse_or_update(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     context: &MailboxStampContext,
     args: &FileMailboxItemArgs,
     identity: &NotificationIdentity,
     existing: &MailboxItem,
 ) -> Result<MailboxWriteReceipt> {
+    reuse_or_update_with_source(node, access, context, args, identity, existing, None).await
+}
+
+pub(super) async fn reuse_or_update_with_source(
+    _node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
+    context: &MailboxStampContext,
+    args: &FileMailboxItemArgs,
+    identity: &NotificationIdentity,
+    existing: &MailboxItem,
+    source: Option<&crate::documents::DatastoreToolSource>,
+) -> Result<MailboxWriteReceipt> {
     validate_existing_notification(existing, context, args)?;
-    if matches!(identity, NotificationIdentity::Event) {
+    if source.is_none() && matches!(identity, NotificationIdentity::Event) {
         return Ok(MailboxWriteReceipt {
             outcome: MailboxWriteOutcome::Reused,
             item: existing.clone(),
         });
     }
-    crate::store::config_client::ConfigAccess::transact_local_write(node, None, "mailbox.update_condition", |txn| {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(context.agent_did.as_str()),
+        "mailbox actor mismatch"
+    );
+    access.transact_write("mailbox.update_condition", |txn| {
         Box::pin(async move {
+            if let Some(source) = source { source.revalidate(txn).await?; }
             let response = txn.execute(&format!("{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {MAILBOX_FIELDS} }} }}", escape_graphql_string(&existing.doc_id))).await?;
             let values = gents_protocol::graphql::graphql_rows_from_response(&response, MAILBOX_COLLECTION);
             anyhow::ensure!(values.len() == 1, "condition notification disappeared");

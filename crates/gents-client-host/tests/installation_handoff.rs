@@ -60,7 +60,6 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
             .await
             .unwrap(),
     );
-    let peer = seed.local_peer_id().to_owned();
     let client_did = seed.node_identity().did().to_owned();
     let did = gents::store::graphql::escape_graphql_string(&client_did);
     gents::store::config_client::ConfigAccess::write_local(
@@ -68,7 +67,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
         "installation_handoff.seed",
         &format!(
             r#"mutation {{ create_AgentSession(input: {{session_id: "retained-session",
-            node_did: "{did}", requester_did: "{did}", agent_id: "agent",
+            node_did: "{did}", requester_did: "{did}", agent_did: "agent",
             created_at: "2026-10-25T00:00:00Z"}}) {{ _docID }} }}"#
         ),
     )
@@ -79,6 +78,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
     let original_record = std::fs::read(paths.store_encryption_path()).unwrap();
     let log = std::fs::File::create(directory.path().join("previous.log")).unwrap();
     let mut previous = Command::new(previous_binary)
+        .envs(support::homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--serve", "--home"])
         .arg(paths.root())
         .stdin(Stdio::null())
@@ -93,6 +93,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
     drop(connection);
 
     let mut attachment = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(support::homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::piped())
@@ -134,7 +135,6 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
 
     let mut updated = Attachment::start(&paths).await;
     let snapshot = updated.snapshot(1).await;
-    assert_eq!(snapshot["client"]["localPeerId"], peer);
     assert_eq!(snapshot["client"]["clientDid"], client_did);
     updated.close().await;
     let (mut connection, current) = hello(&paths).await;

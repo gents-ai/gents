@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::tools::mcp::health::ServiceHealthMap;
 use crate::tools::mcp::pool::McpPool;
@@ -12,7 +12,9 @@ mod flat;
 mod shared;
 pub(crate) use flat::{flat_tool_name, presented_tool_names, selected_remote_identity};
 #[cfg(test)]
-mod tests;
+mod native_policy_tests;
+#[cfg(test)]
+pub(crate) mod tests;
 
 pub(crate) use call::selected_tool_identity;
 pub use call::{CallToolArgs, CallToolTool};
@@ -33,18 +35,23 @@ pub async fn build_meta_tools(
     local_hostname: String,
     local_subnet: Option<String>,
     node_did: String,
+    actor: identity::Did,
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: crate::documents::RemoteTools,
+    configuration: crate::inference::resolved::ResolvedConfiguration,
 ) -> anyhow::Result<Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>> {
+    let mcp_pool = mcp_pool.for_agent(actor.as_str());
     let ctx = MetaToolContext {
+        actor,
         node,
-        mcp_pool: mcp_pool.for_agent(&node_did),
+        mcp_pool,
         health,
         local_hostname,
         local_subnet,
         node_did,
         allowed_mcp_service_ids,
         remote_tools,
+        configuration,
     };
     let mut tools: Vec<Box<dyn crate::inference::llm::tool::ToolDyn>> = Vec::new();
     let mut discovery = false;

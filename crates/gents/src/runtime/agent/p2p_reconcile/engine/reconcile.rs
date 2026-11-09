@@ -386,12 +386,6 @@ pub fn update_applied_after_success(
     desired: &PairingDesired,
 ) {
     match op {
-        DiffOp::InstallCollection(collection) => {
-            applied.collections.insert(collection.clone());
-        }
-        DiffOp::TeardownCollection(collection) => {
-            applied.collections.remove(collection);
-        }
         DiffOp::InstallReplicator(address) => {
             applied.replicator_addresses.insert(address.clone());
             applied.replicator_filter = desired.replicator_filter.clone();

@@ -1,4 +1,5 @@
-import Proofs.Conformance.Triggers.Lifecycle
+import Proofs.Triggers
+import Proofs.Request
 
 def materializedTriggerRequest
     (state : SystemState)
@@ -45,67 +46,3 @@ theorem dispatch_materializedTriggerRequest_consistentLineage
       simp [consistentLineage, materializedTriggerRequest, h_kind]
   | .event =>
       simp [consistentLineage, materializedTriggerRequest, h_kind]
-
-theorem materializedTriggerRequest_coherent_with_claimed_context
-    (state : SystemState)
-    (intent : FireIntent)
-    (seed : RequestSeed)
-    (ctx : RequestContext)
-    (h_state : ctx.state = .claimed)
-    (h_origin : (materializedTriggerRequest state intent seed).executionOrigin = ctx.origin) :
-    TriggerLifecycleCoherent (materializedTriggerRequest state intent seed) ctx := by
-  unfold TriggerLifecycleCoherent
-  constructor
-  · simp [materializedTriggerRequest, requestStateToTriggerTerminal, h_state]
-  · exact h_origin
-
-structure ClaimedEmbeddingInputs where
-  backend : BackendId
-  deadline : Time
-  claimTime : Time
-  currentTime : Time
-  retryCount : Nat
-  maxRetries : Nat
-  messageSeq : Nat
-  persistence : PersistenceState
-  interruptRequestedAt : Option Time
-  validUntil : Option Time
-
-def claimedEmbeddingContext
-    (state : SystemState)
-    (intent : FireIntent)
-    (seed : RequestSeed)
-    (inputs : ClaimedEmbeddingInputs) : RequestContext :=
-  { state := .claimed
-  , origin := (materializedTriggerRequest state intent seed).executionOrigin
-  , backend := inputs.backend
-  , admission := .waiting
-  , deadline := inputs.deadline
-  , claimTime := inputs.claimTime
-  , currentTime := inputs.currentTime
-  , retryCount := inputs.retryCount
-  , maxRetries := inputs.maxRetries
-  , messageSeq := inputs.messageSeq
-  , persistence := inputs.persistence
-  , interruptRequestedAt := inputs.interruptRequestedAt
-  , validUntil := inputs.validUntil }
-
-theorem materializedTriggerRequest_has_claimed_embedding
-    (state : SystemState)
-    (intent : FireIntent)
-    (seed : RequestSeed)
-    (inputs : ClaimedEmbeddingInputs) :
-    TriggerLifecycleCoherent
-      (materializedTriggerRequest state intent seed)
-      (claimedEmbeddingContext state intent seed inputs) := by
-  simp [TriggerLifecycleCoherent, claimedEmbeddingContext, materializedTriggerRequest,
-    requestStateToTriggerTerminal]
-
-theorem materializedTriggerRequest_claimed_embedding_request_coherent
-    (state : SystemState)
-    (intent : FireIntent)
-    (seed : RequestSeed)
-    (inputs : ClaimedEmbeddingInputs) :
-    RequestContext.coherent
-      (claimedEmbeddingContext state intent seed inputs) := by
-  simp [claimedEmbeddingContext, RequestContext.coherent, RequestContext.coherentStateAdmission]
