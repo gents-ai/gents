@@ -10,18 +10,21 @@
 (* result only if the view's epoch is unchanged (a selection bumps it).     *)
 (*                                                                         *)
 (* A command names its node or falls back to the calling window's own       *)
-(* selection. `SharedFallback` is the rejected shape where the fallback is  *)
-(* one selection shared by every window (the client core's), and           *)
-(* `CancelOnSwitch = FALSE` keeps a window's pack watch on its old node.    *)
+(* selection. `SharedFallback` is the code before this model: the fallback *)
+(* is the client core's one `selected_node_did`, which names a node only    *)
+(* while exactly one window is open, so a second window leaves every        *)
+(* window's node-scoped views (MCP services, backend health) without a      *)
+(* node. `CancelOnSwitch = FALSE` keeps a window's pack watch on its old    *)
+(* node.                                                                    *)
 (***************************************************************************)
-EXTENDS Naturals, Sequences
+EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
   Windows,
   Nodes,
   MaxWrites,       \* runtime writes per node
   MaxSwitch,       \* selection changes in a behavior
-  SharedFallback,  \* RED: a window's read resolves the last selection of any window
+  SharedFallback,  \* RED: a window's read resolves the core's one shared selection
   CancelOnSwitch   \* FALSE: a selection change keeps the old node's watch
 
 None == "none"
@@ -29,7 +32,6 @@ NoVer == MaxWrites + 1
 
 VARIABLES
   sel,        \* window -> selected node
-  last,       \* the last selection any window made (the shared fallback)
   latest,     \* node -> runtime document version
   observed,   \* node -> version the shared ObservedStore shows (node scoped)
   dirty,      \* window -> a change notice arrived since its last read began
@@ -40,14 +42,13 @@ VARIABLES
   switches,
   crossed     \* ghost: a watch delivered another node's event to a window
 
-vars == <<sel, last, latest, observed, dirty, epoch, reading, view, watch,
+vars == <<sel, latest, observed, dirty, epoch, reading, view, watch,
           switches, crossed>>
 
 Idle == [node |-> None, epoch |-> 0]
 
 TypeOK ==
   /\ sel \in [Windows -> Nodes \cup {None}]
-  /\ last \in Nodes \cup {None}
   /\ latest \in [Nodes -> 0..MaxWrites]
   /\ observed \in [Nodes -> 0..MaxWrites]
   /\ dirty \in [Windows -> BOOLEAN]
@@ -58,7 +59,7 @@ TypeOK ==
   /\ switches \in 0..MaxSwitch /\ crossed \in BOOLEAN
 
 Init ==
-  /\ sel = [w \in Windows |-> None] /\ last = None
+  /\ sel = [w \in Windows |-> None]
   /\ latest = [n \in Nodes |-> 0] /\ observed = [n \in Nodes |-> 0]
   /\ dirty = [w \in Windows |-> FALSE] /\ epoch = [w \in Windows |-> 0]
   /\ reading = [w \in Windows |-> Idle]
@@ -70,14 +71,14 @@ Init ==
 
 Write(n) ==
   /\ latest[n] < MaxWrites /\ latest' = [latest EXCEPT ![n] = @ + 1]
-  /\ UNCHANGED <<sel, last, observed, dirty, epoch, reading, view, watch, switches, crossed>>
+  /\ UNCHANGED <<sel, observed, dirty, epoch, reading, view, watch, switches, crossed>>
 
 \* The node's source delivers the change and the store publishes it; the
 \* notice reaches every window.
 Observe(n) ==
   /\ observed[n] < latest[n] /\ observed' = [observed EXCEPT ![n] = latest[n]]
   /\ dirty' = [w \in Windows |-> TRUE]
-  /\ UNCHANGED <<sel, last, latest, epoch, reading, view, watch, switches, crossed>>
+  /\ UNCHANGED <<sel, latest, epoch, reading, view, watch, switches, crossed>>
 
 (* A window. *)
 
@@ -85,7 +86,7 @@ Observe(n) ==
 \* selection is written, under the bridge lock; its view restarts loading.
 Select(w, n) ==
   /\ switches < MaxSwitch /\ sel[w] # n
-  /\ sel' = [sel EXCEPT ![w] = n] /\ last' = n
+  /\ sel' = [sel EXCEPT ![w] = n]
   /\ epoch' = [epoch EXCEPT ![w] = @ + 1]
   /\ view' = [view EXCEPT ![w] = [node |-> n, ver |-> NoVer]]
   /\ dirty' = [dirty EXCEPT ![w] = TRUE]
@@ -96,22 +97,25 @@ Select(w, n) ==
 \* The page watches its selected node.
 Rewatch(w) ==
   /\ watch[w] = None /\ sel[w] # None /\ watch' = [watch EXCEPT ![w] = sel[w]]
-  /\ UNCHANGED <<sel, last, latest, observed, dirty, epoch, reading, view, switches, crossed>>
+  /\ UNCHANGED <<sel, latest, observed, dirty, epoch, reading, view, switches, crossed>>
 
 \* A watch event of the watch's node reaches its window (the registry sends
 \* only to a registered watch).
 WatchDeliver(w) ==
   /\ watch[w] # None
   /\ crossed' = (crossed \/ watch[w] # sel[w])
-  /\ UNCHANGED <<sel, last, latest, observed, dirty, epoch, reading, view, watch, switches>>
+  /\ UNCHANGED <<sel, latest, observed, dirty, epoch, reading, view, watch, switches>>
 
-Scope(w) == IF SharedFallback THEN last ELSE sel[w]
+\* The core's shared selection names a node only while one window is open.
+Shared == IF Cardinality(Windows) = 1 THEN sel[CHOOSE w \in Windows : TRUE] ELSE None
+
+Scope(w) == IF SharedFallback THEN Shared ELSE sel[w]
 
 StartRead(w) ==
   /\ dirty[w] /\ reading[w].node = None /\ Scope(w) # None
   /\ reading' = [reading EXCEPT ![w] = [node |-> Scope(w), epoch |-> epoch[w]]]
   /\ dirty' = [dirty EXCEPT ![w] = FALSE]
-  /\ UNCHANGED <<sel, last, latest, observed, epoch, view, watch, switches, crossed>>
+  /\ UNCHANGED <<sel, latest, observed, epoch, view, watch, switches, crossed>>
 
 FinishRead(w) ==
   /\ reading[w].node # None
@@ -120,7 +124,7 @@ FinishRead(w) ==
                                          ver |-> observed[reading[w].node]]]
                ELSE view
   /\ reading' = [reading EXCEPT ![w] = Idle]
-  /\ UNCHANGED <<sel, last, latest, observed, dirty, epoch, watch, switches, crossed>>
+  /\ UNCHANGED <<sel, latest, observed, dirty, epoch, watch, switches, crossed>>
 
 Next ==
   \/ \E n \in Nodes : Write(n) \/ Observe(n)

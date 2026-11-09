@@ -154,9 +154,10 @@ See `../README.md` for how this fits the broader formal-verification model.
   publishes only within its view epoch. `NoCrossDelivery` (a window shows and
   is delivered only its own node), `Converges` (each window converges for its
   own node) and `WatchFollowsSelection` hold (GREEN `MCWindowIndependence`,
-  two windows on two nodes). RED: `SharedFallback` (a read resolves one
-  selection shared by every window, the client core's) and `NoCancelOnSwitch`
-  (a selection change keeps the old node's watch) break `NoCrossDelivery`.
+  two windows on two nodes). RED: `SharedFallback` (the code before: a view
+  falls back to the client core's one selection, which names a node only
+  while one window is open) breaks `Converges`, and `NoCancelOnSwitch` (a
+  selection change keeps the old node's watch) breaks `NoCrossDelivery`.
 - `ObserverResync` — the desktop observer's delivery and resync loop for
   runtime documents and the direct refresh beside it. A runtime write emits a
   subscription event only after the stream is armed; the observer queues the
@@ -334,7 +335,8 @@ violates `ReconnectBounded`, `RenewalFlap` violates `RenewalNeverDisconnects`,
 ```
 
 For WindowIndependence — the green model (two windows, two nodes) checks
-clean; `SharedFallback` and `NoCancelOnSwitch` violate `NoCrossDelivery`:
+clean; `SharedFallback` violates `Converges` and `NoCancelOnSwitch` violates
+`NoCrossDelivery`:
 ```bash
 ./scripts/run-tlc.sh MCWindowIndependence
 ./scripts/run-tlc.sh MCWindowIndependenceSharedFallback
@@ -509,9 +511,9 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCRuntimeConnectionNoEndpoint.cfg` | as green, `NamedNoEndpoint = FALSE` | `NoEndpointNamed` intentionally VIOLATED: the peer loses its endpoint and reconcile leaves no status | 122 distinct states before counterexample; 247 generated | — | <1s |
 | `MCRuntimeConnectionStaleGeneration.cfg` | as green, `GenerationCheck = FALSE` | `StaleNoticeInert` intentionally VIOLATED: the replaced source's queued notice moves the new source's status | 316 distinct states before counterexample; 732 generated | — | <1s |
 | `MCRuntimeConnectionEarlyReady.cfg` | as green, `ArmBeforeReady = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: ready before any subscription is armed, snapshot, Connected | 921 distinct states before counterexample; 2,840 generated | — | <1s |
-| `MCWindowIndependence.cfg` | `Windows = {w1, w2}`, `Nodes = {n1, n2}`, `MaxWrites = 2`, `MaxSwitch = 3`, per-window fallback, cancel on switch | Passes `TypeOK`, `NoCrossDelivery`, `Converges`, `WatchFollowsSelection` | 184,500 distinct states; 1,100,665 generated | 20 | 15s |
-| `MCWindowIndependenceSharedFallback.cfg` | as green, `SharedFallback = TRUE` | `NoCrossDelivery` intentionally VIOLATED: w1 selects n1, w2 selects n2, w1 reads the shared selection n2 | 809 distinct states before counterexample; 1,458 generated | — | <1s |
-| `MCWindowIndependenceNoCancelOnSwitch.cfg` | as green, `CancelOnSwitch = FALSE` | `NoCrossDelivery` intentionally VIOLATED: the old node's watch delivers to the switched window | 938 distinct states before counterexample; 1,814 generated | — | <1s |
+| `MCWindowIndependence.cfg` | `Windows = {w1, w2}`, `Nodes = {n1, n2}`, `MaxWrites = 2`, `MaxSwitch = 3`, per-window fallback, cancel on switch | Passes `TypeOK`, `NoCrossDelivery`, `Converges`, `WatchFollowsSelection` | 126,444 distinct states; 753,497 generated | 20 | 10s |
+| `MCWindowIndependenceSharedFallback.cfg` | as green, `SharedFallback = TRUE` | `Converges` intentionally VIOLATED: with both windows open the shared selection names no node, so neither window's view loads | 2,628 distinct states; 12,601 generated | 12 | <1s |
+| `MCWindowIndependenceNoCancelOnSwitch.cfg` | as green, `CancelOnSwitch = FALSE` | `NoCrossDelivery` intentionally VIOLATED: the old node's watch delivers to the switched window | 979 distinct states before counterexample; 1,946 generated | 7 | <1s |
 | `MCObserverResync.cfg` | 2 nodes, `MaxWrites = 1`, `K = 1`, `MaxDrops = 1`, `MaxRefreshes = 1`, node-scoped events off the reload fence, immediate requeue, no refresh fallback, no widening | Passes `TypeOK`, `NoLostWrite`, `NoReadWithoutReason`, `NoStaleCommit`, `EventualPublication`, `Convergence` | 2,835,856 distinct states; 16,250,601 generated | 33 | 7min 5s |
 | `MCObserverResyncWiden.cfg` | 2 nodes, renewals during every load on both, each node's first publication widens (`MaxWidens = 1`), widened loads check their own node | Passes every invariant and property | 23,689 distinct states; 100,043 generated | 34 | 2s |
 | `MCObserverResyncRejectDelay.cfg` | `Widen` with the 250 ms wait after a rejected load | Passes every invariant and property: the wait is not a guard | 25,109 distinct states; 105,521 generated | 36 | 2s |
