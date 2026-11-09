@@ -213,7 +213,9 @@ pub(crate) async fn interrupt_active_session_in_txn(
                 {{ _docID request_id }} }}"#,
             claimed_or_processing = RequestLifecycleState::graphql_list([
                 RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing
+                RequestLifecycleState::Processing,
+                RequestLifecycleState::WaitingForBackend,
+                RequestLifecycleState::ResumingBackend
             ])
         ))
         .await?;
@@ -261,7 +263,9 @@ fn active_session_request_query(
         r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#,
         claimed_or_processing = RequestLifecycleState::graphql_list([
             RequestLifecycleState::Claimed,
-            RequestLifecycleState::Processing
+            RequestLifecycleState::Processing,
+            RequestLifecycleState::WaitingForBackend,
+            RequestLifecycleState::ResumingBackend,
         ])
     )
 }

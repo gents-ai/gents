@@ -804,6 +804,7 @@ impl RequestLifecycle {
             fold_admitted: Vec::new(),
             folded_selection: Vec::new(),
             natural_finish_allowed: false,
+            resumed_from_backend: false,
             execution_lease_duration_secs:
                 crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         }

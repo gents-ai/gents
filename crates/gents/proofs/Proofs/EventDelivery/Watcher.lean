@@ -11,6 +11,15 @@ def watcherSrc : SourceInstance :=
   , rescanBoundedBy := 1
   }
 
+/-- A cooldown records the generation seen at dispatch. A new generation is a
+new execution opportunity; the durable claim and lease owners still decide
+whether it can run. -/
+def generationMarkApplies (marked observed : Option Nat) : Bool := marked == observed
+
+theorem changed_generation_releases_mark (marked observed : Option Nat)
+    (h : marked ≠ observed) : generationMarkApplies marked observed = false := by
+  simp [generationMarkApplies, h]
+
 theorem watcher_pending_eventually_observed
     (w₀ : World) (d : DocId)
     (h_persisted : d ∈ w₀.persistentSet)

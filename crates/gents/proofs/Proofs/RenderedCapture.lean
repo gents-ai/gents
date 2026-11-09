@@ -6,6 +6,29 @@ ordering modeled below. -/
 
 namespace RenderedCapture
 
+/-- A resumed request starts a fresh capture scope after every scope already
+durably recorded for the same request and kind. Unpersisted allocations need
+not be retained because they cannot have reached the provider boundary. -/
+def lastScope : List Nat → Nat
+  | [] => 0
+  | n :: rest => max n (lastScope rest)
+
+def nextScope (persisted : List Nat) : Nat := lastScope persisted + 1
+
+theorem persisted_scope_precedes_next (persisted : List Nat) (n : Nat)
+    (h : n ∈ persisted) : n < nextScope persisted := by
+  induction persisted with
+  | nil => simp at h
+  | cons first rest ih =>
+      simp only [List.mem_cons] at h
+      simp only [nextScope, lastScope]
+      cases h with
+      | inl heq => subst n; omega
+      | inr hrest =>
+          have bound := ih hrest
+          simp only [nextScope] at bound
+          omega
+
 /-- The permission and audit boundary the capture is attributed to. -/
 abbrev NodeDid := Nat
 

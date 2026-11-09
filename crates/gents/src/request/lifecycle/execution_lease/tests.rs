@@ -2253,3 +2253,491 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
         );
     }
 }
+
+/// Parked-request fixtures act as the Agent that owns the request: the wait
+/// record and every lifecycle write are that Agent's documents.
+async fn parked_fixture() -> (
+    Arc<EmbeddedNode>,
+    crate::support::TestDb,
+    Arc<dyn crate::store::identity::NodeIdentity>,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+    crate::ConfigAccess,
+    RequestLifecycle,
+) {
+    let (node, db, identity, agent) = test_node().await;
+    let access = agent_access(&node, &identity, &agent);
+    let lifecycle = owner(&node, &identity, &agent).await;
+    (node, db, identity, agent, access, lifecycle)
+}
+
+async fn agent_update_request(access: &crate::ConfigAccess, doc_id: &str, input: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    access
+        .write(
+            "test.update_parked_request",
+            &format!(
+                r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ {input} }}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .expect("Agent updates its request");
+}
+
+async fn agent_set_backend_retry(
+    access: &crate::ConfigAccess,
+    doc_id: &str,
+    retry_at: DateTime<Utc>,
+) {
+    let doc = escape_graphql_string(doc_id);
+    let wait = access
+        .execute(&format!(
+            r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{ _docID }} }}"#
+        ))
+        .await
+        .expect("Agent reads its backend wait");
+    let wait_doc = escape_graphql_string(
+        wait["data"]["AgentRequestBackendWait"][0]["_docID"]
+            .as_str()
+            .expect("backend wait visible to its Agent"),
+    );
+    let retry_at = escape_graphql_string(&retry_at.to_rfc3339());
+    access
+        .write(
+            "test.set_backend_retry",
+            &format!(
+                r#"mutation {{ update_AgentRequestBackendWait(docID: "{wait_doc}", input: {{ retry_at: "{retry_at}" }}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .expect("Agent updates its backend wait");
+}
+
+#[tokio::test]
+async fn backend_park_releases_local_lease_only_after_durable_transition() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    assert!(lifecycle.execution_generation().is_err());
+    assert_eq!(lifecycle.state, LocalLifecycleState::Parked);
+    drop(lifecycle);
+    let row = request_row(&access, &doc_id).await;
+    assert_eq!(
+        row.lifecycle_state,
+        Some(RequestLifecycleState::WaitingForBackend)
+    );
+    assert!(row.execution_lease_expires_at.is_none());
+}
+
+#[tokio::test]
+async fn backend_wait_is_invisible_to_the_node_identity() {
+    let (node, _db, identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let query = format!(
+        r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(&doc_id)
+    );
+    let as_agent = access.execute(&query).await.unwrap();
+    assert_eq!(
+        as_agent["data"]["AgentRequestBackendWait"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let as_node = crate::ConfigAccess::local_as(node, identity.did().parse().unwrap())
+        .execute(&query)
+        .await
+        .unwrap();
+    assert!(as_node["data"]["AgentRequestBackendWait"]
+        .as_array()
+        .is_none_or(Vec::is_empty));
+}
+
+#[tokio::test]
+async fn session_interrupt_finds_parked_backend_request() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let active = crate::request::interrupt::active_session_request_with_access(
+        &access,
+        &request.session_id,
+        &request.node_did,
+        request.requester_did.as_deref(),
+    )
+    .await
+    .unwrap()
+    .expect("parked work is active for session control");
+    assert_eq!(active.doc_id.as_deref(), Some(request.doc_id.as_str()));
+    let interrupted = access
+        .transact_write("test.interrupt_parked_session", |txn| {
+            let request = &request;
+            Box::pin(async move {
+                crate::request::interrupt::interrupt_active_session_in_txn(
+                    txn,
+                    &request.session_id,
+                    &request.node_did,
+                    request.requester_did.as_deref(),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(interrupted.as_deref(), Some(request.request_id.as_str()));
+    assert!(
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            &access,
+            &request.doc_id
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+    let wake = crate::request::lifecycle::backend_wait::wake_parked_execution(
+        &access,
+        &request.doc_id,
+        "lease-test",
+        Some(chrono::Utc::now()),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        wake,
+        crate::request::lifecycle::backend_wait::WakeResult::Lost
+    ));
+}
+
+#[tokio::test]
+async fn backend_park_does_not_release_lease_when_interrupted() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    agent_update_request(
+        &access,
+        &lifecycle.request().doc_id,
+        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
+    )
+    .await;
+    assert!(!lifecycle.park_for_backend().await.unwrap());
+    assert!(lifecycle.execution_generation().is_ok());
+    assert_eq!(lifecycle.state, LocalLifecycleState::Streaming);
+}
+
+#[tokio::test]
+async fn parked_request_can_be_interrupted_once_without_a_live_lease() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    let generation = lifecycle.execution_generation().unwrap().to_owned();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    assert_eq!(
+        terminalize_parked_request(&access, &doc_id, &generation, true)
+            .await
+            .unwrap(),
+        TerminalizeResult::Lost
+    );
+    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    agent_update_request(
+        &access,
+        &doc_id,
+        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
+    )
+    .await;
+    assert_eq!(
+        terminalize_parked_request(&access, &doc_id, &generation, true)
+            .await
+            .unwrap(),
+        TerminalizeResult::Won
+    );
+    assert_eq!(
+        terminalize_parked_request(&access, &doc_id, &generation, true)
+            .await
+            .unwrap(),
+        TerminalizeResult::Lost
+    );
+    assert_eq!(
+        request_row(&access, &doc_id).await.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
+}
+
+#[tokio::test]
+async fn watcher_settles_interrupted_parked_work() {
+    use crate::request::watcher::Watcher;
+    let (node, _db, identity, agent, access, mut lifecycle) = parked_fixture().await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    agent_update_request(
+        &access,
+        &request.doc_id,
+        &format!(r#"interrupt_requested_at: "{interrupted_at}""#),
+    )
+    .await;
+    let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
+        node.clone(),
+        &request.node_did,
+        vec![agent_identity(&identity, &agent)],
+    )
+    .unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(2), watcher.next_request()).await;
+    assert_eq!(
+        request_row(&access, &request.doc_id).await.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
+}
+
+#[tokio::test]
+async fn watcher_finds_due_parked_work_after_recreation() {
+    use crate::request::watcher::Watcher;
+    let (node, _db, identity, agent, access, mut lifecycle) = parked_fixture().await;
+    let request = lifecycle.request().clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    agent_set_backend_retry(
+        &access,
+        &request.doc_id,
+        chrono::Utc::now() - chrono::Duration::seconds(1),
+    )
+    .await;
+    let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
+        node.clone(),
+        &request.node_did,
+        vec![agent_identity(&identity, &agent)],
+    )
+    .unwrap();
+    let found = tokio::time::timeout(Duration::from_secs(3), watcher.next_request())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.doc_id, request.doc_id);
+}
+
+#[tokio::test]
+async fn expired_backend_resume_is_reparked_and_old_generation_is_fenced() {
+    use crate::request::lifecycle::backend_wait::{
+        repark_expired_resume, wake_parked_execution, WakeResult,
+    };
+    let (node, _db, _identity, agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let WakeResult::Resumed { generation, .. } = wake_parked_execution(
+        &access,
+        &doc_id,
+        "lease-test",
+        Some(chrono::Utc::now()),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap() else {
+        panic!("request did not wake")
+    };
+    let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let expiry = escape_graphql_string(&expired);
+    agent_update_request(
+        &access,
+        &doc_id,
+        &format!(r#"execution_lease_expires_at: "{expiry}""#),
+    )
+    .await;
+    assert!(
+        !repark_expired_resume(&access, &doc_id, "wrong-generation", &expired)
+            .await
+            .unwrap()
+    );
+    assert!(
+        repark_expired_resume(&access, &doc_id, &generation, &expired)
+            .await
+            .unwrap()
+    );
+    let row = request_row(&access, &doc_id).await;
+    assert_eq!(
+        row.lifecycle_state,
+        Some(RequestLifecycleState::WaitingForBackend)
+    );
+    assert!(row.execution_lease_expires_at.is_none());
+    assert!(
+        !RequestExecutionLease::new(generation, identity::Did::new(&agent.agent_did).unwrap())
+            .owns_execution(&node, &doc_id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn parked_admission_requires_the_original_claimed_deadline() {
+    let (_node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    assert!(lifecycle.park_for_backend().await.unwrap());
+    let doc = escape_graphql_string(&doc_id);
+    let read = || async {
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ {} }} }}"#,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+        );
+        let response = access.execute(&query).await.unwrap();
+        serde_json::from_value::<AgentRequestRow>(response["data"]["AgentRequest"][0].clone())
+            .unwrap()
+    };
+    let row = read().await;
+    assert!(
+        crate::request::admission::verify_resumed_claim_version(&access, &row)
+            .await
+            .unwrap()
+    );
+    let changed =
+        escape_graphql_string(&(chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+    agent_update_request(&access, &doc_id, &format!(r#"deadline: "{changed}""#)).await;
+    let changed_row = read().await;
+    assert!(
+        !crate::request::admission::verify_resumed_claim_version(&access, &changed_row)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn backend_wake_adopts_fresh_lease_and_preserves_claim_binding() {
+    let (node, _db, identity, agent, _access, mut original) = parked_fixture().await;
+    let request = original.request().clone();
+    let old_generation = original.execution_generation().unwrap().to_owned();
+    let claim_cid = original.request_commit_cid().unwrap().to_owned();
+    let deadline = original.claimed_deadline_at();
+    assert!(original.park_for_backend().await.unwrap());
+    drop(original);
+    let managed = agent_identity(&identity, &agent);
+    let mut resumed = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        request,
+        60,
+        ExecutionOrigin::Interactive,
+        "lease-test".to_owned(),
+    );
+    resumed.bind_managed_agent(managed.as_ref()).unwrap();
+    assert!(resumed
+        .wake_for_backend(Some(chrono::Utc::now()))
+        .await
+        .unwrap());
+    assert_ne!(resumed.execution_generation().unwrap(), old_generation);
+    assert_eq!(resumed.request_commit_cid(), Some(claim_cid.as_str()));
+    assert_eq!(resumed.claimed_deadline_at(), deadline);
+    assert!(resumed.resumed_from_backend());
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node,
+        managed.as_ref(),
+        Duration::ZERO,
+    )
+    .unwrap();
+    resumed.begin_owned_execution(&writer).await.unwrap();
+    assert!(resumed.owns_execution().await.unwrap());
+}
+
+#[tokio::test]
+async fn backend_wait_parks_once_and_fences_the_execution_generation() {
+    use crate::request::lifecycle::backend_wait::{
+        park_owned_execution, wake_parked_execution, ParkResult, WakeResult,
+    };
+    let (_node, _db, _identity, _agent, access, lifecycle) = parked_fixture().await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    let generation = lifecycle.execution_generation().unwrap().to_owned();
+    let claim_cid = lifecycle.request_commit_cid().unwrap().to_owned();
+    let before = chrono::Utc::now();
+    assert_eq!(
+        park_owned_execution(&access, &doc_id, "another-generation", &claim_cid, before)
+            .await
+            .unwrap(),
+        ParkResult::Lost
+    );
+    assert_eq!(
+        park_owned_execution(&access, &doc_id, &generation, &claim_cid, before)
+            .await
+            .unwrap(),
+        ParkResult::Parked
+    );
+    assert_eq!(
+        park_owned_execution(&access, &doc_id, &generation, &claim_cid, before)
+            .await
+            .unwrap(),
+        ParkResult::AlreadyParked
+    );
+    assert_eq!(
+        park_owned_execution(&access, &doc_id, &generation, "another-claim", before)
+            .await
+            .unwrap(),
+        ParkResult::Lost
+    );
+    let data = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{0}" }} }}) {{ lifecycle_state deadline execution_lease_expires_at retry_count terminal_output }} AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{0}" }} }}) {{ _docID attempts retry_at claim_cid }} }}"#,
+        escape_graphql_string(&doc_id),
+    )).await.unwrap();
+    let row = &data["data"]["AgentRequest"][0];
+    let wait = &data["data"]["AgentRequestBackendWait"][0];
+    assert_eq!(row["lifecycle_state"], "waitingForBackend");
+    assert_eq!(wait["attempts"], 1);
+    assert_eq!(row["retry_count"], 0);
+    assert!(wait["retry_at"].as_str().is_some());
+    assert_eq!(wait["claim_cid"], claim_cid);
+    assert!(row["deadline"].as_str().is_some());
+    assert!(row["execution_lease_expires_at"].is_null());
+    assert!(row["terminal_output"].is_null());
+    assert!(!lifecycle.owns_execution().await.unwrap());
+    agent_set_backend_retry(
+        &access,
+        &doc_id,
+        chrono::Utc::now() + chrono::Duration::seconds(10),
+    )
+    .await;
+    assert_eq!(
+        wake_parked_execution(
+            &access,
+            &doc_id,
+            "lease-test",
+            Some(before - chrono::Duration::seconds(1)),
+            before
+        )
+        .await
+        .unwrap(),
+        WakeResult::NotDue,
+    );
+    assert_eq!(
+        wake_parked_execution(
+            &access,
+            &doc_id,
+            "wrong-backend",
+            Some(chrono::Utc::now()),
+            before
+        )
+        .await
+        .unwrap(),
+        WakeResult::Lost
+    );
+    let resumed = wake_parked_execution(
+        &access,
+        &doc_id,
+        "lease-test",
+        Some(chrono::Utc::now()),
+        before,
+    )
+    .await
+    .unwrap();
+    let WakeResult::Resumed {
+        generation: new_generation,
+        claim_cid: resumed_claim_cid,
+        ..
+    } = resumed
+    else {
+        panic!("expected a resumed generation");
+    };
+    assert_eq!(resumed_claim_cid, claim_cid);
+    assert_ne!(new_generation, generation);
+    let resumed_row = request_row(&access, &doc_id).await;
+    assert_eq!(
+        resumed_row.lifecycle_state,
+        Some(RequestLifecycleState::ResumingBackend)
+    );
+    assert_eq!(
+        resumed_row.execution_generation.as_deref(),
+        Some(new_generation.as_str())
+    );
+    assert!(!lifecycle.owns_execution().await.unwrap());
+}
