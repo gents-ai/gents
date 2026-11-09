@@ -397,7 +397,7 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
         "inference_sampling":[], "inference_execution":[], "tasks":[],
         "schedules":[], "triggers":[], "skills":[], "compactions":[],
         "tool_service_registries":[], "event_sources":[], "agent_targets":[],
-        "datastore_tool_surfaces":[], "sessions":[], "requests":[]
+        "datastore_tool_surfaces":[], "sessions":[], "requests":[], "backend_observations":[]
     }});
     let store = core.store().clone();
     wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -496,9 +496,26 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
     assert!(!requests.is_empty());
-    assert!(requests
-        .iter()
-        .all(|request| !request.headers.contains_key("authorization")));
+    // Passive reads are the User's: any bearer they carry is minted by the
+    // desktop's client key, never by the locked runtime identity.
+    let client = core.node_identity().did().to_owned();
+    for request in &requests {
+        let Some(authorization) = request.headers.get("authorization") else {
+            continue;
+        };
+        use base64::Engine as _;
+        let token = authorization
+            .to_str()
+            .unwrap()
+            .strip_prefix("Bearer ")
+            .expect("a bearer authorization");
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(token.split('.').nth(1).expect("a JWT payload"))
+            .unwrap();
+        let claims = String::from_utf8(claims).unwrap();
+        assert!(claims.contains(&client), "{claims}");
+        assert!(!claims.contains(&did), "{claims}");
+    }
     let settings = gents_desktop_core::inference::InferenceSetupState::project(
         &gents_desktop_core::client::ClientStore::default(),
         &did,
