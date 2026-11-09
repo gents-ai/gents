@@ -341,11 +341,13 @@ pub enum MenuAct {
 pub enum PackAct {
     /// Shows this page of the registry's search.
     Page(u32),
-    /// With `grant`, the pack's plugins get the authority they ask for.
+    /// With `grant`, the pack's plugins get the authority they ask for; `slots` are the
+    /// `slot=profile` models chosen so far.
     Install {
         pack: String,
         edited: EditedChoice,
         grant: bool,
+        slots: Vec<String>,
     },
     Update {
         pack: String,

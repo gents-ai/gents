@@ -5285,11 +5285,16 @@ async fn packs_wait_for_the_runtime() {
 }
 
 fn install(edited: EditedChoice, grant: bool) -> MenuAct {
+    install_bound(edited, grant, &[])
+}
+
+fn install_bound(edited: EditedChoice, grant: bool, slots: &[&str]) -> MenuAct {
     let pack = "acme/git".to_string();
     MenuAct::Pack(PackAct::Install {
         pack,
         edited,
         grant,
+        slots: slots.iter().map(|slot| slot.to_string()).collect(),
     })
 }
 
@@ -5325,7 +5330,7 @@ fn an_ungranted_install_asks_to_allow_it() {
     use EditedChoice::Refuse;
     let pack = "acme/git".to_string();
 
-    let answer = super::packs::installed(pack, Refuse, false, Err(ungranted()));
+    let answer = super::packs::installed(pack, Refuse, false, Vec::new(), Err(ungranted()));
 
     let (title, rows) = question(answer);
     assert_eq!(title, "Install acme/git");
@@ -5344,7 +5349,7 @@ fn an_edited_install_asks_replace_or_keep_and_keeps_the_grant() {
     use EditedChoice::{Keep, Overwrite, Refuse};
     let pack = "acme/git".to_string();
 
-    let answer = super::packs::installed(pack, Refuse, true, Err(edited_documents()));
+    let answer = super::packs::installed(pack, Refuse, true, Vec::new(), Err(edited_documents()));
 
     let (title, rows) = question(answer);
     assert_eq!(title, "Install acme/git");
@@ -5363,7 +5368,7 @@ fn a_replaced_install_can_still_ask_for_authority() {
     use EditedChoice::Overwrite;
     let pack = "acme/git".to_string();
 
-    let answer = super::packs::installed(pack, Overwrite, false, Err(ungranted()));
+    let answer = super::packs::installed(pack, Overwrite, false, Vec::new(), Err(ungranted()));
 
     let (_, rows) = question(answer);
     assert_eq!(
@@ -5373,13 +5378,57 @@ fn a_replaced_install_can_still_ask_for_authority() {
 }
 
 #[test]
+fn an_install_that_cannot_pick_a_model_asks_which_and_keeps_the_rest() {
+    use gents::pack::SlotBindingError;
+    use EditedChoice::Keep;
+    let profile = |id: &str, name: &str, model: &str| {
+        let profile = json!({
+            "profile_id": id, "display_name": name, "model_name": model,
+            "backend_id": "b", "usable": true,
+        });
+        serde_json::from_value(profile).unwrap()
+    };
+    let unbound = PackChangeError::Slots(SlotBindingError::Unbound {
+        pack: "acme/git".to_string(),
+        slots: vec!["web_researcher".to_string(), "summarizer".to_string()],
+        profiles: vec![
+            profile("profile-grok", "Grok", "grok-4.7"),
+            profile("profile-local", "", "qwen3-coder"),
+        ],
+    });
+    let chosen = vec!["reader=profile-grok".to_string()];
+    let pack = "acme/git".to_string();
+
+    let answer = super::packs::installed(pack, Keep, true, chosen, Err(unbound));
+
+    let (title, rows) = question(answer);
+    assert_eq!(title, "Install acme/git");
+    let pick = |profile| {
+        let slots = ["reader=profile-grok", profile];
+        install_bound(Keep, true, &slots)
+    };
+    assert_eq!(
+        rows,
+        [
+            (
+                " Which model should web_researcher use?".to_string(),
+                Tone::Label,
+                None
+            ),
+            choice(" Grok", pick("web_researcher=profile-grok")),
+            choice(" qwen3-coder", pick("web_researcher=profile-local")),
+        ]
+    );
+}
+
+#[test]
 fn an_install_says_what_it_did_or_why_not() {
     use EditedChoice::Refuse;
     let pack = || "acme/git".to_string();
     let failed = PackChangeError::Other(anyhow::anyhow!("offline").context("fetching acme/git"));
 
-    let done = super::packs::installed(pack(), Refuse, false, Ok(json!({})));
-    let refused = super::packs::installed(pack(), Refuse, false, Err(failed));
+    let done = super::packs::installed(pack(), Refuse, false, Vec::new(), Ok(json!({})));
+    let refused = super::packs::installed(pack(), Refuse, false, Vec::new(), Err(failed));
 
     assert_eq!(done, Update::Notice("Installed acme/git".to_string()));
     let why = "fetching acme/git: offline".to_string();
@@ -5462,6 +5511,7 @@ fn pack_rows_install_update_and_remove() {
         pack: "acme/web".to_string(),
         edited: Refuse,
         grant: false,
+        slots: Vec::new(),
     };
     assert_eq!(named(" acme/web").enter, Some(MenuAct::Pack(web)));
     assert_eq!(named(" acme/git · Installed").enter, None);

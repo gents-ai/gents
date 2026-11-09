@@ -77,6 +77,7 @@ fn a_registry_pack_page_lists_its_detail() {
         pack: "acme/git".to_string(),
         edited: EditedChoice::Refuse,
         grant: false,
+        slots: Vec::new(),
     });
 
     let (title, rows) = question(pack_page("acme/git", false, Ok(&info)));

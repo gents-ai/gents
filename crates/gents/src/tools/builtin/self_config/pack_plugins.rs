@@ -100,7 +100,8 @@ impl PackInstaller {
             &args.inference_slots,
             node_binding.as_ref(),
         )
-        .await?;
+        .await
+        .map_err(|error| error.into_anyhow())?;
         self.fence_bindings(&inference.bindings).await?;
         let notify_access = access.clone();
         let notify_node = self.core.node_did().to_owned();

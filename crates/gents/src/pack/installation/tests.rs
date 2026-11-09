@@ -163,7 +163,11 @@ fn pack_change_errors_keep_conflict_retry() {
     let other = || PackChangeError::Other(classified_conflict_for_test().into());
     let grant_other =
         || PackChangeError::Grant(GrantError::Other(classified_conflict_for_test().into()));
-    for error in [other(), grant_other()] {
+    let slots_other = || {
+        let other = crate::pack::SlotBindingError::Other(classified_conflict_for_test().into());
+        PackChangeError::Slots(other)
+    };
+    for error in [other(), grant_other(), slots_other()] {
         assert!(error.config_client_error().is_some(), "{error:#}");
         assert!(is_classified_transaction_conflict(&error.into_anyhow()));
     }
@@ -181,6 +185,12 @@ fn pack_change_errors_keep_conflict_retry() {
         asks: "HTTP to api.example.com".into(),
     });
     assert!(ungranted.config_client_error().is_none());
+    let unbound = PackChangeError::Slots(crate::pack::SlotBindingError::Unbound {
+        pack: "web".into(),
+        slots: vec!["web_researcher".into()],
+        profiles: Vec::new(),
+    });
+    assert!(unbound.config_client_error().is_none());
 }
 
 #[test]
@@ -2336,6 +2346,42 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
     prepare(crate::pack::InstalledVia::Operator).await.unwrap();
 }
 
+#[tokio::test]
+async fn prepare_returns_the_slot_it_cannot_pick_a_model_for() {
+    let manifest: crate::pack::PackManifest = serde_json::from_value(json!({
+        "manifest_version": 1, "name": "web", "version": "1", "description": "Web",
+        "kind": "documents", "authors": ["Demo"],
+        "assets": ["README.md", "pack_config.json"], "config": "pack_config.json",
+        "inference_slots": [{"name": "web_researcher", "description": "researches", "agents": ["web"]}],
+    }))
+    .unwrap();
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    crate::documents::ensure_node(&node, OWNER).await.unwrap();
+    crate::test_support::install_test_agent(&node, OWNER, "claude").await;
+    crate::test_support::install_test_agent(&node, OWNER, "grok").await;
+    let access = ConfigAccess::local(node);
+    let refused = prepare_document_pack_install(
+        &access,
+        OWNER,
+        &manifest,
+        &config(&[]),
+        &Default::default(),
+        &[],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &|_| None,
+        &Default::default(),
+    )
+    .await;
+    let Err(PackChangeError::Slots(crate::pack::SlotBindingError::Unbound { slots, .. })) = refused
+    else {
+        panic!("two usable profiles leave the slot to the person installing");
+    };
+    assert_eq!(slots, ["web_researcher"]);
+}
+
 #[test]
 fn pack_job_block_targets_outside_pack_and_dependencies_are_refused() {
     operator_refusal(json!({"agent_targets": ["wf-run", "elsewhere"]}));
@@ -3191,6 +3237,7 @@ async fn prepare_naming_plugin(
         &Default::default(),
     )
     .await
+    .map_err(PackChangeError::into_anyhow)
 }
 
 #[tokio::test]
@@ -3257,6 +3304,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
             &Default::default(),
         )
         .await
+        .map_err(PackChangeError::into_anyhow)
     }
     let error = match prepare_remote(
         &access,

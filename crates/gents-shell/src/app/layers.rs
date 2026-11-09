@@ -1904,6 +1904,7 @@ mod tests {
             pack: pack.to_string(),
             edited: EditedChoice::Refuse,
             grant: true,
+            slots: Vec::new(),
         })
     }
 

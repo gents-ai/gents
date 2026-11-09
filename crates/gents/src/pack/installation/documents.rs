@@ -379,27 +379,30 @@ pub async fn prepare_document_pack_install(
     root_archive: Option<&PackArchive>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     // The caller renders `config`; this records the values it used, with an
     // installed root keeping its recorded values for omitted variables.
-    let root = match root_archive {
-        Some(archive) => {
-            let root = root_install_variables(access, owner, manifest).await?;
-            let path = manifest.config.as_deref().context("pack has no config")?;
-            let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
-            let captured = std::sync::Mutex::new(BTreeMap::new());
-            super::super::interpolate::inspect_install_variables(&authored, &|name| {
-                if name == "GENTS_PACK_NODE_DID" {
-                    return Some(owner.to_owned());
-                }
-                capture_variable(&captured, name, || root.resolve(name, environment))
-            })
-            .map_err(|names| anyhow::anyhow!("unset variables: {}", names.join(", ")))?;
-            let variables = captured.into_inner().unwrap_or_else(|e| e.into_inner());
-            root.with_variables(variables)
-        }
-        None => RootInstallVariables::default(),
-    };
+    let root = async {
+        Ok::<_, anyhow::Error>(match root_archive {
+            Some(archive) => {
+                let root = root_install_variables(access, owner, manifest).await?;
+                let path = manifest.config.as_deref().context("pack has no config")?;
+                let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
+                let captured = std::sync::Mutex::new(BTreeMap::new());
+                super::super::interpolate::inspect_install_variables(&authored, &|name| {
+                    if name == "GENTS_PACK_NODE_DID" {
+                        return Some(owner.to_owned());
+                    }
+                    capture_variable(&captured, name, || root.resolve(name, environment))
+                })
+                .map_err(|names| anyhow::anyhow!("unset variables: {}", names.join(", ")))?;
+                let variables = captured.into_inner().unwrap_or_else(|e| e.into_inner());
+                root.with_variables(variables)
+            }
+            None => RootInstallVariables::default(),
+        })
+    }
+    .await?;
     prepare_document_pack_install_inner(
         None,
         BTreeMap::new(),
@@ -690,6 +693,7 @@ async fn prepare_document_pack_archive_inputs(
         overrides,
     )
     .await
+    .map_err(PackChangeError::into_anyhow)
 }
 
 /// The installed root's live configuration, read before an upgrade so the
@@ -885,21 +889,17 @@ async fn prepare_document_pack_install_inner(
     hosted: Option<&HostedPackPreparation>,
     root: RootInstallVariables,
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     if let Some(archive) = root_archive {
-        anyhow::ensure!(
-            serde_json::to_value(archive.manifest())? == serde_json::to_value(manifest)?,
-            "prepared pack manifest does not match the archive"
-        );
+        if serde_json::to_value(archive.manifest()).map_err(anyhow::Error::from)?
+            != serde_json::to_value(manifest).map_err(anyhow::Error::from)?
+        {
+            return Err(anyhow::anyhow!("prepared pack manifest does not match the archive").into());
+        }
     }
-    anyhow::ensure!(
-        document_ux_install_allowed(
-            !manifest.metadata.ux.is_empty(),
-            plugin_home.is_some() || hosted.is_some(),
-            installed_via
-        ),
-        "document packs with UX require an operator install with the node's local home"
-    );
+    if !(document_ux_install_allowed( !manifest.metadata.ux.is_empty(), plugin_home.is_some() || hosted.is_some(), installed_via )) {
+        return Err(anyhow::anyhow!("document packs with UX require an operator install with the node's local home").into());
+    }
     for dependency in dependencies {
         if let Some(hosted) = hosted {
             if !dependency.manifest().metadata.ux.is_empty() {
@@ -908,8 +908,9 @@ async fn prepare_document_pack_install_inner(
                     dependency.manifest().metadata.namespace,
                     dependency.manifest().name
                 );
-                anyhow::ensure!(hosted.operator_ux_digests.get(&coordinate).map(String::as_str) == Some(dependency.digest()),
-                    "dependency {coordinate} with UX must be operator installed at the reviewed digest");
+                if hosted.operator_ux_digests.get(&coordinate).map(String::as_str) != Some(dependency.digest()) {
+                    return Err(anyhow::anyhow!("dependency {coordinate} with UX must be operator installed at the reviewed digest").into());
+                }
             }
         } else {
             require_installed_dependency_ux(
@@ -922,17 +923,9 @@ async fn prepare_document_pack_install_inner(
     }
     validate_dependency_overrides(dependencies, overrides)?;
     for slot in requested.keys() {
-        anyhow::ensure!(
-            std::iter::once(manifest)
-                .chain(dependencies.iter().map(|p| p.manifest()))
-                .any(|m| m
-                    .metadata
-                    .inference_slots
-                    .iter()
-                    .any(|declared| &declared.name == slot)),
-            "pack {} and its dependencies have no inference slot {slot:?}",
-            manifest.name
-        );
+        if !(std::iter::once(manifest) .chain(dependencies.iter().map(|p| p.manifest())) .any(|m| m .metadata .inference_slots .iter() .any(|declared| &declared.name == slot))) {
+            return Err(anyhow::anyhow!("pack {} and its dependencies have no inference slot {slot:?}", manifest.name).into());
+        }
     }
     let selected = |manifest: &super::super::PackManifest| {
         requested
@@ -996,8 +989,9 @@ async fn prepare_document_pack_install_inner(
                 owner,
             )?;
             for (slot, profile) in &requested_dependency {
-                anyhow::ensure!(bindings.get(slot) == Some(profile),
-                    "installed dependency {coordinate} already uses a different profile for {slot:?}; update it explicitly before installing its dependent");
+                if bindings.get(slot) != Some(profile) {
+                    return Err(anyhow::anyhow!("installed dependency {coordinate} already uses a different profile for {slot:?}; update it explicitly before installing its dependent").into());
+                }
             }
             let mut preview = super::super::inspect_pack_inference_bindings_with_node_binding(
                 access,
@@ -1047,9 +1041,10 @@ async fn prepare_document_pack_install_inner(
                     path.to_owned(),
                     crate::store::config_client::preview_schema_install(
                         access,
-                        std::str::from_utf8(sdl)?,
+                        std::str::from_utf8(sdl).map_err(anyhow::Error::from)?,
                     )
-                    .await?,
+                    .await
+                    .map_err(anyhow::Error::from)?,
                 ));
                 assets.insert(path.to_owned(), sdl.to_vec());
             }
@@ -1131,10 +1126,9 @@ async fn prepare_document_pack_install_inner(
                     crate::plugin::store::content_digest_hex(archive.asset(&plugin.artifact)?)
                 );
                 if let Some(previous) = shipped_digests.insert(coordinate.clone(), digest.clone()) {
-                    anyhow::ensure!(
-                        previous == digest,
-                        "pack graph ships conflicting artifacts for plugin {coordinate}"
-                    );
+                    if previous != digest {
+                        return Err(anyhow::anyhow!("pack graph ships conflicting artifacts for plugin {coordinate}").into());
+                    }
                 }
             }
         }

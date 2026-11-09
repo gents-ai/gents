@@ -3,7 +3,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local};
-use gents::pack::PackChangeError;
+use gents::pack::{PackChangeError, SlotBindingError};
 use gents::plugin::authority::GrantError;
 use gents::store::config_client::ConfigAccess;
 use gents::store::local::storage_backend::drive_unsendable;
@@ -369,6 +369,7 @@ fn registry_row(pack: &Value, installed: &[Value]) -> MenuRow {
                 pack: name.clone(),
                 edited: EditedChoice::Refuse,
                 grant: false,
+                slots: Vec::new(),
             })),
             more,
             ..row(format!(" {name}{description}"), Tone::Plain)
@@ -384,18 +385,10 @@ pub(super) async fn install(
     pack: String,
     edited: EditedChoice,
     grant: bool,
+    slots: Vec<String>,
 ) -> Result<Value, PackChangeError> {
-    let install = move |home| {
-        crate::packs::install(
-            home,
-            pack,
-            None,
-            Vec::new(),
-            documents(edited),
-            grant,
-            false,
-        )
-    };
+    let install =
+        move |home| crate::packs::install(home, pack, None, slots, documents(edited), grant, false);
     change(&runtime, &home, install).await
 }
 
@@ -441,17 +434,20 @@ pub(super) fn confirm_remove(pack: String) -> Update {
 }
 
 /// What an install says (`PacksPanel.tsx:139-156`): the toast, or the `window.confirm` asked
-/// before trying again. A retry keeps what the other question chose.
+/// before trying again. A retry keeps what the other questions chose. Where the desktop only
+/// toasts that a pack's slot needs a model, the shell asks which, one slot per retry.
 pub(super) fn installed(
     pack: String,
     edited: EditedChoice,
     grant: bool,
+    slots: Vec<String>,
     done: Result<Value, PackChangeError>,
 ) -> Update {
-    let install = |edited, grant| PackAct::Install {
+    let install = |edited, grant, slots| PackAct::Install {
         pack: pack.clone(),
         edited,
         grant,
+        slots,
     };
     let title = format!("Install {pack}");
     match done {
@@ -459,18 +455,36 @@ pub(super) fn installed(
         Err(refusal @ PackChangeError::Grant(GrantError::Ungranted { .. })) => {
             let allow = vec![
                 row(" Allow it?".to_string(), Tone::Label),
-                choice(" Allow", install(edited, true)),
+                choice(" Allow", install(edited, true, slots)),
             ];
             ask(title, &refusal, allow)
         }
         Err(refusal @ PackChangeError::Edited { .. }) => {
-            let replace = install(EditedChoice::Overwrite, grant);
-            let keep = install(EditedChoice::Keep, grant);
+            let replace = install(EditedChoice::Overwrite, grant, slots.clone());
+            let keep = install(EditedChoice::Keep, grant, slots);
             ask(title, &refusal, keep_or_replace(replace, keep))
         }
-        Err(error @ (PackChangeError::Grant(GrantError::Other(_)) | PackChangeError::Other(_))) => {
-            Update::Notice(format!("{error:#}"))
+        Err(PackChangeError::Slots(SlotBindingError::Unbound {
+            slots: unbound,
+            profiles,
+            ..
+        })) => {
+            let slot = &unbound[0];
+            let profiles = serde_json::to_value(profiles).unwrap_or_default();
+            let mut rows = vec![row(format!(" Which model should {slot} use?"), Tone::Label)];
+            rows.extend(usable(&profiles).map(|profile| {
+                let id = profile["profile_id"].as_str().unwrap_or_default();
+                let chosen = slots.iter().cloned().chain([format!("{slot}={id}")]);
+                let pick = install(edited, grant, chosen.collect());
+                choice(&format!(" {}", profile_name(profile)), pick)
+            }));
+            Update::Ask { title, rows }
         }
+        Err(
+            error @ (PackChangeError::Grant(GrantError::Other(_))
+            | PackChangeError::Slots(SlotBindingError::Other(_))
+            | PackChangeError::Other(_)),
+        ) => Update::Notice(format!("{error:#}")),
     }
 }
 
@@ -491,9 +505,11 @@ pub(super) fn updated(pack: String, done: Result<Value, PackChangeError>) -> Upd
                 keep_or_replace(replace, keep),
             )
         }
-        Err(error @ (PackChangeError::Grant(_) | PackChangeError::Other(_))) => {
-            Update::Notice(format!("{error:#}"))
-        }
+        Err(
+            error @ (PackChangeError::Grant(_)
+            | PackChangeError::Slots(_)
+            | PackChangeError::Other(_)),
+        ) => Update::Notice(format!("{error:#}")),
     }
 }
 
@@ -677,6 +693,7 @@ pub(super) fn pack_page(pack: &str, installed: bool, info: Result<&Value, &str>)
             pack: pack.to_string(),
             edited: EditedChoice::Refuse,
             grant: false,
+            slots: Vec::new(),
         };
         rows.push(choice(" Install", install));
     }

@@ -40,6 +40,7 @@ pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
     install_pack_documents, install_pack_documents_with_expectations,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
+    SlotBindingError,
 };
 pub(crate) use inference::{
     inspect_pack_inference_bindings_with_node_binding,

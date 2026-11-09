@@ -950,6 +950,8 @@ pub enum PackChangeError {
     #[error(transparent)]
     Grant(#[from] GrantError),
     #[error(transparent)]
+    Slots(#[from] super::SlotBindingError),
+    #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
 
@@ -961,6 +963,7 @@ impl PackChangeError {
     pub fn into_anyhow(self) -> anyhow::Error {
         match self {
             Self::Other(error) | Self::Grant(GrantError::Other(error)) => error,
+            Self::Slots(error) => error.into_anyhow(),
             refusal => refusal.into(),
         }
     }
@@ -981,8 +984,12 @@ impl From<crate::store::config_client::ConfigClientError> for PackChangeError {
 impl crate::store::config_client::TransactionFailure for PackChangeError {
     fn config_client_error(&self) -> Option<&crate::store::config_client::ConfigClientError> {
         match self {
-            Self::Edited { .. } | Self::Grant(GrantError::Ungranted { .. }) => None,
-            Self::Other(error) | Self::Grant(GrantError::Other(error)) => {
+            Self::Edited { .. }
+            | Self::Grant(GrantError::Ungranted { .. })
+            | Self::Slots(super::SlotBindingError::Unbound { .. }) => None,
+            Self::Other(error)
+            | Self::Grant(GrantError::Other(error))
+            | Self::Slots(super::SlotBindingError::Other(error)) => {
                 crate::store::config_client::TransactionFailure::config_client_error(error)
             }
         }

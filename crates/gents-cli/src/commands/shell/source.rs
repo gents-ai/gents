@@ -745,10 +745,11 @@ impl Source {
                 pack,
                 edited,
                 grant,
+                slots,
             } => self.pack_change(
                 Some(format!("Installing {pack}…")),
-                packs::install(runtime, home, pack.clone(), edited, grant),
-                move |done| packs::installed(pack, edited, grant, done),
+                packs::install(runtime, home, pack.clone(), edited, grant, slots.clone()),
+                move |done| packs::installed(pack, edited, grant, slots, done),
             ),
             PackAct::Update { pack, edited } => self.pack_change(
                 Some(format!("Updating {pack}…")),
@@ -1888,6 +1889,7 @@ mod tests {
             pack: "acme/git".to_string(),
             edited: gents_shell::source::EditedChoice::Refuse,
             grant: false,
+            slots: Vec::new(),
         };
         let act = MenuAct::Pack(install);
         let menu = MenuId::Packs;
@@ -1929,7 +1931,8 @@ mod tests {
             coordinate: "acme/git".to_string(),
             edited: vec!["skill review".to_string()],
         };
-        let answer = |done| packs::installed("acme/git".to_string(), Refuse, false, done);
+        let answer =
+            |done| packs::installed("acme/git".to_string(), Refuse, false, Vec::new(), done);
 
         source.pack_change(
             Some("Installing acme/git…".into()),
@@ -1952,7 +1955,8 @@ mod tests {
     async fn a_success_reads_packs_again() {
         use gents_shell::source::EditedChoice::Refuse;
         let (mut source, told, mut watched, _dirs) = without_runtime();
-        let answer = |done| packs::installed("acme/git".to_string(), Refuse, false, done);
+        let answer =
+            |done| packs::installed("acme/git".to_string(), Refuse, false, Vec::new(), done);
 
         let done = async { Ok(serde_json::json!({})) };
         source.pack_change(Some("Installing acme/git…".into()), done, answer);
