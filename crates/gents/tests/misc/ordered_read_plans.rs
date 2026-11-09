@@ -406,7 +406,8 @@ fn inventory(root: &Path) -> BTreeSet<Read> {
 }
 
 fn binding_value(value: &str) -> String {
-    let session = |requester| gents::session::session_scope_filter("probe", "probe", requester);
+    let session =
+        |requester| gents_protocol::session::session_scope_filter("probe", "probe", requester);
     match value {
         "@session" => session(Some("probe")),
         "@session-absent" => session(None),
@@ -585,7 +586,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
     );
     let dir = tempfile::tempdir().unwrap();
     let identity = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
-    let node = gents::defra_node::EmbeddedNode::builder()
+    let node = gents::defra_node::Node::builder()
         .with_node_identity_did(gents::NodeIdentity::did(&identity))
         .data_path(dir.path().join("db"))
         .build()
@@ -683,7 +684,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
             }
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     for exception in exceptions {
         if !used_exceptions.contains(&exception.read) {
             failures.push(format!(

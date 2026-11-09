@@ -50,6 +50,23 @@ def recordServerRouteReceipt
       appliedRoutes := insert (clientToServerRoute r d) s.appliedRoutes }
   else s
 
+/-- Startup may reconcile already authorized routes, but cannot create enrollment
+requests, decisions, or authorization revisions. -/
+def reconcileExisting (s : State) (r : Request) (d : Decision) : State :=
+  materializeClientRoute (materializeMembership s r d) r d
+
+theorem reconciliation_preserves_enrollment_authority (s : State) (r : Request) (d : Decision) :
+    (reconcileExisting s r d).acceptedRequests = s.acceptedRequests ∧
+    (reconcileExisting s r d).decisions = s.decisions ∧
+    (reconcileExisting s r d).authorizations = s.authorizations := by
+  simp only [reconcileExisting, materializeClientRoute, materializeMembership]
+  split_ifs <;> simp_all
+
+theorem reconciliation_without_current_approval_cannot_add_membership
+    (s : State) (r : Request) (d : Decision) (h : ¬ currentApproval s r d) :
+    (reconcileExisting s r d).memberships = s.memberships := by
+  simp [reconcileExisting, materializeClientRoute, materializeMembership, h]
+
 def revokeAdmissible (s : State) (r : Request) (revision : AuthorizationRevision) : Prop :=
   r ∈ s.acceptedRequests ∧ revisionMatchesRequest r revision ∧
   revision.kind = .revoked ∧ revision.adminSigned = true ∧

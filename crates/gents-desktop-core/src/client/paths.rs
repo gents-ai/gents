@@ -23,15 +23,14 @@ impl DesktopPaths {
     }
 
     fn discover_with_env(env_root: Option<OsString>) -> Result<Self> {
-        if let Some(root) = env_root.filter(|value| !value.is_empty()) {
-            return Ok(Self::from_root(root));
-        }
-
-        let root = dirs::data_local_dir()
-            .ok_or_else(|| anyhow!("unable to resolve a local application data directory"))?
-            .join("gents")
-            .join("desktop");
-
+        let root = match env_root.filter(|value| !value.is_empty()) {
+            Some(root) => PathBuf::from(root),
+            None => dirs::data_local_dir()
+                .ok_or_else(|| anyhow!("unable to resolve a local application data directory"))?
+                .join("gents")
+                .join("desktop"),
+        };
+        gents::store::local::home::refuse_real_gents_home(&root, DESKTOP_HOME_ENV);
         Ok(Self::from_root(root))
     }
 

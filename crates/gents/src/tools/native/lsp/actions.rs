@@ -72,7 +72,7 @@ pub async fn dispatch(
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
             let states = pool
-                .inspect_session(&session_id, &config.agent_id, workspace, &config.digest)
+                .inspect_session(&session_id, &config.agent_did, workspace, &config.digest)
                 .await
                 .map_err(|error| ToolError::reported_failure(FailureClass::PolicyDenied, error))?;
             Ok(status_text(states, &config.servers, workspace))
@@ -83,7 +83,7 @@ pub async fn dispatch(
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
             let retired = pool
-                .reload_snapshot(&session_id, &config.agent_id, workspace, &config.digest)
+                .reload_snapshot(&session_id, &config.agent_did, workspace, &config.digest)
                 .await;
             Ok(format!(
                 "retired {retired} language-server client(s) for the current snapshot"

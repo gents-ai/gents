@@ -3,18 +3,17 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use tokio::process::Command;
 
 pub(super) fn path_arg(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
 pub(super) async fn run_cli_text(bin: &Path, args: &[String]) -> Result<String> {
-    let output = Command::new(bin)
-        .args(args)
-        .output()
-        .await
-        .context("running gents subcommand")?;
+    let output = gents::tools::exec::native_spawn::output_tokio(
+        tokio::process::Command::new(bin).args(args),
+    )
+    .await
+    .context("running gents subcommand")?;
     if !output.status.success() {
         bail!(
             "gents {} failed: {}",
@@ -25,7 +24,7 @@ pub(super) async fn run_cli_text(bin: &Path, args: &[String]) -> Result<String> 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-pub(super) async fn run_cli_json(bin: &Path, args: &[String]) -> Result<Value> {
+pub(crate) async fn run_cli_json(bin: &Path, args: &[String]) -> Result<Value> {
     let stdout = run_cli_text(bin, args).await?;
     serde_json::from_str(stdout.trim()).with_context(|| {
         format!(
@@ -40,12 +39,13 @@ pub(super) async fn run_cli_json_with_env(
     args: &[String],
     environment: BTreeMap<String, String>,
 ) -> Result<Value> {
-    let output = Command::new(bin)
-        .args(args)
-        .envs(environment)
-        .output()
-        .await
-        .context("running gents subcommand")?;
+    let output = gents::tools::exec::native_spawn::output_tokio(
+        tokio::process::Command::new(bin)
+            .args(args)
+            .envs(environment),
+    )
+    .await
+    .context("running gents subcommand")?;
     if !output.status.success() {
         bail!(
             "gents {} failed: {}",

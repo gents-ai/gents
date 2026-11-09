@@ -66,39 +66,22 @@ def decodeReach (doc : Doc) : Option Reach := do
   pure { enabled, engineerTag }
 
 /-- Tools `integrations` text for the plugin `acme/wf` with a job block: the
-empty ceiling but `max_live`, and the policy mode `dynamic`. -/
+specified `max_live` and policy mode `dynamic`. -/
 def jobIntegrations (maxLive : Nat) (dynamic : String) : FieldValue :=
-  "{\"plugins\":[{\"plugin\":\"acme/wf\",\"job\":{\"agent_targets\":[],\"max_live\":"
+  "{\"plugins\":[{\"plugin\":\"acme/wf\",\"job\":{\"agent_targets\":[\"target\"],\"max_live\":"
     ++ toString maxLive
-    ++ ",\"max_spawns\":0,\"max_messages_per_slot\":0,\"result_bytes\":0,\"max_wall_secs\":0,"
+    ++ ",\"max_spawns\":128,\"max_messages_per_slot\":4,\"result_bytes\":65536,\"max_wall_secs\":7200,"
     ++ "\"policy\":{\"dynamic\":\"" ++ dynamic
     ++ "\",\"dynamic_targets\":[],\"trusted_packs\":[]}}}]}"
 
-def fixtureJob (maxLive : Nat) (mode : PluginJob.DynamicMode) : List (String × JobGrant) :=
-  [("acme/wf",
-    { ceiling := { PluginJob.Ceiling.empty with maxLive := maxLive }
-    , policy := { mode := mode, dynamicTargets := [], trustedPacks := [] } })]
-
-/-- Fixture decoder for the `integrations` values used below; every other
-value, and an absent field, carries no job block. -/
-def decodeJob (doc : Doc) : List (String × JobGrant) :=
-  match doc "integrations" with
-  | some t =>
-      if t = jobIntegrations 8 "check" then fixtureJob 8 .check
-      else if t = jobIntegrations 4 "check" then fixtureJob 4 .check
-      else if t = jobIntegrations 4 "off" then fixtureJob 4 .off
-      else []
-  | none => []
-
 /-- Fixture decoder; production projects `OperatorGrants::from_tools_json`. -/
 def decodeGrants (doc : Doc) : Option Grants :=
-  let job := decodeJob doc
   match doc "self_config" with
   | some "{\"enable_self_config\":true,\"enable_pack_install\":true}" =>
-      some { Grants.bot with packInstall := true, job := job }
+      some { Grants.bot with packInstall := true }
   | some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"enable_pack_install\":true}" =>
-      some { Grants.bot with packInstall := true, job := job }
-  | _ => some { Grants.bot with job := job }
+      some { Grants.bot with packInstall := true }
+  | _ => some Grants.bot
 
 def awsAuthText : String :=
   "{\"kind\":\"aws_credentials\",\"access_key_id\":\"AKIDEXAMPLE\",\"secret_access_key\":\"secret\"}"
@@ -114,6 +97,9 @@ def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"node_oauth\",\"account_ref\":\"g2\"}" => some (.nodeOAuth (some "g2"))
   | "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}" => some (.nodeOAuthPool false)
   | "{\"kind\":\"node_oauth_pool\",\"allow_overage\":true}" => some (.nodeOAuthPool true)
+  | "{\"kind\":\"credential\",\"id\":\"c1\",\"version\":\"v1\"}" => some (.credential "c1" "v1")
+  | "{\"kind\":\"credential\",\"id\":\"c2\",\"version\":\"v2\"}" => some (.credential "c2" "v2")
+  | "{\"kind\":\"api_key\",\"key\":\"operator-secret\"}" => some (.apiKey "operator-secret")
   | text =>
     if text = awsAuthText then some (.awsCredentials "AKIDEXAMPLE" "secret" none)
     else if text = googleAuthText then some (.googleCredentials "{}")
@@ -213,7 +199,7 @@ def examples : List (Target × FieldKey × FieldValue) :=
   , (.agentContext, "system_prompt", "You are concise.")
   , (.compaction, "threshold", "0.75")
   , (.tools, "host", "{\"root\":\"/workspace\"}")
-  , (.agentTarget, "agent_id", "gatekeeper")
+  , (.agentTarget, "agent_did", "gatekeeper")
   , (.skill, "instructions", "Read the checklist before reviewing.")
   , (.datastoreToolSurface, "entries", "[{tool_name: submit_job, collection: Job}]")
   , (.inferenceProfile, "model_name", "model-1")
@@ -253,6 +239,14 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .agent, guarded := false, validates := true
     , doc := [("node_did", "did:key:node-a")]
     , patch := [("node_did", some "did:key:node-b")] }
+  , { name := "agent_creation_nonce_set_rejected"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_did", "worker"), ("creation_nonce", "original")]
+    , patch := [("creation_nonce", some "replacement")] }
+  , { name := "agent_creation_nonce_clear_rejected"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_did", "worker"), ("creation_nonce", "original")]
+    , patch := [("creation_nonce", none)] }
   , { name := "agent_invalid_reference_rejected"
     , target := .agent, guarded := false, validates := false
     , doc := [("context_id", "context-1")]
@@ -317,19 +311,19 @@ def scenarios : List CaseRow := examplesToRows ++
         some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"self_config_categories\":[\"tools\"]}")] }
   , { name := "agent_guarded_self_disable_rejected"
     , target := .agent, guarded := true, validates := true
-    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
+    , doc := [("agent_did", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("enabled", some "false")] }
   , { name := "agent_guarded_engineer_tag_removal_rejected"
     , target := .agent, guarded := true, validates := true
-    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
+    , doc := [("agent_did", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("tags", some "[\"ui:engineer\"]")] }
   , { name := "agent_guarded_tag_addition_accepted"
     , target := .agent, guarded := true, validates := true
-    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
+    , doc := [("agent_did", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("tags", some "[\"gents:engineer\",\"ui:engineer\"]")] }
   , { name := "task_targeting_invoker_unguarded_accepted"
     , target := .task, guarded := false, validates := true
-    , doc := [("task_id", "engineer-inbox"), ("agent_id", "default")]
+    , doc := [("task_id", "engineer-inbox"), ("agent_did", "default")]
     , patch := [("prompt_template", some "Review {{ doc.outcome }}")] }
   , { name := "backend_observation_patch_rejected"
     , target := .inferenceBackend, guarded := false, validates := true
@@ -371,6 +365,14 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
     , patch := [("auth", some "{\"kind\":\"aws_credentials\",\"access_key_id\":\"AKIDEXAMPLE\",\"secret_access_key\":\"secret\"}")] }
+  , { name := "backend_credential_reference_change_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"credential\",\"id\":\"c1\",\"version\":\"v1\"}")]
+    , patch := [("auth", some "{\"kind\":\"credential\",\"id\":\"c2\",\"version\":\"v2\"}")] }
+  , { name := "backend_credential_to_raw_key_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"credential\",\"id\":\"c1\",\"version\":\"v1\"}")]
+    , patch := [("auth", some "{\"kind\":\"api_key\",\"key\":\"operator-secret\"}")] }
   , { name := "backend_aws_credentials_kept_endpoint_edit_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"aws_credentials\",\"access_key_id\":\"AKIDEXAMPLE\",\"secret_access_key\":\"secret\"}")]
@@ -503,38 +505,38 @@ def scenarios : List CaseRow := examplesToRows ++
     , tools := [("granted", grantedTools)] }
   , { name := "agent_grant_reselect_without_held_rejected"
     , target := .agent, guarded := false, validates := true
-    , doc := [("agent_id", "worker"), ("context_id", "ctx-plain")]
+    , doc := [("agent_did", "worker"), ("context_id", "ctx-plain")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
     , tools := [("plain", plainTools), ("granted", grantedTools)] }
   , { name := "agent_reselect_away_from_granted_tools_accepted"
     , target := .agent, guarded := false, validates := true
-    , doc := [("agent_id", "worker"), ("context_id", "ctx-granted")]
+    , doc := [("agent_did", "worker"), ("context_id", "ctx-granted")]
     , patch := [("context_id", some "ctx-plain")]
     , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
     , tools := [("plain", plainTools), ("granted", grantedTools)] }
   , { name := "clone_granted_source_without_held_rejected"
     , target := .agent, guarded := false, validates := true
-    , doc := [("agent_id", "copy")]
+    , doc := [("agent_did", "copy")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-granted", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "clone_granted_source_with_held_accepted"
     , target := .agent, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
-    , doc := [("agent_id", "copy")]
+    , doc := [("agent_did", "copy")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-granted", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "clone_plain_source_without_held_accepted"
     , target := .agent, guarded := false, validates := true
-    , doc := [("agent_id", "copy")]
+    , doc := [("agent_did", "copy")]
     , patch := [("context_id", some "ctx-plain")]
     , contexts := [("ctx-plain", some "plain")]
     , tools := [("plain", plainTools)] }
   , { name := "clone_source_without_tools_accepted"
     , target := .agent, guarded := false, validates := true
-    , doc := [("agent_id", "copy")]
+    , doc := [("agent_did", "copy")]
     , patch := [("context_id", some "ctx-bare")]
     , contexts := [("ctx-bare", none)] }
   , { name := "tools_job_ceiling_narrowing_accepted"
@@ -542,22 +544,22 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true}"),
         ("integrations", jobIntegrations 8 "check")]
     , patch := [("integrations", some (jobIntegrations 4 "check"))] }
-  , { name := "tools_job_ceiling_widening_with_held_rejected"
+  , { name := "tools_job_ceiling_widening_with_held_accepted"
     , target := .tools, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("self_config", "{\"enable_self_config\":true}"),
         ("integrations", jobIntegrations 4 "check")]
     , patch := [("integrations", some (jobIntegrations 8 "check"))] }
-  , { name := "tools_job_policy_edit_rejected"
+  , { name := "tools_job_policy_edit_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
         ("integrations", jobIntegrations 4 "check")]
     , patch := [("integrations", some (jobIntegrations 4 "off"))] }
-  , { name := "tools_job_block_added_rejected"
+  , { name := "tools_job_block_added_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]
     , patch := [("integrations", some (jobIntegrations 4 "check"))] }
-  , { name := "context_select_job_tools_from_none_with_held_rejected"
+  , { name := "context_select_job_tools_from_none_with_held_accepted"
     , target := .agentContext, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
     , doc := [("context_id", "ctx")]
@@ -614,11 +616,11 @@ theorem self_config_cases_cover_reselection :
 theorem self_config_cases_cover_job_guard :
     (selfConfigCases.any (fun w =>
         w.row.name == "tools_job_ceiling_narrowing_accepted" && w.accepted)
-      && ["tools_job_ceiling_widening_with_held_rejected", "tools_job_policy_edit_rejected",
-          "tools_job_block_added_rejected",
-          "context_select_job_tools_from_none_with_held_rejected"].all (fun n =>
+      && ["tools_job_ceiling_widening_with_held_accepted", "tools_job_policy_edit_accepted",
+          "tools_job_block_added_accepted",
+          "context_select_job_tools_from_none_with_held_accepted"].all (fun n =>
         selfConfigCases.any (fun w =>
-          w.row.name == n && w.admissiblePatch && !w.accepted))) = true := by
+          w.row.name == n && w.admissiblePatch && w.accepted))) = true := by
   native_decide
 
 def publishedProfiles : List String := ["fast", "deep"]

@@ -1,16 +1,14 @@
-use std::time::Duration;
-
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use tauri::{AppHandle, Runtime, State};
 
 use crate::error::BridgeError;
 
 use super::emit_config_update_and_snapshot;
-use crate::commands::{remove_peer, rename_peer, repair_p2p};
+use crate::commands::{remove_peer, rename_peer};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    DesktopClientSnapshot, EnrollmentRequestView, EnrollmentStatusRequest, NetworkReplicatorView,
-    NetworkSavedPeerView, NetworkStatusView, PeerRemoveResponse, PeerStatusFetchRequest,
+    DesktopClientSnapshot, EnrollmentRequestView, EnrollmentStatusRequest, PeerRemoveResponse,
+    PeerStatusFetchRequest,
 };
 
 #[tauri::command]
@@ -46,24 +44,6 @@ pub async fn desktop_peer_enroll_status(
         return Err(BridgeError::untyped("desktop client is not running"));
     };
     crate::commands::request_status_enrollment(&core, request).await
-}
-
-#[tauri::command]
-pub async fn desktop_p2p_repair<R>(
-    app: AppHandle<R>,
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError>
-where
-    R: Runtime,
-{
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-
-    repair_p2p(core.as_ref(), Duration::from_millis(250))
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
 #[tauri::command]
@@ -104,58 +84,4 @@ where
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     emit_config_update_and_snapshot(&app, &core, &state).await
-}
-
-#[tauri::command]
-pub async fn desktop_network_status(
-    state: State<'_, DesktopAppState>,
-) -> Result<NetworkStatusView, BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-
-    let status = core.network_status().await;
-    fn split<T>(probe: Result<T, String>, empty: T) -> (T, Option<String>) {
-        match probe {
-            Ok(value) => (value, None),
-            Err(error) => (empty, Some(error)),
-        }
-    }
-    let (local_peer_id, local_peer_id_error) = match status.local_peer_id {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    };
-    let (listen_addresses, listen_addresses_error) = split(status.listen_addresses, Vec::new());
-    let (connected_peers, connected_peers_error) = split(status.connected_peers, Vec::new());
-    let (replicators, replicators_error) = split(status.replicators, Vec::new());
-    Ok(NetworkStatusView {
-        local_peer_id,
-        local_peer_id_error,
-        listen_addresses,
-        listen_addresses_error,
-        connected_peers,
-        connected_peers_error,
-        replicators: replicators
-            .into_iter()
-            .map(|replicator| NetworkReplicatorView {
-                peer_id: replicator.peer_id,
-                address: replicator.address,
-                collections: replicator.collections,
-                status: replicator.status,
-                last_status_change: replicator.last_status_change,
-            })
-            .collect(),
-        replicators_error,
-        saved_peers: status
-            .saved_peers
-            .into_iter()
-            .map(|record| NetworkSavedPeerView {
-                peer_id: record.peer_id,
-                label: record.label,
-                addr: record.addr,
-                node_did: record.node_did,
-                source: record.source,
-            })
-            .collect(),
-    })
 }

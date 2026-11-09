@@ -211,10 +211,10 @@ fn stable_uuid_is_a_deterministic_version_4_uuid() {
 }
 
 #[test]
-fn agent_id_has_claude_codes_spawned_agent_shape() {
-    let id = agent_id(b"session-1");
-    assert_eq!(id, agent_id(b"session-1"));
-    assert_ne!(id, agent_id(b"session-2"));
+fn agent_did_has_claude_codes_spawned_agent_shape() {
+    let id = agent_did(b"session-1");
+    assert_eq!(id, agent_did(b"session-1"));
+    assert_ne!(id, agent_did(b"session-2"));
     assert_eq!(id.len(), 17);
     assert!(id.starts_with('a'));
     assert!(id[1..]

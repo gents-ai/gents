@@ -112,13 +112,22 @@ async fn call_installed_inner(
         let writes: Vec<gents_protocol::job::DataWrite> = serde_json::from_value(writes)
             .context("plugin writes must be an array of data writes")?;
         if !writes.is_empty() {
-            let stamps = gents::plugin::data::StampContext::Ux { node_did };
+            let caller_did = access
+                .actor_did()
+                .context("plugin writes require the user's authenticated identity")?;
+            anyhow::ensure!(
+                caller_did != node_did,
+                "plugin writes require the user's identity"
+            );
+            let actor = identity::Did::new(caller_did.clone())?;
+            let stamps = gents::plugin::data::StampContext::Ux { caller_did };
+            let schemas = &record.data_collection_schemas;
             access
                 .transact_write("ux_plugin.writes", |txn| {
-                    let (grant, stamps, writes) = (&grant, &stamps, writes.clone());
+                    let (grant, stamps, writes, actor) = (&grant, &stamps, writes.clone(), &actor);
                     Box::pin(async move {
-                        gents::plugin::application_write::apply_plugin_writes_in_txn(
-                            txn, grant, stamps, writes,
+                        gents::plugin::application_write::apply_signed_plugin_writes_in_txn(
+                            txn, actor, grant, stamps, writes, schemas,
                         )
                         .await
                     })
@@ -227,6 +236,7 @@ mod tests {
             model_binding: None,
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
         }
     }
 
@@ -256,26 +266,28 @@ mod tests {
 
     #[tokio::test]
     async fn ux_plugin_writes_are_scoped_and_atomic() {
-        let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        node.add_collection("type UxNote { body: String }")
+        // The operator is the home's enrolled User, writing as itself.
+        let client = crate::shared::test_support::ClientHome::new().await;
+        client
+            .node()
+            .add_collection("type UxNote { body: String }")
             .await
             .unwrap();
-        let access = gents::ConfigAccess::local(node);
+        let access = client.access.clone();
+        let node_did = client.node_did().to_owned();
         let bytes = build_echo_plugin();
         let mut record = sample_record(&bytes);
         record.declaration.data = Some(gents_protocol::job::PluginDataDeclaration {
             collections: vec!["UxNote".into()],
-            ops: vec!["insert".into()],
+            ops: vec!["insert".into(), "update".into(), "delete".into()],
             stamped: Default::default(),
         });
         record
             .data_collection_fields
             .insert("UxNote".into(), vec!["body".into()]);
+        record
+            .data_collection_schemas
+            .insert("UxNote".into(), "type UxNote { body: String }".into());
         let home = tempfile::tempdir().unwrap();
         store::store_bytes(
             home.path(),
@@ -284,7 +296,7 @@ mod tests {
         )
         .unwrap();
         store::write_record(home.path(), &record).unwrap();
-        let caller = || Some((access.clone(), "did:key:z6Mknode".to_owned()));
+        let caller = || Some((access.clone(), node_did.clone()));
         let result = call_installed_for_operator(home.path(), "gents", "echo", serde_json::json!({
             "response": "ok", "writes": [{"op": "insert", "collection": "UxNote", "fields": {"body": "one"}}]
         }), caller()).await.unwrap();
@@ -304,8 +316,32 @@ mod tests {
         )
         .await;
         assert!(refused.is_err());
+        let rows = access.execute("{ UxNote { _docID body } }").await.unwrap();
+        assert_eq!(rows["data"]["UxNote"].as_array().unwrap().len(), 1);
+        assert_eq!(rows["data"]["UxNote"][0]["body"], "one");
+        // Updates and deletes are signed by the User against the pack's schema too.
+        let doc = rows["data"]["UxNote"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        call_installed_for_operator(home.path(), "gents", "echo", serde_json::json!({
+            "writes": [{"op": "update", "collection": "UxNote", "doc_id": doc, "fields": {"body": "uno"}}]
+        }), caller()).await.unwrap();
         let rows = access.execute("{ UxNote { body } }").await.unwrap();
-        assert_eq!(rows["data"]["UxNote"], serde_json::json!([{"body": "one"}]));
+        assert_eq!(rows["data"]["UxNote"], serde_json::json!([{"body": "uno"}]));
+        call_installed_for_operator(
+            home.path(),
+            "gents",
+            "echo",
+            serde_json::json!({
+                "writes": [{"op": "delete", "collection": "UxNote", "doc_id": doc, "fields": {}}]
+            }),
+            caller(),
+        )
+        .await
+        .unwrap();
+        let rows = access.execute("{ UxNote { body } }").await.unwrap();
+        assert_eq!(rows["data"]["UxNote"], serde_json::json!([]));
     }
 
     #[tokio::test]

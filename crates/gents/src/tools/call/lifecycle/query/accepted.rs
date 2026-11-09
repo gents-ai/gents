@@ -1,33 +1,45 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 
 use crate::request::streaming::AcceptedToolCall;
-use crate::session::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 #[cfg(test)]
 use crate::store::config_client::ConfigAccess;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
+use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 
 use super::ToolCallLifecycle;
 
 impl ToolCallLifecycle {
+    /// The accepted dispatch binding of a direct call, read as the owning
+    /// Agent, which alone sees its Agent-owned call rows.
     #[cfg(test)]
-    pub(crate) async fn load_accepted_for_dispatch(
+    pub(crate) async fn load_accepted_for_dispatch_as(
         node: &std::sync::Arc<EmbeddedNode>,
+        actor: identity::Did,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,
         requester_did: Option<&str>,
     ) -> Result<AcceptedToolCall> {
-        Self::load_direct_binding(node, tool_doc_id, node_did, session_id, requester_did, true)
-            .await
+        Self::load_direct_binding(
+            node,
+            actor,
+            tool_doc_id,
+            node_did,
+            session_id,
+            requester_did,
+            true,
+        )
+        .await
     }
 
     #[cfg(test)]
-    pub(super) async fn load_direct_binding(
+    async fn load_direct_binding(
         node: &std::sync::Arc<EmbeddedNode>,
+        actor: identity::Did,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,
@@ -36,7 +48,7 @@ impl ToolCallLifecycle {
     ) -> Result<AcceptedToolCall> {
         ConfigAccess::transact_local_readonly(
             node,
-            None,
+            Some(actor),
             "tool_call.load_direct_admission",
             |txn| {
                 Box::pin(Self::load_direct_binding_in_txn(
@@ -60,7 +72,8 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
         require_complete: bool,
     ) -> Result<AcceptedToolCall> {
-        let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+        let scope =
+            gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
         let tool_id = escape_graphql_string(tool_doc_id);
         let response = txn
             .execute(&format!(
@@ -98,7 +111,7 @@ impl ToolCallLifecycle {
             .as_u64()
             .and_then(|value| u32::try_from(value).ok())
             .context("accepted tool lacks valid message sequence")?;
-        let await_mode = crate::tools::call::lifecycle::AwaitMode::from_persisted(
+        let await_mode = gents_protocol::tool_call::AwaitMode::from_persisted(
             tool["await_mode"].as_str().unwrap_or("foreground"),
         )
         .context("accepted tool has an invalid await mode")?;
@@ -166,7 +179,24 @@ impl ToolCallLifecycle {
             "accepted header does not uniquely bind this physical tool"
         );
         let (call_id, arguments) = matches[0];
+        let request_doc = escape_graphql_string(request_doc_id);
+        let owner = txn
+            .execute_local_response(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ agent_did }} }}"#
+            ))
+            .await?;
+        let agent = owner
+            .data
+            .as_ref()
+            .and_then(|data| data["AgentRequest"].as_array())
+            .and_then(|rows| rows.first())
+            .context("tool owner request is missing or ambiguous")?["agent_did"]
+            .as_str()
+            .context("accepted tool request is missing its agent DID")?;
+        let actor = identity::Did::new(agent.to_owned())?;
         Ok(AcceptedToolCall {
+            actor,
+            agent_signer: txn.managed_agent_signer(),
             tool_call_doc_id: tool_doc_id.to_owned(),
             request_doc_id: request_doc_id.to_owned(),
             session_id: session_id.to_owned(),

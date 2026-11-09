@@ -1,4 +1,0 @@
----- MODULE MCReversePairing ----
-EXTENDS ReversePairing
-
-====

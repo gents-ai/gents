@@ -5,10 +5,16 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use defra_http::ExtractIdentity;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 #[derive(Clone)]
 pub(crate) struct HttpAuthority {
     configured: Option<(String, u16)>,
+    advertised: Option<(String, u16)>,
+    startup_gate: Option<(Arc<AtomicBool>, String)>,
 }
 
 impl HttpAuthority {
@@ -19,7 +25,26 @@ impl HttpAuthority {
                 url.port_or_known_default()?,
             ))
         });
-        Self { configured }
+        Self {
+            configured,
+            advertised: None,
+            startup_gate: None,
+        }
+    }
+
+    /// The HTTP listener is bound before native Node ownership is observed.
+    /// Keep every external operation closed until bootstrap completes; the
+    /// private, instance-specific bind probe is the sole exception.
+    pub(crate) fn with_startup_gate(mut self, gate: Arc<AtomicBool>, probe_path: String) -> Self {
+        self.startup_gate = Some((gate, probe_path));
+        self
+    }
+
+    /// An explicitly configured public origin can differ from the listener
+    /// behind a proxy. Never infer it from forwarded headers or incoming DNS.
+    pub(crate) fn with_advertised_endpoint(mut self, endpoint: Option<&str>) -> Self {
+        self.advertised = endpoint.and_then(|value| Self::for_endpoint(value).configured);
+        self
     }
 
     pub(crate) fn protect_http(
@@ -59,13 +84,22 @@ impl HttpAuthority {
                 return false;
             }
         }
-        port == *bound_port
-            && (host == *configured_host
-                || matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]"))
+        self.advertised
+            .as_ref()
+            .is_some_and(|(advertised_host, advertised_port)| {
+                host == *advertised_host && port_matches(port, *advertised_port)
+            })
+            || port_matches(port, *bound_port)
+                && (host == *configured_host
+                    || matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]"))
     }
 }
 
-fn parse_authority(value: &str) -> Option<(String, u16)> {
+fn port_matches(actual: Option<u16>, expected: u16) -> bool {
+    actual.map_or(matches!(expected, 80 | 443), |port| port == expected)
+}
+
+fn parse_authority(value: &str) -> Option<(String, Option<u16>)> {
     if value.contains('@') {
         return None;
     }
@@ -75,13 +109,13 @@ fn parse_authority(value: &str) -> Option<(String, u16)> {
     }
     let suffix = authority.as_str().strip_prefix(authority.host())?;
     let port = if suffix.is_empty() {
-        80
+        None
     } else {
         let digits = suffix.strip_prefix(':')?;
         if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
         }
-        digits.parse::<u16>().ok()?
+        Some(digits.parse::<u16>().ok()?)
     };
     Some((authority.host().to_ascii_lowercase(), port))
 }
@@ -97,6 +131,18 @@ async fn require_authority(
         return failure(
             StatusCode::MISDIRECTED_REQUEST,
             "This authority does not serve the runtime.",
+        );
+    }
+    if authority
+        .startup_gate
+        .as_ref()
+        .is_some_and(|(ready, probe)| {
+            !ready.load(Ordering::Acquire) && request.uri().path() != probe
+        })
+    {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Runtime access is not ready.",
         );
     }
     next.run(request).await

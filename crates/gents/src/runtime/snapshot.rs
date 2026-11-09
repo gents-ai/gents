@@ -3,30 +3,51 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use futures::future::BoxFuture;
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
-use crate::documents::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
-pub use crate::documents::ConcurrencyMode;
-pub use crate::documents::ScheduleCadence;
-use crate::documents::TaskHook;
+use crate::documents::automation::{
+    ResolvedAutomation, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
+};
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
-use crate::request::watcher::AgentRequest;
 use crate::store::identity::RuntimeNode;
+use crate::tools::background::agent_identity_watch::{
+    AgentIdentityWatch, AgentIdentityWatchClosed, WatchedAndActiveAgents,
+};
 use crate::tools::surface::ToolSurface;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::node_readiness::{
     effective_agent_readiness_admission, EffectiveAgentReadinessAdmission,
 };
+use gents_protocol::row::AgentRequest;
 
 pub type DispatcherMap = RapidHashMap<String, mpsc::Sender<AgentRequest>>;
+
+#[derive(Clone)]
+pub(crate) struct ResolvedWatcherIdentity(pub(crate) Arc<dyn crate::store::identity::NodeIdentity>);
+
+impl std::fmt::Debug for ResolvedWatcherIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ResolvedWatcherIdentity")
+            .field(&self.0.did())
+            .finish()
+    }
+}
+
+impl PartialEq for ResolvedWatcherIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.did() == other.0.did()
+    }
+}
+impl Eq for ResolvedWatcherIdentity {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnavailableAgent {
     pub public_reason: AgentReadinessUnavailableReason,
     pub diagnostic: String,
+    pub(crate) watcher_identity: Option<ResolvedWatcherIdentity>,
 }
 
 impl UnavailableAgent {
@@ -37,7 +58,16 @@ impl UnavailableAgent {
         Self {
             public_reason,
             diagnostic: diagnostic.into(),
+            watcher_identity: None,
         }
+    }
+
+    pub(crate) fn with_watcher_identity(
+        mut self,
+        identity: Arc<dyn crate::store::identity::NodeIdentity>,
+    ) -> Self {
+        self.watcher_identity = Some(ResolvedWatcherIdentity(identity));
+        self
     }
 
     pub fn public_message(&self) -> &'static str {
@@ -78,125 +108,11 @@ pub(crate) fn effective_agent_admission<'a>(
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedTask {
-    pub emit_outcome: bool,
-    pub task_id: String,
-    pub name: Option<String>,
-    pub agent_id: String,
-    pub prompt_template: String,
-    pub goal_objective_template: Option<String>,
-    pub goal_token_budget: Option<i64>,
-    #[allow(dead_code)]
-    pub output_schema_ref: Option<String>,
-    pub hooks: Vec<TaskHook>,
-}
-
-impl ResolvedTask {
-    pub(crate) fn display_label(&self) -> &str {
-        self.name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&self.task_id)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedSchedule {
-    pub session_id_template: Option<String>,
-    pub trigger_doc_id: String,
-    pub schedule_id: String,
-    #[allow(dead_code)]
-    pub task_id: String,
-    pub task: ResolvedTask,
-    pub cadence: ScheduleCadence,
-    #[allow(dead_code)]
-    pub enabled: bool,
-    pub concurrency: ConcurrencyMode,
-}
-
-pub const MAX_EVENT_TRIGGER_GROUP_DOCS: usize = 256;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EventTriggerFireMode {
-    PerDocument,
-    PerGroup,
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedEventTrigger {
-    pub session_id_template: Option<String>,
-    pub trigger_doc_id: String,
-    pub trigger_id: String,
-    #[allow(dead_code)]
-    pub task_id: String,
-    pub task: ResolvedTask,
-    pub source_collection: String,
-    pub event_kind: String,
-    pub filter: Option<String>,
-    #[allow(dead_code)]
-    pub enabled: bool,
-    pub concurrency: ConcurrencyMode,
-    pub fire_mode: EventTriggerFireMode,
-    pub correlation_field: Option<String>,
-    pub expected_count: Option<usize>,
-    pub expected_count_field: Option<String>,
-    pub group_timeout_secs: Option<u64>,
-    pub group_min_count: usize,
-    pub workspace_authority: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ResolvedAutomation {
-    pub(crate) tasks: RapidHashMap<String, ResolvedTask>,
-    pub(crate) schedules: RapidHashMap<String, ResolvedSchedule>,
-    pub(crate) unavailable_schedules: RapidHashSet<String>,
-    pub(crate) event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
-    pub(crate) unavailable_event_triggers: RapidHashSet<String>,
-}
-
-pub(crate) fn seed_schedule_next_run_at(
-    cadence: &ScheduleCadence,
-    now: DateTime<Utc>,
-) -> Result<DateTime<Utc>> {
-    match cadence {
-        ScheduleCadence::Interval { .. } => Ok(now),
-        ScheduleCadence::Cron {
-            expression,
-            timezone,
-            ..
-        } => next_cron_run_after(expression, timezone, now),
-    }
-}
-
-pub(crate) fn advance_schedule_next_run_at(
-    cadence: &ScheduleCadence,
-    parsed_next_run_at: DateTime<Utc>,
-    now: DateTime<Utc>,
-) -> Result<DateTime<Utc>> {
-    match cadence {
-        ScheduleCadence::Interval { interval_secs } => {
-            Ok(parsed_next_run_at + ChronoDuration::seconds(*interval_secs))
-        }
-        ScheduleCadence::Cron {
-            expression,
-            timezone,
-            missed_run_policy,
-        } => match missed_run_policy {
-            None | Some(CronMissedRunPolicy::LatestOnly) => {
-                next_cron_run_after(expression, timezone, now)
-            }
-        },
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) node: Option<Arc<RuntimeNode>>,
     pub(crate) local_did: String,
-    pub(crate) default_agent_id: String,
+    pub(crate) default_agent_did: String,
     pub(crate) agents: RapidHashMap<String, Arc<ResolvedAgent>>,
     pub(crate) tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
@@ -211,41 +127,43 @@ pub(crate) struct ResolvedRuntimeSnapshot {
 impl ResolvedRuntimeSnapshot {
     pub(crate) fn validate_node_readiness_source(&self) -> Result<()> {
         let canonical = |value: &str| !value.is_empty() && value == value.trim();
-        if !canonical(&self.default_agent_id) {
+        if !canonical(&self.default_agent_did) {
             anyhow::bail!(
                 "default agent {:?} is not a canonical agent identifier",
-                self.default_agent_id
+                self.default_agent_did
             );
         }
         if self
             .agents
             .keys()
             .chain(self.unavailable_agents.keys())
-            .any(|agent_id| !canonical(agent_id))
+            .any(|agent_did| !canonical(agent_did))
         {
             anyhow::bail!("runtime agent identifiers must be non-empty and trimmed");
         }
-        let runnable_agent_ids = self.agents.keys().collect::<BTreeSet<_>>();
-        let tool_surface_agent_ids = self.tool_surfaces.keys().collect::<BTreeSet<_>>();
-        if runnable_agent_ids != tool_surface_agent_ids {
-            let missing = runnable_agent_ids
-                .difference(&tool_surface_agent_ids)
-                .map(|agent_id| agent_id.as_str())
+        let runnable_agent_dids = self.agents.keys().collect::<BTreeSet<_>>();
+        let tool_surface_agent_dids = self.tool_surfaces.keys().collect::<BTreeSet<_>>();
+        if runnable_agent_dids != tool_surface_agent_dids {
+            let missing = runnable_agent_dids
+                .difference(&tool_surface_agent_dids)
+                .map(|agent_did| agent_did.as_str())
                 .collect::<Vec<_>>();
-            let extra = tool_surface_agent_ids
-                .difference(&runnable_agent_ids)
-                .map(|agent_id| agent_id.as_str())
+            let extra = tool_surface_agent_dids
+                .difference(&runnable_agent_dids)
+                .map(|agent_did| agent_did.as_str())
                 .collect::<Vec<_>>();
             anyhow::bail!(
                 "runnable agent/tool-surface keysets differ (missing={missing:?}, extra={extra:?})"
             );
         }
-        if !self.agents.contains_key(&self.default_agent_id)
-            && !self.unavailable_agents.contains_key(&self.default_agent_id)
+        if !self.agents.contains_key(&self.default_agent_did)
+            && !self
+                .unavailable_agents
+                .contains_key(&self.default_agent_did)
         {
             anyhow::bail!(
                 "default agent {:?} is not assigned to the resolved runtime",
-                self.default_agent_id
+                self.default_agent_did
             );
         }
         Ok(())
@@ -253,13 +171,13 @@ impl ResolvedRuntimeSnapshot {
 
     #[allow(dead_code)]
     pub(crate) fn from_parts(
-        default_agent_id: String,
+        default_agent_did: String,
         agents: Vec<Arc<ResolvedAgent>>,
         tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
         unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     ) -> Self {
         Self::from_parts_with_admission_configs(
-            default_agent_id,
+            default_agent_did,
             agents,
             tool_surfaces,
             RapidHashMap::new(),
@@ -268,7 +186,7 @@ impl ResolvedRuntimeSnapshot {
     }
 
     pub(crate) fn from_parts_with_admission_configs(
-        default_agent_id: String,
+        default_agent_did: String,
         agents: Vec<Arc<ResolvedAgent>>,
         tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
         backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
@@ -277,10 +195,10 @@ impl ResolvedRuntimeSnapshot {
         Self {
             node: None,
             local_did: String::new(),
-            default_agent_id,
+            default_agent_did,
             agents: agents
                 .into_iter()
-                .map(|agent| (agent.agent_id.clone(), agent))
+                .map(|agent| (agent.agent_did.clone(), agent))
                 .collect(),
             tool_surfaces,
             backend_admission_configs,
@@ -315,26 +233,34 @@ impl ResolvedRuntimeSnapshot {
     /// Applies the unavailable-agent cascades that resolution runs for agents it
     /// rejects: drop local agent targets of the agent, and mark its tasks,
     /// schedules and event triggers unavailable.
-    pub(crate) fn demote_agent(&mut self, agent_id: &str, reason: UnavailableAgent) {
-        self.agents.remove(agent_id);
-        self.tool_surfaces.remove(agent_id);
-        self.unavailable_agents.insert(agent_id.to_string(), reason);
+    pub(crate) fn demote_agent(&mut self, agent_did: &str, reason: UnavailableAgent) {
+        let identity = self
+            .agents
+            .remove(agent_did)
+            .map(|agent| agent.agent_identity.clone());
+        self.tool_surfaces.remove(agent_did);
+        let reason = match identity {
+            Some(identity) => reason.with_watcher_identity(identity),
+            None => reason,
+        };
+        self.unavailable_agents
+            .insert(agent_did.to_string(), reason);
 
-        let active_agent_ids = self.agents.keys().cloned().collect::<RapidHashSet<_>>();
+        let active_agent_dids = self.agents.keys().cloned().collect::<RapidHashSet<_>>();
         for surface in self.tool_surfaces.values_mut() {
-            Arc::make_mut(surface).retain_agent_targets(&self.local_did, &active_agent_ids);
+            Arc::make_mut(surface).retain_agent_targets(&self.local_did, &active_agent_dids);
         }
         self.active_tasks
-            .retain(|_, task| task.agent_id != agent_id);
+            .retain(|_, task| task.agent_did != agent_did);
         self.active_schedules.retain(|trigger_id, schedule| {
-            let keep = schedule.task.agent_id != agent_id;
+            let keep = schedule.task.agent_did != agent_did;
             if !keep {
                 self.unavailable_schedules.insert(trigger_id.clone());
             }
             keep
         });
         self.active_event_triggers.retain(|trigger_id, event| {
-            let keep = event.task.agent_id != agent_id;
+            let keep = event.task.agent_did != agent_did;
             if !keep {
                 self.unavailable_event_triggers.insert(trigger_id.clone());
             }
@@ -350,11 +276,11 @@ impl ResolvedRuntimeSnapshot {
     ) -> ActiveRuntimeSnapshot {
         let agent_executor_capacities = dispatchers
             .keys()
-            .map(|agent_id| (agent_id.clone(), 1))
+            .map(|agent_did| (agent_did.clone(), 1))
             .collect();
         let agent_executor_queue_capacities = dispatchers
             .iter()
-            .map(|(agent_id, dispatcher)| (agent_id.clone(), dispatcher.max_capacity()))
+            .map(|(agent_did, dispatcher)| (agent_did.clone(), dispatcher.max_capacity()))
             .collect();
         self.activate_with_executor_metadata(
             generation,
@@ -381,7 +307,7 @@ impl ResolvedRuntimeSnapshot {
             generation,
             node: self.node,
             local_did: self.local_did,
-            default_agent_id: self.default_agent_id,
+            default_agent_did: self.default_agent_did,
             agents: self.agents,
             tool_surfaces: self.tool_surfaces,
             backend_admission_configs: self.backend_admission_configs,
@@ -399,7 +325,7 @@ impl ResolvedRuntimeSnapshot {
 
     pub(crate) fn configuration_fingerprint(&self) -> String {
         configuration_fingerprint(
-            &self.default_agent_id,
+            &self.default_agent_did,
             &self.local_did,
             &self.agents,
             &self.tool_surfaces,
@@ -419,7 +345,7 @@ pub struct ActiveRuntimeSnapshot {
     pub generation: u64,
     pub node: Option<Arc<RuntimeNode>>,
     pub local_did: String,
-    pub default_agent_id: String,
+    pub default_agent_did: String,
     pub agents: RapidHashMap<String, Arc<ResolvedAgent>>,
     pub tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
     pub backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
@@ -434,6 +360,36 @@ pub struct ActiveRuntimeSnapshot {
     pub agent_executor_queue_capacities: RapidHashMap<String, usize>,
 }
 
+/// The background owners' view of the active Agent signers: each consumer
+/// holds its own receiver, so its `changed` marks only its own observation.
+pub(crate) struct ActiveSnapshotAgentIdentities(watch::Receiver<Arc<ActiveRuntimeSnapshot>>);
+
+impl ActiveSnapshotAgentIdentities {
+    pub(crate) fn boxed(
+        snapshots: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    ) -> Box<dyn AgentIdentityWatch> {
+        Box::new(Self(snapshots))
+    }
+}
+
+impl AgentIdentityWatch for ActiveSnapshotAgentIdentities {
+    fn watcher_identities(&self) -> Result<Vec<Arc<dyn crate::store::identity::NodeIdentity>>> {
+        self.0.borrow().watcher_identities()
+    }
+
+    fn watched_and_active_agents(&self) -> Result<WatchedAndActiveAgents> {
+        let snapshot = self.0.borrow();
+        Ok((
+            snapshot.watcher_identities()?,
+            snapshot.agents.keys().cloned().collect(),
+        ))
+    }
+
+    fn changed(&mut self) -> BoxFuture<'_, std::result::Result<(), AgentIdentityWatchClosed>> {
+        Box::pin(async move { self.0.changed().await.map_err(|_| AgentIdentityWatchClosed) })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct AgentExecutorStatus {
     pub(crate) worker_capacity: usize,
@@ -442,8 +398,34 @@ pub(crate) struct AgentExecutorStatus {
 }
 
 impl ActiveRuntimeSnapshot {
-    pub(crate) fn agent(&self, agent_id: &str) -> Option<&Arc<ResolvedAgent>> {
-        self.agents.get(agent_id)
+    pub(crate) fn watcher_identities(
+        &self,
+    ) -> Result<Vec<Arc<dyn crate::store::identity::NodeIdentity>>> {
+        let mut identities = self
+            .agents
+            .iter()
+            .map(|(did, agent)| {
+                anyhow::ensure!(
+                    did == &agent.agent_did && did == agent.agent_identity.did(),
+                    "runtime snapshot has an inconsistent agent identity"
+                );
+                Ok(agent.agent_identity.clone())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (did, unavailable) in &self.unavailable_agents {
+            if let Some(identity) = &unavailable.watcher_identity {
+                anyhow::ensure!(
+                    did == identity.0.did(),
+                    "runtime snapshot has an inconsistent unavailable agent identity"
+                );
+                identities.push(identity.0.clone());
+            }
+        }
+        Ok(identities)
+    }
+
+    pub(crate) fn agent(&self, agent_did: &str) -> Option<&Arc<ResolvedAgent>> {
+        self.agents.get(agent_did)
     }
 
     pub(crate) fn active_schedules(&self) -> &RapidHashMap<String, ResolvedSchedule> {
@@ -454,37 +436,33 @@ impl ActiveRuntimeSnapshot {
         &self.active_event_triggers
     }
 
-    pub(crate) fn active_tasks(&self) -> &RapidHashMap<String, ResolvedTask> {
-        &self.active_tasks
+    pub(crate) fn tool_surface(&self, agent_did: &str) -> Option<&Arc<ToolSurface>> {
+        self.tool_surfaces.get(agent_did)
     }
 
-    pub(crate) fn tool_surface(&self, agent_id: &str) -> Option<&Arc<ToolSurface>> {
-        self.tool_surfaces.get(agent_id)
-    }
-
-    pub(crate) fn unavailable_public_message(&self, agent_id: &str) -> Option<&'static str> {
+    pub(crate) fn unavailable_public_message(&self, agent_did: &str) -> Option<&'static str> {
         self.unavailable_agents
-            .get(agent_id)
+            .get(agent_did)
             .map(UnavailableAgent::public_message)
     }
 
     pub(crate) fn agent_executor_statuses(&self) -> BTreeMap<String, AgentExecutorStatus> {
-        let mut agent_ids = self
+        let mut agent_dids = self
             .agents
             .keys()
             .chain(self.dispatchers.keys())
             .chain(self.agent_executor_capacities.keys())
             .cloned()
             .collect::<BTreeSet<_>>();
-        agent_ids.extend(self.agent_executor_queue_capacities.keys().cloned());
+        agent_dids.extend(self.agent_executor_queue_capacities.keys().cloned());
 
-        agent_ids
+        agent_dids
             .into_iter()
-            .map(|agent_id| {
-                let dispatcher = self.dispatchers.get(&agent_id);
+            .map(|agent_did| {
+                let dispatcher = self.dispatchers.get(&agent_did);
                 let queue_capacity = self
                     .agent_executor_queue_capacities
-                    .get(&agent_id)
+                    .get(&agent_did)
                     .copied()
                     .or_else(|| dispatcher.map(mpsc::Sender::max_capacity))
                     .unwrap_or_default();
@@ -493,11 +471,11 @@ impl ActiveRuntimeSnapshot {
                     .unwrap_or_default();
                 let worker_capacity = self
                     .agent_executor_capacities
-                    .get(&agent_id)
+                    .get(&agent_did)
                     .copied()
                     .unwrap_or_else(|| if dispatcher.is_some() { 1 } else { 0 });
                 (
-                    agent_id,
+                    agent_did,
                     AgentExecutorStatus {
                         worker_capacity,
                         queue_depth,
@@ -510,7 +488,7 @@ impl ActiveRuntimeSnapshot {
 
     pub(crate) fn configuration_fingerprint(&self) -> String {
         configuration_fingerprint(
-            &self.default_agent_id,
+            &self.default_agent_did,
             &self.local_did,
             &self.agents,
             &self.tool_surfaces,
@@ -527,7 +505,7 @@ impl ActiveRuntimeSnapshot {
 
 #[allow(clippy::too_many_arguments)]
 fn configuration_fingerprint(
-    default_agent_id: &str,
+    default_agent_did: &str,
     local_did: &str,
     agents: &RapidHashMap<String, Arc<ResolvedAgent>>,
     tool_surfaces: &RapidHashMap<String, Arc<ToolSurface>>,
@@ -544,17 +522,17 @@ fn configuration_fingerprint(
     fingerprint.push_str(local_did);
     fingerprint.push('\n');
     fingerprint.push_str("default:");
-    fingerprint.push_str(default_agent_id);
+    fingerprint.push_str(default_agent_did);
     fingerprint.push('\n');
 
-    let mut agent_ids = agents.keys().cloned().collect::<Vec<_>>();
-    agent_ids.sort();
-    for agent_id in agent_ids {
+    let mut agent_dids = agents.keys().cloned().collect::<Vec<_>>();
+    agent_dids.sort();
+    for agent_did in agent_dids {
         let agent = agents
-            .get(&agent_id)
+            .get(&agent_did)
             .expect("agent id came from agents map");
         fingerprint.push_str("agent:");
-        fingerprint.push_str(&agent_id);
+        fingerprint.push_str(&agent_did);
         fingerprint.push('=');
         fingerprint.push_str(&format!("{agent:?}"));
         fingerprint.push('\n');
@@ -562,12 +540,12 @@ fn configuration_fingerprint(
 
     let mut tool_ids = tool_surfaces.keys().cloned().collect::<Vec<_>>();
     tool_ids.sort();
-    for agent_id in tool_ids {
+    for agent_did in tool_ids {
         let tool_surface = tool_surfaces
-            .get(&agent_id)
+            .get(&agent_did)
             .expect("agent id came from tool surface map");
         fingerprint.push_str("tools:");
-        fingerprint.push_str(&agent_id);
+        fingerprint.push_str(&agent_did);
         fingerprint.push('=');
         fingerprint.push_str(&format!("{tool_surface:?}"));
         fingerprint.push('\n');
@@ -591,16 +569,20 @@ fn configuration_fingerprint(
 
     let mut unavailable_ids = unavailable_agents.keys().cloned().collect::<Vec<_>>();
     unavailable_ids.sort();
-    for agent_id in unavailable_ids {
+    for agent_did in unavailable_ids {
         let reason = unavailable_agents
-            .get(&agent_id)
+            .get(&agent_did)
             .expect("agent id came from unavailable agent map");
         fingerprint.push_str("unavailable:");
-        fingerprint.push_str(&agent_id);
+        fingerprint.push_str(&agent_did);
         fingerprint.push('=');
         fingerprint.push_str(&reason.diagnostic);
         fingerprint.push(':');
         fingerprint.push_str(&format!("{:?}", reason.public_reason));
+        fingerprint.push(':');
+        if let Some(identity) = &reason.watcher_identity {
+            fingerprint.push_str(identity.0.did());
+        }
         fingerprint.push('\n');
     }
 

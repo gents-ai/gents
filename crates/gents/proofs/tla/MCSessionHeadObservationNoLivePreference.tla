@@ -1,0 +1,4 @@
+---- MODULE MCSessionHeadObservationNoLivePreference ----
+EXTENDS SessionHeadObservation
+
+====

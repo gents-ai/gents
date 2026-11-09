@@ -15,11 +15,6 @@ import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { SentAttachments } from "../src/ui/screens/session/attachments";
 import { node, testApp, withApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
-import {
-  contentKey,
-  unresolvedSubmissionFor,
-  rememberUnresolvedSubmission,
-} from "../src/hooks/unresolvedSubmissions";
 
 vi.mock("../src/lib/nativeShell", async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -191,24 +186,6 @@ describe("desktop attachments", () => {
       },
     });
     expect(screen.queryByTestId("attachment-tray")).not.toBeInTheDocument();
-  });
-
-  it("does not reconcile changed images under an earlier text-only fingerprint", () => {
-    rememberUnresolvedSubmission({
-      nodeDid: "node",
-      sessionId: "session",
-      selectedSessionId: "session",
-      requestId: "original",
-      contentKey: contentKey("", [attached]),
-    });
-    expect(unresolvedSubmissionFor("node", "session", "", [attached])?.requestId).toBe(
-      "original",
-    );
-    expect(
-      unresolvedSubmissionFor("node", "session", "", [
-        { ...attached, data: PNG + "AAAA" },
-      ]),
-    ).toBeUndefined();
   });
 
   it("loads forked-message previews without a request ID and can retry a failed read", async () => {

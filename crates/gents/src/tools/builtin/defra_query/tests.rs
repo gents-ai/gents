@@ -7,7 +7,7 @@ use super::*;
 
 #[tokio::test]
 async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type Reports { duty: String @fulltext rank: String }")
         .await
         .unwrap();
@@ -112,10 +112,10 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
             "{error}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
-async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
+async fn seeded_node() -> Arc<defra_node::Node> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -288,6 +288,29 @@ async fn refuses_a_protected_collection_even_when_unrestricted() {
         message.contains(gents_protocol::schemas::EVAL_VERDICT_NAME),
         "{message}"
     );
+}
+
+#[tokio::test]
+async fn refuses_client_publication_reads_and_discovery() {
+    let node = seeded_node().await;
+    let tool = DefraQueryTool::new(node, CollectionScope::all());
+    let collection =
+        &crate::lean_vocab_test::lean_contract_snapshot().client_publication_protected_collection;
+    for fields in [vec!["payload".to_owned()], vec!["*".to_owned()]] {
+        let error = Tool::call(
+            &tool,
+            DefraQueryParams {
+                collection: collection.clone(),
+                filter: None,
+                fields,
+                limit: None,
+            }
+            .into(),
+        )
+        .await
+        .expect_err("client publication data is not agent-readable");
+        assert!(format!("{error:#}").contains("protected"));
+    }
 }
 
 #[tokio::test]
@@ -564,7 +587,7 @@ async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
 
 #[tokio::test]
 async fn count_is_filtered_total_and_find_is_a_stable_page() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type Ticket { name: String priority: Int status: String }")
         .await
         .unwrap();
@@ -586,7 +609,7 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
     assert_eq!(result["results"][0]["name"], "T005");
     assert_eq!(result["results"][4]["name"], "T009");
     assert!(result.get("count").is_none());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -595,48 +618,67 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let alice =
         crate::store::identity::KeyIdentity::load_or_create(keys.path().join("alice.key"), None)
             .unwrap();
-    let bob =
-        crate::store::identity::KeyIdentity::load_or_create(keys.path().join("bob.key"), None)
-            .unwrap();
-    let alice_did = crate::store::identity::NodeIdentity::did(&alice);
-    let bob_did = crate::store::identity::NodeIdentity::did(&bob);
+    let alice_node_did = crate::store::identity::NodeIdentity::did(&alice).to_owned();
+    let alice_agent = crate::store::identity::resolve_agent_identity(
+        &alice,
+        &crate::store::identity::provision_agent_identity(&alice).unwrap(),
+    )
+    .unwrap();
+    let bob_agent = crate::store::identity::resolve_agent_identity(
+        &alice,
+        &crate::store::identity::provision_agent_identity(&alice).unwrap(),
+    )
+    .unwrap();
+    let alice_did = crate::store::identity::NodeIdentity::did(&*alice_agent).to_owned();
+    let bob_did = crate::store::identity::NodeIdentity::did(&*bob_agent).to_owned();
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(alice_did.to_owned())
+        crate::defra_node::Node::builder()
+            .with_node_identity_did(alice_node_did.clone())
             .build()
             .await
             .unwrap(),
     );
-    let policy = node.add_dac_policy(alice_did, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
+    let policy = node
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(alice_node_did.clone())),
+            "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
+        )
+        .await
+        .unwrap();
     node.add_collection(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         crate::store::graphql::escape_graphql_string(&policy)
     ))
     .await
     .unwrap();
-    for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
+    for (agent, label) in [(&alice_agent, "Alice-only"), (&bob_agent, "Bob-only")] {
         let mutation = format!(
             "mutation {{ add_PrivateRecord(input: {{label: \"{}\"}}) {{_docID}} }}",
             crate::store::graphql::escape_graphql_string(label)
         );
-        crate::store::config_client::ConfigAccess::transact_local_write(
-            &node,
-            Some(::identity::Did::new(did).unwrap()),
-            "seed_private_query",
-            |txn| Box::pin(async { txn.execute(&mutation).await }),
+        let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(crate::store::identity::NodeIdentity::did(&**agent)).unwrap(),
+            agent.as_ref(),
         )
-        .await
         .unwrap();
+        access
+            .transact_write("seed_private_query", |txn| {
+                let mutation = &mutation;
+                Box::pin(async move { txn.execute(mutation).await })
+            })
+            .await
+            .unwrap();
     }
     let mut ids = rapidhash::RapidHashMap::default();
-    for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
-        let actor = ::identity::Did::new(did).unwrap();
-        let rows = crate::store::config_client::ConfigAccess::transact_local_write(
-            &node,
-            Some(actor),
-            "test.private_field_ids",
-            |txn| Box::pin(async { txn.execute("{PrivateRecord {_docID label}}").await }),
+    for (did, label) in [(&alice_did, "Alice-only"), (&bob_did, "Bob-only")] {
+        let rows = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(did.as_str()).unwrap(),
         )
+        .transact_readonly("test.private_field_ids", |txn| {
+            Box::pin(async move { txn.execute("{PrivateRecord {_docID label}}").await })
+        })
         .await
         .unwrap();
         ids.insert(
@@ -655,7 +697,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             node.clone(),
             CollectionScope::restricted(vec!["PrivateRecord".into()]),
         )
-        .with_actor(::identity::Did::new(did).unwrap());
+        .with_actor(::identity::Did::new(did.clone()).unwrap());
         let find: QueryParams = serde_json::from_value(
             json!({"argv":["find"],"collection":"PrivateRecord","options":{"fields":["label"]}}),
         )
@@ -707,17 +749,12 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         let result: Value = serde_json::from_str(&Tool::call(&tool, count).await.unwrap()).unwrap();
         assert_eq!(result["total_count"], 0);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn explain_preserves_native_plan_and_requires_explicit_execution() {
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type PlanTicket { reference: String status: String @index }")
         .await
         .unwrap();
@@ -794,5 +831,5 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
         .await
         .unwrap();
     assert_eq!(persisted["data"]["PlanTicket"][0]["status"], "open");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

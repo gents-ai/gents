@@ -60,7 +60,7 @@ pub(super) fn import_langgraph_capture(
     let mut requests = vec![TimelineRequestRow {
         request_id: mapping.request_id.clone(),
         node_did: mapping.node_did.clone(),
-        agent_id: mapping.agent_id.clone(),
+        agent_did: mapping.agent_did.clone(),
         session_id: Some(session_id.clone()),
         content: latest_values
             .and_then(|values| values.get("topic"))
@@ -146,7 +146,7 @@ pub(super) fn import_langgraph_capture(
             session: imported_session(
                 &session_id,
                 mapping.node_did.as_deref(),
-                mapping.agent_id.as_deref(),
+                mapping.agent_did.as_deref(),
                 started_at,
                 "Imported LangGraph state history".to_string(),
                 latest_values

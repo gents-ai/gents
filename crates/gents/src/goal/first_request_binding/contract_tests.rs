@@ -6,6 +6,41 @@ use gents_protocol::request_admission::{
 };
 use std::sync::Arc;
 
+async fn fixture_session(
+    access: &ConfigAccess,
+    node_did: &str,
+    user_did: &str,
+    agent_did: &str,
+    agent_doc: &str,
+    session_id: &str,
+) -> String {
+    access.transact_write("test.first_binding.session", |txn| {
+        Box::pin(async move {
+            let input = serde_json::json!({"node_did": node_did, "session_id": session_id,
+                "requester_did": user_did, "agent_did": agent_did,
+                "relationships_pending": false, "created_at": "2026-11-04T00:00:00Z"});
+            let created = txn.execute_client_signed_create(
+                "mutation($input: AgentSessionMutationInputArg!) {create_AgentSession(input: $input) {_docID}}",
+                &serde_json::json!({"input": input}), gents_protocol::schemas::AGENT_SESSION,
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&created, "AgentSession")?;
+            txn.add_resource_relationship("AgentSession", &doc, "parent", "agents", agent_doc).await?;
+            txn.add_actor_relationship("AgentSession", &doc, "working_agent", &identity::Did::new(agent_did)?).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    }).await.unwrap()
+}
+
+async fn fixture_goal(access: &ConfigAccess, node_did: &str, session_id: &str) -> GoalDocument {
+    access
+        .transact_readonly("test.first_binding.goal", |txn| {
+            Box::pin(load_canonical_goal_in_txn(txn, node_did, session_id))
+        })
+        .await
+        .unwrap()
+        .unwrap()
+}
+
 #[test]
 fn generated_continuation_assignments_preserve_physical_bindings() {
     let cases =
@@ -53,45 +88,86 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
     for case in cases {
         let temp = tempfile::tempdir().unwrap();
         let signer = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
+        let user = KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&signer).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&signer, &binding).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let node = Arc::new(
             EmbeddedNode::builder()
                 .with_node_identity_did(signer.did())
+                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
                 .build()
                 .await
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
+                .with_client_signing_capability(user.client_signing_capability().unwrap())
+                .unwrap()
+                .with_client_signed_agent_creates(),
+        );
+        let agent_doc = access.transact_write("test.first_binding.agent", |txn| {
+            Box::pin(async {
+                let created = txn.execute_client_signed_create(
+                    "mutation($input: AgentMutationInputArg!) {create_Agent(input: $input) {_docID}}",
+                    &serde_json::json!({"input": {"node_did": signer.did(), "agent_did": agent.did(),
+                        "creation_nonce": binding.creation_nonce, "display_name": "test agent", "inference_profile_id": "test-profile"}}),
+                    gents_protocol::schemas::AGENT,
+                ).await?;
+                let doc = crate::store::graphql::created_doc_id(&created, "Agent")?;
+                txn.add_actor_relationship("Agent", &doc, "executor", &identity::Did::new(agent.did())?).await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        }).await.unwrap();
+        let session_doc = fixture_session(
+            &access,
+            signer.did(),
+            user.did(),
+            agent.did(),
+            &agent_doc,
+            "session",
+        )
+        .await;
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "first",
             signer.did(),
-            signer.did(),
-            "agent",
+            user.did(),
+            agent.did(),
             "session",
             "Start work",
             "interactive",
             "2026-10-21T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(signer.did()),
+            AgentRequestAdmissionRecord::client(user.did()),
         );
-        crate::sign_agent_request_create(&signer, &mut create)
+        create.session_doc_id = Some(session_doc.clone());
+        create.agent_doc_id = Some(agent_doc.clone());
+        crate::sign_agent_request_create(&user, &mut create)
             .await
             .unwrap();
-        let response = access
-            .write(
-                "test.first_binding.request",
-                &create.graphql_mutation().unwrap(),
-            )
+        crate::request::lifecycle::submit_client_request(&access, &create)
             .await
             .unwrap();
-        let physical = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        super::super::create_goal_for_session(&node, signer.did(), "session", "Start work", None)
+        let request = access
+            .execute(r#"{AgentRequest(filter: {request_id: {_eq: "first"}}) {_docID}}"#)
             .await
             .unwrap();
-        let mut goal = load_canonical_goal(&node, signer.did(), "session")
-            .await
+        let physical = request["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
             .unwrap()
-            .unwrap();
+            .to_owned();
+        super::super::create_goal_for_session_from_access(
+            &access,
+            signer.did(),
+            "session",
+            "Start work",
+            None,
+        )
+        .await
+        .unwrap();
+        let mut goal = fixture_goal(&access, signer.did(), "session").await;
         let root = |value: &str| {
             if value == "request" {
                 physical.clone()
@@ -100,14 +176,20 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             }
         };
         if let Some(current) = case["current"].as_str() {
-            access.write("test.first_binding.previous_root", &format!(
-                "mutation {{update_Goal(docID: \"{}\", input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
-                escape_graphql_string(&goal.doc_id), escape_graphql_string(&root(current)),
-            )).await.unwrap();
-            goal = load_canonical_goal(&node, signer.did(), "session")
-                .await
-                .unwrap()
-                .unwrap();
+            let doc = escape_graphql_string(&goal.doc_id);
+            let current = root(current);
+            access.transact_write("test.first_binding.previous_root", |txn| {
+                let current = &current;
+                let doc = &doc;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        &format!(r#"mutation($input: GoalMutationInputArg!) {{update_Goal(docID: "{doc}", input: $input) {{_docID}}}}"#),
+                        &serde_json::json!({"input": {"assignment_root_request_doc_id": current}}),
+                        gents_protocol::schemas::GOAL,
+                    ).await
+                })
+            }).await.unwrap();
+            goal = fixture_goal(&access, signer.did(), "session").await;
         }
         let mut reference: Option<GoalAssignmentInput> =
             serde_json::from_value(case["reference"].clone()).unwrap();
@@ -138,10 +220,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             "{}: {result:?}",
             case["name"]
         );
-        let after = load_canonical_goal(&node, signer.did(), "session")
-            .await
-            .unwrap()
-            .unwrap();
+        let after = fixture_goal(&access, signer.did(), "session").await;
         assert_eq!(
             after.assignment_root_request_doc_id,
             case["expected_root"].as_str().map(root),
@@ -150,6 +229,15 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
         );
 
         let task_session = "task-session";
+        fixture_session(
+            &access,
+            signer.did(),
+            user.did(),
+            agent.did(),
+            &agent_doc,
+            task_session,
+        )
+        .await;
         let initial = deterministic_goal_id(signer.did(), task_session);
         let task_id = |value: &str| {
             if value == "initial-goal" {
@@ -191,6 +279,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                             },
                             "2026-10-21T00:00:00Z",
                             Some(identity),
+                            None,
                         )
                         .await?;
                         Ok::<_, anyhow::Error>(())
@@ -226,27 +315,12 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             "{}: {checked:?}",
             case["name"]
         );
-        crate::test_support::install_test_agent(&node, signer.did(), "agent").await;
-        access
-            .transact_write("test.first_binding.task_session", |txn| {
-                let signer = &signer;
-                Box::pin(async move {
-                    crate::session::ensure_session_in_txn(
-                        txn,
-                        task_session,
-                        signer.did(),
-                        "agent",
-                        Some(signer.did()),
-                        None,
-                        None,
-                        "2026-10-21T00:00:00Z",
-                    )
-                    .await?;
-                    Ok::<_, anyhow::Error>(())
-                })
-            })
-            .await
-            .unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
         let fire_identity = gents_protocol::trigger_delivery::FireIdentity {
             owner_did: signer.did().to_owned(),
             trigger_id: "manual:task".into(),
@@ -275,21 +349,23 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             RequestPurpose::Normal,
             &fire.request_id,
             signer.did(),
-            signer.did(),
-            "agent",
+            user.did(),
+            agent.did(),
             task_session,
             "Task work",
-            "interactive",
+            "scheduled",
             "2026-10-21T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(signer.did()),
+            AgentRequestAdmissionRecord::runtime_automated_trigger(agent.did(), "manual:task"),
         );
-        request.caused_by_trigger_kind = Some("manual".into());
+        request.caused_by_trigger_id = Some("manual:task".into());
+        request.caused_by_trigger_kind = Some("schedule".into());
         request.input.goal_assignment = Some(task_reference);
-        crate::sign_agent_request_create(&signer, &mut request)
+        crate::sign_agent_request_create(agent.as_ref(), &mut request)
             .await
             .unwrap();
         let admitted =
-            crate::request::lifecycle::write_task_delivery(&access, &fire, true, &request).await;
+            crate::request::lifecycle::write_task_delivery(&agent_access, &fire, true, &request)
+                .await;
         assert_eq!(
             admitted.is_ok(),
             case["task_binding_valid"] == true,
@@ -298,14 +374,14 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             admitted.as_ref().err()
         );
         if let Ok(admitted) = admitted {
-            let persisted = crate::request::binding::load_agent_request_by_doc_id(
-                &node,
+            let persisted = crate::request::binding::load_agent_request_by_doc_id_with_access(
+                &agent_access,
                 &admitted.request.doc_id,
             )
             .await
             .unwrap()
             .unwrap();
-            access
+            agent_access
                 .transact_write("test.first_binding.task_claim", |txn| {
                     let persisted = &persisted;
                     Box::pin(async move {
@@ -319,10 +395,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 })
                 .await
                 .unwrap();
-            let assigned = load_canonical_goal(&node, signer.did(), task_session)
-                .await
-                .unwrap()
-                .unwrap();
+            let assigned = fixture_goal(&agent_access, signer.did(), task_session).await;
             assert_eq!(assigned.goal_id, selected);
             assert_eq!(
                 assigned.assignment_root_request_doc_id.as_deref(),
@@ -333,7 +406,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 request.input.goal_assignment
             );
         } else {
-            let state = access
+            let state = agent_access
                 .execute("{TriggerFire {fire_key} AgentRequest {session_id}}")
                 .await
                 .unwrap();
@@ -344,6 +417,6 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 .iter()
                 .any(|row| row["session_id"] == task_session));
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

@@ -423,6 +423,7 @@ function Reply({
   worked?: number;
 }) {
   const live = item.kind === "liveAssistant";
+  const ready = item.kind === "liveAssistant" || item.reconstruction.state === "ready";
   return (
     /* the space under a reply sits below its actions, so the copy button
        and time stay with the text they belong to */
@@ -433,23 +434,38 @@ function Reply({
       <AssistantMessage
         className={item.content ? "pt-4" : undefined}
         actions={
-          !live && item.content
+          !live && ready && item.content
             ? copyActions(writtenText(item.content ?? "", []))
             : false
         }
-        meta={!live && item.content ? sentAt(item.timestamp, worked) : undefined}
+        meta={
+          !live && ready && item.content ? sentAt(item.timestamp, worked) : undefined
+        }
       >
-        {readableReasoning(item.reasoning) ? (
+        {ready && readableReasoning(item.reasoning) ? (
           <Reasoning
             text={readableReasoning(item.reasoning)!}
             stateKey={item.itemKey}
           />
-        ) : reasoningWithheld(item.reasoning) ? (
+        ) : ready && reasoningWithheld(item.reasoning) ? (
           <p className="pb-2 text-xs text-muted-foreground">
             Reasoning was not shared by the provider.
           </p>
         ) : null}
-        {item.content ? <ReplyText content={item.content} live={live} /> : null}
+        {item.kind === "assistantMessage" && item.reconstruction.state !== "ready" ? (
+          <p
+            role={item.reconstruction.state === "loading" ? "status" : "alert"}
+            data-testid="assistant-output-unavailable"
+          >
+            {item.reconstruction.state === "loading"
+              ? "Loading message…"
+              : item.reconstruction.state === "denied"
+                ? "Message unavailable: access denied."
+                : "Message could not be reconstructed."}
+          </p>
+        ) : item.content ? (
+          <ReplyText content={item.content} live={live} />
+        ) : null}
       </AssistantMessage>
     </div>
   );
@@ -962,11 +978,33 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }
   };
 
+  if (rows.failure?.denied) {
+    return (
+      <Notice
+        tone="destructive"
+        title="Couldn’t load this session"
+        description={rows.failure.message}
+      />
+    );
+  }
+
   return (
     <div
       className="mt-6 grid grid-cols-[minmax(0,1fr)] [--step-scroll-inset:56]"
       data-testid="transcript-panel"
     >
+      {rows.failure && (
+        <Notice
+          tone="warning"
+          title="Couldn’t load these messages"
+          description={rows.failure.message}
+          actions={
+            <Button size="sm" variant="outline" onClick={rows.retryRead}>
+              Try again
+            </Button>
+          }
+        />
+      )}
       <FindBar
         scroller={scroller}
         sessionKey={sessionKey}

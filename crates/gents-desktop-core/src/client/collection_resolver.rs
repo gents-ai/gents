@@ -2,7 +2,7 @@ use rapidhash::RapidHashMap;
 use std::sync::RwLock;
 
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::schemas::{
     ALL_COLLECTION_NAMES, INFERENCE_CALL_NAME, RUNTIME_COLLECTION_NAMES,
 };

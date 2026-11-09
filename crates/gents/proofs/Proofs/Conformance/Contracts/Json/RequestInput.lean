@@ -38,6 +38,7 @@ private def goalJson : Option GoalContinuationInput → String
 
 private def admissionKindJson : AgentRequestAdmissionKind → String
   | .enrollment => jsonString "enrollment"
+  | .client => jsonString "client"
   | .localSelf => jsonString "local-self"
   | .runtimeInternal => jsonString "runtime-internal"
   | .peer => jsonString "peer"
@@ -144,6 +145,16 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"admission_kind\":" ++ admissionKindJson c.admissionKind ++
   ",\"runtime_source\":" ++ runtimeSourceJson c.runtimeSource ++
   ",\"verified_goal_continuation\":" ++ goalJson c.verifiedGoalContinuation ++
+  ",\"expected_client_claim_queue_candidate\":" ++ boolString (clientClaimQueueCandidate c.input false) ++
+  ",\"expected_agent_message_claim_queue_candidate\":" ++ boolString (clientClaimQueueCandidate c.input true) ++
+  ",\"client_goal_claim_binding_cases\":" ++ jsonArray
+    (([false, true] : List Bool).flatMap fun visible =>
+      ([false, true] : List Bool).flatMap fun goalMatches =>
+      ([false, true] : List Bool).flatMap fun root =>
+      ([false, true] : List Bool).map fun agent =>
+        "{\"visible\":" ++ boolString visible ++ ",\"matches\":" ++ boolString goalMatches ++
+        ",\"root\":" ++ boolString root ++ ",\"agent\":" ++ boolString agent ++ ",\"expected\":" ++
+        boolString (clientGoalClaimBinding visible goalMatches root agent) ++ "}") ++
   ",\"context_skill_ids\":" ++ jsonStringArray c.contextSkillIds ++
   ",\"cwd_allowed\":" ++ boolString c.cwdAllowed ++
   ",\"queue_source_allowed\":" ++ boolString c.queueSourceAllowed ++

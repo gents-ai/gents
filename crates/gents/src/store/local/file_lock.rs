@@ -27,6 +27,11 @@ impl FileLock {
         Ok(Self(file))
     }
 
+    pub fn try_shared(file: File) -> Result<Self, TryLockError> {
+        file.try_lock_shared()?;
+        Ok(Self(file))
+    }
+
     pub fn adopt(file: File) -> Self {
         Self(file)
     }

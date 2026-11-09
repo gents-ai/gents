@@ -52,7 +52,6 @@ export function collectionGroups(node: NodeView): Group[] {
   for (const tools of listOf(node.tools)) {
     for (const c of listOf(tools.datastore?.defra_query_collections)) fromPacks.add(c);
     for (const c of listOf(tools.datastore?.write_collections)) fromPacks.add(c);
-    for (const c of listOf(tools.built_ins?.p2p_collections)) fromPacks.add(c);
   }
   for (const c of CORE) fromPacks.delete(c);
   const watched = new Set(listOf(node.eventSources).map((e) => e.source_collection));

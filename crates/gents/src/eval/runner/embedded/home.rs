@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
+use crate::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
 
@@ -24,17 +24,43 @@ const NODE_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
 /// restores the same persisted key and collections.
 pub type P2PConfigForPath = Arc<dyn Fn(&Path) -> P2PConfig + Send + Sync>;
 
-/// Trial homes are harness scratch, not gents homes: their identity key sits
-/// beside the data, so a store key there would protect nothing, and they stay
-/// unencrypted at rest.
+/// Trial homes are harness scratch. Their file-custodied store key and data
+/// live together; the key binds the fresh-store provenance, not host secrecy.
+///
+/// Dropping a home whose node was not shut down hands the node to a release
+/// thread, which shuts it down once no other holder remains, then releases
+/// the store lock and temporary directory. DefraDB's
+/// HTTP transaction sweep is a pool task that holds its own pool and is
+/// stopped only by `Node::shutdown`, so an HTTP-serving node dropped without
+/// it keeps its worker threads, store and descriptors for the process life.
 pub struct EmbeddedHome {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<dyn NodeIdentity>,
+    evaluator: Option<(
+        Arc<dyn NodeIdentity>,
+        crate::store::config_client::ClientSigningCapability,
+    )>,
+    client_endpoint: Option<String>,
     did: String,
     path: PathBuf,
+    data_path: PathBuf,
+    store_key: crate::store::local::store_key::StoreKey,
+    store_lock: Option<crate::store::local::home::StoreLock>,
+    backend_admission: crate::store::local::backend_protection::BackendAdmission,
     p2p: Option<P2PConfigForPath>,
     #[allow(dead_code)]
     tempdir: Option<TempDir>,
+}
+
+#[cfg(test)]
+pub(super) fn bind_test_evaluator(home: &mut EmbeddedHome) -> Arc<KeyIdentity> {
+    let identity =
+        Arc::new(KeyIdentity::load_or_create(home.path().join("evaluator.key"), None).unwrap());
+    home.set_evaluator(
+        identity.clone(),
+        identity.client_signing_capability().unwrap(),
+    );
+    identity
 }
 
 impl std::fmt::Debug for EmbeddedHome {
@@ -83,8 +109,22 @@ impl EmbeddedHome {
     }
 
     async fn open_at(path: PathBuf, p2p: Option<P2PConfigForPath>) -> Result<Self> {
+        ensure!(
+            !tokio::fs::try_exists(path.join("MANIFEST")).await?,
+            "legacy trial store has no backend protection provenance"
+        );
+        let retained = tokio::fs::try_exists(path.join("data").join("MANIFEST")).await?;
+        let identity_path = path.join("node.key");
         let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(path.join("node.key"), None).context("node identity")?,
+            tokio::task::spawn_blocking(move || {
+                if retained {
+                    KeyIdentity::load_existing(identity_path, None)
+                } else {
+                    KeyIdentity::load_or_create(identity_path, None)
+                }
+            })
+            .await?
+            .context("node identity")?,
         );
         Self::open_with_identity(path, p2p, identity, true).await
     }
@@ -95,7 +135,7 @@ impl EmbeddedHome {
             "retained trial home {} is missing",
             dir.display()
         );
-        crate::store::local::storage_backend::require_existing_store(dir)?;
+        crate::store::local::storage_backend::require_existing_store(&dir.join("data"))?;
         let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_existing(dir.join("node.key"), None)
                 .context("loading the retained trial identity")?,
@@ -115,14 +155,63 @@ impl EmbeddedHome {
         initialize_schemas: bool,
     ) -> Result<Self> {
         let did = identity.did().to_string();
-        let mut builder = EmbeddedNode::builder()
-            .data_path(&path)
-            .with_regolith_options(crate::store::local::storage_backend::regolith_options())
-            .with_node_identity_did(&did);
-        if let Some(p2p) = &p2p {
-            builder = builder.with_p2p(p2p(&path));
+        ensure!(
+            !tokio::fs::try_exists(path.join("MANIFEST")).await?,
+            "legacy trial store has no backend protection provenance"
+        );
+        let data_path = path.join("data");
+        if !tokio::fs::try_exists(&data_path).await? {
+            ensure!(initialize_schemas, "retained trial store is unavailable");
+            tokio::fs::create_dir_all(&data_path).await?;
         }
-        let node = Arc::new(builder.build().await.context("embedded node")?);
+        let lock_home = path.clone();
+        let lock_data = data_path.clone();
+        let store_lock = tokio::task::spawn_blocking(move || {
+            crate::store::local::home::lock_store(&lock_home, &lock_data)
+        })
+        .await??;
+        let fresh = tokio::fs::read_dir(&data_path)
+            .await?
+            .next_entry()
+            .await?
+            .is_none();
+        let fresh_store = if fresh {
+            ensure!(initialize_schemas, "retained trial store is unavailable");
+            Some(
+                crate::store::local::backend_protection::FreshBackendStore::observe(
+                    &data_path,
+                    &store_lock,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let store_key = trial_store_key(&path, &data_path, fresh).await?;
+        if let Some(fresh_store) = fresh_store {
+            fresh_store.initialize(&store_key, Some(&did)).await?;
+        }
+        let protected = crate::store::local::backend_protection::ProtectedBackendStore::open(
+            &data_path,
+            &store_key,
+            &store_lock,
+        )
+        .await?
+        .preflight(&store_key, Some(&did))
+        .await?;
+        let served = ServedNode::default();
+        let (http, client_endpoint) = trial_http(served.clone()).await?;
+        let (node, backend_admission) = crate::runtime::node_start::start_node(
+            protected,
+            &store_key,
+            identity.clone(),
+            Some(http),
+            p2p.as_ref().map(|p| p(&path)),
+            crate::tools::surface::ToolCeiling::meta_only(),
+            &path,
+        )
+        .await?;
+        let _ = served.set((Arc::downgrade(&node), identity.clone()));
         if initialize_schemas {
             ensure_runtime_schemas(&node)
                 .await
@@ -131,8 +220,14 @@ impl EmbeddedHome {
         Ok(Self {
             node,
             identity,
+            evaluator: None,
+            client_endpoint: Some(client_endpoint),
             did,
             path,
+            data_path,
+            store_key,
+            store_lock: Some(store_lock),
+            backend_admission,
             p2p,
             tempdir: None,
         })
@@ -142,15 +237,66 @@ impl EmbeddedHome {
         &self.did
     }
 
+    /// Address of this home's running GraphQL endpoint, when one is installed.
+    pub fn graphql_endpoint(&self) -> Option<&str> {
+        self.client_endpoint.as_deref()
+    }
+
+    pub fn set_evaluator(
+        &mut self,
+        identity: Arc<dyn NodeIdentity>,
+        capability: crate::store::config_client::ClientSigningCapability,
+    ) {
+        self.evaluator = Some((identity, capability));
+    }
+
+    pub(super) fn evaluator(&self, did: &str) -> Result<&dyn NodeIdentity> {
+        let identity = self
+            .evaluator
+            .as_ref()
+            .map(|(identity, _)| identity.as_ref())
+            .context("evaluation requires the held client signing identity")?;
+        ensure!(
+            identity.did() == did,
+            "held evaluator identity does not match the frozen evaluator DID"
+        );
+        Ok(identity)
+    }
+
+    pub fn client_access(&self, did: &str) -> Result<crate::ConfigAccess> {
+        self.evaluator(did)?;
+        let endpoint = self
+            .client_endpoint
+            .as_ref()
+            .context("trial client HTTP endpoint is unavailable")?;
+        let (_, capability) = self
+            .evaluator
+            .as_ref()
+            .context("evaluation requires the held client signing capability")?;
+        Ok(crate::ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(endpoint, did)
+                .with_client_signing_capability(capability.clone())?
+                .with_client_signed_agent_creates(),
+        ))
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The admission is bound to this home's protected native node.
+    pub fn backend_admission(&self) -> crate::store::local::backend_protection::BackendAdmission {
+        self.backend_admission.clone()
     }
 
     pub async fn reopen(&mut self) -> Result<()> {
         // Stopping the node closes its subscriptions and other node-owned
         // services; wait for their handles to be released before claiming an
         // exclusive durable-store reopen.
-        self.node.shutdown().await;
+        self.node
+            .shutdown()
+            .await
+            .context("shutting down trial node")?;
         let release_deadline = tokio::time::Instant::now() + NODE_RELEASE_TIMEOUT;
         while Arc::strong_count(&self.node) != 1 && tokio::time::Instant::now() < release_deadline {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -184,26 +330,199 @@ impl EmbeddedHome {
             }
         }
 
-        let mut builder = EmbeddedNode::builder()
-            .data_path(&self.path)
-            .with_regolith_options(crate::store::local::storage_backend::regolith_options())
-            .with_node_identity_did(&self.did);
-        if let Some(p2p) = &self.p2p {
-            builder = builder.with_p2p(p2p(&self.path));
-        }
-        let reopened = builder.build().await.map_err(|e| {
-            anyhow!(
-                "simulate_process_crash: reopen durable store at {} failed: {e}",
-                self.path.display()
-            )
-        })?;
-        self.node = Arc::new(reopened);
+        let protected = crate::store::local::backend_protection::ProtectedBackendStore::open(
+            &self.data_path,
+            &self.store_key,
+            self.store_lock
+                .as_ref()
+                .context("trial store lock was released")?,
+        )
+        .await?
+        .preflight(&self.store_key, Some(&self.did))
+        .await?;
+        let served = ServedNode::default();
+        let (http, client_endpoint) = trial_http(served.clone()).await?;
+        let (node, admission) = crate::runtime::node_start::start_node(
+            protected,
+            &self.store_key,
+            self.identity.clone(),
+            Some(http),
+            self.p2p.as_ref().map(|p| p(&self.path)),
+            crate::tools::surface::ToolCeiling::meta_only(),
+            &self.path,
+        )
+        .await?;
+        let _ = served.set((Arc::downgrade(&node), self.identity.clone()));
+        self.node = node;
+        self.backend_admission = admission;
+        self.client_endpoint = Some(client_endpoint);
 
         ensure_runtime_schemas(&self.node)
             .await
             .map_err(|e| anyhow!("simulate_process_crash: ensure schemas: {e}"))?;
         Ok(())
     }
+}
+
+impl Drop for EmbeddedHome {
+    fn drop(&mut self) {
+        if self.node.is_shutdown() {
+            return;
+        }
+        let node = self.node.clone();
+        let held = (self.store_lock.take(), self.tempdir.take());
+        let release = std::thread::Builder::new()
+            .name("gents-home-release".to_owned())
+            .spawn(move || release_unstopped_node(node, held));
+        if let Err(error) = release {
+            tracing::warn!(
+                %error,
+                did = %self.did,
+                "could not start the trial node release thread; its node stays running"
+            );
+        }
+    }
+}
+
+/// Runs on its own OS thread, outside any Tokio runtime, so the shutdown
+/// completes even when the dropping runtime is itself shutting down. Callers
+/// may keep using the node after its home is dropped; `Arc` offers no release
+/// notification, so this thread polls for being the last holder.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "waits for and drives Node::shutdown on a dedicated release thread; no runtime worker waits"
+)]
+fn release_unstopped_node<H>(node: Arc<EmbeddedNode>, held: H) {
+    let mut wait = Duration::from_millis(5);
+    while Arc::strong_count(&node) > 1 && !node.is_shutdown() {
+        std::thread::sleep(wait);
+        wait = (wait * 2).min(Duration::from_millis(100));
+    }
+    if let Err(error) = futures::executor::block_on(node.shutdown()) {
+        tracing::warn!(error = %error, "dropped trial node did not shut down cleanly");
+    }
+    drop(node);
+    drop(held);
+}
+
+/// The node a trial endpoint serves, set once the node has started.
+/// The node a trial home's HTTP route serves. The node owns the HTTP server
+/// that holds this cell, so it is held weakly: a strong reference would keep a
+/// dropped home's node (and its threads and descriptors) alive.
+type ServedNode = Arc<std::sync::OnceLock<(std::sync::Weak<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
+
+async fn trial_http(served: ServedNode) -> Result<(crate::defra_node::HttpConfig, String)> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
+        .with_extra_routes(agent_identity_routes(served));
+    Ok((config, endpoint))
+}
+
+/// A trial home serves Agent identity provisioning as a runtime does, so a
+/// client installing an Agent provisions its identity through the same
+/// authorized owner (`provision_agent_identity_authorized`).
+fn agent_identity_routes(served: ServedNode) -> axum::Router {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    let failure = |status: StatusCode, message: &str| {
+        (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
+    };
+    axum::Router::new().route(
+        gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
+        axum::routing::post(
+            move |identity: defra_http::ExtractIdentity,
+                  axum::Json(request): axum::Json<
+                gents_protocol::agent_identity::ProvisionAgentIdentityRequest,
+            >| {
+                let served = served.clone();
+                async move {
+                    let Some(caller) = identity
+                        .did()
+                        .and_then(|did| ::identity::Did::new(did.as_ref()).ok())
+                    else {
+                        return failure(
+                            StatusCode::UNAUTHORIZED,
+                            "Connect this client before creating an agent.",
+                        );
+                    };
+                    let Some((node, runtime)) = served
+                        .get()
+                        .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                    else {
+                        return failure(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "The runtime is still starting.",
+                        );
+                    };
+                    if request.node_did != runtime.did() {
+                        return failure(
+                            StatusCode::BAD_REQUEST,
+                            "The requested node does not serve this endpoint.",
+                        );
+                    }
+                    match crate::store::identity::provision_agent_identity_authorized(
+                        &node,
+                        runtime.as_ref(),
+                        &caller,
+                    )
+                    .await
+                    {
+                        Ok(binding) => axum::Json(binding).into_response(),
+                        Err(crate::store::identity::AgentProvisionError::Unauthorized) => failure(
+                            StatusCode::FORBIDDEN,
+                            "This client cannot create an agent on this node.",
+                        ),
+                        Err(error) => {
+                            tracing::warn!(%error, "trial agent identity provisioning failed");
+                            failure(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "The runtime cannot provision an agent identity.",
+                            )
+                        }
+                    }
+                }
+            },
+        ),
+    )
+}
+
+async fn trial_store_key(
+    path: &Path,
+    data: &Path,
+    fresh: bool,
+) -> Result<crate::store::local::store_key::StoreKey> {
+    use crate::store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
+    use tokio::io::AsyncWriteExt;
+    let key_file = path.join("store.key");
+    let record_path = path.join("store-custody.json");
+    let record = if fresh {
+        let (key_file, data) = (key_file.clone(), data.to_owned());
+        let record = tokio::task::spawn_blocking(move || {
+            StoreEncryption::prepare(StoreKeyCustodyChoice::File, &key_file, &data)
+        })
+        .await??;
+        let mut file = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&record_path)
+            .await?;
+        file.write_all(&serde_json::to_vec(&record)?).await?;
+        file.sync_all().await?;
+        record
+    } else {
+        serde_json::from_slice::<StoreEncryption>(&tokio::fs::read(&record_path).await?)?
+    };
+    let data = data.to_owned();
+    tokio::task::spawn_blocking(move || {
+        if fresh {
+            record.initialize(&key_file, &data)
+        } else {
+            record.load(&key_file, &data)
+        }
+    })
+    .await?
+    .map_err(Into::into)
 }
 
 pub struct RunningRuntime {
@@ -237,9 +556,10 @@ pub async fn boot_runtime(
 pub(crate) async fn boot_runtime_within(
     home: &EmbeddedHome,
     identity: Arc<dyn NodeIdentity>,
-    options: DocumentRuntimeOptions,
+    mut options: DocumentRuntimeOptions,
     ready_timeout: Duration,
 ) -> Result<(RunningRuntime, Gents)> {
+    options.backend_admission = Some(home.backend_admission.clone());
     let agent = Gents::from_default_agent_documents(home.node.clone(), identity, options).await?;
     let node_did = agent.node_did().to_string();
     let (shutdown, shutdown_rx) = watch::channel(false);
@@ -377,7 +697,7 @@ async fn fetch_runtime_snapshot(
     }))
 }
 
-async fn fetch_node_readiness_snapshot(
+pub(super) async fn fetch_node_readiness_snapshot(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Option<gents_protocol::node_readiness::NodeReadinessSnapshot>> {
@@ -434,7 +754,46 @@ mod tests {
         let home = EmbeddedHome::create_temp("eval-home").await.unwrap();
         assert!(home.did().starts_with("did:"));
         assert!(home.path().join("node.key").exists());
+        assert!(home.backend_admission.validate(&home.node).await.is_ok());
         let response = home.node.execute("query { AgentRequest { _docID } }").await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
+    }
+
+    #[tokio::test]
+    async fn client_access_requires_the_held_evaluator_even_after_reopen() {
+        let mut home = EmbeddedHome::create_temp("eval-held-client").await.unwrap();
+        let evaluator =
+            Arc::new(KeyIdentity::load_or_create(home.path().join("evaluator.key"), None).unwrap());
+        let evaluator_did = evaluator.did().to_owned();
+        assert!(home.client_access(&evaluator_did).is_err());
+        let capability = evaluator.client_signing_capability().unwrap();
+        home.set_evaluator(evaluator, capability);
+        assert!(home.client_access(home.did()).is_err());
+        assert_eq!(
+            home.client_access(&evaluator_did)
+                .unwrap()
+                .actor_did()
+                .as_deref(),
+            Some(evaluator_did.as_str())
+        );
+        let previous_admission = home.backend_admission.clone();
+        home.reopen().await.unwrap();
+        assert!(home.backend_admission.validate(&home.node).await.is_ok());
+        assert!(previous_admission.validate(&home.node).await.is_err());
+        assert_eq!(
+            home.client_access(&evaluator_did)
+                .unwrap()
+                .actor_did()
+                .as_deref(),
+            Some(evaluator_did.as_str())
+        );
+        let other =
+            Arc::new(KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap());
+        let wrong_capability = other.client_signing_capability().unwrap();
+        let evaluator =
+            Arc::new(KeyIdentity::load_existing(home.path().join("evaluator.key"), None).unwrap());
+        home.set_evaluator(evaluator, wrong_capability);
+        assert!(home.client_access(&evaluator_did).is_err());
+        home.node.shutdown().await.unwrap();
     }
 }

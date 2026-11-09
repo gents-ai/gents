@@ -93,6 +93,7 @@ async fn late_visibility_observer_cannot_restart_the_emission_budget() {
 
 pub(super) async fn wait_for_visible_content(
     core: &ClientCore,
+    graphql: &str,
     request: &str,
     expected: &str,
     emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
@@ -106,7 +107,7 @@ pub(super) async fn wait_for_visible_content(
     );
     tokio::time::timeout_at(deadline, async {
         loop {
-            let content = canonical_live_content(core, request).await?;
+            let content = canonical_live_content(core, graphql, request).await?;
             anyhow::ensure!(
                 tokio::time::Instant::now() < deadline,
                 "provider content visibility deadline elapsed during observation"
@@ -127,7 +128,13 @@ pub(super) async fn wait_for_visible_content(
     Ok(())
 }
 
-async fn canonical_live_content(core: &ClientCore, request_id: &str) -> Result<Option<String>> {
+/// The app reads live output from the runtime as its own User; P2P carries
+/// only discovery and enrollment, so its local database holds no transcript.
+async fn canonical_live_content(
+    core: &ClientCore,
+    graphql: &str,
+    request_id: &str,
+) -> Result<Option<String>> {
     use gents_protocol::output::live::{
         observed_request_execution_owner, select_live_target, LiveTargetSelection, LiveView,
         OwnerLiveness,
@@ -151,8 +158,13 @@ async fn canonical_live_content(core: &ClientCore, request_id: &str) -> Result<O
     ) else {
         return Ok(None);
     };
-    let canonical = gents_desktop_core::client::load_session_context_store(
-        core.node(),
+    let app = core.node_identity();
+    let access = gents::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, app.did())
+            .with_client_signing_capability(gents::NodeIdentity::client_signing_capability(app)?)?,
+    );
+    let canonical = gents_desktop_core::client::load_session_context_store_on(
+        &access,
         session_id,
         Some(node_did),
         request.requester_did.as_deref(),

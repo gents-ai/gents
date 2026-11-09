@@ -7,7 +7,7 @@ pub struct AgentTargetDocument {
     pub target_id: String,
     pub node_did: String,
     pub target_node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]

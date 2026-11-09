@@ -5,12 +5,12 @@ import { testApp } from "./app-fixture";
 
 const routed = (itemId: string) => ({
   nodeDid: "did:key:a",
-  agentId: "engineer",
+  agentDid: "engineer",
   sessionId: null,
   mailboxRoute: {
     itemId,
     nodeDid: "did:key:a",
-    agentId: "engineer",
+    agentDid: "engineer",
     sessionId: null,
   },
 });

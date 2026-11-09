@@ -28,9 +28,9 @@ const readiness = (reason: string | null) => ({
   ...deployment.nodeReadiness,
   agents: [
     reason
-      ? { state: "unavailable", agentId: "default", reason }
-      : { state: "ready", agentId: "default" },
-    { state: "ready", agentId: "ops" },
+      ? { state: "unavailable", agentDid: "default", reason }
+      : { state: "ready", agentDid: "default" },
+    { state: "ready", agentDid: "ops" },
   ],
 });
 
@@ -91,8 +91,23 @@ describe("the composer's reason box", () => {
   });
 
   it("says a node is offline", () => {
-    show({ dialSucceeded: false, chatSafe: false });
+    show({ runtimeConnection: "disconnected" });
     expect(box()).toHaveTextContent(/is offline/);
+    expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
+    inputOutOfReach();
+  });
+
+  it("says a node refuses this app instead of connecting forever", () => {
+    show({ runtimeConnection: "refused" });
+    expect(box()).toHaveTextContent(/doesn't accept this app/);
+    expect(box()).toHaveTextContent(/restore this device's access/);
+    expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
+    inputOutOfReach();
+  });
+
+  it("says a node has no address instead of waiting on it", () => {
+    show({ source: "enrollment", graphql: null, runtimeConnection: "noEndpoint" });
+    expect(box()).toHaveTextContent(/has no address this app can reach/);
     expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
     inputOutOfReach();
   });
@@ -115,7 +130,7 @@ describe("the composer's reason box", () => {
       {
         sessionId: "worker",
         nodeDid: NODE,
-        agentId: "default",
+        agentDid: "default",
         title: "Worker",
         turnState: "completed",
         timelineItems: [],

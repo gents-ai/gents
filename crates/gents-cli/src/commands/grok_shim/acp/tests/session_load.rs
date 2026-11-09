@@ -221,7 +221,7 @@ async fn history_picker_scopes_searches_paginates_and_preserves_legacy_sessions(
             .execute(&format!(
                 r#"mutation {{ create_AgentSession(input: {{
                 session_id: "{id}", node_did: "did:test:grok-shim", requester_did: {requester},
-                {provenance} agent_id: "did:test:grok-shim:default", created_at: "2026-09-01T00:00:00Z"
+                {provenance} agent_did: "did:test:grok-shim:default", created_at: "2026-09-01T00:00:00Z"
             }}) {{ _docID }} }}"#
             ))
             .await;
@@ -329,7 +329,7 @@ async fn history_picker_scopes_searches_paginates_and_preserves_legacy_sessions(
     let rows = crate::commands::grok_shim::sessions::load(
         &service.config.node,
         &service.config.node_did,
-        &service.config.agent_id,
+        &service.config.agent_did,
         "older",
     )
     .await
@@ -343,7 +343,7 @@ async fn history_picker_scopes_searches_paginates_and_preserves_legacy_sessions(
     assert!(crate::commands::grok_shim::sessions::load(
         &service.config.node,
         &service.config.node_did,
-        &service.config.agent_id,
+        &service.config.agent_did,
         "foreign-session"
     )
     .await

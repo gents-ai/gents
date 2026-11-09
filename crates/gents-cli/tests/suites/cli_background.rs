@@ -1,7 +1,6 @@
 use crate::support::*;
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
 use gents::ensure_runtime_schemas;
 use serde_json::Value;
 
@@ -11,10 +10,10 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     let node_home = tempdir.path().join("node-home");
 
     {
-        let node = initialized_node(tempdir.path(), &node_home, "background-test").await?;
-        ensure_runtime_schemas(&node).await?;
-        seed_background_tool_calls(&node).await?;
-        node.shutdown().await;
+        let home = UserSeededHome::open(tempdir.path(), &node_home, "background-test").await?;
+        ensure_runtime_schemas(home.node()).await?;
+        seed_background_tool_calls(&home).await?;
+        home.shutdown().await?;
     }
 
     let node_home = node_home.to_str().context("node home utf8")?;
@@ -140,14 +139,14 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     Ok(())
 }
 
-async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
+async fn seed_background_tool_calls(node: &UserSeededHome) -> Result<()> {
     exec(
         node,
         r#"mutation {
             background_request: create_AgentRequest(input: {purpose: "normal",
                 request_id: "req-background",
                 node_did: "did:test:test",
-                agent_id: "default",
+                agent_did: "default",
                 session_id: "session-background",
                 content: "background list fixture",
                 lifecycle_state: "processing",
@@ -160,7 +159,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
             other_request: create_AgentRequest(input: {purpose: "normal",
                 request_id: "req-other",
                 node_did: "did:test:test",
-                agent_id: "default",
+                agent_did: "default",
                 session_id: "session-other",
                 content: "background list other fixture",
                 lifecycle_state: "processing",
@@ -242,10 +241,6 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
     .await
 }
 
-async fn exec(node: &EmbeddedNode, query: &str) -> Result<()> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
-    }
-    Ok(())
+async fn exec(node: &UserSeededHome, query: &str) -> Result<()> {
+    user_exec(node, query).await
 }

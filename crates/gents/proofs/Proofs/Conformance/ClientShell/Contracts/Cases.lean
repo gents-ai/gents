@@ -6,8 +6,8 @@ namespace Conformance.ClientShellContracts
 def contractPeer : PeerId := 40
 def contractNode : NodeDid := 20
 def alternateNode : NodeDid := 21
-def contractAgent : AgentId := 30
-def alternateAgent : AgentId := 31
+def contractAgent : AgentDid := 30
+def alternateAgent : AgentDid := 31
 def sid1 : SessionId := 1
 def sid2 : SessionId := 2
 def reqOld : RequestId := 100
@@ -34,12 +34,12 @@ def sessionObs
     (req : Option RequestId)
     (turn : Option ClientTurnState)
     (node : NodeDid := contractNode)
-    (agentId : Option AgentId := some contractAgent)
+    (agentDid : Option AgentDid := some contractAgent)
     (queued : List RequestId := [])
     : SessionObservation :=
   { sessionId := sid
   , nodeDid := node
-  , agentId := agentId
+  , agentDid := agentDid
   , latestObservedRequest := req
   , latestTurn := turn
   , queuedRequests := queued

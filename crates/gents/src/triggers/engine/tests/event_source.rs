@@ -1,6 +1,72 @@
 use super::*;
 
 #[tokio::test]
+async fn event_source_reads_seed_and_group_as_selected_agent() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    node.add_collection("type SelectionProbe { kind: String @index message: String }")
+        .await
+        .unwrap();
+    let response = crate::ConfigAccess::local(node.clone())
+        .write("test.event_selection_probe", r#"mutation { create_SelectionProbe(input: {kind: "ready", message: "hello"}) { _docID } }"#)
+        .await;
+    let id = crate::store::graphql::created_doc_id(&response.unwrap(), "SelectionProbe").unwrap();
+    let agent_did = "did:key:z6MkhfKM8cN5hVhu5B4msjSKmz2zPPaTF7s8q5VVt57Uoz6f";
+    let task = ResolvedTask {
+        agent_did: agent_did.to_owned(),
+        ..resolved_task("handle")
+    };
+    let mut trigger = resolved_event_trigger_with_filter(
+        "selection-probe",
+        "SelectionProbe",
+        task,
+        r#"{kind: {_eq: "ready"}}"#,
+    );
+    let snapshot = snapshot_with_event_triggers(1, RapidHashMap::default());
+    let (_tx, rx) = watch::channel(snapshot);
+    let source = EventSource::new(rx, node.clone(), CancellationToken::new());
+
+    assert!(event_delivery::probe_document(
+        &node,
+        &trigger.source_collection,
+        &id,
+        trigger.filter.as_deref(),
+        Some(identity::Did::new(agent_did).unwrap()),
+    )
+    .await
+    .unwrap()
+    .is_some());
+    assert_eq!(
+        source
+            .read_source_doc("SelectionProbe", &id, agent_did)
+            .await
+            .unwrap()
+            .unwrap()["message"],
+        "hello"
+    );
+
+    trigger.fire_mode = crate::documents::automation::EventTriggerFireMode::PerGroup;
+    trigger.correlation_field = Some("kind".to_owned());
+    trigger.expected_count = Some(1);
+    let delivery = event_delivery::Delivery::Trigger {
+        node_did: agent_did,
+        trigger: &trigger,
+    };
+    assert!(matches!(
+        event_delivery::evaluate_group(
+            &node,
+            &Default::default(),
+            &crate::ConfigAccess::local_as(node.clone(), identity::Did::new(agent_did).unwrap()),
+            delivery,
+            "missing",
+        )
+        .await
+        .unwrap(),
+        event_delivery::GroupOutcome::Empty
+    ));
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
@@ -27,7 +93,7 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
         ids.len(),
         "startup seeding must cover the full source collection"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 use events::{
@@ -74,7 +140,7 @@ impl crate::UpdateSubscriptionSource for FakeUpdateSubscriptionSource {
 
 #[tokio::test]
 async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real_one_does() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection("type BranchableProbe { value: String }")
         .await
@@ -86,10 +152,12 @@ async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real
         ..resolved_task("go")
     };
     let trigger = resolved_event_trigger("trigger-branchable", "BranchableProbe", task);
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("trigger-branchable".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let subs = Arc::new(FakeUpdateSubscriptionSource::new());
     let mut source = EventSource::with_subscription_source(
@@ -133,30 +201,34 @@ async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real
 
 #[tokio::test]
 async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_document() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let trigger = resolved_event_trigger(
         "receipt-trigger",
         "WorkspaceReceipt",
         resolved_task("{{ event.source_doc_id }}"),
     );
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("receipt-trigger".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
-    let response = node
-        .execute(
+    // Receipts are written by the Agent whose workspace produced them.
+    let response = crate::triggers::callback::test_agent_access(&node)
+        .write(
+            "test.workspace_receipt",
             r#"mutation { add_WorkspaceReceipt(input: {
                 receipt_id: "receipt-1", workspace_id: "ws-1", kind: "writer"
             }) { _docID } }"#,
         )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let doc_id = response.data.unwrap()["add_WorkspaceReceipt"][0]["_docID"]
+        .await
+        .unwrap();
+    let doc_id = response["data"]["add_WorkspaceReceipt"][0]["_docID"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -195,7 +267,7 @@ impl crate::RuntimeSnapshotObserver for SubscriptionObserver {
 
 #[tokio::test]
 async fn event_source_acknowledges_exact_configuration_after_subscription_setup() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection("type ReadyInput { value: String }")
         .await
@@ -204,13 +276,15 @@ async fn event_source_acknowledges_exact_configuration_after_subscription_setup(
         .execute(r#"mutation { create_ReadyInput(input: {value: "before"}) {_docID} }"#)
         .await
         .has_errors());
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([(
             "ready-trigger".into(),
             resolved_event_trigger("ready-trigger", "ReadyInput", resolved_task("observe")),
         )]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let observer = Arc::new(SubscriptionObserver::default());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new())
@@ -339,6 +413,9 @@ fn resolved_event_trigger(
     task: ResolvedTask,
 ) -> ResolvedEventTrigger {
     ResolvedEventTrigger {
+        event_source_id: trigger_id.to_owned(),
+        event_source_doc_id: "source-doc".into(),
+        task_doc_id: "task-doc".into(),
         session_id_template: None,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
@@ -349,7 +426,7 @@ fn resolved_event_trigger(
         filter: None,
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -366,6 +443,9 @@ fn resolved_event_trigger_with_filter(
     filter: &str,
 ) -> ResolvedEventTrigger {
     ResolvedEventTrigger {
+        event_source_id: trigger_id.to_owned(),
+        event_source_doc_id: "source-doc".into(),
+        task_doc_id: "task-doc".into(),
         session_id_template: None,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
@@ -376,7 +456,7 @@ fn resolved_event_trigger_with_filter(
         filter: Some(filter.to_string()),
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerDocument,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -386,6 +466,28 @@ fn resolved_event_trigger_with_filter(
     }
 }
 
+async fn hydrate_event_config_ids(
+    node: &Arc<defra_node::Node>,
+    trigger: &mut ResolvedEventTrigger,
+) {
+    let response = crate::triggers::callback::test_agent_access(node).execute(&format!(
+        "{{Trigger(filter:{{trigger_id:{{_eq:\"{}\"}}}}){{_docID}} EventSource(filter:{{event_source_id:{{_eq:\"{}\"}}}}){{_docID}} Task(filter:{{task_id:{{_eq:\"{}\"}}}}){{_docID}}}}",
+        escape_graphql_string(&trigger.trigger_id), escape_graphql_string(&trigger.event_source_id),
+        escape_graphql_string(&trigger.task_id))).await.unwrap();
+    trigger.trigger_doc_id = response["data"]["Trigger"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .into();
+    trigger.event_source_doc_id = response["data"]["EventSource"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .into();
+    trigger.task_doc_id = response["data"]["Task"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .into();
+}
+
 fn event_test_behavior() -> Arc<ResolvedAgent> {
     static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedAgent>> = std::sync::OnceLock::new();
     BEHAVIOR
@@ -393,18 +495,27 @@ fn event_test_behavior() -> Arc<ResolvedAgent> {
         .clone()
 }
 
+/// Event-source tasks run as the event behavior's signed Agent; its snapshot
+/// only holds that Agent, so the task must name its DID.
+fn resolved_task(prompt_template: &str) -> ResolvedTask {
+    ResolvedTask {
+        agent_did: event_test_behavior().agent_did.clone(),
+        ..super::resolved_task(prompt_template)
+    }
+}
+
 fn snapshot_with_event_triggers(
     generation: u64,
     triggers: RapidHashMap<String, ResolvedEventTrigger>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        "general".to_string(),
+        event_test_behavior().agent_did.clone(),
         vec![event_test_behavior()],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::documents::automation::ResolvedAutomation {
         event_triggers: triggers,
         ..Default::default()
     })
@@ -412,39 +523,138 @@ fn snapshot_with_event_triggers(
     Arc::new(resolved.activate(generation, RapidHashMap::new()))
 }
 
-async fn persist_event_bindings(
-    node: &Arc<defra_node::EmbeddedNode>,
-    snapshot: &ActiveRuntimeSnapshot,
-) {
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    for trigger in snapshot.active_event_triggers().values() {
-        let behavior = snapshot.agent(&trigger.task.agent_id).unwrap();
-        let owner = behavior.node_did();
-        access.transact_write("test.event_binding", |txn| Box::pin(async move {
-            txn.execute_with_variables(
-                "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
-                &serde_json::json!({"input":{"node_did":owner,"event_source_id":trigger.trigger_id,
-                    "source_collection":trigger.source_collection,"event_kind":"created",
-                    "filter":trigger.filter,"correlation_field":trigger.correlation_field}}),
-            ).await?;
-            txn.execute_with_variables(
-                "mutation($input:TriggerMutationInputArg!){create_Trigger(input:$input){_docID}}",
-                &serde_json::json!({"input":{"node_did":owner,"trigger_id":trigger.trigger_id,
-                    "task_id":trigger.task_id,"enabled":true,"concurrency":trigger.concurrency,
-                    "source":{"kind":"event","event_source_id":trigger.trigger_id}}}),
-            ).await?;
-            Ok::<_, anyhow::Error>(())
-        })).await.unwrap();
-    }
+/// The fixture Node's managed Agent; durable arrival delivery reads and seeds
+/// cursors through this Agent's signer, which must belong to the test node.
+fn configured_event_agent() -> Arc<ResolvedAgent> {
+    static AGENT: std::sync::OnceLock<Arc<ResolvedAgent>> = std::sync::OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            use crate::store::identity::NodeIdentity;
+            let root = crate::triggers::callback::test_root_identity();
+            let mut agent = event_test_behavior().as_ref().clone();
+            agent.agent_identity = crate::triggers::callback::test_agent_identity();
+            agent.agent_did = agent.agent_identity.did().to_owned();
+            agent.node = Arc::new(RuntimeNode {
+                node_did: root.did().to_owned(),
+                identity: Arc::new(root),
+                default_agent_did: agent.agent_did.clone(),
+                display_name: None,
+                enabled: true,
+            });
+            Arc::new(agent)
+        })
+        .clone()
 }
 
-async fn admit_observed_event(
-    node: &Arc<defra_node::EmbeddedNode>,
+/// A node whose identity, Node row and Agent match `configured_event_agent`.
+async fn configured_event_node() -> Arc<defra_node::Node> {
+    let node = Arc::new(
+        crate::triggers::callback::test_node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    crate::triggers::callback::seed_test_agent(
+        &node,
+        crate::request::lifecycle::test_support::PIN_FIXED_DID,
+    )
+    .await;
+    node
+}
+
+/// Persist each trigger's Task, EventSource and Trigger as the owning user so
+/// the configuration transaction seeds its arrival cursor, then bind the
+/// resolved triggers to those documents and the fixture Agent.
+async fn configured_event_snapshot(
+    node: &Arc<defra_node::Node>,
+    generation: u64,
+    triggers: RapidHashMap<String, ResolvedEventTrigger>,
+) -> Arc<ActiveRuntimeSnapshot> {
+    let agent = configured_event_agent();
+    let mut configured = RapidHashMap::with_capacity(triggers.len());
+    for (id, mut trigger) in triggers {
+        trigger.task.agent_did = agent.agent_did.clone();
+        let group = (trigger.fire_mode
+            == crate::documents::automation::EventTriggerFireMode::PerGroup)
+            .then(|| {
+                let mut group = serde_json::json!({});
+                if let Some(count) = trigger.expected_count {
+                    group["expected_count"] = count.into();
+                }
+                if let Some(field) = &trigger.expected_count_field {
+                    group["expected_count"] = serde_json::json!({"source_field": field});
+                }
+                if let Some(timeout) = trigger.group_timeout_secs {
+                    group["timeout_secs"] = timeout.into();
+                }
+                if trigger.group_min_count != 1 {
+                    group["min_count"] = trigger.group_min_count.into();
+                }
+                group
+            });
+        crate::triggers::callback::seed_test_configuration(
+            node,
+            crate::request::lifecycle::test_support::PIN_FIXED_DID,
+            vec![
+                (
+                    crate::Collection::Task,
+                    serde_json::json!({"task_id": trigger.task_id,
+                        "agent_did": trigger.task.agent_did,
+                        "prompt_template": trigger.task.prompt_template,
+                        "emit_outcome": trigger.task.emit_outcome}),
+                ),
+                (
+                    crate::Collection::EventSource,
+                    serde_json::json!({"event_source_id": trigger.event_source_id,
+                        "source_collection": trigger.source_collection,
+                        "event_kind": trigger.event_kind,
+                        "filter": trigger.filter,
+                        "correlation_field": trigger.correlation_field,
+                        "group": group}),
+                ),
+                (
+                    crate::Collection::Trigger,
+                    serde_json::json!({"trigger_id": trigger.trigger_id,
+                        "task_id": trigger.task_id,
+                        "enabled": trigger.enabled,
+                        "concurrency": trigger.concurrency,
+                        "source": {"kind": "event", "event_source_id": trigger.event_source_id}}),
+                ),
+            ],
+        )
+        .await;
+        hydrate_event_config_ids(node, &mut trigger).await;
+        configured.insert(id, trigger);
+    }
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        agent.agent_did.clone(),
+        vec![agent.clone()],
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+    )
+    .with_node(agent.node.clone())
+    .with_local_did(crate::request::lifecycle::test_support::PIN_FIXED_DID.into())
+    .with_automation(crate::documents::automation::ResolvedAutomation {
+        event_triggers: configured,
+        ..Default::default()
+    });
+    Arc::new(resolved.activate(generation, RapidHashMap::new()))
+}
+
+async fn admit_observed_event(node: &Arc<defra_node::Node>, intent: &FireIntent) -> FireResult {
+    admit_observed_event_for(node, intent, event_test_behavior().node_did()).await
+}
+
+async fn admit_observed_event_for(
+    node: &Arc<defra_node::Node>,
     intent: &FireIntent,
+    owner_did: &str,
 ) -> FireResult {
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
     let identity = FireIdentity {
-        owner_did: event_test_behavior().node_did().to_owned(),
+        owner_did: owner_did.to_owned(),
         trigger_id: intent.trigger_id.clone().unwrap(),
         source_collection: intent.event_vars["source_collection"]
             .as_str()
@@ -470,8 +680,8 @@ async fn admit_observed_event(
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", node_did: \"{}\", session_id: \"{}\", agent_id: \"general\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
-        escape_graphql_string(&fire.request_id), escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id));
+    let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", node_did: \"{}\", session_id: \"{}\", agent_did: \"{}\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
+        escape_graphql_string(&fire.request_id), escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id), escape_graphql_string(&intent.task.agent_did));
     crate::store::config_client::ConfigAccess::local(node.clone())
         .transact_write("test.event_admission", |txn| {
             let fire = &fire;
@@ -486,6 +696,99 @@ async fn admit_observed_event(
         .unwrap();
     FireResult::Fired {
         request_id: fire.request_id,
+    }
+}
+
+async fn admit_selected_event(
+    node: &Arc<defra_node::Node>,
+    intent: &FireIntent,
+    owner: &str,
+) -> FireResult {
+    let agent = crate::triggers::callback::test_agent_identity();
+    let access = crate::triggers::callback::test_agent_access(node);
+    let identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: owner.into(),
+        trigger_id: intent.trigger_id.clone().unwrap(),
+        source_collection: intent.event_vars["source_collection"]
+            .as_str()
+            .unwrap()
+            .into(),
+        source_doc_id: intent.event_vars["source_doc_id"].as_str().unwrap().into(),
+    };
+    let fire = gents_protocol::trigger_delivery::TriggerFire {
+        fire_key: identity.fire_key(),
+        request_id: identity.request_id(),
+        session_id: identity.session_id(),
+        identity,
+        task_id: intent.task.task_id.clone(),
+        goal_id: None,
+        goal_objective: None,
+        goal_token_budget: None,
+        goal_assignment_applied: false,
+        emit_outcome: intent.task.emit_outcome,
+        queued_serial: intent.concurrency == ConcurrencyMode::QueuedSerial,
+        source_handoff_id: intent
+            .doc_vars
+            .as_ref()
+            .and_then(|doc| doc["handoff_id"].as_str())
+            .map(str::to_owned),
+        reply_session_id: None,
+        shard_id: None,
+        attempt: None,
+        created_at: "2030-01-01T00:00:00Z".into(),
+    };
+    let response = access
+        .execute(&format!(
+            "{{Trigger(filter:{{trigger_id:{{_eq:\"{}\"}}}}){{_docID}}}}",
+            escape_graphql_string(intent.trigger_id.as_deref().unwrap())
+        ))
+        .await
+        .unwrap();
+    let trigger_doc = response["data"]["Trigger"][0]["_docID"].as_str().unwrap();
+    let spec = crate::request::lifecycle::materialize::pending_agent_request_spec(
+        owner,
+        agent.did(),
+        &intent.task.prompt_template,
+        crate::request::lifecycle::ExecutionOrigin::Scheduled,
+        crate::request::lifecycle::TriggerLineage {
+            trigger_id: intent.trigger_id.clone(),
+            trigger_kind: Some("event".into()),
+            source_doc_id: Some(fire.identity.source_doc_id.clone()),
+            correlation: intent.correlation.clone(),
+            trigger_context: None,
+        },
+        None,
+        None,
+        &fire.request_id,
+        &fire.session_id,
+        Some(&fire.fire_key),
+        None,
+        Some(trigger_doc),
+    )
+    .unwrap();
+    let create = crate::request::lifecycle::build_signed_request(
+        spec,
+        crate::request::lifecycle::RequestSigner::Identity(agent.as_ref()),
+    )
+    .await
+    .unwrap();
+    let prepared = super::super::durable::PreparedFire {
+        receipt: fire.clone(),
+        target_existing: false,
+        replace_prior: false,
+        event_source_generation: intent.event_source_generation.clone(),
+    };
+    let result = crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+        node,
+        identity::Did::new(agent.did()).unwrap(),
+        &prepared,
+        &create,
+        Some(agent.as_ref()),
+    )
+    .await
+    .unwrap();
+    FireResult::Fired {
+        request_id: result.request.request_id,
     }
 }
 
@@ -533,8 +836,7 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
 
 #[tokio::test]
 async fn event_source_next_fire_emits_intent_on_matching_real_event() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node = configured_event_node().await;
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -550,10 +852,12 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-webhook", "WebhookEvent", task.clone());
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("trigger-webhook".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
@@ -614,7 +918,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     );
     assert_eq!(
         intent.durable_fire_key,
-        crate::triggers::engine::durable_fire_key(
+        gents_protocol::trigger_delivery::durable_fire_key(
             "event-document",
             &["trigger-webhook", ev["source_doc_id"].as_str().unwrap()]
         )
@@ -623,30 +927,72 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
 
 #[tokio::test]
 async fn a_callback_result_fires_its_bindings_event_source_once() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    use crate::store::identity::NodeIdentity as _;
+    let root = crate::triggers::callback::test_root_identity();
+    let owner = root.did().to_owned();
+    let node = Arc::new(
+        crate::triggers::callback::test_node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    crate::triggers::callback::seed_test_agent(&node, &owner).await;
 
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-after-callback".to_string(),
+        agent_did: crate::triggers::callback::test_agent_did(),
         ..resolved_task("continue after the callback")
     };
-    let trigger = resolved_event_trigger_with_filter(
+    let mut trigger = resolved_event_trigger_with_filter(
         "trigger-after-callback",
         "CallbackResult",
         task,
         r#"{ binding_id: { _eq: "maintenance-execute-workspace" } }"#,
     );
-    let snapshot = snapshot_with_event_triggers(
-        1,
-        RapidHashMap::from_iter([("trigger-after-callback".to_string(), trigger)]),
-    );
-    persist_event_bindings(&node, snapshot.as_ref()).await;
+    crate::triggers::callback::seed_test_configuration(&node, &owner, vec![
+        (crate::Collection::Task, serde_json::json!({"task_id":"task-after-callback",
+            "agent_did":crate::triggers::callback::test_agent_did(), "prompt_template":"continue after the callback"})),
+        (crate::Collection::EventSource, serde_json::json!({"event_source_id":"trigger-after-callback",
+            "source_collection":"CallbackResult", "event_kind":"created",
+            "filter":"{ binding_id: { _eq: \"maintenance-execute-workspace\" } }"})),
+        (crate::Collection::Trigger, serde_json::json!({"trigger_id":"trigger-after-callback",
+            "task_id":"task-after-callback", "concurrency":"serial",
+            "source":{"kind":"event", "event_source_id":"trigger-after-callback"}})),
+    ]).await;
+    hydrate_event_config_ids(&node, &mut trigger).await;
+    let mut behavior = event_test_behavior().as_ref().clone();
+    behavior.agent_identity = crate::triggers::callback::test_agent_identity();
+    behavior.agent_did = behavior.agent_identity.did().to_owned();
+    behavior.node = Arc::new(crate::store::identity::RuntimeNode {
+        node_did: owner.clone(),
+        identity: Arc::new(root),
+        default_agent_did: behavior.agent_did.clone(),
+        display_name: None,
+        enabled: true,
+    });
+    let principal = behavior.node.clone();
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        behavior.agent_did.clone(),
+        vec![Arc::new(behavior)],
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+    )
+    .with_node(principal)
+    .with_local_did(owner.clone())
+    .with_automation(crate::documents::automation::ResolvedAutomation {
+        event_triggers: RapidHashMap::from_iter([("trigger-after-callback".to_string(), trigger)]),
+        ..Default::default()
+    });
+    let snapshot = Arc::new(resolved.activate(1, RapidHashMap::new()));
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
     let node_for_write = node.clone();
+    let owner_for_write = owner.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(100)).await;
         for (invocation_id, binding_id) in [
@@ -655,15 +1001,18 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
         ] {
             crate::triggers::callback::create_callback_result(
                 &node_for_write,
+                &crate::triggers::callback::test_agent_access(&node_for_write),
                 &crate::triggers::callback::CallbackResultDoc {
                     result_id: format!("res-{invocation_id}"),
                     invocation_id: invocation_id.to_string(),
                     binding_id: Some(binding_id.to_string()),
-                    owner_node_did: "did:key:zWriter".to_string(),
+                    agent_did: crate::triggers::callback::test_agent_did(),
+                    owner_node_did: owner_for_write.clone(),
                     workspace_id: None,
                     work_unit_id: None,
                     caused_by_correlation: None,
                     created_at: None,
+                    route: Default::default(),
                 },
             )
             .await
@@ -679,7 +1028,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     let doc_vars = intent.doc_vars.as_ref().expect("hydrated result");
     assert_eq!(doc_vars["invocation_id"].as_str(), Some("inv-wanted"));
 
-    let result = admit_observed_event(&node, &intent).await;
+    let result = admit_selected_event(&node, &intent, &owner).await;
     (intent.on_result)(result);
     let extra = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
     assert!(
@@ -691,7 +1040,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
 
 #[tokio::test]
 async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_scope() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection(
         r#"type GroupMember {
@@ -725,16 +1074,21 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
         ..resolved_task("{{ group.correlation_value }} {{ group.count }}")
     };
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        event_source_id: "source".into(),
+        event_source_doc_id: "source-doc".into(),
+        task_doc_id: "task-doc".into(),
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count_field: Some("expected_total".into()),
         filter: Some(r#"{ kind: { _eq: "include" } }"#.into()),
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
     };
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("group-trigger".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node, CancellationToken::new());
 
@@ -760,7 +1114,7 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
 
 #[tokio::test]
 async fn per_group_timeout_uses_durable_first_seen_clock() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection(
         r#"type DurableGroupMember {
@@ -783,40 +1137,65 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 
     let task = resolved_task("{{ group.correlation_value }} {{ group.complete }}");
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         group_timeout_secs: Some(60),
         group_min_count: 1,
         ..resolved_event_trigger("durable-group-trigger", "DurableGroupMember", task)
     };
-    let (group_key, trigger_config_key) =
-        EventSource::group_state_keys(event_test_behavior().node_did(), &trigger, "run-old");
-    let first_seen_at =
-        (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339_opts(SecondsFormat::Millis, true);
-    let mutation = format!(
-        r#"mutation {{
-            create_EventGroupState(input: {{
-                group_key: "{}"
-                node_did: "{owner}"
-                consumer: {{kind:"trigger",trigger_id:"durable-group-trigger"}}
-                correlation: "run-old"
-                consumer_config_key: "{}"
-                first_seen_at: "{}"
-            }}) {{ _docID }}
-        }}"#,
-        escape_graphql_string(&group_key),
-        escape_graphql_string(&trigger_config_key),
-        escape_graphql_string(&first_seen_at),
-        owner = escape_graphql_string(event_test_behavior().node_did()),
-    );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
-
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("durable-group-trigger".to_string(), trigger)]),
-    );
+    )
+    .await;
+    // The owning Agent created this group clock before the runtime restarted;
+    // its first observation is already past the group timeout.
+    let trigger = snapshot.active_event_triggers()["durable-group-trigger"].clone();
+    let owner = configured_event_agent().node_did().to_owned();
+    let (group_key, consumer_config_key) =
+        EventSource::group_state_keys(&owner, &trigger, "run-old");
+    let state = gents_protocol::event_delivery::EventGroupState {
+        group_key,
+        node_did: owner.clone(),
+        consumer: gents_protocol::event_delivery::EventConsumer::Trigger {
+            trigger_id: trigger.trigger_id.clone(),
+        },
+        correlation: "run-old".into(),
+        consumer_config_key,
+        first_seen_at: (Utc::now() - ChronoDuration::seconds(120))
+            .to_rfc3339_opts(SecondsFormat::Millis, true),
+        quiesced_at: None,
+        quiesced_reason: None,
+    };
+    let agent_did = configured_event_agent().agent_did.clone();
+    crate::triggers::callback::test_agent_access(&node)
+        .transact_write("test.durable_group_clock", |txn| {
+            let (owner, state, agent_did) = (&owner, &state, &agent_did);
+            Box::pin(async move {
+                let (parent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    owner,
+                    agent_did,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("fixture Agent is unavailable"))?;
+                let created = txn
+                    .execute_with_variables(
+                        "mutation($input:EventGroupStateMutationInputArg!){create_EventGroupState(input:$input){_docID}}",
+                        &serde_json::json!({"input": state}),
+                    )
+                    .await?;
+                let doc = crate::store::graphql::created_doc_id(&created, "EventGroupState")?;
+                txn.add_resource_relationship("EventGroupState", &doc, "parent", "agents", &parent)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node, CancellationToken::new());
 
@@ -939,7 +1318,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
         logical_doc, pending_doc,
         "siblings must share one physical source row"
     );
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection(
         r#"type MixedCorrelationMember {
@@ -959,14 +1338,15 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
             resolved_task("{{ event.correlation }}"),
         )
     };
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([
             (ready.trigger_id.clone(), ready),
             (pending.trigger_id.clone(), pending),
         ]),
-    );
-    persist_event_bindings(&node, snapshot.as_ref()).await;
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
@@ -1114,7 +1494,7 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
 
 #[tokio::test]
 async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_collection(
         r#"type QuiescedGroupMember {
@@ -1137,7 +1517,7 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     }
 
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(1),
         ..resolved_event_trigger(
@@ -1146,10 +1526,12 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
             resolved_task("{{ group.count }}"),
         )
     };
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("quiesced-group-trigger".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut first_source = EventSource::new(rx, node.clone(), CancellationToken::new());
     first_source
@@ -1191,25 +1573,25 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
 fn group_state_identity_changes_only_with_membership_definition() {
     let task = resolved_task("first prompt");
     let mut trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
     };
     let initial =
-        EventSource::group_state_keys(event_test_behavior().node_did(), &trigger, "run-a");
+        EventSource::group_state_keys(configured_event_agent().node_did(), &trigger, "run-a");
 
     trigger.task.prompt_template = "changed prompt".into();
     trigger.expected_count = Some(3);
     assert_eq!(
-        EventSource::group_state_keys(event_test_behavior().node_did(), &trigger, "run-a"),
+        EventSource::group_state_keys(configured_event_agent().node_did(), &trigger, "run-a"),
         initial,
         "task and policy changes must not restart a group's first-seen clock",
     );
 
     trigger.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
     assert_ne!(
-        EventSource::group_state_keys(event_test_behavior().node_did(), &trigger, "run-a"),
+        EventSource::group_state_keys(configured_event_agent().node_did(), &trigger, "run-a"),
         initial,
         "membership filter changes must use fresh recovery state",
     );
@@ -1230,7 +1612,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
 
     let task = resolved_task("first prompt");
     let trigger = ResolvedEventTrigger {
-        fire_mode: crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        fire_mode: crate::documents::automation::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".into()),
         expected_count: Some(2),
         ..resolved_event_trigger("fingerprint-trigger", "RecoveryFingerprintMember", task)
@@ -1288,7 +1670,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
 
 #[tokio::test]
 async fn event_source_filter_probe_gates_fire_on_operator_filter() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     // `kind` must be indexed for DefraDB's filter evaluator to accept `_eq`
@@ -1316,11 +1698,12 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
         task.clone(),
         r#"{ kind: { _eq: "signup" } }"#,
     );
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("trigger-filtered".to_string(), trigger)]),
-    );
-    persist_event_bindings(&node, snapshot.as_ref()).await;
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -1388,7 +1771,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
 
 #[tokio::test]
 async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let webhook_sdl = r#"
@@ -1409,10 +1792,12 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
         ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-hydrate", "WebhookEvent", task.clone());
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("trigger-hydrate".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -1476,7 +1861,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
 }
 
 async fn create_event_trigger_doc(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     trigger_id: &str,
     task_id: &str,
     source_collection: &str,
@@ -1541,14 +1926,15 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
         }
     }
     assert!(committed > 0, "at least one concurrent update commits");
-    let trigger = observed_trigger(node.as_ref(), trigger_id).await;
+    let trigger =
+        observed_trigger(node.as_ref(), event_test_behavior().node_did(), trigger_id).await;
     assert_eq!(trigger["fire_count"].as_i64(), Some(committed));
 }
 
-async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_json::Value {
+async fn observed_trigger(node: &defra_node::Node, owner_did: &str, id: &str) -> serde_json::Value {
     let query = format!(
         "{{Trigger(filter:{{node_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
-        escape_graphql_string(event_test_behavior().node_did()),
+        escape_graphql_string(owner_did),
         escape_graphql_string(id)
     );
     let response = node.execute(&query).await;
@@ -1559,7 +1945,7 @@ async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_js
 
 #[tokio::test]
 async fn event_source_on_result_writes_runtime_fields_on_fired() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let webhook_sdl = r#"
@@ -1572,18 +1958,19 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
         .await
         .expect("add_collection for WebhookEvent");
 
-    create_event_trigger_doc(&node, "trigger-fired", "task-webhook", "WebhookEvent").await;
-
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-webhook".to_string(),
         ..resolved_task("handle webhook")
     };
-    let trigger = resolved_event_trigger("trigger-fired", "WebhookEvent", task.clone());
-    let snapshot = snapshot_with_event_triggers(
+    let mut trigger = resolved_event_trigger("trigger-fired", "WebhookEvent", task.clone());
+    trigger.event_source_id = "WebhookEvent".into();
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("trigger-fired".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -1626,7 +2013,12 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
     let mut fired_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(node.as_ref(), "trigger-fired").await;
+        let trig = observed_trigger(
+            node.as_ref(),
+            configured_event_agent().node_did(),
+            "trigger-fired",
+        )
+        .await;
         if trig["last_status"].as_str() == Some("fired") {
             fired_trigger = Some(trig);
             break;
@@ -1655,7 +2047,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
 
 #[tokio::test]
 async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let webhook_sdl = r#"
@@ -1668,18 +2060,30 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         .await
         .expect("add_collection for WebhookEvent");
 
-    create_event_trigger_doc(&node, "trigger-skip-err", "task-webhook", "WebhookEvent").await;
-
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-webhook".to_string(),
         ..resolved_task("handle webhook")
     };
-    let trigger = resolved_event_trigger("trigger-skip-err", "WebhookEvent", task.clone());
-    let snapshot = snapshot_with_event_triggers(
+    let mut trigger = resolved_event_trigger("trigger-skip-err", "WebhookEvent", task.clone());
+    trigger.event_source_id = "WebhookEvent".into();
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("trigger-skip-err".to_string(), trigger)]),
-    );
+    )
+    .await;
+    crate::documents::update_trigger_runtime_fields(
+        &node,
+        configured_event_agent().node_did(),
+        "trigger-skip-err",
+        crate::documents::TriggerRuntimeUpdate {
+            fire_count_delta: Some(0),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -1723,7 +2127,12 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let mut skipped_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(node.as_ref(), "trigger-skip-err").await;
+        let trig = observed_trigger(
+            node.as_ref(),
+            configured_event_agent().node_did(),
+            "trigger-skip-err",
+        )
+        .await;
         if trig["last_status"].as_str() == Some("skipped") {
             skipped_trigger = Some(trig);
             break;
@@ -1747,7 +2156,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 
     EventSource::spawn_runtime_field_write(
         node.clone(),
-        event_test_behavior().node_did().to_owned(),
+        configured_event_agent().node_did().to_owned(),
         trigger_id.clone(),
         source_doc_id.clone(),
         FireResult::Errored {
@@ -1758,7 +2167,12 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let mut errored_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let trig = observed_trigger(node.as_ref(), "trigger-skip-err").await;
+        let trig = observed_trigger(
+            node.as_ref(),
+            configured_event_agent().node_did(),
+            "trigger-skip-err",
+        )
+        .await;
         if trig["last_status"].as_str() == Some("error") {
             errored_trigger = Some(trig);
             break;
@@ -1869,7 +2283,7 @@ async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
 
 #[tokio::test]
 async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -1882,10 +2296,12 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
         .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
     let trigger = resolved_event_trigger("trigger-firstseen", "WebhookEvent", task);
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([("trigger-firstseen".to_string(), trigger)]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
@@ -1947,7 +2363,7 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
 
 #[tokio::test]
 async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -1961,14 +2377,15 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
     let task = resolved_task("ignored");
     let trigger_alpha = resolved_event_trigger("trigger-alpha", "WebhookEvent", task.clone());
     let trigger_beta = resolved_event_trigger("trigger-beta", "WebhookEvent", task);
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([
             ("trigger-alpha".to_string(), trigger_alpha),
             ("trigger-beta".to_string(), trigger_beta),
         ]),
-    );
-    persist_event_bindings(&node, snapshot.as_ref()).await;
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
@@ -2015,7 +2432,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
 
 #[tokio::test]
 async fn event_source_tries_all_triggers_when_first_filter_misses() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = configured_event_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -2040,13 +2457,15 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
         task,
         r#"{ kind: { _eq: "other" } }"#,
     );
-    let snapshot = snapshot_with_event_triggers(
+    let snapshot = configured_event_snapshot(
+        &node,
         1,
         RapidHashMap::from_iter([
             ("trigger-a-lex-first".to_string(), trigger_a),
             ("trigger-b-matches".to_string(), trigger_b),
         ]),
-    );
+    )
+    .await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());

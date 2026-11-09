@@ -8,16 +8,16 @@ use anyhow::Result;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::inference::admission::AdmissionRegistry;
-use crate::request::watcher::AgentRequest;
 use crate::runtime::agent::daemon::{AgentDaemon, AgentDaemonInit};
 use crate::tools::call::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::tools::surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::turn::completion_factory::build_admitted_model;
 use crate::turn::prompt::LayeredPromptBuilder;
+use gents_protocol::row::AgentRequest;
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) admission_registry: AdmissionRegistry,
     pub(super) hook_failure_policy: crate::tools::call::hook::FailurePolicy,
@@ -37,7 +37,7 @@ pub(super) struct RuntimeContext {
 }
 
 pub(super) struct AgentResolution {
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) rejection_reason: Option<String>,
 }
 
@@ -50,7 +50,7 @@ impl StartupBarrier {
     pub(super) fn new(agents: &[Arc<crate::inference::resolved::ResolvedAgent>]) -> Self {
         let pending: BTreeSet<(String, u64)> = agents
             .iter()
-            .map(|agent_config| (agent_config.agent_id.clone(), 1))
+            .map(|agent_config| (agent_config.agent_did.clone(), 1))
             .collect();
         let (pending_count_tx, _) = watch::channel(pending.len());
         Self {
@@ -59,9 +59,9 @@ impl StartupBarrier {
         }
     }
 
-    async fn release(&self, agent_id: &str, generation: u64) -> bool {
+    async fn release(&self, agent_did: &str, generation: u64) -> bool {
         let mut pending = self.pending_standings.lock().await;
-        if pending.remove(&(agent_id.to_string(), generation)) {
+        if pending.remove(&(agent_did.to_string(), generation)) {
             let _ = self.pending_count_tx.send_replace(pending.len());
             true
         } else {
@@ -69,9 +69,9 @@ impl StartupBarrier {
         }
     }
 
-    pub async fn register_agent(&self, agent_id: &str, generation: u64) {
+    pub async fn register_agent(&self, agent_did: &str, generation: u64) {
         let mut pending = self.pending_standings.lock().await;
-        if pending.insert((agent_id.to_string(), generation)) {
+        if pending.insert((agent_did.to_string(), generation)) {
             self.pending_count_tx.send_replace(pending.len());
         }
     }
@@ -81,23 +81,23 @@ impl StartupBarrier {
         Self::new(&[])
     }
 
-    pub async fn mark_agent_ready(&self, agent_id: &str, generation: u64) -> bool {
-        self.release(agent_id, generation).await
+    pub async fn mark_agent_ready(&self, agent_did: &str, generation: u64) -> bool {
+        self.release(agent_did, generation).await
     }
 
-    pub async fn mark_agent_demoted(&self, agent_id: &str, generation: u64) -> bool {
-        self.release(agent_id, generation).await
+    pub async fn mark_agent_demoted(&self, agent_did: &str, generation: u64) -> bool {
+        self.release(agent_did, generation).await
     }
 
-    pub async fn mark_agent_superseded(&self, agent_id: &str, generation: u64) -> bool {
-        self.release(agent_id, generation).await
+    pub async fn mark_agent_superseded(&self, agent_did: &str, generation: u64) -> bool {
+        self.release(agent_did, generation).await
     }
 
-    pub async fn is_pending(&self, agent_id: &str, generation: u64) -> bool {
+    pub async fn is_pending(&self, agent_did: &str, generation: u64) -> bool {
         self.pending_standings
             .lock()
             .await
-            .contains(&(agent_id.to_string(), generation))
+            .contains(&(agent_did.to_string(), generation))
     }
 
     pub async fn pending_agents(&self) -> Vec<String> {
@@ -105,7 +105,7 @@ impl StartupBarrier {
             .lock()
             .await
             .iter()
-            .map(|(agent_id, generation)| format!("{agent_id}@{generation}"))
+            .map(|(agent_did, generation)| format!("{agent_did}@{generation}"))
             .collect()
     }
 
@@ -126,7 +126,11 @@ impl RuntimeContext {
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
-        let api_key = if agent_config.backend_auth.uses_node_oauth() {
+        let api_key = if agent_config.backend_auth.uses_node_oauth()
+            || matches!(
+                &agent_config.backend_auth,
+                crate::documents::BackendAuth::Credential { .. }
+            ) {
             "no-key".to_owned()
         } else {
             agent_config.completion_client_api_key()?
@@ -138,25 +142,29 @@ impl RuntimeContext {
             &allowed_targets,
         );
         let preamble = prompt_builder.preamble().to_string();
-        let mut loop_tools = tool_surface.build_tools(&self.tool_runtime).await?;
+        let tool_runtime = self.tool_runtime.for_agent(&agent_config);
+        let mut loop_tools = tool_surface.build_tools(&tool_runtime).await?;
         if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
             let ceiling = crate::documents::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
                 tool_surface.allowed_mcp_service_ids(),
                 tool_surface.includes_meta_tools(),
             );
-            loop_tools.push(Box::new(crate::documents::skills::LoadSkillTool::new(
-                agent_config.skills.clone(),
-                ceiling,
-            )));
+            loop_tools.push(Box::new(
+                crate::tools::native::skills::LoadSkillTool::for_agent(
+                    agent_config.skills.clone(),
+                    ceiling,
+                    &agent_config.configuration,
+                ),
+            ));
         }
         let loop_tools = std::sync::Arc::new(loop_tools);
         let background_tool_registry = BackgroundToolRegistry::from_config(
-            tool_surface.build_tools(&self.tool_runtime).await?,
+            tool_surface.build_tools(&tool_runtime).await?,
             tool_surface.background_tools(),
         );
         tracing::info!(
-            agent_id = %agent_config.agent_id,
+            agent_did = %agent_config.agent_did,
             did = %agent_config.node_did(),
             model = %agent_config.model_name,
             tools = ?tool_names,
@@ -241,6 +249,12 @@ impl RuntimeContext {
             self.startup_readiness.build_timeout,
         )
         .await?;
+        let capture_factory = match &self.rendered_request_capture_factory {
+            Some(factory) => factory.clone(),
+            None => crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                self.node.clone(), agent_config.agent_identity.as_ref(),
+            )?,
+        };
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: self.node.clone(),
             agent_config,
@@ -250,7 +264,7 @@ impl RuntimeContext {
             loop_tools,
             prompt_builder,
             hook_failure_policy: self.hook_failure_policy,
-            rendered_request_capture_factory: self.rendered_request_capture_factory.clone(),
+            rendered_request_capture_factory: Some(capture_factory),
             background_tool_registry,
             background_execution_registry: self.background_execution_registry.clone(),
             startup_barrier: self.startup_barrier.clone(),
@@ -282,12 +296,12 @@ impl RuntimeContext {
 mod startup_barrier_tests {
     use super::*;
 
-    fn agent_config(agent_id: &str) -> Arc<crate::inference::resolved::ResolvedAgent> {
+    fn agent_config(agent_did: &str) -> Arc<crate::inference::resolved::ResolvedAgent> {
         Arc::new(
-            crate::runtime::agent::PendingAgent::new(agent_id).build_with_identity_for_test(
+            crate::runtime::agent::PendingAgent::new(agent_did).build_with_identity_for_test(
                 crate::KeyIdentity::load_or_create(
                     std::env::temp_dir()
-                        .join(format!("barrier-{agent_id}-{}.key", uuid::Uuid::new_v4())),
+                        .join(format!("barrier-{agent_did}-{}.key", uuid::Uuid::new_v4())),
                     None,
                 )
                 .unwrap(),
@@ -305,16 +319,17 @@ mod startup_barrier_tests {
 
     #[tokio::test]
     async fn release_before_and_after_wait_both_complete() {
-        let barrier = Arc::new(StartupBarrier::new(&[agent_config("a"), agent_config("b")]));
+        let (a, b) = (agent_config("a"), agent_config("b"));
+        let barrier = Arc::new(StartupBarrier::new(&[a.clone(), b.clone()]));
 
-        barrier.mark_agent_ready("a", 1).await;
+        barrier.mark_agent_ready(&a.agent_did, 1).await;
 
         let waiter = {
             let barrier = barrier.clone();
             tokio::spawn(async move { barrier.wait_ready().await })
         };
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        barrier.mark_agent_ready("b", 1).await;
+        barrier.mark_agent_ready(&b.agent_did, 1).await;
 
         tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
             .await
@@ -324,17 +339,22 @@ mod startup_barrier_tests {
 
     #[tokio::test]
     async fn demotion_and_supersession_release_without_readiness() {
-        let barrier = Arc::new(StartupBarrier::new(&[
+        let (healthy, unbuildable, retired) = (
             agent_config("healthy"),
             agent_config("unbuildable"),
             agent_config("retired"),
+        );
+        let barrier = Arc::new(StartupBarrier::new(&[
+            healthy.clone(),
+            unbuildable.clone(),
+            retired.clone(),
         ]));
 
-        barrier.mark_agent_ready("healthy", 1).await;
-        barrier.mark_agent_demoted("unbuildable", 1).await;
-        assert!(barrier.is_pending("retired", 1).await);
-        barrier.mark_agent_superseded("retired", 1).await;
-        assert!(!barrier.is_pending("retired", 1).await);
+        barrier.mark_agent_ready(&healthy.agent_did, 1).await;
+        barrier.mark_agent_demoted(&unbuildable.agent_did, 1).await;
+        assert!(barrier.is_pending(&retired.agent_did, 1).await);
+        barrier.mark_agent_superseded(&retired.agent_did, 1).await;
+        assert!(!barrier.is_pending(&retired.agent_did, 1).await);
 
         tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
             .await

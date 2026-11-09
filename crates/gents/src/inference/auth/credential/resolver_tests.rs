@@ -1,4 +1,3 @@
-use super::test_support::test_node;
 use super::*;
 
 const DID: &str = "did:key:zResolver";
@@ -157,20 +156,23 @@ fn resolver_reference_names_exactly_one_account() {
 
 #[tokio::test]
 async fn resolver_reads_through_config_access() {
-    let node = test_node().await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-resolver").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let access = super::rows::runtime_credential_access(&node, did).unwrap();
     for credential in [
-        row(DID, PROVIDER, "xai-oauth:b", Some("b"), Some(1_000), true),
-        row(DID, PROVIDER, "xai-oauth:original", None, None, true),
+        row(did, PROVIDER, "xai-oauth:b", Some("b"), Some(1_000), true),
+        row(did, PROVIDER, "xai-oauth:original", None, None, true),
     ] {
         upsert_oauth_credential(&node, &credential).await.unwrap();
     }
-    let access = crate::store::config_client::ConfigAccess::local(node);
     for (pick, expected) in [
         (AccountPick::Reference(Some("b")), "xai-oauth:b"),
         (AccountPick::Reference(None), "xai-oauth:original"),
         (AccountPick::ProviderDefault, "xai-oauth:original"),
     ] {
-        let resolved = resolve_oauth_credential(&access, DID, PROVIDER, pick)
+        let resolved = resolve_oauth_credential(&access, did, PROVIDER, pick)
             .await
             .unwrap()
             .map(|row| row.credential_id);
@@ -180,17 +182,20 @@ async fn resolver_reads_through_config_access() {
 
 #[tokio::test]
 async fn resolver_missing_account_keeps_the_missing_guidance() {
-    let node = test_node().await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-resolver").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
     let missing = classify_oauth_auth_error(
         &XAI_OAUTH_PRODUCT,
-        DID,
+        did,
         PROVIDER,
         &OAuthAuthProblem::Missing,
     );
     let bootstrap = |pick| {
         crate::inference::auth::http::bootstrap_oauth_client(
             node.clone(),
-            DID,
+            did,
             PROVIDER,
             OAuthRefreshKind::Xai,
             XAI_OAUTH_PRODUCT,
@@ -204,7 +209,7 @@ async fn resolver_missing_account_keeps_the_missing_guidance() {
 
     upsert_oauth_credential(
         &node,
-        &row(DID, PROVIDER, "xai-oauth:original", None, None, true),
+        &row(did, PROVIDER, "xai-oauth:original", None, None, true),
     )
     .await
     .unwrap();

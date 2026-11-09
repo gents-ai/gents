@@ -5,15 +5,14 @@ pub mod status_projection;
 use crate::inference::llm::message::{AssistantContent, Message, Text};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use crate::store::graphql::escape_graphql_string;
 
-use crate::session::canonical_rows::{
+use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+use gents_protocol::output::rows::{
     decode_scoped_request_output_segments, request_output_segments_query,
 };
-use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{OutputSource, OutputWriter, PayloadRef};
 
 use self::r4c_args::{
@@ -114,8 +113,8 @@ pub(crate) enum ReadToolOutputOutcome {
     NotBackgrounded,
 }
 
-pub(crate) async fn handle_list_background_tools(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn handle_list_background_tools_with_access(
+    access: &crate::ConfigAccess,
     caller: &ProcessControlScope,
     local_deployment_id: &str,
     // Unused here by design: list rows project status from the persisted
@@ -149,14 +148,9 @@ pub(crate) async fn handle_list_background_tools(
             }}
         }}"#
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "handle_list_background_tools",
-    )
-    .await?;
+    let response = access.execute(&query).await?;
     let rows: Vec<ListBackgroundToolRow> =
-        rows_skipping_malformed(response.data.as_ref(), "AgentToolCall")?;
+        rows_skipping_malformed(response.get("data"), "AgentToolCall")?;
 
     let mut entries = Vec::new();
     for row in rows {
@@ -178,15 +172,16 @@ pub(crate) async fn handle_list_background_tools(
         let Some(tool_call_id) = non_empty_string(Some(&row.tool_call_id)) else {
             continue;
         };
-        let output = canonical_tool_output(
-            node,
+        let output = observe_canonical_tool_output_with_access(
+            access,
             &row.doc_id,
             &row.request_doc_id,
             &row.session_id,
             &row.node_did,
             row.requester_did.as_deref(),
         )
-        .await?;
+        .await?
+        .into_text();
         let evidence = OutputEvidence::from_text(&output);
 
         entries.push(ListBackgroundToolsEntry {
@@ -217,14 +212,14 @@ pub(crate) async fn handle_list_background_tools(
     })
 }
 
-pub(crate) async fn handle_read_tool_output(
-    node: &EmbeddedNode,
+pub(crate) async fn handle_read_tool_output_with_access(
+    access: &crate::ConfigAccess,
     caller: &ProcessControlScope,
     live_outputs: &LiveToolOutputRegistry,
     args: ReadToolOutputArgs,
 ) -> Result<ReadToolOutputOutcome> {
-    read_tool_output_slice(
-        node,
+    read_tool_output_slice_with_access(
+        access,
         caller,
         live_outputs,
         &args.tool_call_id,
@@ -234,12 +229,28 @@ pub(crate) async fn handle_read_tool_output(
     .await
 }
 
-pub(crate) async fn read_tool_output_slice(
-    node: &EmbeddedNode,
+pub(crate) async fn read_tool_output_slice_with_access(
+    access: &crate::ConfigAccess,
     caller: &ProcessControlScope,
-    // Unused here by design: elapsed/status come from the authoritative
-    // persisted lifecycle projection and output evidence from the canonical
-    // output owner, not the live-output registry.
+    live_outputs: &LiveToolOutputRegistry,
+    tool_call_id: &str,
+    offset: u64,
+    max_bytes: usize,
+) -> Result<ReadToolOutputOutcome> {
+    read_tool_output_slice_inner(
+        access,
+        caller,
+        live_outputs,
+        tool_call_id,
+        offset,
+        max_bytes,
+    )
+    .await
+}
+
+async fn read_tool_output_slice_inner(
+    access: &crate::ConfigAccess,
+    caller: &ProcessControlScope,
     _live_outputs: &LiveToolOutputRegistry,
     tool_call_id: &str,
     offset: u64,
@@ -275,13 +286,8 @@ pub(crate) async fn read_tool_output_slice(
             }}
         }}"#
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "read_tool_output_slice",
-    )
-    .await?;
-    let Some(row) = first_row::<ReadToolOutputRow>(response.data.as_ref(), "AgentToolCall") else {
+    let data = access.execute(&query).await?.get("data").cloned();
+    let Some(row) = first_row::<ReadToolOutputRow>(data.as_ref(), "AgentToolCall") else {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     };
     if !caller.authorizes(
@@ -303,21 +309,28 @@ pub(crate) async fn read_tool_output_slice(
     );
     let status = projection.status_token().to_string();
     let exited = projection.lifecycle.is_terminal();
-    let combined = canonical_tool_output(
-        node,
+    let request_doc_id = row
+        .request_doc_id
+        .as_deref()
+        .context("tool output row lacks request binding")?;
+    let session_id = row
+        .session_id
+        .as_deref()
+        .context("tool output row lacks session binding")?;
+    let node_did = row
+        .node_did
+        .as_deref()
+        .context("tool output row lacks agent binding")?;
+    let combined = observe_canonical_tool_output_with_access(
+        access,
         &row.doc_id,
-        row.request_doc_id
-            .as_deref()
-            .context("tool output row lacks request binding")?,
-        row.session_id
-            .as_deref()
-            .context("tool output row lacks session binding")?,
-        row.node_did
-            .as_deref()
-            .context("tool output row lacks agent binding")?,
+        request_doc_id,
+        session_id,
+        node_did,
         row.requester_did.as_deref(),
     )
-    .await?;
+    .await?
+    .into_text();
     let slice = read_combined_output_slice(&combined, offset, max_bytes);
     let exit_code = None;
 
@@ -335,8 +348,12 @@ pub(crate) async fn read_tool_output_slice(
     }))
 }
 
+/// Reads without an actor. Output segments are Agent-owned and invisible to
+/// it, so it exists only for unowned fixtures; runtime readers use
+/// [`observe_canonical_tool_output_with_access`] with the owning Agent.
+#[cfg(test)]
 pub(crate) async fn canonical_tool_output(
-    node: &EmbeddedNode,
+    node: &defra_node::Node,
     tool_doc_id: &str,
     request_doc_id: &str,
     session_id: &str,
@@ -367,7 +384,7 @@ pub(crate) enum CanonicalToolOutputObservation {
 }
 
 impl CanonicalToolOutputObservation {
-    fn into_text(self) -> String {
+    pub(crate) fn into_text(self) -> String {
         match self {
             Self::Open(text) | Self::Closed(text) => text,
         }
@@ -395,7 +412,7 @@ pub(crate) async fn observe_canonical_tool_output_with_access(
 }
 
 pub(crate) fn canonical_tool_output_from_rows(
-    rows: Vec<crate::session::canonical_rows::OutputSegmentRow>,
+    rows: Vec<gents_protocol::output::rows::OutputSegmentRow>,
     tool_doc_id: &str,
     request_doc_id: &str,
 ) -> Result<CanonicalToolOutputObservation> {
@@ -659,7 +676,7 @@ pub async fn request_foreground_backgrounding(
                 .context("background request missing request document identity")?,
         )
         .await?
-            < crate::tools::call::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
+            < gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
         "background process limit reached; wait for a background process to finish"
     );
     let doc = escape_graphql_string(

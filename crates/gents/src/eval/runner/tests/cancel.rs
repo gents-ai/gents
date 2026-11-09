@@ -52,12 +52,12 @@ async fn cancel_stops_launching_and_leaves_in_flight_rows_null() {
     .unwrap();
     assert_eq!((outcome.completed, outcome.abandoned), (0, 1));
 
-    let trials = load_trials(&launching.access, OWNER, "run-1")
+    let trials = load_trials(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap();
     assert_eq!(trials.len(), 1, "the second slot is never launched");
     assert!(trials[0].completion.is_none());
-    assert!(load_verdicts(&launching.access, OWNER, "run-1")
+    assert!(load_verdicts(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap()
         .is_empty());
@@ -132,7 +132,7 @@ async fn a_cancel_marker_stops_the_loop_at_its_next_launch_and_resume_clears_it(
     let marker = launching.runs_dir().join("run-marker").join(CANCEL_MARKER);
     assert!(marker.exists());
     assert_eq!(
-        load_trials(&launching.access, OWNER, "run-marker")
+        load_trials(&launching.access, launching.owner(), "run-marker")
             .await
             .unwrap()
             .len(),
@@ -141,7 +141,7 @@ async fn a_cancel_marker_stops_the_loop_at_its_next_launch_and_resume_clears_it(
 
     let resumed = resume(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-marker",
         &launching.runs_dir(),
         &ScriptedExecutor::new().with_default(passed()),
@@ -157,7 +157,7 @@ async fn a_cancel_marker_stops_the_loop_at_its_next_launch_and_resume_clears_it(
         "resume removes the marker before it plans"
     );
     assert_eq!(
-        load_trials(&launching.access, OWNER, "run-marker")
+        load_trials(&launching.access, launching.owner(), "run-marker")
             .await
             .unwrap()
             .len(),
@@ -192,10 +192,12 @@ async fn a_marker_written_before_the_loop_starts_launches_nothing() {
             ..RunOutcome::default()
         }
     );
-    assert!(load_trials(&launching.access, OWNER, "run-early")
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        load_trials(&launching.access, launching.owner(), "run-early")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 struct MarkAfterComplete<'a> {
@@ -316,7 +318,7 @@ async fn a_cancelled_slot_is_planned_again_under_no_infrastructure_retries() {
 
     let resumed = resume(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-abandoned",
         &launching.runs_dir(),
         &ScriptedExecutor::new().with_default(passed()),
@@ -327,12 +329,13 @@ async fn a_cancelled_slot_is_planned_again_under_no_infrastructure_retries() {
     .await
     .unwrap();
     assert_eq!(resumed.completed, 1, "the abandoned attempt spent no retry");
-    let mut attempts: Vec<(u32, bool)> = load_trials(&launching.access, OWNER, "run-abandoned")
-        .await
-        .unwrap()
-        .iter()
-        .map(|trial| (trial.identity.attempt, trial.completion.is_some()))
-        .collect();
+    let mut attempts: Vec<(u32, bool)> =
+        load_trials(&launching.access, launching.owner(), "run-abandoned")
+            .await
+            .unwrap()
+            .iter()
+            .map(|trial| (trial.identity.attempt, trial.completion.is_some()))
+            .collect();
     attempts.sort();
     assert_eq!(attempts, vec![(1, false), (2, true)]);
 }
@@ -396,7 +399,7 @@ async fn a_marker_written_mid_trial_interrupts_the_trial_in_flight() {
         "the trial saw its token cancelled, not its 30 s timeout"
     );
     assert_eq!((outcome.completed, outcome.abandoned), (0, 1));
-    let trials = load_trials(&launching.access, OWNER, "run-mid")
+    let trials = load_trials(&launching.access, launching.owner(), "run-mid")
         .await
         .unwrap();
     assert_eq!(trials.len(), 1);

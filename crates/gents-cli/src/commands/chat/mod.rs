@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::cli::args::ChatArgs;
 use crate::cli::output_format::OutputFormat;
-use crate::request_helpers::{create_goal_backed_agent_request, ensure_local_request_signer};
+use crate::request_helpers::create_goal_backed_agent_request;
 use crate::{
     create_agent_request, print_json, require_non_empty, resolve_home_dir,
     wait_for_terminal_response, write_json_output_file, RequestOutputEnvelope,
@@ -40,7 +40,6 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    ensure_local_request_signer(args.home.as_deref(), &node_did)?;
     let goal = args
         .goal_objective
         .as_deref()
@@ -60,7 +59,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                     &graphql,
                     &node_did,
                     &session_id,
-                    args.agent_id.as_deref(),
+                    args.agent_did.as_deref(),
                     &message,
                     goal,
                     args.timeout_secs,
@@ -77,7 +76,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                     &graphql,
                     &node_did,
                     &session_id,
-                    args.agent_id.as_deref(),
+                    args.agent_did.as_deref(),
                     &message,
                     goal,
                     args.timeout_secs,
@@ -111,7 +110,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         &graphql,
         &node_did,
         &session_id,
-        args.agent_id.as_deref(),
+        args.agent_did.as_deref(),
         goal,
         &prompt_label,
         args.timeout_secs,
@@ -149,7 +148,7 @@ async fn submit_chat_turn_with_goal(
     graphql: &GraphqlEndpoint,
     node_did: &str,
     session_id: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     content: &str,
     goal: Option<GoalBackedSubmission<'_>>,
     timeout_secs: u64,
@@ -172,7 +171,7 @@ async fn submit_chat_turn_with_goal(
                 node_did,
                 content,
                 session_id,
-                agent_id,
+                agent_did,
                 goal.objective,
                 goal.token_budget,
                 input,
@@ -185,7 +184,7 @@ async fn submit_chat_turn_with_goal(
                 node_did,
                 content,
                 Some(session_id),
-                agent_id,
+                agent_did,
                 RequestSubmitOptions {
                     input: Some(input),
                     ..Default::default()
@@ -215,7 +214,7 @@ async fn submit_chat_turn_json(
     graphql: &GraphqlEndpoint,
     node_did: &str,
     session_id: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     content: &str,
     goal: Option<GoalBackedSubmission<'_>>,
     timeout_secs: u64,
@@ -236,7 +235,7 @@ async fn submit_chat_turn_json(
                 node_did,
                 content,
                 session_id,
-                agent_id,
+                agent_did,
                 goal.objective,
                 goal.token_budget,
                 input,
@@ -249,7 +248,7 @@ async fn submit_chat_turn_json(
                 node_did,
                 content,
                 Some(session_id),
-                agent_id,
+                agent_did,
                 RequestSubmitOptions {
                     input: Some(input),
                     ..Default::default()
@@ -322,7 +321,7 @@ fn chat_turn_output(submitted: &SubmittedRequest, envelope: RequestOutputEnvelop
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
         "node_did": submitted.node_did,
-        "agent_id": submitted.agent_id,
+        "agent_did": submitted.agent_did,
         "request": request,
         "output": output,
     })
