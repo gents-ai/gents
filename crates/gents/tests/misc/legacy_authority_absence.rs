@@ -100,19 +100,24 @@ fn client_sync_cannot_regrow_a_synthetic_owner_or_runtime_readiness_join() {
 
     assert!(owner.contains("struct ClientSyncStateOwner"));
     assert_eq!(owner.matches("struct ClientSyncStateOwner").count(), 1);
-    assert!(projection.contains("pub fn project_sync_health("));
-    assert_eq!(projection.matches("pub fn project_sync_health(").count(), 1);
-    assert!(bridge.contains("project_sync_health(sync)"));
-    assert!(wire.contains("pub sync_health: Option<SyncHealthView>"));
+    assert_eq!(
+        projection
+            .matches("pub fn project_sync_health<I>(sync: &ClientSyncStateSnapshot, runtimes: I)")
+            .count(),
+        1
+    );
+    assert_eq!(projection.matches("fn project_sync_health").count(), 1);
+    assert!(wire.contains("pub sync_health: SyncHealthView"));
 
-    let bridge_sync_projection = bridge
-        .split("pub(crate) fn to_sync_health_view")
-        .nth(1)
-        .and_then(|tail| {
-            tail.split("pub(crate) fn to_pairing_collection_view")
-                .next()
-        })
-        .expect("bridge sync projection source boundary");
+    let (_, bridge_sync_projection) = bridge
+        .split_once("pub(crate) fn to_sync_health_view")
+        .expect("bridge sync projection start boundary");
+    let (bridge_sync_projection, _) = bridge_sync_projection
+        .split_once("pub(crate) fn system_time_rfc3339")
+        .expect("bridge sync projection end boundary");
+    assert!(bridge_sync_projection.contains("let sync = core.sync_state();"));
+    assert!(bridge_sync_projection.contains("project_sync_health(\n        &sync,"));
+    assert!(!bridge_sync_projection.contains("SyncHealthState::"));
 
     for source in [owner, projection, bridge] {
         assert!(!source.contains("NodeReadiness"));
