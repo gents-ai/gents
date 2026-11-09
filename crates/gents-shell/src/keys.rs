@@ -82,6 +82,10 @@ pub enum Action {
     Prev,
     PageUp,
     PageDown,
+    /// `gg` in vim, `alt-<` in emacs: the focused pane's first row.
+    Top,
+    /// `G` in vim, `alt->` in emacs: the focused pane's last row.
+    Bottom,
     SearchNext,
     SearchPrev,
     Complete,
@@ -166,6 +170,8 @@ impl Keymap {
         if key.modifiers.contains(KeyModifiers::ALT) {
             return match key.code {
                 KeyCode::Char('x') if self.set == KeySet::Emacs => Action::OpenBar,
+                KeyCode::Char('<') if self.set == KeySet::Emacs => Action::Top,
+                KeyCode::Char('>') if self.set == KeySet::Emacs => Action::Bottom,
                 KeyCode::Char('b') | KeyCode::Left if in_line(ctx) => Action::WordLeft,
                 KeyCode::Char('f') | KeyCode::Right if in_line(ctx) => Action::WordRight,
                 KeyCode::Backspace if in_line(ctx) => Action::DeleteWord,
@@ -216,6 +222,7 @@ impl Keymap {
             Prefix::G => match c {
                 't' => Action::NextTab,
                 'T' => Action::PrevTab,
+                'g' => Action::Top,
                 _ => Action::None,
             },
             Prefix::CtrlW => match c {
@@ -307,6 +314,7 @@ impl Keymap {
             (KeyCtx::Normal, '?') => Action::OpenKeys,
             (KeyCtx::Normal, 'n') => Action::SearchNext,
             (KeyCtx::Normal, 'N') => Action::SearchPrev,
+            (KeyCtx::Normal, 'G') => Action::Bottom,
             (KeyCtx::Normal, 'y') => Action::Accept,
             (KeyCtx::Normal | KeyCtx::Menu, 's') if self.set == KeySet::Vim => Action::Stop,
             (KeyCtx::Menu, 'd') => Action::SecondAct,
@@ -397,6 +405,7 @@ mod tests {
         (Menu, "pgup", A::PageUp), (Menu, "pgdn", A::PageDown), (Filter, "pgup", A::None), (Menu, "s", A::Stop),
         (Normal, "ctrl-m", A::Submit), (Normal, "ctrl-[", A::Back), (Normal, "ctrl-i", A::None), (Normal, "ctrl-w ctrl-m", A::None),
         (Normal, "shift-enter", A::Submit), (Normal, "ctrl-j", A::None), (Normal, "alt-left", A::None), (Normal, "super-left", A::None), (Normal, "ctrl-bs", A::None),
+        (Normal, "g g", A::Top), (Normal, "G", A::Bottom), (Input, "G", A::Insert('G')), (Menu, "G", A::None),
     ];
 
     /// The message box's line breaks and every line's text-editing keys, the same in each set.
@@ -433,6 +442,7 @@ mod tests {
         (Input, "ctrl-u", A::DeleteToStart), (Filter, "ctrl-u", A::DeleteToStart), (SearchLine, "ctrl-u", A::DeleteToStart), (SearchLine, "ctrl-a", A::Home), (SearchLine, "ctrl-e", A::End),
         (Input, "alt-b", A::WordLeft), (Input, "alt-f", A::WordRight), (Filter, "alt-b", A::WordLeft), (Filter, "alt-f", A::WordRight), (SearchLine, "alt-b", A::WordLeft), (SearchLine, "alt-f", A::WordRight),
         (Menu, "ctrl-u", A::None), (Menu, "alt-b", A::None), (Menu, "alt-f", A::None),
+        (Input, "alt-<", A::Top), (Input, "alt->", A::Bottom), (Input, "<", A::Insert('<')),
     ];
 
     #[rustfmt::skip]

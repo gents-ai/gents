@@ -231,7 +231,7 @@ impl App {
         if !self.layers.is_empty() {
             self.step_layer(down);
         } else if panes.agent.contains(at) {
-            self.scroll_agent(!down, false);
+            self.scroll_agent(!down, super::By::Row);
         } else if panes.sessions.is_some_and(|rect| rect.contains(at)) {
             self.step_session(down);
         } else if matches!(panes.right, Right::Sidebar(rect) if rect.contains(at)) {

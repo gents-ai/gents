@@ -441,12 +441,24 @@ fn stepped(value: usize, increase: bool, max: usize) -> usize {
     }
 }
 
-/// `scroll`, counted up from the bottom of `total` rows, moved a row or with `page` a screenful
-/// of `height`, and kept where the top row still fills the screen.
-fn scrolled(scroll: usize, up: bool, page: bool, total: usize, height: u16) -> usize {
+/// How far a scroll moves: a row, a screenful, or to the first or last row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum By {
+    Row,
+    Page,
+    End,
+}
+
+/// `scroll`, counted up from the bottom of `total` rows, moved `by` within `height`, and kept
+/// where the top row still fills the screen.
+fn scrolled(scroll: usize, up: bool, by: By, total: usize, height: u16) -> usize {
     let height = usize::from(height);
     let max = total.saturating_sub(height);
-    let by = if page { height } else { 1 };
+    let by = match by {
+        By::Row => 1,
+        By::Page => height,
+        By::End => max,
+    };
     let scroll = scroll.min(max);
     if up {
         (scroll + by).min(max)
@@ -1145,10 +1157,14 @@ impl App {
             Action::ClosePane => self.close_pane(),
             Action::ToggleSessions => self.toggle_sessions(),
             Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::PageUp if self.focus == Pane::Agent => self.scroll_agent(true, true),
-            Action::PageDown if self.focus == Pane::Agent => self.scroll_agent(false, true),
-            Action::PageUp if self.focus == Pane::Sidebar => self.scroll_subagent(true, true),
-            Action::PageDown if self.focus == Pane::Sidebar => self.scroll_subagent(false, true),
+            Action::PageUp if self.focus == Pane::Agent => self.scroll_agent(true, By::Page),
+            Action::PageDown if self.focus == Pane::Agent => self.scroll_agent(false, By::Page),
+            Action::PageUp if self.focus == Pane::Sidebar => self.scroll_subagent(true, By::Page),
+            Action::PageDown if self.focus == Pane::Sidebar => {
+                self.scroll_subagent(false, By::Page);
+            }
+            Action::Top => self.jump_to_edge(true),
+            Action::Bottom => self.jump_to_edge(false),
             Action::Next => self.step(true),
             Action::Prev => self.step(false),
             Action::Quit => self.quit = true,
@@ -1773,7 +1789,7 @@ impl App {
 
     fn step(&mut self, forward: bool) {
         match self.focus {
-            Pane::Agent => self.scroll_agent(!forward, false),
+            Pane::Agent => self.scroll_agent(!forward, By::Row),
             Pane::Sessions => self.step_session(forward),
             Pane::Sidebar => self.step_sidebar(forward),
         }
@@ -1785,7 +1801,7 @@ impl App {
 
     fn step_sidebar(&mut self, forward: bool) {
         if self.view == View::Subagent {
-            return self.scroll_subagent(!forward, false);
+            return self.scroll_subagent(!forward, By::Row);
         }
         let Some(file) = self.diff else {
             let rows = self.view_rows(self.view);
@@ -1813,18 +1829,44 @@ impl App {
     }
 
     /// One row, or with `page` a screenful.
-    fn scroll_agent(&mut self, up: bool, page: bool) {
+    /// `gg` and `G`, `alt-<` and `alt->`: the focused pane's first or last row. A diff past its
+    /// end is drawn and stepped from its last screenful, as after a resize.
+    fn jump_to_edge(&mut self, top: bool) {
+        let edge = |rows: &[SidebarRow]| match top {
+            true => rows.iter().position(SidebarRow::selectable),
+            false => rows.iter().rposition(SidebarRow::selectable),
+        };
+        match self.focus {
+            Pane::Agent => self.scroll_agent(top, By::End),
+            Pane::Sessions => {
+                if let Some(row) = edge(&self.session_rows()) {
+                    self.sessions_sel = row;
+                }
+            }
+            Pane::Sidebar if self.view == View::Subagent => self.scroll_subagent(top, By::End),
+            Pane::Sidebar if self.diff.is_some() => {
+                self.diff_scroll = if top { 0 } else { usize::MAX };
+            }
+            Pane::Sidebar => {
+                if let Some(row) = edge(&self.view_rows(self.view)) {
+                    self.view_sel[self.view as usize] = row;
+                }
+            }
+        }
+    }
+
+    fn scroll_agent(&mut self, up: bool, by: By) {
         let Some(panes) = self.panes() else {
             return;
         };
         let area = self.visible_rows(Pane::Agent, self.conversation_rect(panes.agent));
         let lines = self.conversation_rows(area.width).len();
         let tab = &mut self.tabs[self.active];
-        tab.scroll = scrolled(tab.scroll, up, page, lines, area.height);
+        tab.scroll = scrolled(tab.scroll, up, by, lines, area.height);
     }
 
     /// The sidebar's subagent, as `scroll_agent` scrolls the tab.
-    pub(super) fn scroll_subagent(&mut self, up: bool, page: bool) {
+    pub(super) fn scroll_subagent(&mut self, up: bool, by: By) {
         let Some(pane) = self.sidebar_pane() else {
             return;
         };
@@ -1834,7 +1876,7 @@ impl App {
             return;
         };
         let lines = shown.wrapped_rows(area.width).len();
-        shown.scroll = scrolled(shown.scroll, up, page, lines, area.height);
+        shown.scroll = scrolled(shown.scroll, up, by, lines, area.height);
     }
 
     fn activate_session_row(&mut self) {
@@ -2482,6 +2524,29 @@ mod tests {
         type_text(&mut app, "hi");
         press(&mut app, "enter");
         assert_eq!(app.tabs[0].scroll, 0);
+    }
+
+    #[test]
+    fn gg_and_shift_g_or_alt_angles_go_to_the_top_and_bottom() {
+        for (set, top, bottom) in [(Vim, "esc g g", "G"), (Emacs, "alt-<", "alt->")] {
+            let mut app = App::new(set, 132, 36);
+            app.tabs[0].lines = numbered(40);
+            press(&mut app, top);
+            assert_eq!(app.tabs[0].scroll, 40 - 27, "{set:?}");
+            assert_eq!(find(&screen(&app), "message 0 "), Some((4, 30)), "{set:?}");
+            press(&mut app, bottom);
+            assert_eq!(app.tabs[0].scroll, 0, "{set:?}");
+        }
+
+        let mut app = App::new(Vim, 132, 36);
+        press(&mut app, "esc h G");
+        assert_eq!(app.focus, Pane::Sessions);
+        let rows = app.session_rows();
+        let last = rows.iter().rposition(SidebarRow::selectable).unwrap();
+        assert!(last > 0);
+        assert_eq!(app.sessions_sel, last);
+        press(&mut app, "g g");
+        assert_eq!(app.sessions_sel, first_selectable(&rows));
     }
 
     #[test]

@@ -1186,7 +1186,7 @@ const VIM_KEYS: &[(&str, &str)] = &[
     ("Search the focused pane", "/ in normal mode"),
     ("Back one layer", "esc"),
     ("Keys overlay", "?"),
-    ("Scroll the focused pane", "j/k · pgup/pgdn"),
+    ("Scroll the focused pane", "j/k · pgup/pgdn · gg / G"),
     ("Send, or stop the turn", "enter · s"),
     ("New line", "shift-enter · alt-enter · ctrl-j"),
     (
@@ -1209,7 +1209,10 @@ const EMACS_KEYS: &[(&str, &str)] = &[
     ("Search the focused pane", "ctrl-s"),
     ("Back one layer", "ctrl-g"),
     ("Keys overlay", "ctrl-x ?"),
-    ("Scroll the focused pane", "ctrl-n/p · pgup/pgdn"),
+    (
+        "Scroll the focused pane",
+        "ctrl-n/p · pgup/pgdn · alt-< / alt->",
+    ),
     ("Send, or stop the turn", "enter · ctrl-c"),
     ("New line", "shift-enter · alt-enter · ctrl-j"),
     (

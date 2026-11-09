@@ -326,7 +326,7 @@ impl App {
             Action::Next => self.step_layer(true),
             Action::Prev => self.step_layer(false),
             Action::PageUp | Action::PageDown if top.kind == LayerKind::Sidebar => {
-                self.scroll_subagent(action == Action::PageUp, true);
+                self.scroll_subagent(action == Action::PageUp, super::By::Page);
             }
             Action::SecondAct if answers => self.dismiss(),
             Action::Stop if top.kind == LayerKind::Sidebar => self.act(action),
