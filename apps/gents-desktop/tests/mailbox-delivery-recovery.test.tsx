@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   ChatSendRequest,
   ChatSendResult,
-  ChatSubmissionRecovery,
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
 import { testApp, node, withApp } from "./app-fixture";
@@ -77,16 +76,12 @@ function fixture(items = [item()]) {
   const send = vi
     .fn<(request: ChatSendRequest) => Promise<ChatSendResult>>()
     .mockRejectedValue(new Error("Outer reply was lost"));
-  const read = vi.fn<() => Promise<ChatSubmissionRecovery>>();
-  const ack = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   const report = vi.fn();
   const refresh = vi.fn().mockRejectedValue(new Error("Snapshot unavailable"));
   const dismiss = vi.fn().mockResolvedValue(undefined);
   const app = testApp({
     api: {
       sendChatMessage: send,
-      recoverChatSubmission: read,
-      acknowledgeChatSubmission: ack,
       fetchDesktopSnapshot: refresh,
       dismissMailboxItem: dismiss,
     },
@@ -94,7 +89,7 @@ function fixture(items = [item()]) {
     selection: { nodeDid: NODE, sessionId: "session" },
     reportFailure: report,
   });
-  return { app, send, read, ack, report, refresh, dismiss };
+  return { app, send, report, refresh, dismiss };
 }
 
 it("freezes the structured answer, question and caller identity before dispatch", async () => {
@@ -123,72 +118,33 @@ it("freezes the structured answer, question and caller identity before dispatch"
     "Lost reply",
   );
   expect(f.send).toHaveBeenCalledTimes(1);
-  expect(f.ack).not.toHaveBeenCalled();
 });
 
-it("reloads a lost answer, checks without publication and resumes the original choices", async () => {
+it("reloads a failed answer, blocks a second answer and retries the original choices", async () => {
   const f = fixture();
   await f.app.actions.answerMailboxQuestion(item(), original).catch(() => {});
   const request = f.send.mock.calls[0][0];
   const reloaded = fixture();
   reloaded.app.drafts.setState({ drafts: { newer: "Keep this newer input" } });
-  reloaded.read.mockResolvedValue({
-    kind: "unconfirmed",
-    nodeDid: NODE,
-    requestId: request.requestId!,
-  });
-  expect(
-    await reloaded.app.actions.recoverMailboxAnswer("question", request.requestId!),
-  ).toBeNull();
-  expect(reloaded.send).not.toHaveBeenCalled();
   await expect(
     reloaded.app.actions.answerMailboxQuestion(item(), {
       option_ids: ["remote"],
       free_text: null,
     }),
-  ).rejects.toThrow("Check the saved answer");
+  ).rejects.toThrow("Retry or discard the saved answer");
   expect(reloaded.send).not.toHaveBeenCalled();
   reloaded.send.mockImplementationOnce(async (request) => acceptedChat(request));
-  await reloaded.app.actions.recoverMailboxAnswer("question", request.requestId!, true);
+  await reloaded.app.actions.retryMailboxAnswer("question", request.requestId!);
   expect(reloaded.send).toHaveBeenCalledExactlyOnceWith(request);
   expect(reloaded.app.drafts.getState().drafts.newer).toBe("Keep this newer input");
-  await vi.waitFor(() => expect(reloaded.ack).toHaveBeenCalledTimes(1));
-  expect(loadChatDrafts().chatDrafts[0].result).toEqual(acceptedChat(request));
+  expect(loadChatDrafts().chatDrafts[0].confirmed).toBe(true);
 });
 
-it("keeps an answer whose delivery is unknown open, with Check, rather than moving on", async () => {
-  const f = fixture();
-  f.send.mockImplementationOnce(async (request) => ({
-    ...acceptedChat(request),
-    outcome: "deliveryUnknown",
-  }));
-  render(<Mailbox />, { wrapper: withApp(f.app) });
-  const dialog = openItem("Question question");
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: /This computer/ }));
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "Something else" }), {
-    target: { value: "Keep the workspace local" },
-  });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Send" }));
-  expect(
-    await within(dialog).findByRole("button", { name: "Check answer delivery" }),
-  ).toBeEnabled();
-  expect(
-    within(dialog).getByRole("heading", { name: "Question question" }),
-  ).toBeVisible();
-  expect(within(dialog).queryByRole("button", { name: "Send" })).toBeNull();
-  expect(f.send.mock.calls[0][0].answer).toEqual(original);
-});
-
-it("keeps Check and Resume available after reloading an uncertain question", async () => {
+it("keeps Retry available in the dialog after reloading a failed question", async () => {
   const f = fixture();
   await f.app.actions.answerMailboxQuestion(item(), original).catch(() => {});
   const request = f.send.mock.calls[0][0];
   const reloaded = fixture();
-  reloaded.read.mockResolvedValue({
-    kind: "unconfirmed",
-    nodeDid: NODE,
-    requestId: request.requestId!,
-  });
   reloaded.send.mockImplementationOnce(async (request) => acceptedChat(request));
   render(<Mailbox />, { wrapper: withApp(reloaded.app) });
   const dialog = openItem("Question question");
@@ -197,19 +153,15 @@ it("keeps Check and Resume available after reloading an uncertain question", asy
   expect(within(panel).getByText("This computer", { exact: false })).toHaveTextContent(
     "Keep the workspace local",
   );
-  fireEvent.click(within(panel).getByRole("button", { name: "Check answer delivery" }));
-  await within(panel).findByText(
-    "Delivery is still unconfirmed. Check again or resume the saved answer.",
-  );
-  expect(reloaded.send).not.toHaveBeenCalled();
-  fireEvent.click(within(panel).getByRole("button", { name: "Resume saved answer" }));
+  expect(within(dialog).queryByRole("button", { name: "Send" })).toBeNull();
+  fireEvent.click(within(panel).getByRole("button", { name: "Retry answer" }));
   /* confirmed, the dialog moves on: past the only item, it closes */
   await vi.waitFor(() => expect(screen.queryByTestId("mailbox-dialog")).toBeNull());
   expect(reloaded.send).toHaveBeenCalledExactlyOnceWith(request);
 });
 
 it.each([2, 3])(
-  "retains version %i signed source for an optional skip whose delivery is uncertain",
+  "retains version %i signed source for an optional skip that failed",
   async (version) => {
     /* an item of its own: the panel keeps an unsent answer per item */
     const question = {
@@ -222,16 +174,12 @@ it.each([2, 3])(
       }),
     };
     const f = fixture([question]);
-    f.send.mockImplementationOnce(async (request) => ({
-      ...acceptedChat(request),
-      outcome: "deliveryUnknown",
-    }));
     render(<Mailbox />, { wrapper: withApp(f.app) });
     const dialog = openItem("Question skip");
     fireEvent.click(within(dialog).getByRole("button", { name: "Skip" }));
 
     expect(
-      await within(dialog).findByRole("button", { name: "Check answer delivery" }),
+      await within(dialog).findByRole("button", { name: "Retry answer" }),
     ).toBeEnabled();
     expect(f.send.mock.calls[0][0].answer).toEqual({
       option_ids: [],
@@ -250,7 +198,7 @@ it("retains confirmed acceptance across reload while the native question is stil
   const f = fixture();
   f.send.mockImplementationOnce(async (request) => acceptedChat(request));
   expect(await f.app.actions.answerMailboxQuestion(item(), original)).toBe(true);
-  await vi.waitFor(() => expect(f.ack).toHaveBeenCalledTimes(1));
+  expect(loadChatDrafts().chatDrafts[0].confirmed).toBe(true);
   const reloaded = fixture();
   render(<Mailbox />, { wrapper: withApp(reloaded.app) });
   const dialog = openItem("Question question");
@@ -259,20 +207,20 @@ it("retains confirmed acceptance across reload while the native question is stil
   expect(within(dialog).queryByRole("button", { name: "Send" })).toBeNull();
   await expect(
     reloaded.app.actions.answerMailboxQuestion(item(), original),
-  ).rejects.toThrow("Check the saved answer");
+  ).rejects.toThrow("Retry or discard the saved answer");
   expect(reloaded.send).not.toHaveBeenCalled();
 });
 
-it("recovers the answer from its chat even if the question card has disappeared", async () => {
+it("retries the answer from its chat even if the question card has disappeared", async () => {
   const f = fixture();
   await f.app.actions.answerMailboxQuestion(item(), original).catch(() => {});
   const request = f.send.mock.calls[0][0];
   const reloaded = fixture([]);
-  reloaded.read.mockResolvedValue({ kind: "prepared", result: acceptedChat(request) });
+  reloaded.send.mockImplementationOnce(async (request) => acceptedChat(request));
   render(<ChatDeliveryFeedback />, { wrapper: withApp(reloaded.app) });
-  fireEvent.click(screen.getByRole("button", { name: "Check answer delivery" }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry answer" }));
   await screen.findByText("Answer sent");
-  expect(reloaded.send).not.toHaveBeenCalled();
+  expect(reloaded.send).toHaveBeenCalledExactlyOnceWith(request);
 });
 
 it("does not confuse two pending questions in the same session", async () => {
@@ -296,25 +244,12 @@ it("does not confuse two pending questions in the same session", async () => {
   ).toEqual(["first", "second"]);
 });
 
-it("does not acknowledge an answer before its confirmation is saved", async () => {
-  const f = fixture();
-  f.send.mockImplementationOnce(async (request) => {
-    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
-      throw new Error("Storage full");
-    });
-    return acceptedChat(request);
-  });
-  await expect(f.app.actions.answerMailboxQuestion(item(), original)).rejects.toThrow(
-    "Storage full",
-  );
-  expect(f.ack).not.toHaveBeenCalled();
-});
-
 it("does not let a late answer release a replacement compose route", async () => {
   const f = fixture();
   const reply = deferred<ChatSendResult>();
   f.send.mockReturnValueOnce(reply.promise);
   const pending = f.app.actions.answerMailboxQuestion(item(), original);
+  await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
   const request = f.send.mock.calls[0][0];
   selection.advanceIntent(f.app.stores.selection);
   selection.openMailboxRoute(f.app.stores.selection, {
@@ -338,25 +273,22 @@ it("does not turn a failed snapshot refresh into a failed answer", async () => {
   expect(f.report).not.toHaveBeenCalled();
 });
 
-it("rejects recovery from another question without querying or publishing", async () => {
+it("rejects a retry from another question without publishing", async () => {
   const f = fixture();
   await f.app.actions.answerMailboxQuestion(item(), original).catch(() => {});
   await expect(
-    f.app.actions.recoverMailboxAnswer(
+    f.app.actions.retryMailboxAnswer(
       "other-question",
       f.send.mock.calls[0][0].requestId!,
-      true,
     ),
   ).rejects.toThrow("another question");
-  expect(f.read).not.toHaveBeenCalled();
   expect(f.send).toHaveBeenCalledTimes(1);
 });
 
-it("retires a confirmed form only after explicit question dismissal and acknowledgement", async () => {
+it("retires a confirmed form after explicit question dismissal", async () => {
   const f = fixture();
   f.send.mockImplementationOnce(async (request) => acceptedChat(request));
   await f.app.actions.answerMailboxQuestion(item(), original);
-  await vi.waitFor(() => expect(f.ack).toHaveBeenCalledTimes(1));
   expect(loadChatDrafts().chatDrafts).toHaveLength(1);
   await expect(f.app.actions.dismissMailboxItem("question")).resolves.toBeUndefined();
   expect(f.dismiss).toHaveBeenCalledExactlyOnceWith("question");

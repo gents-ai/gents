@@ -28,8 +28,7 @@ type GeneratedRecoveryCase = {
   surface:
     "transport" | "route" | "offline" | "failed" | "incompatible" | "deploymentError";
   connected: boolean;
-  routeReady: boolean;
-  pairingPending: boolean;
+  refusal: { cause: string; nextAction: string } | null;
   expected_kind: "ready" | "waiting" | "blocked";
   expected_action: null;
 };
@@ -80,8 +79,10 @@ describe("ClientShell presentation agreement", () => {
           ? projectDeploymentTransportStatus(contractCase.connected)
           : contractCase.surface === "route"
             ? projectRouteOperationalStatus(
-                contractCase.routeReady,
-                contractCase.pairingPending,
+                contractCase.refusal && {
+                  ...contractCase.refusal,
+                  detail: contractCase.refusal.cause,
+                },
               )
             : contractCase.surface === "deploymentError"
               ? projectDeploymentOperationalState({

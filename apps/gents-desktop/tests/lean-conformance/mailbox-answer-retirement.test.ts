@@ -10,7 +10,6 @@ type Case = {
   binding: Parameters<typeof mayRetireMailboxAnswer>[0];
   observation: Parameters<typeof mayRetireMailboxAnswer>[1];
   currentClient: string;
-  acknowledged: boolean;
   retire: boolean;
 };
 const run = promisify(execFile);
@@ -29,20 +28,16 @@ it("derives answer-cache retirement from the executed Mailbox owner", async () =
     { cwd, timeout: 240_000 },
   );
   const cases = JSON.parse(stdout) as Case[];
-  expect(cases).toHaveLength(17);
+  expect(cases).toHaveLength(16);
   expect(cases.filter((row) => row.retire).map((row) => row.name)).toEqual([
     "acted",
     "dismissed",
     "expired",
+    "agent-created-session",
   ]);
   for (const row of cases)
     expect(
-      mayRetireMailboxAnswer(
-        row.binding,
-        row.observation,
-        row.currentClient,
-        row.acknowledged,
-      ),
+      mayRetireMailboxAnswer(row.binding, row.observation, row.currentClient),
       row.name,
     ).toBe(row.retire);
 }, 300_000);

@@ -59,7 +59,6 @@ const mailboxWith = (
   testApp({
     api: {
       sendChatMessage: send,
-      acknowledgeChatSubmission: vi.fn().mockResolvedValue(undefined),
     },
     deployments: [deploymentWith(items)],
   });

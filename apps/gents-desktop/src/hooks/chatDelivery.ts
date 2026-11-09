@@ -1,7 +1,8 @@
-import type {
-  ChatSendRequest,
-  ChatSendResult,
-  DesktopApiAdapter,
+import {
+  asBridgeErrorPayload,
+  type ChatSendRequest,
+  type ChatSendResult,
+  type DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
 import {
   chatDraftRequest,
@@ -13,11 +14,15 @@ import {
   validateChatResult,
   type ChatDraft,
 } from "./chatDrafts";
-import { deliveryAffordances, savedDelivery } from "./chatDeliveryView";
+import { deliveryAffordances, sendStatus } from "./chatDeliveryView";
 import type { ShellStores } from "./shellProjection";
 
 type Applied = (result: ChatSendResult, draft: ChatDraft) => Promise<boolean>;
 
+/** The optimistic send (Lean `ClientOptimisticSend`): the message gets its
+ * request identity and a kept payload before dispatch, is pending while the
+ * one signed create is in flight, and is confirmed by its reply or failed
+ * with Retry, which resends the same payload under the same identity. */
 export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) {
   function clientDid() {
     const actor = stores.client.getState().snapshot?.client?.clientDid;
@@ -37,6 +42,9 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
     if (!draft) throw new Error("The original message is unavailable for this client.");
     return draft;
   }
+  function inFlight(requestId: string) {
+    return stores.chat.getState().chatRequestsInFlight.has(requestId);
+  }
   function track(requestId: string, running: boolean) {
     stores.chat.setState((state) => {
       const chatRequestsInFlight = new Set(state.chatRequestsInFlight);
@@ -45,34 +53,38 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
       return { chatRequestsInFlight };
     });
   }
-  async function settle(draft: ChatDraft, result: ChatSendResult, applied: Applied) {
-    validateChatResult(draft, result);
-    saveChatDraft(stores.chat, { ...draft, result, unretained: undefined });
-    if (result.outcome === "deliveryUnknown") return result;
-    const consumed =
-      result.outcome !== "notDelivered" && (await applied(result, draft));
-    void Promise.resolve()
-      .then(() => api.acknowledgeChatSubmission(result.submissionReceipt!))
-      .then(() => {
-        if (consumed) removeChatDraft(stores.chat, draft);
-      })
-      .catch(() => {});
-    return result;
-  }
-  async function query(draft: ChatDraft) {
-    const recovered = await api.recoverChatSubmission({
-      clientDid: draft.clientDid,
-      nodeDid: draft.nodeDid,
-      requestId: draft.requestId,
-    });
-    if (recovered.kind === "unconfirmed") {
-      if (
-        recovered.nodeDid !== draft.nodeDid ||
-        recovered.requestId !== draft.requestId
-      )
-        throw new Error("The delivery check belongs to another saved message.");
-    } else validateChatResult(draft, recovered.result);
-    return recovered;
+  async function send(draft: ChatDraft, applied: Applied) {
+    if (clientDid() !== draft.clientDid)
+      throw new Error("The selected client changed before dispatch.");
+    track(draft.requestId, true);
+    try {
+      let result: ChatSendResult;
+      try {
+        result = await api.sendChatMessage(chatDraftRequest(draft));
+        validateChatResult(draft, result);
+      } catch (error) {
+        const payload = asBridgeErrorPayload(error);
+        saveChatDraft(stores.chat, {
+          ...draft,
+          failure: {
+            message:
+              payload?.message ??
+              (error instanceof Error ? error.message : String(error)),
+            error: payload,
+          },
+        });
+        throw error;
+      }
+      await applied(result, draft);
+      // Confirmed: the payload is released. A mailbox answer stays saved,
+      // confirmed, until its question is observed closed.
+      if (draft.mailbox)
+        saveChatDraft(stores.chat, { ...draft, confirmed: true, failure: undefined });
+      else removeChatDraft(stores.chat, draft);
+      return result;
+    } finally {
+      track(draft.requestId, false);
+    }
   }
   return {
     async submit(
@@ -85,7 +97,6 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
       const actor = clientDid();
       if (request.clientDid && request.clientDid !== actor)
         throw new Error("The selected client changed before dispatch.");
-      const inFlight = stores.chat.getState().chatRequestsInFlight;
       if (
         chatDraftsFor(
           load(),
@@ -96,15 +107,13 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
         ).some(
           (draft) =>
             deliveryAffordances(
-              savedDelivery(draft, inFlight.has(draft.requestId)),
+              sendStatus(draft, inFlight(draft.requestId)),
               mailbox !== undefined,
             ).blocksComposer,
         )
       )
         throw new Error(
-          mailbox
-            ? "Check the saved answer before answering this question again."
-            : "Check the saved message before sending another message in this chat.",
+          "Retry or discard the saved answer before answering this question again.",
         );
       const draft = retainChatDraft(
         {
@@ -117,97 +126,21 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
         queued,
         mailbox,
       );
-      track(draft.requestId, true);
-      try {
-        saveChatDraft(stores.chat, draft);
-        if (clientDid() !== actor)
-          throw new Error("The selected client changed before dispatch.");
-        return await settle(
-          draft,
-          await api.sendChatMessage(chatDraftRequest(draft)),
-          applied,
-        );
-      } finally {
-        track(draft.requestId, false);
-      }
+      saveChatDraft(stores.chat, draft);
+      return send(draft, applied);
     },
-    async recover(requestId: string, resume: boolean, applied: Applied) {
-      let draft = original(requestId);
-      if (stores.chat.getState().chatRequestsInFlight.has(requestId))
-        throw new Error("This message is still being submitted or checked.");
-      track(requestId, true);
-      try {
-        const recovered = await query(draft);
-        if (recovered.kind === "prepared") {
-          if (recovered.result.outcome !== "deliveryUnknown")
-            return await settle(draft, recovered.result, applied);
-          draft = { ...draft, result: recovered.result, unretained: undefined };
-          saveChatDraft(stores.chat, draft);
-        } else if (draft.result?.outcome === "deliveryUnknown" && !draft.unretained) {
-          draft = { ...draft, unretained: true };
-          saveChatDraft(stores.chat, draft);
-        }
-        if (!resume) return null;
-        if (clientDid() !== draft.clientDid)
-          throw new Error(
-            "The selected client changed while delivery was being checked.",
-          );
-        if (recovered.kind === "unconfirmed" && draft.result?.submissionReceipt)
-          throw new Error(
-            "The original signed preparation is unavailable, so this message can't be resumed; no new message was submitted. Set it aside to keep writing: it still appears here if it was delivered.",
-          );
-        return await settle(
-          draft,
-          await api.sendChatMessage(chatDraftRequest(draft)),
-          applied,
-        );
-      } finally {
-        track(requestId, false);
-      }
-    },
-    async dismiss(requestId: string) {
+    /** Resend a failed message: the same payload under the same identity. */
+    async retry(requestId: string, applied: Applied) {
       const draft = original(requestId);
-      const recovered = await query(draft);
-      if (recovered.kind !== "prepared" || recovered.result.outcome !== "notDelivered")
-        throw new Error(
-          "Check delivery before dismissing this message; non-delivery is not confirmed.",
-        );
-      removeChatDraft(stores.chat, draft);
-      void Promise.resolve()
-        .then(() => api.acknowledgeChatSubmission(recovered.result.submissionReceipt!))
-        .catch(() => {});
+      if (inFlight(requestId)) throw new Error("This message is still being sent.");
+      if (draft.confirmed) throw new Error("This message was already delivered.");
+      return send({ ...draft, failure: undefined }, applied);
     },
-    /** Set aside a send that can no longer be proven either way. It never
-     * claims non-delivery and sends nothing: a late landing of the original
-     * still appears in the session. */
-    async setAside(requestId: string, applied: Applied) {
-      let draft = original(requestId);
-      if (stores.chat.getState().chatRequestsInFlight.has(requestId))
-        throw new Error("This message is still being submitted or checked.");
-      const recovered = await query(draft);
-      if (recovered.kind === "prepared") {
-        if (recovered.result.outcome !== "deliveryUnknown") {
-          await settle(draft, recovered.result, applied);
-          return;
-        }
-        saveChatDraft(stores.chat, {
-          ...draft,
-          result: recovered.result,
-          unretained: undefined,
-        });
-        throw new Error(
-          "This message can still be confirmed. Check or resume it instead of setting it aside.",
-        );
-      }
-      if (draft.result?.outcome === "deliveryUnknown" && !draft.unretained) {
-        draft = { ...draft, unretained: true };
-        saveChatDraft(stores.chat, draft);
-      }
-      if (
-        !deliveryAffordances(savedDelivery(draft, false), draft.mailbox !== undefined)
-          .setAside
-      )
-        throw new Error("Check delivery before setting this message aside.");
+    /** Discard a failed message. It sends nothing; if an earlier send of it
+     * reached the runtime, it still appears in the session. */
+    async discard(requestId: string) {
+      const draft = original(requestId);
+      if (inFlight(requestId)) throw new Error("This message is still being sent.");
       removeChatDraft(stores.chat, draft);
     },
   };

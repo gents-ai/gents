@@ -51,7 +51,6 @@ const renderPanel = (items: MailboxItemView[], send = vi.fn(acceptedChatReply)) 
   const app = testApp({
     api: {
       sendChatMessage: send,
-      acknowledgeChatSubmission: vi.fn().mockResolvedValue(undefined),
     },
     deployments: [
       node({

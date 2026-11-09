@@ -1130,5 +1130,7 @@ it("does not clear the replacement history draft when an earlier client's reply 
   expect(composerText(screen.getByLabelText("Message"))).toBe(
     "same text in another history",
   );
-  expect(app.stores.chat.getState().chatDrafts[0].clientDid).toBe("test-client");
+  // Confirmed under its original client: the runtime holds it, so the
+  // payload is released (Lean `ClientOptimisticSend`).
+  expect(app.stores.chat.getState().chatDrafts).toEqual([]);
 });
