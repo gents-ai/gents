@@ -451,6 +451,12 @@ theorem revocation_retracts_exact_member_routes
     serverToClientRoute r d ∉ (revoke s r revision).appliedRoutes := by
   simp [revoke, hrevoke, routeOwnedBy, clientToServerRoute, serverToClientRoute]
 
+theorem revocation_preserves_all_replicated_copies
+    (s : State) (r : Request) (revision : AuthorizationRevision) :
+    (revoke s r revision).replicatedCopies = s.replicatedCopies := by
+  unfold revoke
+  split <;> rfl
+
 theorem revocation_preserves_unrelated_operations
     {s : State} {r : Request} {revision : AuthorizationRevision}
     {membership : Membership} {route : AppliedRoute}

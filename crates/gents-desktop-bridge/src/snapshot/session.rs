@@ -167,7 +167,9 @@ pub(super) fn request_origin_view(
             sequence,
             wrapup,
         },
-        RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion,
+        RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion {
+            notification: false,
+        },
     })
 }
 
@@ -188,7 +190,7 @@ pub(super) fn message_origin(
     if gents::tools::background::completion::is_background_completion_notification_message_key(
         &message.message_key,
     ) {
-        return Some(RequestOriginView::BackgroundCompletion);
+        return Some(RequestOriginView::BackgroundCompletion { notification: true });
     }
     input_request.and_then(|request| request_origin_view(store, request))
 }

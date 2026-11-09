@@ -261,7 +261,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content: completion(
         "call-auto-test",
         "bash",
@@ -271,7 +271,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content: completion(
         "call-auto-lint",
         "bash",
@@ -281,7 +281,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content: completion(
         "call-auto-worker",
         "agent_new",
@@ -291,7 +291,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: false },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
@@ -304,7 +304,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content: completion("call-auto-other", "spawn_process", "completed", "done"),
     },
     harnessAssistantItem({
@@ -347,13 +347,13 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: false },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
     {
       ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
-      origin: { kind: "backgroundCompletion" as const },
+      origin: { kind: "backgroundCompletion" as const, notification: true },
       content:
         "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
     },
