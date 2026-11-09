@@ -54,7 +54,7 @@ pub(crate) struct UxModuleArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct UxLintArgs {
-    #[arg(help = "A plugin.js file")]
+    #[arg(help = "A plugin.js file, or its plugin.css")]
     pub(crate) file: PathBuf,
 }
 

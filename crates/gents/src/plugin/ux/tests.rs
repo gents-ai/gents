@@ -267,3 +267,83 @@ fn lint_pack_dir_reports_per_plugin_and_skips_afb_produced_ones() {
     assert!(findings["good"].is_empty());
     assert_eq!(findings["bad"][0].rule, "dynamic code");
 }
+
+#[test]
+fn lint_pack_dir_reads_the_declared_stylesheet() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("ux/styled")).unwrap();
+    std::fs::write(dir.path().join("ux/styled/plugin.js"), "export default {}").unwrap();
+    std::fs::write(
+        dir.path().join("ux/styled/plugin.css"),
+        ".a { color: var(--background) }",
+    )
+    .unwrap();
+    let mut styled = ux("styled", Some("ux/styled/plugin.js"), None);
+    styled.css = Some("ux/styled/plugin.css".into());
+    let findings = lint_pack_dir(dir.path(), &[styled]).unwrap();
+    assert_eq!(findings["styled"][0].rule, "undefined css token");
+    assert!(findings["styled"][0].stylesheet);
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn plugin_files_under(dir: &Path, found: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            plugin_files_under(&path, found);
+        } else if path.file_name().is_some_and(|name| name == DEV_ENTRY) {
+            found.push(path);
+        }
+    }
+}
+
+/// Every plugin this repository ships, scaffold output aside (the scaffold
+/// tests run it through `pack check`), has to pass the lint it teaches.
+#[test]
+fn every_shipped_plugin_passes_the_lint() {
+    let root = repo_root();
+    let mut plugins = vec![
+        root.join("crates/gents/tests/fixtures/packs/ux_fixture/ux/badge/plugin.js"),
+        root.join("apps/gents-desktop/src/ui/ux-plugins/hello/plugin.js"),
+    ];
+    plugin_files_under(&root.join("examples/ux-plugins"), &mut plugins);
+    assert!(
+        plugins
+            .iter()
+            .any(|p| p.ends_with("ux/dashboard/plugin.js")),
+        "the walk found the examples: {plugins:?}"
+    );
+    for plugin in plugins {
+        let source = std::fs::read_to_string(&plugin).unwrap();
+        let css = std::fs::read_to_string(plugin.with_file_name(DEV_CSS)).ok();
+        let findings = lint::lint_plugin(&source, css.as_deref());
+        assert!(
+            findings.is_empty(),
+            "{}:\n{}",
+            plugin.display(),
+            lint::describe(&findings)
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_dashboard_example_is_a_checked_pack() {
+    let dir = repo_root().join("examples/ux-plugins/board_dashboard");
+    let check = crate::pack::authoring::check_dir(&dir).await;
+    assert!(check.problems.is_empty(), "{:#?}", check.problems);
+}
+
+#[test]
+fn the_sdk_reference_carries_the_skeleton_and_every_token() {
+    assert!(reference::SDK_REFERENCE.contains("export default {"));
+    assert!(reference::SDK_REFERENCE.contains("ctx.registerMany"));
+    assert!(reference::SDK_REFERENCE.contains("useQuery(ctx, surface, tool, options?)"));
+    let tokens: Vec<&str> = reference::frame_tokens().collect();
+    assert!(tokens.contains(&"--bg"));
+    for token in tokens {
+        assert!(reference::SDK_REFERENCE.contains(token), "{token}");
+    }
+}

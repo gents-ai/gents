@@ -13,10 +13,22 @@
 //! `/<script/`; and `text`, where strings stay, because an import specifier
 //! and the payload of an `innerHTML` write are strings the rule must read.
 //! A template literal's `${…}` is code in both.
+//!
+//! Colors are the other half: a page has to read in the light and dark themes,
+//! and the frame re-themes by changing what its custom properties resolve to.
+//! So a plugin's CSS and the CSS strings in its module may not name a custom
+//! property the frame does not define (`--background` paints nothing and no
+//! fallback saves it in dark mode) and may not write a color by value. The
+//! defined set is `reference::frame_tokens`, generated from the frame's built
+//! stylesheet, plus whatever the plugin declares for itself.
 
+use rapidhash::{HashSetExt, RapidHashSet};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::ops::Range;
 use std::sync::LazyLock;
+
+use super::reference;
 
 /// One rule hit: which rule, on which line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +37,9 @@ pub struct Finding {
     pub line: usize,
     /// The offending text, trimmed to one line.
     pub excerpt: String,
+    /// The finding is in the plugin's stylesheet, not its module.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stylesheet: bool,
 }
 
 struct Rule {
@@ -121,6 +136,8 @@ struct Masked {
     code: String,
     /// Comments and regex literals blanked; strings kept.
     text: String,
+    /// Where each string's contents and each stretch of template text lie.
+    strings: Vec<Range<usize>>,
 }
 
 enum Frame {
@@ -154,6 +171,10 @@ fn mask(source: &str) -> Masked {
     let mut code = Vec::with_capacity(n);
     let mut text = Vec::with_capacity(n);
     let mut frames: Vec<Frame> = Vec::new();
+    let mut strings: Vec<Range<usize>> = Vec::new();
+    /* where the template text being read began; an `${}` between two
+    stretches resets it, so one position serves every nesting depth */
+    let mut template_text = 0;
     /* the last byte of code emitted that was not whitespace, and the word
     it ended, for the regex-or-division decision */
     let mut prev: Option<u8> = None;
@@ -185,6 +206,7 @@ fn mask(source: &str) -> Masked {
                     i += 2;
                 }
                 b'$' if i + 1 < n && bytes[i + 1] == b'{' => {
+                    strings.push(template_text..i);
                     code.extend_from_slice(b"${");
                     text.extend_from_slice(b"${");
                     frames.push(Frame::Expr { depth: 0 });
@@ -193,6 +215,7 @@ fn mask(source: &str) -> Masked {
                     i += 2;
                 }
                 b'`' => {
+                    strings.push(template_text..i);
                     code.push(b);
                     text.push(b);
                     frames.pop();
@@ -227,6 +250,7 @@ fn mask(source: &str) -> Masked {
                 code.push(b);
                 text.push(b);
                 i += 1;
+                let contents = i;
                 while i < n && bytes[i] != b && bytes[i] != b'\n' {
                     let take = if bytes[i] == b'\\' && i + 1 < n { 2 } else { 1 };
                     for k in 0..take {
@@ -236,6 +260,7 @@ fn mask(source: &str) -> Masked {
                     }
                     i += take;
                 }
+                strings.push(contents..i.min(n));
                 if i < n && bytes[i] == b {
                     code.push(b);
                     text.push(b);
@@ -250,6 +275,7 @@ fn mask(source: &str) -> Masked {
                 text.push(b);
                 frames.push(Frame::Template);
                 i += 1;
+                template_text = i;
             }
             b'/' => {
                 let opens = !dead_line
@@ -289,6 +315,7 @@ fn mask(source: &str) -> Masked {
                         *depth += 1;
                     } else if *depth == 0 {
                         frames.pop();
+                        template_text = i + 1;
                     } else {
                         *depth -= 1;
                     }
@@ -319,6 +346,7 @@ fn mask(source: &str) -> Masked {
     Masked {
         code: lossless(code),
         text: lossless(text),
+        strings,
     }
 }
 
@@ -352,8 +380,241 @@ fn regex_end(bytes: &[u8], slash: usize) -> Option<usize> {
     None
 }
 
+const RAW_COLOR: &str = "raw color";
+const UNDEFINED_TOKEN: &str = "undefined css token";
+
+/// What to do about a color finding, named with tokens the frame defines.
+const TOKEN_HINT: &str = "use a frame token instead of the color, such as var(--text), \
+var(--text-muted), var(--bg), var(--card), var(--border), var(--primary), \
+var(--destructive) or var(--chart-1) (--background and --foreground do not exist); \
+the SDK reference lists them all";
+
+static FRAME_TOKENS: LazyLock<RapidHashSet<&'static str>> =
+    LazyLock::new(|| reference::frame_tokens().collect());
+
+static VAR_REFERENCE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bvar\(\s*(--[\w-]+)").unwrap());
+static TOKEN_READ: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\bgetPropertyValue\(\s*['"](--[\w-]+)['"]"#).unwrap());
+/* `--name:` inside CSS text */
+static CUSTOM_DECLARATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(--[\w-]+)\s*:").unwrap());
+/* `{ '--name': … }` and `setProperty('--name', …)` in a module */
+static CUSTOM_SETTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:['"](--[\w-]+)['"]\s*\]?\s*:|\bsetProperty\(\s*['"](--[\w-]+)['"])"#).unwrap()
+});
+static HEX_COLOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#[0-9a-fA-F]{3,8}\b").unwrap());
+/* a numeric first argument, so prose such as "lab(s)" is left alone */
+static COLOR_FUNCTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch)\(\s*[\d.+-]").unwrap());
+/* a string a hex value in is a color rather than an issue number: it sets a
+color-taking property or attribute, or draws a gradient */
+static SETS_A_COLOR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)(?:^|[;{\s'"])[a-z-]*(?:color|background|border|fill|stroke|outline|shadow)[a-z-]*\s*[:=]|gradient\("#,
+    )
+    .unwrap()
+});
+
+/* the lengths a hex color can have; `#abcde` is not one */
+fn is_hex_color(token: &str) -> bool {
+    matches!(token.len(), 4 | 5 | 7 | 9)
+}
+
+/* a string that is nothing but a hex value, unless a selector API took it */
+fn is_whole_hex_color(contents: &str, before: &str) -> bool {
+    let trimmed = contents.trim();
+    let before = before.trim_end_matches(['\'', '"', '`']).trim_end();
+    let takes_a_selector = [
+        "querySelector(",
+        "querySelectorAll(",
+        "closest(",
+        "matches(",
+    ]
+    .iter()
+    .any(|call| before.ends_with(call));
+    HEX_COLOR
+        .find(trimmed)
+        .is_some_and(|m| m.len() == trimmed.len())
+        && is_hex_color(trimmed)
+        && !takes_a_selector
+}
+
+struct Sink<'a> {
+    source: &'a str,
+    stylesheet: bool,
+    findings: &'a mut Vec<Finding>,
+}
+
+impl Sink<'_> {
+    fn push(&mut self, rule: &'static str, offset: usize) {
+        let line = self.source[..offset].matches('\n').count() + 1;
+        let excerpt = self
+            .source
+            .lines()
+            .nth(line - 1)
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(120)
+            .collect();
+        self.findings.push(Finding {
+            rule,
+            line,
+            excerpt,
+            stylesheet: self.stylesheet,
+        });
+    }
+
+    fn check_references(&mut self, haystack: &str, base: usize, declared: &RapidHashSet<String>) {
+        for caps in VAR_REFERENCE.captures_iter(haystack) {
+            let name = caps.get(1).expect("the group is not optional");
+            if !FRAME_TOKENS.contains(name.as_str()) && !declared.contains(name.as_str()) {
+                self.push(UNDEFINED_TOKEN, base + name.start());
+            }
+        }
+    }
+
+    fn check_colors(&mut self, haystack: &str, base: usize, hex: bool) {
+        for m in COLOR_FUNCTION.find_iter(haystack) {
+            self.push(RAW_COLOR, base + m.start());
+        }
+        if hex {
+            for m in HEX_COLOR.find_iter(haystack) {
+                let in_url = haystack[..m.start()].trim_end().ends_with("url(");
+                if is_hex_color(m.as_str()) && !in_url {
+                    self.push(RAW_COLOR, base + m.start());
+                }
+            }
+        }
+    }
+}
+
+/// The module's CSS strings, read for tokens and colors.
+fn lint_module_css(
+    source: &str,
+    masked: &Masked,
+    declared: &RapidHashSet<String>,
+    findings: &mut Vec<Finding>,
+) {
+    let mut sink = Sink {
+        source,
+        stylesheet: false,
+        findings,
+    };
+    for caps in TOKEN_READ.captures_iter(&masked.text) {
+        let name = caps.get(1).expect("the group is not optional");
+        if !FRAME_TOKENS.contains(name.as_str()) && !declared.contains(name.as_str()) {
+            sink.push(UNDEFINED_TOKEN, name.start());
+        }
+    }
+    for range in &masked.strings {
+        let contents = &masked.text[range.clone()];
+        sink.check_references(contents, range.start, declared);
+        if is_whole_hex_color(contents, &masked.text[..range.start]) {
+            sink.push(RAW_COLOR, range.start);
+        } else {
+            sink.check_colors(contents, range.start, SETS_A_COLOR.is_match(contents));
+        }
+    }
+}
+
+/* blanks comments, string contents and url() contents, keeping every byte
+offset and line break */
+fn mask_css(css: &str) -> String {
+    let bytes = css.as_bytes();
+    let mut out = bytes.to_vec();
+    let blank = |out: &mut [u8], range: Range<usize>| {
+        for byte in &mut out[range] {
+            if *byte != b'\n' {
+                *byte = b' ';
+            }
+        }
+    };
+    /* bytes, not chars: the walk steps through multi-byte text one at a time */
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &bytes[i..];
+        if rest.starts_with(b"/*") {
+            let end = rest[2..]
+                .windows(2)
+                .position(|pair| pair == b"*/")
+                .map_or(bytes.len(), |at| i + 2 + at + 2);
+            blank(&mut out, i..end);
+            i = end;
+        } else if rest.starts_with(b"url(") {
+            let end = rest
+                .iter()
+                .position(|byte| *byte == b')')
+                .map_or(bytes.len(), |at| i + at);
+            blank(&mut out, i + 4..end);
+            i = end;
+        } else if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let quote = bytes[i];
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] != quote && bytes[j] != b'\n' {
+                j += if bytes[j] == b'\\' { 2 } else { 1 };
+            }
+            let end = j.min(bytes.len());
+            blank(&mut out, i + 1..end);
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/* a `name: value` statement, with the offset of its value */
+fn css_declaration(text: &str, base: usize) -> Option<(&str, usize, &str)> {
+    let (name, value) = text.split_once(':')?;
+    Some((name.trim(), base + name.len() + 1, value))
+}
+
+/* each `name: value` in a stylesheet; a run of text that ends in `{` is a
+selector or an at-rule's prelude, so a `#id` or a `:hover` never reads as one */
+fn css_declarations(masked: &str) -> Vec<(&str, usize, &str)> {
+    let mut declarations = Vec::new();
+    let mut start = 0;
+    for (i, byte) in masked.bytes().enumerate() {
+        match byte {
+            b'{' => start = i + 1,
+            b';' | b'}' => {
+                declarations.extend(css_declaration(&masked[start..i], start));
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    declarations.extend(css_declaration(&masked[start..], start));
+    declarations
+}
+
+fn lint_stylesheet(
+    css: &str,
+    masked: &str,
+    declared: &RapidHashSet<String>,
+    findings: &mut Vec<Finding>,
+) {
+    let mut sink = Sink {
+        source: css,
+        stylesheet: true,
+        findings,
+    };
+    for (_, base, value) in css_declarations(masked) {
+        sink.check_references(value, base, declared);
+        sink.check_colors(value, base, true);
+    }
+}
+
 /// The lint findings for one module's source; empty means admitted.
 pub fn lint(source: &str) -> Vec<Finding> {
+    lint_plugin(source, None)
+}
+
+/// The lint findings for a plugin's module and its stylesheet, which share a
+/// frame, so a custom property either of them declares is defined for both.
+pub fn lint_plugin(source: &str, css: Option<&str>) -> Vec<Finding> {
     let masked = mask(source);
     let mut findings = Vec::new();
     for (rule, re) in COMPILED.iter() {
@@ -379,21 +640,63 @@ pub fn lint(source: &str) -> Vec<Finding> {
                 rule: rule.name,
                 line,
                 excerpt,
+                stylesheet: false,
             });
         }
     }
-    findings.sort_by_key(|f| (f.line, f.rule));
+    let mut declared: RapidHashSet<String> = RapidHashSet::new();
+    let masked_css = css.map(mask_css);
+    if let Some(masked_css) = &masked_css {
+        declared.extend(
+            css_declarations(masked_css)
+                .into_iter()
+                .filter(|(name, _, _)| name.starts_with("--"))
+                .map(|(name, _, _)| name.to_owned()),
+        );
+    }
+    for caps in CUSTOM_SETTER.captures_iter(&masked.text) {
+        declared.extend(
+            caps.iter()
+                .skip(1)
+                .flatten()
+                .map(|name| name.as_str().to_owned()),
+        );
+    }
+    for range in &masked.strings {
+        for caps in CUSTOM_DECLARATION.captures_iter(&masked.text[range.clone()]) {
+            declared.insert(caps[1].to_owned());
+        }
+    }
+    lint_module_css(source, &masked, &declared, &mut findings);
+    if let (Some(css), Some(masked_css)) = (css, &masked_css) {
+        lint_stylesheet(css, masked_css, &declared, &mut findings);
+    }
+    findings.sort_by_key(|f| (f.stylesheet, f.line, f.rule));
     findings.dedup();
     findings
 }
 
-/// One sentence per finding, for a report or an error.
+/// One sentence per finding, for a report or an error, and what to do about
+/// a color when there is one.
 pub fn describe(findings: &[Finding]) -> String {
-    findings
+    let mut lines: Vec<String> = findings
         .iter()
-        .map(|f| format!("line {}: {} ({})", f.line, f.rule, f.excerpt))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|f| {
+            let place = if f.stylesheet {
+                "stylesheet line"
+            } else {
+                "line"
+            };
+            format!("{place} {}: {} ({})", f.line, f.rule, f.excerpt)
+        })
+        .collect();
+    if findings
+        .iter()
+        .any(|f| f.rule == RAW_COLOR || f.rule == UNDEFINED_TOKEN)
+    {
+        lines.push(TOKEN_HINT.to_owned());
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -537,6 +840,186 @@ export default { id: 'ok', register(ctx) { ctx.register({ id: 'x', area: NAV_ARE
             rules("await import('react/jsx-runtime')"),
             Vec::<&str>::new()
         );
+    }
+
+    fn css_rules(source: &str, css: &str) -> Vec<&'static str> {
+        lint_plugin(source, Some(css))
+            .into_iter()
+            .map(|f| f.rule)
+            .collect()
+    }
+
+    /// The names a dark-mode bug actually used, and the ones it should have.
+    #[test]
+    fn a_token_the_frame_does_not_define_is_refused() {
+        assert_eq!(
+            css_rules("", ".a { color: var(--background); }"),
+            vec![UNDEFINED_TOKEN]
+        );
+        assert_eq!(
+            css_rules("", ".a { color: var(--foreground, red); }"),
+            vec![UNDEFINED_TOKEN],
+            "a fallback does not make the token exist"
+        );
+        assert_eq!(
+            css_rules("", ".a { color: var(--text); background: var(--bg); }"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            rules("const c = 'var(--background)'"),
+            vec![UNDEFINED_TOKEN]
+        );
+        assert_eq!(
+            rules("const c = `linear-gradient(var(--text), var(--nope))`"),
+            vec![UNDEFINED_TOKEN]
+        );
+        assert_eq!(
+            rules("const v = el.style.getPropertyValue('--background')"),
+            vec![UNDEFINED_TOKEN]
+        );
+        assert_eq!(rules("const c = 'var(--text)'"), Vec::<&str>::new());
+        assert_eq!(
+            rules("const a = '// var(--nope)'"),
+            vec![UNDEFINED_TOKEN],
+            "a string is read as a string"
+        );
+        assert_eq!(rules("// var(--nope)\n"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_custom_property_the_plugin_declares_is_defined() {
+        assert_eq!(
+            css_rules("", ".a { --mine: 2px; width: var(--mine); }"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            css_rules(
+                "jsx('div', { style: { '--pct': '40%' } })",
+                ".bar { width: var(--pct); }"
+            ),
+            Vec::<&str>::new(),
+            "the module sets it, the stylesheet reads it"
+        );
+        assert_eq!(
+            css_rules(
+                "el.style.setProperty('--w', '1px')",
+                ".a { width: var(--w); }"
+            ),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            rules("const css = `.a { --mine: 2px; width: var(--mine); }`"),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn raw_colors_are_refused_in_a_stylesheet() {
+        for value in [
+            ".a { color: #fff; }",
+            ".a { color: #AABBCC }",
+            ".a { background: linear-gradient(#000, #fff) }",
+            ".a { border: 1px solid rgb(1, 2, 3); }",
+            ".a { color: rgba(0,0,0,.5); }",
+            ".a { color: hsl(210 50% 40%); }",
+            ".a { color: oklch(0.5 0.1 200); }",
+            ".a { --mine: #123456; }",
+            "@media (min-width: 1px) { .a:hover { color: #abc; } }",
+        ] {
+            assert_eq!(css_rules("", value), vec![RAW_COLOR], "{value}");
+        }
+    }
+
+    #[test]
+    fn raw_colors_are_refused_in_module_strings() {
+        assert_eq!(rules("const c = '#fff'"), vec![RAW_COLOR]);
+        assert_eq!(rules("jsx('rect', { fill: '#3b82f6' })"), vec![RAW_COLOR]);
+        assert_eq!(rules("const c = 'rgb(1, 2, 3)'"), vec![RAW_COLOR]);
+        assert_eq!(rules("const c = `color: #fff;`"), vec![RAW_COLOR]);
+        assert_eq!(
+            rules("const c = `background-color: #AABBCC`"),
+            vec![RAW_COLOR]
+        );
+        assert_eq!(
+            rules(r##"el.innerHTML = '<svg fill="#fff" />'"##),
+            vec![RAW_COLOR]
+        );
+        assert_eq!(
+            rules("const g = 'linear-gradient(90deg, #000, #fff)'"),
+            vec![RAW_COLOR],
+            "one finding per rule per line"
+        );
+        assert_eq!(rules("const s = `x ${'#fff'} y`"), vec![RAW_COLOR]);
+    }
+
+    /// Text shaped like a color that is not one: the lint must not make a
+    /// plugin rewrite an issue number or an element id.
+    #[test]
+    fn hex_shaped_text_that_is_no_color_is_left_alone() {
+        for source in [
+            "const t = 'issue #123 is open'",
+            "const t = `Background job #123`",
+            "document.querySelector('#add')",
+            "root.querySelectorAll( '#abc' )",
+            "class A { #abc = 1; f() { return this.#abc } }",
+            "// #fff in a comment\n",
+            "const u = 'https://example.test/#abc'",
+            "const s = 'see lab(s) and rgb results'",
+            "const i = 'url(#abc)'",
+        ] {
+            assert_eq!(rules(source), Vec::<&str>::new(), "{source}");
+        }
+        assert_eq!(
+            css_rules(
+                "",
+                "#add { color: var(--text); }\n\
+                 /* #fff */\n\
+                 .a:hover { fill: url(#abc); content: '#fff'; }"
+            ),
+            Vec::<&str>::new()
+        );
+        assert_eq!(css_rules("", ".a { color: #abcde; }"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_stylesheet_finding_says_where_it_is_and_what_to_do() {
+        let findings = lint_plugin("", Some(".a {}\n.b { color: #fff; }\n"));
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].stylesheet);
+        assert_eq!(findings[0].line, 2);
+        let described = describe(&findings);
+        assert!(
+            described.starts_with("stylesheet line 2: raw color"),
+            "{described}"
+        );
+        assert!(described.contains("var(--text)"), "{described}");
+        assert!(!describe(&lint("eval('1')")).contains("var(--text)"));
+    }
+
+    /// The stylesheet walk steps byte by byte; text outside ASCII may not
+    /// land it on a char boundary it then slices at.
+    #[test]
+    fn a_stylesheet_with_non_ascii_text_keeps_its_lines() {
+        let css = ".été { color: var(--text); } /* é */\n.b { content: 'é'; color: #fff; }\n";
+        let findings = lint_plugin("", Some(css));
+        assert_eq!(findings.len(), 1, "{}", describe(&findings));
+        assert_eq!(findings[0].rule, RAW_COLOR);
+        assert_eq!(findings[0].line, 2);
+    }
+
+    /// The hint can only recommend what the lint would admit.
+    #[test]
+    fn the_hint_names_tokens_that_exist() {
+        let named: Vec<&str> = VAR_REFERENCE
+            .captures_iter(TOKEN_HINT)
+            .map(|caps| caps.get(1).unwrap().as_str())
+            .collect();
+        assert!(!named.is_empty());
+        for token in named {
+            assert!(FRAME_TOKENS.contains(token), "{token}");
+        }
+        assert!(!FRAME_TOKENS.contains("--background"));
+        assert!(!FRAME_TOKENS.contains("--foreground"));
     }
 
     #[test]

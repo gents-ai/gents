@@ -2,7 +2,7 @@
 //! terminal. `list` and `module` are the same two reads the desktop bridge
 //! makes (`gents_server::packs::{ux_list, ux_module}`), so an author can see
 //! exactly what the webview will receive; `lint` runs the static lint on
-//! one file before it is ever in a pack.
+//! one module or stylesheet before it is ever in a pack.
 
 use anyhow::{Context, Result};
 
@@ -29,9 +29,21 @@ async fn module(args: UxModuleArgs) -> Result<()> {
 }
 
 fn lint(args: UxLintArgs) -> Result<()> {
-    let source = std::fs::read_to_string(&args.file)
+    let text = std::fs::read_to_string(&args.file)
         .with_context(|| format!("reading {}", args.file.display()))?;
-    let findings = gents::plugin::ux::lint::lint(&source);
+    let is_stylesheet = args.file.extension().is_some_and(|e| e == "css");
+    // Either file may declare a custom property the other reads, so each is
+    // linted with the one the frame would load beside it.
+    let beside = |name: &str| std::fs::read_to_string(args.file.with_file_name(name)).ok();
+    let findings = if is_stylesheet {
+        let entry = beside(gents::plugin::ux::DEV_ENTRY).unwrap_or_default();
+        let mut findings = gents::plugin::ux::lint::lint_plugin(&entry, Some(&text));
+        findings.retain(|finding| finding.stylesheet);
+        findings
+    } else {
+        let css = beside(gents::plugin::ux::DEV_CSS);
+        gents::plugin::ux::lint::lint_plugin(&text, css.as_deref())
+    };
     crate::print_json(&serde_json::json!({
         "file": args.file,
         "admitted": findings.is_empty(),

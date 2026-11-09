@@ -1,7 +1,8 @@
 # UX plugin examples
 
-Four packs and folders, each one shape the desktop accepts, ported from
-hermes-agent's bundled desktop plugins (`apps/desktop/src/plugins/`):
+Five packs and folders, each one shape the desktop accepts; all but the
+dashboard are ported from hermes-agent's bundled desktop plugins
+(`apps/desktop/src/plugins/`):
 
 | Example | Hermes original | Door | Form | What it shows |
 |---|---|---|---|---|
@@ -9,6 +10,7 @@ hermes-agent's bundled desktop plugins (`apps/desktop/src/plugins/`):
 | `focus_timer/` | `radio/plugin.js` | dev | plain ESM + css | the radio plugin's patterns: `ctx.storage` state (validated on read), a header action whose label is the clock, a page of its own, `ctx.setInterval`, a stylesheet beside the module; ships off like the original |
 | `board_docs/` | (`plugin_api.py`'s store) | documents pack, into the node | schema + `pack_config.json` | the board's documents: `BoardTask` / `BoardMove` and the `board` surface with four tools — what both the page and an agent read and write |
 | `board_pack/` | `kanban/plugin.tsx` | assets pack | plain ESM + css | the kanban plugin's shape: a nav row, the plugin's own page, a `::board` card, and `ctx.data` into the `board` surface (the Gents stand-in for `ctx.rest`); the manifest's `ux[].data` names what the page may call; ships off like the original |
+| `board_dashboard/` | (none) | assets pack | plain ESM, no css | a dashboard assembled only from SDK blocks (`Page`, `Grid`, `Stat`, `Tabs`, `Select`, `Table`, the charts and the state blocks) over the same `board` surface |
 
 A bundled fifth, `hello`, lives in the app at
 `apps/gents-desktop/src/ui/ux-plugins/hello/plugin.js`: it ships off

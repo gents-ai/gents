@@ -35,6 +35,7 @@ use crate::pack::{
 };
 
 pub mod lint;
+pub mod reference;
 
 /// The entry file a dev plugin folder must hold.
 pub const DEV_ENTRY: &str = "plugin.js";
@@ -367,7 +368,15 @@ pub fn lint_pack_dir(
             continue;
         };
         let source = read_bounded(&dir.join(entry), "ux plugin entry")?;
-        out.insert(plugin.name.clone(), lint::lint(&source));
+        let css = plugin
+            .css
+            .as_deref()
+            .map(|css| read_bounded(&dir.join(css), "ux plugin css"))
+            .transpose()?;
+        out.insert(
+            plugin.name.clone(),
+            lint::lint_plugin(&source, css.as_deref()),
+        );
     }
     Ok(out)
 }

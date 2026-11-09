@@ -27,8 +27,20 @@ import {
   type TranscriptDirectiveContribution,
 } from "../../src/ui/contrib/types";
 import "../../src/App.css";
+import dashboardSource from "../../../../examples/ux-plugins/board_dashboard/ux/dashboard/plugin.js?raw";
 
 const calls: Array<{ verb: string; args: unknown[] }> = [];
+
+/* a board with enough in it to draw every block of the dashboard example */
+const LANES = ["triage", "ready", "running", "done"];
+const DASHBOARD_TASKS = Array.from({ length: 24 }, (_, i) => ({
+  task_id: `t${i}`,
+  title: `Task number ${i}`,
+  lane: LANES[i % LANES.length],
+  created_at: new Date(Date.UTC(2026, 9, 1 + (i % 8), 9)).toISOString(),
+}));
+
+let dashboardLoaded = false;
 
 const host: UxHost = {
   shell: {
@@ -46,6 +58,10 @@ const host: UxHost = {
   data: {
     call: async (listing, nodeDid, surface, tool, args) => {
       calls.push({ verb: "data.call", args: [listing, nodeDid, surface, tool, args] });
+      if (dashboardLoaded) {
+        const results = tool === "list_tasks" ? DASHBOARD_TASKS : [];
+        return { kind: "query", output: { results, count: results.length } };
+      }
       return {
         kind: "query",
         output: { results: [{ title: "from the host" }], count: 1 },
@@ -144,6 +160,7 @@ declare global {
   interface Window {
     __UX_HARNESS__: {
       load: () => Promise<string | null>;
+      loadDashboard: () => Promise<string | null>;
       enable: (on: boolean) => Promise<void>;
       retire: () => void;
       records: () => Readonly<Record<string, unknown>>;
@@ -180,6 +197,20 @@ window.__UX_HARNESS__ = {
         },
       },
     ),
+  loadDashboard: () => {
+    dashboardLoaded = true;
+    return loadRuntimeUxPlugin(
+      { source: dashboardSource },
+      {
+        origin: "harness/dashboard",
+        expectId: "board_dashboard",
+        door: "pack",
+        file: "/harness/dashboard/plugin.js",
+        listing: "harness/dashboard",
+        declared: { areas: ["nav", PLUGIN_PAGE_AREA], directives: [] },
+      },
+    );
+  },
   enable: (on) => setUxPluginEnabled("probe", on),
   retire: () => retireRuntimeUxPlugin("probe"),
   records: () => uxPluginRecords(),
