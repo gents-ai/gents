@@ -12,16 +12,12 @@ use super::prepare::{
 use super::retry::{retry_request, retry_request_with_request_id};
 use super::*;
 
-fn test_local_admission(core: &ClientCore) -> AgentRequestAdmissionRecord {
-    AgentRequestAdmissionRecord::local_self(core.node_identity().did())
-}
 use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 
 use super::lean_vocab_test::{
     assert_lean_transition_is_legal, lean_contract_snapshot, LeanSessionRecoveryCase,
 };
 
-const RECOVERY_AGENT_DID: &str = "amy-code";
 const FAILED_CLAIM_BACKEND: &str = "old-claim-backend";
 
 #[derive(Debug)]
