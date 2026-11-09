@@ -124,7 +124,10 @@ sequence of the user's, the runtime's and the client's actions; between them
 the observer's drain loop starts any owed read, one at a time (`settle`). Each
 action is a `Step` (`apply_reachable`), so every observed state is `Reachable`
 and `phase_has_exit` covers it. The retry action is taken only while the
-projected status offers it, which is when no read runs. -/
+projected status offers it and no read runs. A shown session dropped while its
+refresh runs offers it beside that read; production then holds two reads whose
+older answer fails the refresh fence, and a trace answers only the latest, so
+the driver leaves that case out. -/
 
 structure Driver where
   s : State
@@ -169,7 +172,7 @@ def settle (d : Driver) : Driver :=
   else d
 
 def retryOffered (s : State) : Bool :=
-  (project (input s none)).bind (·.action) == some .retryLocal
+  s.reading.isNone && (project (input s none)).bind (·.action) == some .retryLocal
 
 def other (n : Nat) : Nat := if n == 0 then 1 else 0
 
@@ -292,7 +295,7 @@ def obsJson (d : Driver) : String :=
   let loadMatches := s.load == some s.selected
   "{\"selected\":" ++ toString s.selected ++ ",\"status\":" ++ status ++
   ",\"loadPhase\":" ++ q (phaseName s.phase) ++ ",\"load\":" ++ optNat s.load ++
-  ",\"reread\":" ++ (if loadMatches then toString (s.reading.isSome || s.timer) else "null") ++
+  ",\"reread\":" ++ (if loadMatches then toString s.loadReread else "null") ++
   ",\"reading\":" ++ toString s.reading.isSome ++ ",\"shown\":" ++ optNat s.shown ++ "}"
 
 /-- Runs a trace, keeping only the enabled prefix. -/
@@ -341,7 +344,9 @@ def waitingStreak (r : Reply) : List Act :=
 
 /-- Scenarios a walk rarely reaches: a spent streak in each waiting phase, a
 streak a notice resets, the client stopping while a read or a re-read waits,
-a retry while it is stopped, a selection while it is stopped, and a mismatched reply. -/
+a retry while it is stopped, a selection while it is stopped, a mismatched reply,
+and a refresh of a shown session that is dropped, stopped or answered with a
+waiting phase. -/
 def scripted : List (List Act) :=
   [.pending, .delivering, .notConnected, .accepted].map waitingStreak ++
   [ [.complete .pending, .fire, .complete .pending, .notice, .complete .pending, .fire,
@@ -353,7 +358,12 @@ def scripted : List (List Act) :=
       .select false, .complete .missing],
     [.complete .mismatch, .retry, .complete .mismatch, .notice, .complete .found],
     [.complete .found, .drop, .retry, .complete .found, .select false, .complete .pending,
-      .select false, .complete .found] ]
+      .select false, .complete .found],
+    [.complete .found, .notice, .drop, .complete .found, .drop, .retry, .complete .found,
+      .notice, .complete .found],
+    [.complete .found, .notice, .stop, .restart, .complete .found, .notice,
+      .complete .pending, .fire, .complete .found],
+    [.complete .found, .notice, .complete .missing, .notice, .complete .found] ]
 
 def traceRows : List String :=
   (exhaustive 3 start).map traceJson ++

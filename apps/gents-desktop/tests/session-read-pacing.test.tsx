@@ -38,15 +38,24 @@ function bridgeApi(): Record<string, ReturnType<typeof vi.fn>> {
 
 type Listener = (event: { reason?: string }) => Promise<void>;
 
-/* a session with a request that has not finished and no live text, whose
-   read takes `readMs` and, while `changing` says so, differs each time */
-function observe({ readMs, changing }: { readMs: number; changing: () => boolean }) {
+/* a session with a request that has not finished and no live text, unless
+   `idle`, whose read takes `readMs` and, while `changing` says so, differs
+   each time */
+function observe({
+  readMs,
+  changing,
+  idle = false,
+}: {
+  readMs: number;
+  changing: () => boolean;
+  idle?: boolean;
+}) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   const api = bridgeApi();
   const session = sessionSnapshot({
     sessionId: "s-1",
     nodeDid: NODE_DID,
-    turnState: "running",
+    turnState: idle ? "completed" : "running",
     latestRequestId: "r-1",
     liveCursor: null,
     timelineItems: [],
@@ -83,7 +92,20 @@ function deliveryError(code: BridgeErrorCode) {
   });
 }
 
-afterEach(() => vi.useRealTimers());
+let visibility: DocumentVisibilityState = "visible";
+Object.defineProperty(document, "visibilityState", {
+  configurable: true,
+  get: () => visibility,
+});
+const showWindow = (shown: boolean) => {
+  visibility = shown ? "visible" : "hidden";
+  document.dispatchEvent(new Event("visibilitychange"));
+};
+
+afterEach(() => {
+  visibility = "visible";
+  vi.useRealTimers();
+});
 
 describe("reading a session with an open request", () => {
   it("reads nothing while no update arrives", async () => {
@@ -145,6 +167,74 @@ describe("reading a session with an open request", () => {
       expect(run.started).toHaveLength(before + 1);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(run.started).toHaveLength(before + 1);
+    } finally {
+      run.stop();
+    }
+  });
+});
+
+describe("reading an idle open session while its node is busy elsewhere", () => {
+  it("refreshes the list on every store change but reads the session at its own pace", async () => {
+    const run = observe({ readMs: 200, changing: () => false, idle: true });
+    try {
+      await vi.advanceTimersByTimeAsync(200);
+      expect(run.app.trackedRequestId()).toBeNull();
+      expect(run.started).toHaveLength(1);
+      const lists = () => run.api.fetchDesktopSnapshot.mock.calls.length;
+      let listed = lists();
+      for (let i = 0; i < 40; i++) {
+        await run.sendUpdate();
+        await vi.advanceTimersByTimeAsync(50);
+        /* a change made while a session read runs is listed after it */
+        if (i % 4 === 3) {
+          expect(lists()).toBeGreaterThan(listed);
+          listed = lists();
+        }
+      }
+      /* each read waits at least as long as the last one took */
+      for (let i = 1; i < run.started.length; i++)
+        expect(run.started[i]! - run.started[i - 1]!).toBeGreaterThanOrEqual(400);
+      expect(run.started.length).toBeLessThanOrEqual(6);
+      /* the last change is still read, once */
+      const reads = run.started.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(run.started.length).toBeLessThanOrEqual(reads + 1);
+      expect(run.started.at(-1)!).toBeGreaterThanOrEqual(2_000);
+    } finally {
+      run.stop();
+    }
+  });
+
+  it("reads nothing for the session while the window is hidden, then reads it once shown", async () => {
+    const run = observe({ readMs: 0, changing: () => true, idle: true });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run.started).toHaveLength(1);
+      showWindow(false);
+      const lists = run.api.fetchDesktopSnapshot.mock.calls.length;
+      for (let i = 0; i < 20; i++) {
+        await run.sendUpdate();
+        await vi.advanceTimersByTimeAsync(3_000);
+      }
+      expect(run.started).toHaveLength(1);
+      expect(run.api.fetchDesktopSnapshot.mock.calls.length - lists).toBe(20);
+      showWindow(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run.started).toHaveLength(2);
+    } finally {
+      run.stop();
+    }
+  });
+
+  it("keeps a running request's reads while the window is hidden", async () => {
+    const run = observe({ readMs: 0, changing: () => true });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run.app.trackedRequestId()).toBe("r-1");
+      showWindow(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await run.sendUpdate();
+      expect(run.started).toHaveLength(2);
     } finally {
       run.stop();
     }

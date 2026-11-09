@@ -84,7 +84,18 @@ export function writeSession(
   });
 }
 
+/* an unchanged load keeps its object, so its readers do not render again */
 export function writeSessionLoad(store: SessionStore, load: SessionLoadState) {
+  const held = store.getState().load;
+  if (
+    held.phase === load.phase &&
+    held.sessionId === load.sessionId &&
+    held.nodeDid === load.nodeDid &&
+    held.found === load.found &&
+    held.error === load.error &&
+    held.reread === load.reread
+  )
+    return;
   store.setState({ load });
 }
 

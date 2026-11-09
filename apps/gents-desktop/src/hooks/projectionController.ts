@@ -4,7 +4,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 export type DesktopUpdateRefreshScope =
-  "snapshot" | "sessionDelta" | "session" | "sessionEvent" | "full";
+  "snapshot" | "sessionDelta" | "storeUpdate" | "session" | "sessionEvent" | "full";
 
 /** What the drain loop can be asked for: an update's scope, or a waiting
     phase's re-read, which continues its streak unless another request for
@@ -14,7 +14,10 @@ export type ProjectionRequest = DesktopUpdateRefreshScope | "reread";
 /** A pairing-health change re-reads a selected session that shows no
     snapshot yet: the pairing is one of the signals its delivery state derives
     from, and a read already in flight may have taken the pairing before the
-    change. */
+    change. A store change while the selected session is shown with no request
+    tracked refreshes the index and paces the session's read: every write on
+    the node sends one, and most do not touch the open session (Lean
+    `ClientSessionLoad.Step.notice`). */
 export function desktopUpdateRefreshScope(
   reason: string | undefined,
   selectedSessionId: string | null,
@@ -27,6 +30,8 @@ export function desktopUpdateRefreshScope(
     if (reason === "store") return "sessionDelta";
     return "sessionEvent";
   }
+  if (reason === "store" && selectedSessionId && !selectedSessionUnresolved)
+    return "storeUpdate";
   return "full";
 }
 
@@ -50,6 +55,9 @@ type ProjectionControllerOptions = {
   /** reads a store update for the open session; resolves to the ms until
       it is owed a full read (0: now), or null when a read covers it */
   readSessionUpdate: () => Promise<number | null>;
+  /** while this holds, a store update's session read waits: the caller reads
+      in full once it stops holding */
+  defersUpdates?: () => boolean;
   onError?: (error: unknown) => void;
 };
 
@@ -61,6 +69,8 @@ function requestedWork(scope: ProjectionRequest) {
       return SNAPSHOT;
     case "sessionDelta":
       return SESSION_DELTA;
+    case "storeUpdate":
+      return SNAPSHOT | SESSION_DELTA;
     case "session":
       return SESSION;
     case "sessionEvent":
@@ -76,6 +86,7 @@ export function createProjectionController({
   refreshSession,
   rereadSession,
   readSessionUpdate,
+  defersUpdates = () => false,
   onError = () => {},
 }: ProjectionControllerOptions): ProjectionController {
   let active: Promise<void> | null = null;
@@ -146,13 +157,16 @@ export function createProjectionController({
           if (!sessionId && !(work & SNAPSHOT)) {
             snapshot = refreshIndex();
           }
-        } else if (sessionId && work & SESSION_DELTA) {
+        } else if (sessionId && work & SESSION_DELTA && !defersUpdates()) {
+          /* an update that refreshes the index needs no second refresh
+             after the session's read */
+          const owedRead = work & SNAPSHOT ? "session" : "sessionEvent";
           const due = await readSessionUpdate();
-          if (due === 0) enqueue(SESSION | INDEX_AFTER_TERMINAL);
+          if (due === 0) enqueue(requestedWork(owedRead));
           else if (due !== null && owed === undefined && !disposed) {
             owed = setTimeout(() => {
               owed = undefined;
-              void controller.request("sessionEvent");
+              if (!defersUpdates()) void controller.request(owedRead);
             }, due);
           }
         }

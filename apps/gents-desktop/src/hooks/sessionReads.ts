@@ -23,6 +23,7 @@ import {
 import type { SelectionStore } from "./selectionStore";
 import {
   IDLE_LOAD,
+  heldFor,
   readSession,
   writeSession,
   writeSessionLoad,
@@ -50,12 +51,30 @@ export function waitingRereadDelay(used: number): number | null {
   return WAITING_REREAD_MS[used] ?? null;
 }
 
-/* a session's content apart from the store-wide revision, which moves when
-   any document in the store changes */
-const sessionSignature = (snapshot: DesktopSessionSnapshot) =>
-  JSON.stringify(snapshot, (key, value) =>
-    key === "projectionRevision" ? undefined : value,
-  );
+/* a session's content apart from the store-wide version, which moves when
+   any document in the store changes; its lineage version stays, since live
+   reads apply only over the lineage they were read against */
+const signatures = new WeakMap<DesktopSessionSnapshot, string>();
+const sessionSignature = (snapshot: DesktopSessionSnapshot) => {
+  let signature = signatures.get(snapshot);
+  if (signature === undefined) {
+    signature = JSON.stringify(snapshot, (key, value: unknown) =>
+      key === "projectionRevision"
+        ? (value as DesktopSessionSnapshot["projectionRevision"])?.provenanceVersion
+        : value,
+    );
+    signatures.set(snapshot, signature);
+  }
+  return signature;
+};
+
+/* the held session took a newer revision while a full read ran: a live read
+   landed after the full read was taken */
+const supersedes = (held: DesktopSessionSnapshot, next: DesktopSessionSnapshot) =>
+  held.sessionId === next.sessionId &&
+  held.projectionRevision != null &&
+  next.projectionRevision != null &&
+  held.projectionRevision.storeVersion > next.projectionRevision.storeVersion;
 
 type SessionReadParams = {
   api: DesktopApiAdapter;
@@ -179,15 +198,23 @@ export function createSessionReads({
       previous.sessionId === nextSessionId && previous.nodeDid === nodeDid;
     const waiting =
       previous.phase === "pending" || isSessionDeliveryPhase(previous.phase);
-    setSessionLoad({
-      phase: sameSelection && waiting ? previous.phase : "loading",
-      sessionId: nextSessionId,
-      nodeDid,
-      /* looking again doesn't bring a missing session back until it's found */
-      found: sameSelection && previous.found === false ? false : null,
-      error: sameSelection ? previous.error : null,
-      reread: true,
-    });
+    const heldAtStart = readSession(sessionStore);
+    /* a read of the session on screen refreshes it and leaves its load as
+       it is (Lean `ClientSessionLoad.launch`) */
+    const refreshes =
+      sameSelection &&
+      previous.phase === "loaded" &&
+      heldFor(heldAtStart, nextSessionId, nodeDid) !== null;
+    if (!refreshes)
+      setSessionLoad({
+        phase: sameSelection && waiting ? previous.phase : "loading",
+        sessionId: nextSessionId,
+        nodeDid,
+        /* looking again doesn't bring a missing session back until it's found */
+        found: sameSelection && previous.found === false ? false : null,
+        error: sameSelection ? previous.error : null,
+        reread: true,
+      });
     const started = performance.now();
     try {
       const next = await api.fetchSessionSnapshot(
@@ -218,8 +245,21 @@ export function createSessionReads({
         return null;
       }
       waitingRereads = 0;
-      setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
-      noteRead(nextSessionId, next ? sessionSignature(next) : "missing", started);
+      const held = readSession(sessionStore);
+      let outcome = "missing";
+      if (!next) setSession(null);
+      else if (held && held !== heldAtStart && supersedes(held, next)) {
+        outcome = sessionSignature(held);
+      } else {
+        const merged = mergeSessionTipSnapshot(held, next);
+        /* a read that finds nothing new keeps the held session, so nothing
+           that shows it renders again */
+        const kept =
+          held && sessionSignature(held) === sessionSignature(merged) ? held : merged;
+        setSession(kept);
+        outcome = sessionSignature(kept);
+      }
+      noteRead(nextSessionId, outcome, started);
       setSessionLoad({
         phase: "loaded",
         sessionId: nextSessionId,
