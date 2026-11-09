@@ -25,10 +25,10 @@ type GeneratedPresentationCase = {
 
 type GeneratedRecoveryCase = {
   name: string;
-  surface:
-    "transport" | "route" | "offline" | "failed" | "incompatible" | "deploymentError";
+  surface: "transport" | "route" | "sync" | "deploymentError";
   connected: boolean;
   refusal: { cause: string; nextAction: string } | null;
+  sync?: { state: string; cause: string | null; nextAction: string | null };
   expected_kind: "ready" | "waiting" | "blocked";
   expected_action: null;
 };
@@ -72,7 +72,7 @@ describe("ClientShell presentation agreement", () => {
     const { presentationCases: cases, recoveryCases } =
       await generatedPresentationCases();
     expect(cases).toHaveLength(22);
-    expect(recoveryCases).toHaveLength(10);
+    expect(recoveryCases).toHaveLength(16);
     for (const contractCase of recoveryCases) {
       const actual =
         contractCase.surface === "transport"
@@ -98,8 +98,11 @@ describe("ClientShell presentation agreement", () => {
                   },
                 }).summary
               : projectSyncOperationalStatus({
-                  state: contractCase.surface,
-                } as Parameters<typeof projectSyncOperationalStatus>[0]);
+                  ...contractCase.sync!,
+                  lastError: null,
+                  connectedPeerCount: 0,
+                  activationErrorCount: 0,
+                });
       expect(actual.kind, contractCase.name).toBe(contractCase.expected_kind);
       expect(actual.action, contractCase.name).toBe(contractCase.expected_action);
     }

@@ -1,5 +1,6 @@
 import Proofs.ClientShell.Transition
 import Proofs.ClientShell.ChatReadiness
+import Proofs.ClientShell.SyncHealth
 
 inductive SelectionHealth where
   | noSelection
@@ -86,6 +87,20 @@ def projectRouteRecovery : Option ClientChatReadiness.Cause → RecoveryStatus
 
 def projectConnectionFailure : RecoveryStatus :=
   { kind := .blocked, action := none }
+
+/-- The sync surface shows `ClientSyncHealth.view`'s state unchanged: healthy is
+ready, and waiting and blocked keep their tone. The view's own next action names
+what the user does, so the status adds no recovery action. -/
+def projectSyncRecovery (view : ClientSyncHealth.View) : RecoveryStatus :=
+  { kind := match view.state with
+      | .healthy => .ready
+      | .waiting => .waiting
+      | .blocked => .blocked
+    action := none }
+
+theorem sync_recovery_requires_no_action (view : ClientSyncHealth.View) :
+    (projectSyncRecovery view).action = none := by
+  rfl
 
 theorem connection_failure_preserves_block_without_reconnect :
     projectConnectionFailure.kind = .blocked ∧ projectConnectionFailure.action = none := by

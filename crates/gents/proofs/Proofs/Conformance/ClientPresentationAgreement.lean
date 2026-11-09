@@ -1,5 +1,6 @@
 import Proofs.ClientShell.PresentationAgreement
 import Proofs.ClientShell.Projection
+import Proofs.Conformance.ClientSyncHealthCases
 
 namespace Conformance.ClientPresentationAgreement
 
@@ -109,13 +110,34 @@ def recoveryCaseJson (surface : String) (connected : Bool)
     ",\"expected_kind\":" ++ recoveryKindJson projected.kind ++
     ",\"expected_action\":" ++ recoveryActionJson projected.action ++ "}"
 
+/-- One case per distinct sync view the facts reach; the desktop receives the
+view's state, cause and next action as projected by `ClientSyncHealth.view`. -/
+def syncRecoveryCaseJson (view : ClientSyncHealth.View) : String :=
+  let projected := projectSyncRecovery view
+  let state := ClientSyncHealthCases.stateToken view.state
+  let cause := view.cause.map ClientSyncHealthCases.causeToken
+  "{\"name\":" ++ jsonString s!"sync_{state}_{cause.getD "none"}" ++
+    ",\"surface\":" ++ jsonString "sync" ++
+    ",\"connected\":false" ++
+    ",\"refusal\":null" ++
+    ",\"sync\":{\"state\":" ++ jsonString state ++
+      ",\"cause\":" ++ optionJson cause ++
+      ",\"nextAction\":" ++
+        optionJson (view.nextAction.map ClientSyncHealthCases.nextActionToken) ++ "}" ++
+    ",\"expected_kind\":" ++ recoveryKindJson projected.kind ++
+    ",\"expected_action\":" ++ recoveryActionJson projected.action ++ "}"
+
+def syncViews : List ClientSyncHealth.View :=
+  (ClientSyncHealth.allFacts.map ClientSyncHealth.view).eraseDups
+
 def recoveryCasesJson : String :=
   let transport := [false, true].map fun connected =>
     recoveryCaseJson "transport" connected none
   let route := (none :: ClientChatReadiness.allCauses.map some).map fun refusal =>
     recoveryCaseJson "route" true refusal
-  "[" ++ String.intercalate "," (transport ++ route ++ ["offline", "failed", "incompatible", "deploymentError"].map fun surface =>
-    recoveryCaseJson surface false none) ++ "]"
+  let sync := syncViews.map syncRecoveryCaseJson
+  "[" ++ String.intercalate "," (transport ++ route ++ sync ++
+    [recoveryCaseJson "deploymentError" false none]) ++ "]"
 
 def presentationAndRecoveryJson : String :=
   "{\"presentationCases\":" ++ casesJson ++ ",\"recoveryCases\":" ++ recoveryCasesJson ++ "}"
