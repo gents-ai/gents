@@ -1,7 +1,9 @@
 /-!
 Pairing persistence after one route reconcile (`combined_route_readiness`).
-`pairing_ready` is a P2P route observation: it feeds the managed runtime's
-pairing status and never gates chat writes (`ClientChatReadiness`).
+`pairing_ready` is a P2P route observation of an enrollment peer (a joined
+remote node) and never gates chat writes (`ClientChatReadiness`). The local
+node is never paired and carries no pairing readiness: its readiness is the
+User's private status read (`Identity.NodeProvisioning.localStartup`).
 -/
 
 namespace ClientRoutePairing

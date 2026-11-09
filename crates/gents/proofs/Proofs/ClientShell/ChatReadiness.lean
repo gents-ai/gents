@@ -13,10 +13,12 @@ External premises (#3538, discovery-only P2P):
 
 Decision (user, #3538): an authenticated endpoint means ready. Pairing and the
 enrollment lease are P2P route observations and do not gate chat writes: the
-route fields this contract reads are the route's provenance, whether it holds
-an operator endpoint and whether it is a managed local runtime, and nothing
-else. Connection progress and its UX belong to the frontend's runtime
-connection machinery (`RuntimeConnectionObservation`), not to this fence.
+route fields this contract reads are the route's provenance and whether it
+holds an operator endpoint, and nothing else. The local node is a
+`localStandard` route the client reaches over HTTP as its owning User; it is
+never an enrollment route (`Identity.NodeProvisioning.admitLocalHome`).
+Connection progress and its UX belong to the frontend's runtime connection
+machinery (`RuntimeConnectionObservation`), not to this fence.
 A send while the runtime is unreachable reaches the endpoint and fails; the
 optimistic send (`ClientOptimisticSend`) shows it failed with Retry.
 -/
@@ -30,20 +32,17 @@ inductive Source where
   | other
   deriving DecidableEq, Repr
 
-/-- One saved deployment route as the desktop's peer directory holds it.
-`managed` is `PeerRecord::is_managed_runtime` (a local runtime home and an
-HTTP(S) GraphQL URL). -/
+/-- One saved deployment route as the desktop's peer directory holds it. -/
 structure Route where
   source : Source
   operatorEndpoint : Bool
-  managed : Bool
   deriving DecidableEq, Repr
 
 /-- Why a send is refused. -/
 inductive Cause where
   /-- No saved route names the runtime. -/
   | noRoute
-  /-- A local, managed or manual route holds no operator endpoint. -/
+  /-- A local or manual route holds no operator endpoint. -/
   | noEndpoint
   /-- A remote enrollment route has not yet recorded the runtime's signed HTTP
   advertisement; the enrollment reconcile records it when it resolves. -/
@@ -60,7 +59,7 @@ def chatReadiness : Option Route → Readiness
   | none => .notReady .noRoute
   | some route =>
     if route.operatorEndpoint then .ready
-    else if route.source == .enrollment && !route.managed then .notReady .endpointNotAdvertised
+    else if route.source == .enrollment then .notReady .endpointNotAdvertised
     else .notReady .noEndpoint
 
 theorem endpoint_opens_writes (route : Route) (endpoint : route.operatorEndpoint = true) :
@@ -70,18 +69,18 @@ theorem endpoint_opens_writes (route : Route) (endpoint : route.operatorEndpoint
 /-- A route without an endpoint has no write path and is refused. -/
 theorem endpointless_route_is_refused (route : Route) (endpoint : route.operatorEndpoint = false) :
     chatReadiness (some route) ≠ .ready := by
-  rcases route with ⟨source, operator, managed⟩
+  rcases route with ⟨source, operator⟩
   simp only at endpoint
   subst endpoint
-  cases source <;> cases managed <;> simp [chatReadiness]
+  cases source <;> simp [chatReadiness]
 
 theorem ready_iff_endpoint (route : Option Route) :
     chatReadiness route = .ready ↔ ∃ r, route = some r ∧ r.operatorEndpoint = true := by
   cases route with
   | none => simp [chatReadiness]
   | some r =>
-    rcases r with ⟨source, operator, managed⟩
-    cases operator <;> cases source <;> cases managed <;> simp [chatReadiness]
+    rcases r with ⟨source, operator⟩
+    cases operator <;> cases source <;> simp [chatReadiness]
 
 /-! Refusals and their next action. -/
 
@@ -94,7 +93,7 @@ inductive Event where
   deriving DecidableEq, Repr
 
 def step : Event → Option Route → Option Route
-  | .addDeployment operator, none => some ⟨.other, operator, false⟩
+  | .addDeployment operator, none => some ⟨.other, operator⟩
   | .endpointWritten _, none => none
   | .addDeployment _, some route => some route
   | .endpointWritten operator, some route => some { route with operatorEndpoint := operator }
@@ -125,8 +124,8 @@ theorem every_refusal_reopens_by_its_remedy (route : Option Route) (cause : Caus
     subst refused
     simp [remedy, step, chatReadiness]
   | some route =>
-    rcases route with ⟨source, operator, managed⟩
-    cases operator <;> cases source <;> cases managed <;> cases cause <;>
+    rcases route with ⟨source, operator⟩
+    cases operator <;> cases source <;> cases cause <;>
       simp_all [chatReadiness, remedy, step]
 
 /-- The stable token a refusal message carries for its cause. -/
@@ -155,6 +154,6 @@ def bools : List Bool := [true, false]
 
 def fenceRoutes : List (Option Route) :=
   none :: (allSources.flatMap fun source =>
-    bools.flatMap fun endpoint => bools.map fun managed => some ⟨source, endpoint, managed⟩)
+    bools.map fun endpoint => some ⟨source, endpoint⟩)
 
 end ClientChatReadiness

@@ -33,7 +33,10 @@ inductive Transport where
   | healthy | degraded | wedged
   deriving DecidableEq, Repr
 
-/-- Discovery: the transport probe and how many configured peers dialed. -/
+/-- Discovery: the transport probe and how many configured peers dialed.
+Configured peers are enrollment peers (joined remote nodes) only. The local
+node is never dialed over P2P; it appears only as a runtime connection in
+`Facts.runtimes`. -/
 structure Discovery where
   transport : Transport
   configuredPeers : Nat

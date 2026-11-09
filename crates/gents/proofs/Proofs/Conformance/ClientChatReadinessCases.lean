@@ -21,8 +21,7 @@ private def readinessJson : Readiness → String
 
 private def routeFieldsJson (spelling : String) (route : Route) : String :=
   "{\"source\":" ++ spelling ++
-  ",\"operator_endpoint\":" ++ boolJson route.operatorEndpoint ++
-  ",\"managed\":" ++ boolJson route.managed ++ "}"
+  ",\"operator_endpoint\":" ++ boolJson route.operatorEndpoint ++ "}"
 
 /-- Each route with each native spelling of its source. -/
 private def spelledRoutes (route : Option Route) : List (String × Option Route) :=

@@ -61,32 +61,37 @@ theorem applied_request_is_hidden (requestFresh hasDecision currentApproval : Bo
     activeRequestVisible requestFresh hasDecision currentApproval true = false := by
   simp [activeRequestVisible]
 
-/-- Missing enrollment authority removes enrollment-owned peers, but the local
-managed deployment has an independent owner and survives with readiness closed. -/
-def absentEnrollmentPeer (managed : Bool) : Bool × Bool :=
-  (managed, false)
+/-- Missing enrollment authority removes the enrollment peer and closes its
+readiness. Only joined remote nodes are enrollment peers: the client's local
+node is reached over HTTP as its owning User (`NodeProvisioning.admitLocalHome`)
+and is never enrolled, so no local record survives as an enrollment exception.
+The result is (retained, ready). -/
+def absentEnrollmentPeer : Bool × Bool :=
+  (false, false)
 
-theorem absent_enrollment_never_remains_ready (managed : Bool) :
-    (absentEnrollmentPeer managed).2 = false := by
-  simp [absentEnrollmentPeer]
-
-theorem absent_enrollment_preserves_managed_deployment :
-    absentEnrollmentPeer true = (true, false) := by
+theorem absent_enrollment_never_remains_ready :
+    absentEnrollmentPeer.2 = false := by
   rfl
-/-- A local operator endpoint does not establish an authenticated enrollment route.
+
+theorem absent_enrollment_removes_peer :
+    absentEnrollmentPeer.1 = false := by
+  rfl
+
+/-- An enrollment route is ready only from enrollment authority and a native
+applied route with a fresh lease; an HTTP endpoint is not an input.
 `routeApplied` is supplied by the native route reconciliation owner. -/
-def enrollmentRouteReady (enrollment routeApplied network digest sequenceFresh leaseFresh : Bool)
-    (_operatorEndpoint : Bool) : Bool :=
+def enrollmentRouteReady (enrollment routeApplied network digest sequenceFresh leaseFresh : Bool) :
+    Bool :=
   enrollment && routeApplied && network && digest && sequenceFresh && leaseFresh
 
-theorem operator_endpoint_cannot_supply_enrollment_route
+theorem enrollment_route_requires_applied_route
     (enrollment network digest sequenceFresh leaseFresh : Bool) :
-    enrollmentRouteReady enrollment false network digest sequenceFresh leaseFresh true = false := by
+    enrollmentRouteReady enrollment false network digest sequenceFresh leaseFresh = false := by
   simp [enrollmentRouteReady]
 
 theorem enrollment_route_requires_fresh_lease
-    (enrollment routeApplied network digest sequenceFresh operatorEndpoint : Bool) :
-    enrollmentRouteReady enrollment routeApplied network digest sequenceFresh false operatorEndpoint = false := by
+    (enrollment routeApplied network digest sequenceFresh : Bool) :
+    enrollmentRouteReady enrollment routeApplied network digest sequenceFresh false = false := by
   simp [enrollmentRouteReady]
 
 structure DurableDocuments where
