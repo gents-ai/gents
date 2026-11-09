@@ -100,12 +100,11 @@ fn apply_source_notice(
     node: &str,
     generation: u64,
     event: RuntimeConnectionEvent,
-    now: Instant,
     metrics: &ObserverMetrics,
 ) -> Option<SourceNotice> {
     let kind = SourceNotice::of(event)?;
     queue.notice(store, node, generation, kind);
-    sources.observe(node, remote::Origin::Source, event, store, now, metrics);
+    sources.observe(node, remote::Origin::Source, event, store, Instant::now(), metrics);
     Some(kind)
 }
 
@@ -353,7 +352,7 @@ pub fn spawn_observer(
                     let Some(notice) = notice else { break; };
                     if let Some(generation) = sources.entries.get(&notice.node).filter(|source| source.generation == notice.generation && !source.ended()).map(|source| source.generation) {
                         let applied = apply_source_notice(&mut queue, &mut sources, &store,
-                            &notice.node, generation, notice.event, Instant::now(), &metrics_for_task);
+                            &notice.node, generation, notice.event, &metrics_for_task);
                         if applied.is_some_and(SourceNotice::aborts_load) {
                             loads.cancel(&notice.node);
                         }

@@ -1500,7 +1500,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     store.observe_request_event(None);
                 }
                 let kind = apply_source_notice(
-                    queue, sources, &store, &node_did, *generation, event, now, &metrics,
+                    queue, sources, &store, &node_did, *generation, event, &metrics,
                 )
                 .expect("a source task event");
                 if kind.aborts_load() {
