@@ -43,7 +43,6 @@ async fn configure_session_chain(db: &TestDb) -> (ManagedAgentFixture, String) {
         crate::support::install_managed_agent(db, &fixture.access, &fixture.user, "Order child")
             .await;
     let child_did = child.agent_did;
-    crate::support::grant_agent_session_writer(db, &fixture.access, &child_did, &parent_did).await;
     configure_agent_tools_as(
         &fixture.access,
         &node_did,
