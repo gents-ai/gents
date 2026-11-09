@@ -385,6 +385,8 @@ async fn spawn_succeeds_when_pipes_exceed_open_max() {
 
 async fn exercise_spawn_succeeds_when_pipes_exceed_open_max() {
     const OPEN_MAX: usize = 10_240;
+    // Descriptors above OPEN_MAX for the probe pipe and the spawn's own pipes.
+    const HEADROOM: usize = 256;
     let mut limits = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -394,19 +396,38 @@ async fn exercise_spawn_succeeds_when_pipes_exceed_open_max() {
         unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
         0
     );
-    let target = ((OPEN_MAX + 64) as libc::rlim_t).min(limits.rlim_max);
+    let target = (OPEN_MAX + HEADROOM) as libc::rlim_t;
+    assert!(
+        limits.rlim_max >= target,
+        "precondition: RLIMIT_NOFILE hard limit {} is below {target}, so descriptors cannot \
+         reach OPEN_MAX ({OPEN_MAX})",
+        limits.rlim_max
+    );
     if limits.rlim_cur < target {
         limits.rlim_cur = target;
         // SAFETY: limits is a valid rlimit; only the soft limit increases.
         assert_eq!(
             unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) },
             0,
-            "raise the soft descriptor limit"
+            "raise the RLIMIT_NOFILE soft limit to {target} (kern.maxfilesperproc may be lower): {}",
+            std::io::Error::last_os_error()
         );
     }
+    // Descriptors are allocated lowest-free first, so once one reaches
+    // OPEN_MAX - 1 every lower number is occupied and the next lands past it.
     let mut held = Vec::new();
-    while held.len() < OPEN_MAX + 64 {
-        held.push(std::fs::File::open("/dev/null").unwrap());
+    loop {
+        let file = std::fs::File::open("/dev/null").unwrap_or_else(|error| {
+            panic!(
+                "hold descriptors up to OPEN_MAX ({OPEN_MAX}) under a soft limit of {}: {error}",
+                limits.rlim_cur
+            )
+        });
+        let fd = std::os::fd::AsRawFd::as_raw_fd(&file) as usize;
+        held.push(file);
+        if fd + 1 >= OPEN_MAX {
+            break;
+        }
     }
     let (reader, writer) = std::io::pipe().unwrap();
     let pipe_fd = std::os::fd::AsRawFd::as_raw_fd(&writer);
