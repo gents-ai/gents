@@ -157,24 +157,12 @@ pub(crate) const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
 pub enum FireResult {
-    Duplicate {
-        request_id: String,
-    },
-    Fired {
-        request_id: String,
-    },
-    Skipped {
-        reason: String,
-    },
-    Errored {
-        error: String,
-    },
-    Rejected {
-        error: String,
-    },
-    BudgetExhausted {
-        reason: String,
-    },
+    Duplicate { request_id: String },
+    Fired { request_id: String },
+    Skipped { reason: String },
+    Errored { error: String },
+    Rejected { error: String },
+    BudgetExhausted { reason: String },
 }
 
 pub trait TriggerSource: Send + Sync {

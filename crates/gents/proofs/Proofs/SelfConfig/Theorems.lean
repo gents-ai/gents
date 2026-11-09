@@ -268,7 +268,7 @@ theorem policy_widening_requires_held (decode : Doc → Option Grants) (held : G
     (h : keepsGrants decode held stored candidate = true) :
     held.policy = true := by
   simp [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] at h
-  exact h.2
+  exact h.1.2
 
 theorem unrelated_edit_preserves_grants (decode : Doc → Option Grants) (held : Grants)
     (stored candidate : Doc) (g : Grants)

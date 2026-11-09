@@ -239,7 +239,7 @@ pub fn self_write_warnings(config: &crate::documents::PackConfig) -> Vec<String>
         let Some(tools) = config
             .agents
             .iter()
-            .find(|agent| agent.agent_id == task.agent_id)
+            .find(|agent| agent.agent_did == task.agent_did)
             .and_then(|agent| agent.context_id.as_ref())
             .and_then(|id| {
                 config
@@ -272,7 +272,7 @@ pub fn self_write_warnings(config: &crate::documents::PackConfig) -> Vec<String>
         if direct || surfaced {
             warnings.push(format!(
                 "trigger {}: agent {} of task {} can write {}, the collection this trigger watches, so each such write fires the task again; filter the event source to exclude them, or confirm the loop is intended (max_fires_per_hour bounds a runaway)",
-                trigger.trigger_id, task.agent_id, task.task_id, source.source_collection
+                trigger.trigger_id, task.agent_did, task.task_id, source.source_collection
             ));
         }
     }
@@ -286,11 +286,11 @@ mod tests {
     fn self_writing_config(write_collections: &[&str]) -> crate::documents::PackConfig {
         serde_json::from_value(serde_json::json!({
             "node": {"node_did": PLACEHOLDER_OWNER},
-            "agents": [{"agent_id": "writer", "node_did": PLACEHOLDER_OWNER, "context_id": "ctx", "inference_profile_id": "p"}],
+            "agents": [{"agent_did": "did:key:zWriter", "creation_nonce": "n", "node_did": PLACEHOLDER_OWNER, "context_id": "ctx", "inference_profile_id": "p"}],
             "contexts": [{"context_id": "ctx", "node_did": PLACEHOLDER_OWNER, "tools_id": "t"}],
             "tools": [{"tools_id": "t", "node_did": PLACEHOLDER_OWNER,
                 "datastore": {"write_collections": write_collections}}],
-            "tasks": [{"task_id": "turn", "node_did": PLACEHOLDER_OWNER, "agent_id": "writer", "prompt_template": "go"}],
+            "tasks": [{"task_id": "turn", "node_did": PLACEHOLDER_OWNER, "agent_did": "did:key:zWriter", "prompt_template": "go"}],
             "event_sources": [{"event_source_id": "moves", "node_did": PLACEHOLDER_OWNER, "source_collection": "Move"}],
             "triggers": [{"trigger_id": "on-move", "node_did": PLACEHOLDER_OWNER, "task_id": "turn",
                 "source": {"kind": "event", "event_source_id": "moves"}}],

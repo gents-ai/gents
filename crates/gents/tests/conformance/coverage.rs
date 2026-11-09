@@ -1247,6 +1247,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             ][..],
         ),
         ("Triggers.Types", &["delivery_options"][..]),
+        ("Triggers.SessionKey", &["session_config"][..]),
+        (
+            "Triggers.FireBudget",
+            &["fire_budget", "fire_budget_config"][..],
+        ),
         ("Triggers.Queue", &["queues", "observed_claims"][..]),
         ("EventDelivery.Durable", &["cursors"][..]),
         (

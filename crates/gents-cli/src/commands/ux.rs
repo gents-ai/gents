@@ -4,7 +4,7 @@
 //! exactly what the webview will receive; `lint` runs the static lint on
 //! one module or stylesheet before it is ever in a pack.
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use crate::cli::args::{UxCommand, UxLintArgs, UxListArgs, UxModuleArgs, UxPreviewArgs};
 

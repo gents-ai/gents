@@ -779,6 +779,8 @@ async fn admit_selected_event(
     let prepared = super::super::durable::PreparedFire {
         receipt: fire.clone(),
         target_existing: false,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         replace_prior: false,
         event_source_generation: intent.event_source_generation.clone(),
     };

@@ -257,15 +257,15 @@ pub async fn explain_trigger_in_txn(
             "Update the Task with enabled: true.",
         ),
         Some(task) => {
-            match decoded::<Agent>(txn, Collection::Agent, owner, &task.agent_id).await? {
+            match decoded::<Agent>(txn, Collection::Agent, owner, &task.agent_did).await? {
                 None => trace.failed(
                     "task",
-                    format!("Task agent {} does not exist", task.agent_id),
+                    format!("Task agent {} does not exist", task.agent_did),
                     "Create the Task's agent or recreate the Task for an existing agent.",
                 ),
                 Some(agent) if !agent.enabled => trace.failed(
                     "task",
-                    format!("Task agent {} is disabled", task.agent_id),
+                    format!("Task agent {} is disabled", task.agent_did),
                     "Enable the agent or recreate the Task for an enabled agent.",
                 ),
                 Some(_) => trace.passed(

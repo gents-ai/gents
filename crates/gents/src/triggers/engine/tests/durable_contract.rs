@@ -1393,47 +1393,39 @@ fn generated_session_key_cases_match_admission_and_config() {
     }
 }
 
-async fn budget_fixture() -> (
-    Arc<defra_node::EmbeddedNode>,
+/// A signed Node whose Agent admits fires of the User-owned Trigger `handoff`.
+async fn budget_fixture(
+    name: &str,
+) -> (
+    crate::support::TestDb,
+    crate::ConfigAccess,
+    crate::ConfigAccess,
     ProductionMaterializer,
+    ResolvedTask,
+    String,
     String,
 ) {
-    let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
-    let owner = snapshot.local_did.clone();
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(&owner)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), rx);
-    let input = serde_json::json!({
-        "node_did": owner, "trigger_id": "handoff", "task_id": "budget-task",
-        "source": {"kind": "schedule", "schedule_id": "s"}, "enabled": true,
-    });
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.budget_trigger",
-        |txn| {
-            let input = &input;
-            Box::pin(async move {
-                txn.execute_with_variables(
-                    "mutation($input:TriggerMutationInputArg!){create_Trigger(input:$input){_docID}}",
-                    &serde_json::json!({"input":input}),
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        },
-    )
-    .await
+    let (db, _user, client, behavior) = signed_materializer_agent(name).await;
+    let owner = behavior.node_did().to_owned();
+    let agent_did = behavior.agent_did.clone();
+    let config = serde_json::from_value(serde_json::json!({
+        "node":{"node_did":owner,"default_agent_did":agent_did},
+        "tasks":[{"node_did":owner,"task_id":"budget-task","agent_did":agent_did,"prompt_template":"work"}],
+        "schedules":[{"node_did":owner,"schedule_id":"s","cadence":{"kind":"interval","interval_secs":60}}],
+        "triggers":[{"node_did":owner,"trigger_id":"handoff","task_id":"budget-task","source":{"kind":"schedule","schedule_id":"s"}}]
+    }))
     .unwrap();
-    (node, materializer, owner)
+    let trigger_doc = apply_user_config(&client, &config, "handoff").await;
+    let agent = agent_access(&db.node, &behavior);
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(db.node.clone(), rx);
+    let task = ResolvedTask {
+        task_id: "budget-task".into(),
+        agent_did,
+        ..resolved_task("work")
+    };
+    (db, client, agent, materializer, task, owner, trigger_doc)
 }
 
 fn budget_fire(owner: &str, document: &str, created_at: String) -> TriggerFire {
@@ -1465,15 +1457,13 @@ fn budget_fire(owner: &str, document: &str, created_at: String) -> TriggerFire {
 
 const BUDGET_NOW: &str = "2030-01-01T12:00:00Z";
 
-async fn seed_receipt(node: &Arc<defra_node::EmbeddedNode>, fire: &TriggerFire) {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "test.budget_receipt",
-        |txn| Box::pin(async { durable::stage_fire_receipt(txn, fire).await }),
-    )
-    .await
-    .unwrap();
+async fn seed_receipt(agent: &crate::ConfigAccess, fire: &TriggerFire) {
+    agent
+        .transact_write("test.budget_receipt", |txn| {
+            Box::pin(async { durable::stage_fire_receipt(txn, fire).await })
+        })
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1502,7 +1492,9 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
     }
     let now = chrono::DateTime::parse_from_rfc3339(BUDGET_NOW).unwrap();
     for case in cases["fire_budget"].as_array().unwrap() {
-        let (node, materializer, owner) = budget_fixture().await;
+        let name = case["name"].as_str().unwrap();
+        let (_db, client, agent, materializer, task, owner, trigger_doc) =
+            budget_fixture(&format!("fire-budget-{name}")).await;
         let budget = trigger_with_options(
             None,
             None,
@@ -1511,14 +1503,13 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
         )
         .effective_max_fires_per_hour();
         assert_eq!(budget as u64, case["budget"].as_u64().unwrap(), "{case}");
-        let mut task = resolved_task("work");
-        task.task_id = "budget-task".into();
         let current = budget_fire(&owner, "budget-fire", BUDGET_NOW.to_owned());
         let prepared = durable::PreparedFire {
             receipt: current.clone(),
             target_existing: false,
             create_session: false,
             replace_prior: false,
+            event_source_generation: None,
             max_fires_per_hour: budget,
         };
         let materialize = || {
@@ -1526,7 +1517,7 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
                 &task,
                 Some("handoff"),
                 TriggerKind::Schedule,
-                Some("handoff-document"),
+                Some(&trigger_doc),
                 None,
                 None,
                 None,
@@ -1547,16 +1538,15 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
                 &format!("prior-{index}"),
                 at.to_rfc3339_opts(SecondsFormat::Secs, true),
             );
-            seed_receipt(&node, &prior).await;
+            seed_receipt(&agent, &prior).await;
         }
-        let name = case["name"].as_str().unwrap();
         let result = materialize().await;
         let admitted = result.is_ok();
         let exhausted = result
             .as_ref()
             .err()
             .is_some_and(|error| error.downcast_ref::<MaterializeBudgetExhausted>().is_some());
-        let row = crate::store::config_client::ConfigAccess::local(node.clone())
+        let row = client
             .execute(r#"{ Trigger(filter: {trigger_id: {_eq: "handoff"}}) { enabled last_status last_error } }"#)
             .await
             .unwrap();
@@ -1564,9 +1554,9 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
         assert_eq!(admitted, case["admitted"].as_bool().unwrap(), "{name}");
         assert_eq!(exhausted, case["stopped"].as_bool().unwrap(), "{name}");
         assert_eq!(
-            row["enabled"].as_bool(),
-            Some(!case["stopped"].as_bool().unwrap()),
-            "{name}"
+            row["enabled"].as_bool() == Some(false),
+            case["stopped"].as_bool().unwrap(),
+            "{name}: {row}"
         );
         assert_eq!(
             row["last_status"].as_str(),

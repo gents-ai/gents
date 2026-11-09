@@ -9,22 +9,20 @@ async fn authoring_tool(
     root: &std::path::Path,
     categories: &[&str],
     authority: bool,
-) -> (Arc<EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    fixture.grant_agent_schema().await;
+    fixture.publish_workspace_root(root).await;
+    let root = std::fs::canonicalize(root).unwrap();
     let mut tool_config = config(categories);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
     tool_config.enable_pack_authority = authority;
     tool_config.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadWrite;
-    tool_config.process_ceiling.root = Some(root.to_owned());
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
+    tool_config.process_ceiling.root = Some(root.clone());
+    let tools = fixture.tools_with_plugins(
         &tool_config,
         Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
             home.to_owned(),
@@ -40,7 +38,7 @@ async fn authoring_tool(
         )
         .await
         .unwrap();
-    (node, node_did, tools)
+    (fixture, tools)
 }
 
 async fn config_json(tools: &[Box<dyn ToolDyn>], argv: &[&str]) -> Value {
@@ -54,7 +52,7 @@ async fn config_json(tools: &[Box<dyn ToolDyn>], argv: &[&str]) -> Value {
 async fn a_shell_less_agent_takes_a_data_pack_from_scaffold_to_installed() {
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let (node, _did, tools) =
+    let (fixture, tools) =
         authoring_tool("pack-loop", home.path(), root.path(), &["tools"], false).await;
 
     config_json(
@@ -87,8 +85,11 @@ async fn a_shell_less_agent_takes_a_data_pack_from_scaffold_to_installed() {
     )
     .await;
     assert_eq!(installed["artifact_digest"], digest.as_str(), "{installed}");
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    let response = access.execute("query { Note { run_id } }").await.unwrap();
+    let response = fixture
+        .user_access()
+        .execute("query { Note { run_id } }")
+        .await
+        .unwrap();
     assert!(response.get("errors").is_none(), "{response}");
 }
 
@@ -98,7 +99,7 @@ async fn a_shell_less_agent_takes_a_data_pack_from_scaffold_to_installed() {
 async fn a_shell_less_agent_installs_a_pack_with_a_page() {
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let (_node, _did, tools) =
+    let (_fixture, tools) =
         authoring_tool("pack-page", home.path(), root.path(), &["tools"], true).await;
 
     config_json(
@@ -146,7 +147,7 @@ async fn pack_authority_grants_what_a_plugins_pack_asks_for() {
         let (workspace, _artifact, _) =
             crate::pack::plugin_lifecycle::tests::fixture("1.0.0", true);
         let home = tempfile::tempdir().unwrap();
-        let (_node, _did, tools) = authoring_tool(
+        let (_fixture, tools) = authoring_tool(
             &format!("pack-authority-{authority}"),
             home.path(),
             workspace.path(),
@@ -180,7 +181,6 @@ async fn pack_authority_grants_what_a_plugins_pack_asks_for() {
         let record =
             crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
         assert!(record.granted.is_some(), "the store keeps the grant");
-        assert!(
         let ran = tools
             .iter()
             .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -193,6 +193,7 @@ async fn pack_authority_grants_what_a_plugins_pack_asks_for() {
             .unwrap();
         let ran: Value = serde_json::from_str(&ran).unwrap();
         assert_eq!(ran["output"]["native_pack_echo"], "ok", "{ran}");
+        assert!(
             crate::plugin::ux::list(home.path())
                 .unwrap()
                 .iter()
@@ -202,19 +203,6 @@ async fn pack_authority_grants_what_a_plugins_pack_asks_for() {
     }
 }
 
-#[tokio::test]
-async fn compiling_plugin_source_needs_the_authority_grant() {
-    let root = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let (_node, _did, tools) =
-        authoring_tool("pack-compile", home.path(), root.path(), &["tools"], false).await;
-    config_json(
-        &tools,
-        &["pack", "scaffold", "tool_a", "--template", "plugin-tool"],
-    )
-    .await;
-    for verb in ["build", "test"] {
-        let error = config_call(&tools, &["pack", verb, "tool_a"])
 /// An assets pack carries no documents: its page installs through the home
 /// record alone.
 #[tokio::test]
@@ -254,6 +242,19 @@ async fn a_shell_less_agent_installs_an_assets_pack_with_a_page() {
     assert_eq!(got["installed"]["digest"], digest.as_str(), "{got}");
 }
 
+#[tokio::test]
+async fn compiling_plugin_source_needs_the_authority_grant() {
+    let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let (_fixture, tools) =
+        authoring_tool("pack-compile", home.path(), root.path(), &["tools"], false).await;
+    config_json(
+        &tools,
+        &["pack", "scaffold", "tool_a", "--template", "plugin-tool"],
+    )
+    .await;
+    for verb in ["build", "test"] {
+        let error = config_call(&tools, &["pack", verb, "tool_a"])
             .await
             .unwrap_err()
             .to_string();
@@ -297,7 +298,7 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
     std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _builder =
         crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
-    let (_node, _did, tools) =
+    let (_fixture, tools) =
         authoring_tool("pack-sandbox", home.path(), root.path(), &["tools"], true).await;
     config_json(
         &tools,
@@ -323,20 +324,20 @@ async fn authoring_paths_stay_inside_the_tool_root() {
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
-    let (_node, _did, tools) =
+    let (_fixture, tools) =
         authoring_tool("pack-root", home.path(), root.path(), &["tools"], false).await;
     let scaffolded = config_json(
         &tools,
         &["pack", "scaffold", "in-side", "--template", "assets"],
     )
     .await;
-    let outside = config_call(
     assert_eq!(scaffolded["pack"], "in_side", "{scaffolded}");
     assert_eq!(scaffolded["dir"], "in_side", "{scaffolded}");
     assert!(
         scaffolded["renamed"].as_str().unwrap().contains("in-side"),
         "{scaffolded}"
     );
+    let outside = config_call(
         &tools,
         &[
             "pack",
@@ -393,7 +394,7 @@ async fn ux_reads_what_the_desktop_would_load() {
     )
     .unwrap();
     std::fs::write(root.path().join("bad.js"), "eval('1')\n").unwrap();
-    let (_node, _did, tools) =
+    let (_fixture, tools) =
         authoring_tool("ux-read", home.path(), root.path(), &["tools"], false).await;
 
     let list = config_json(&tools, &["ux", "list"]).await;
@@ -420,7 +421,7 @@ async fn ux_reads_what_the_desktop_would_load() {
 async fn task_run_fires_a_task_now_and_reuses_target_id() {
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let (node, _did, tools) = authoring_tool(
+    let (fixture, tools) = authoring_tool(
         "task-run",
         home.path(),
         root.path(),
@@ -455,7 +456,7 @@ async fn task_run_fires_a_task_now_and_reuses_target_id() {
     assert_eq!(fired["status"], "pending", "{fired}");
     assert_eq!(fired["duplicate"], false, "{fired}");
     let request_id = fired["request_id"].as_str().unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = fixture.agent_access();
     let query = format!(
         r#"query {{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ content }} }}"#,
         crate::store::graphql::escape_graphql_string(request_id)
@@ -477,7 +478,7 @@ async fn task_run_fires_a_task_now_and_reuses_target_id() {
 async fn page_help_discloses_detail_per_command_and_topic() {
     let root = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let (_node, _did, tools) = authoring_tool(
+    let (_fixture, tools) = authoring_tool(
         "page-help",
         home.path(),
         root.path(),

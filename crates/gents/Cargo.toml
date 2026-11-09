@@ -94,7 +94,6 @@ hkdf.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-tungstenite = "0.26.2"
 toml.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true

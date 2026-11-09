@@ -604,7 +604,7 @@ impl SelfConfigFixture {
         self.tools_with_plugins(grants, test_plugins())
     }
 
-    fn tools_with_plugins(
+    pub(super) fn tools_with_plugins(
         &self,
         grants: &SelfConfigToolConfig,
         plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -7778,6 +7778,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     let holder = core.with_held_grants(ops::OperatorGrants {
         pack_install: true,
         policy: false,
+        pack_authority: false,
     });
     holder
         .apply(protect_working_agent(

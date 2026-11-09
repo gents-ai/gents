@@ -203,6 +203,7 @@ mod lean_bound_tests {
             let grants = |field: &str| OperatorGrants {
                 pack_install: false,
                 policy: case[field].as_bool().unwrap(),
+                pack_authority: false,
             };
             assert_eq!(
                 grants("candidate_policy")
@@ -227,6 +228,7 @@ mod lean_bound_tests {
         let holder = OperatorGrants {
             pack_install: false,
             policy: true,
+            pack_authority: false,
         };
         guard_tools_keep_grants(&holder, None, tools).unwrap();
     }

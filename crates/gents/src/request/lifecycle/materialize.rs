@@ -2020,12 +2020,14 @@ mod task_delivery_tests {
 
     async fn keyed_delivery(
         node: &std::sync::Arc<EmbeddedNode>,
+        owner: &str,
+        agent: &dyn crate::store::identity::NodeIdentity,
         document: &str,
         session: &str,
         create_session: bool,
     ) -> Result<TaskDeliveryAdmission> {
         let identity = gents_protocol::trigger_delivery::FireIdentity {
-            owner_did: PIN_FIXED_DID.to_owned(),
+            owner_did: owner.to_owned(),
             trigger_id: "player-red".to_owned(),
             source_collection: "Schedule".to_owned(),
             source_doc_id: document.to_owned(),
@@ -2053,11 +2055,12 @@ mod task_delivery_tests {
             target_existing: true,
             create_session,
             replace_prior: false,
+            event_source_generation: None,
             max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         };
         let spec = pending_agent_request_spec(
-            PIN_FIXED_DID,
-            "agent",
+            owner,
+            agent.did(),
             "play",
             crate::request::lifecycle::ExecutionOrigin::Scheduled,
             crate::request::lifecycle::TriggerLineage {
@@ -2074,11 +2077,12 @@ mod task_delivery_tests {
             Some("player-red-document"),
         )?;
         let create = build_request(spec)?;
-        write_trigger_delivery(
+        write_trigger_delivery_with_identity(
             node,
-            ::identity::Did::new(PIN_FIXED_DID).unwrap(),
+            ::identity::Did::new(agent.did()).unwrap(),
             &prepared,
             &create,
+            Some(agent),
         )
         .await
     }
@@ -2087,28 +2091,25 @@ mod task_delivery_tests {
     /// the unique `(node_did, session_id)` index resolves the race between them.
     #[tokio::test]
     async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
-        let identity_dir = tempfile::tempdir().unwrap();
-        let _identity = pin_fixed_signing_identity(identity_dir.path());
-        let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(PIN_FIXED_DID)
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (db, _user, _user_access, binding) =
+            crate::test_support::signed_test_node("keyed-session-fires").await;
+        let agent =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let owner = db.node_identity.did().to_owned();
+        let node = &db.node;
         let key = "game:g1:red";
         let (first, second, third) = tokio::join!(
-            keyed_delivery(&node, "turn-1", key, true),
-            keyed_delivery(&node, "turn-2", key, true),
-            keyed_delivery(&node, "turn-3", key, true),
+            keyed_delivery(node, &owner, agent.as_ref(), "turn-1", key, true),
+            keyed_delivery(node, &owner, agent.as_ref(), "turn-2", key, true),
+            keyed_delivery(node, &owner, agent.as_ref(), "turn-3", key, true),
         );
         let admissions = [first.unwrap(), second.unwrap(), third.unwrap()];
         assert!(admissions
             .iter()
             .all(|admission| admission.request.session_id == key));
 
-        let refused = keyed_delivery(&node, "turn-4", "game:g2:red", false)
+        let refused = keyed_delivery(node, &owner, agent.as_ref(), "turn-4", "game:g2:red", false)
             .await
             .err()
             .expect("a literal target without create_session still requires an owned session");
@@ -2117,50 +2118,50 @@ mod task_delivery_tests {
             "{refused:#}"
         );
 
-        let now = "2030-06-01T00:00:01Z".to_owned();
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let now = "2030-06-01T00:00:01Z";
         let requests = admissions.iter().map(|admission| {
             let doc = admission.request.doc_id.clone();
-            let node = node.clone();
-            let now = now.clone();
+            let access = &access;
             async move {
-                crate::store::config_client::ConfigAccess::transact_local_write(
-                    &node,
-                    None,
-                    "test.project_keyed_claim",
-                    |txn| {
+                access
+                    .transact_write("test.project_keyed_claim", |txn| {
                         let doc = doc.clone();
-                        let now = now.clone();
                         Box::pin(async move {
                             let rows = txn
                                 .execute(&format!(
                                     "{{AgentRequest(filter: {{_docID: {{_eq: \"{doc}\"}}}}) {{{}}}}}",
-                                    crate::request::admission::SIGNED_REQUEST_FIELDS
+                                    gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
                                 ))
                                 .await?;
                             let row: gents_protocol::row::AgentRequestRow =
                                 serde_json::from_value(rows["data"]["AgentRequest"][0].clone())?;
                             let request = crate::AgentRequest::try_from(row)
                                 .map_err(anyhow::Error::msg)?;
-                            apply_request_session_projection(txn, &request, &now).await
+                            apply_request_session_projection(txn, &request, now).await
                         })
-                    },
-                )
-                .await
+                    })
+                    .await
             }
         });
         for result in futures::future::join_all(requests).await {
             result.unwrap();
         }
 
-        let sessions = crate::store::config_client::ConfigAccess::local(node.clone())
+        let sessions = access
             .execute(&format!(
-                r#"{{ AgentSession(filter: {{session_id: {{_eq: "{key}"}}}}) {{ agent_id provenance }} }}"#
+                r#"{{ AgentSession(filter: {{session_id: {{_eq: "{key}"}}}}) {{ agent_did provenance }} }}"#
             ))
             .await
             .unwrap();
         let rows = sessions["data"]["AgentSession"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "one session per key: {rows:?}");
-        assert_eq!(rows[0]["agent_id"], "agent");
+        assert_eq!(rows[0]["agent_did"], agent.did());
         assert_eq!(
             rows[0]["provenance"]["task_id"], "play",
             "AgentSession provenance names the Task from its fire receipt"

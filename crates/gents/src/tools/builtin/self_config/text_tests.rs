@@ -2124,10 +2124,10 @@ async fn receipts_summarize_long_text_by_length_and_sha256() {
 
 #[tokio::test]
 async fn trigger_explain_names_the_first_failed_step_and_what_to_do() {
-    let (node, _owner, tools) = setup("explain", &["automation"]).await;
-    node.add_collection("type ExplainInput { message: String }")
-        .await
-        .unwrap();
+    let (fixture, tools) = authenticated_setup("explain", &["automation"]).await;
+    fixture
+        .add_collection("type ExplainInput { message: String }")
+        .await;
     let edit = |kind: &str, id: &str, set: Value| json!({"argv":["automation","edit",kind],"target_id":id,"set":set});
     ok(
         &tools,
@@ -2166,7 +2166,8 @@ async fn trigger_explain_names_the_first_failed_step_and_what_to_do() {
     assert!(position("answer") < position("how_to_proceed"), "{raw}");
     assert!(position("how_to_proceed") < position("metadata"), "{raw}");
 
-    let response = crate::store::config_client::ConfigAccess::local(node.clone())
+    let response = fixture
+        .agent_access()
         .write(
             "test.explain_doc",
             r#"mutation { create_ExplainInput(input: {message: "stop"}) { _docID } }"#,
@@ -2219,29 +2220,23 @@ async fn trigger_explain_names_the_first_failed_step_and_what_to_do() {
     );
 }
 
-async fn ux_preview_tools(label: &str, home: &std::path::Path) -> Tools {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
+async fn ux_preview_tools(label: &str, home: &std::path::Path) -> (SelfConfigFixture, Tools) {
+    let fixture = SelfConfigFixture::new(label).await;
     let mut grants = config(&["tools"]);
-    grants.agent_id = "setup".into();
-    build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
+    grants.agent_did = fixture.agent_did().to_owned();
+    let tools = fixture.tools_with_plugins(
         &grants,
         std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
             home.to_owned(),
         ))),
-    )
+    );
+    (fixture, tools)
 }
 
 #[tokio::test]
 async fn ux_preview_explains_itself_and_names_a_missing_plugin() {
     let home = tempfile::tempdir().unwrap();
-    let tools = ux_preview_tools("ux-preview", home.path()).await;
+    let (_fixture, tools) = ux_preview_tools("ux-preview", home.path()).await;
     let help = ok(&tools, json!({"argv":["ux","preview","--help"]})).await;
     assert!(help.as_str().unwrap().starts_with("ux preview: "), "{help}");
     let missing = refused(&tools, json!({"argv":["ux","preview","nope"]})).await;
@@ -2271,7 +2266,7 @@ async fn ux_preview_reports_text_first_through_the_config_tool() {
          render: () => jsx('h1', { children: 'hello from the probe' }) }) } }\n",
     )
     .unwrap();
-    let tools = ux_preview_tools("ux-preview-live", home.path()).await;
+    let (_fixture, tools) = ux_preview_tools("ux-preview-live", home.path()).await;
     let report = ok(&tools, json!({"argv":["ux","preview","probe"]})).await;
     let report = report.as_str().unwrap();
     assert!(

@@ -71,7 +71,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     if manifest.metadata.kind == gents::pack::PackKind::Documents {
         match load_config(&archive) {
             Ok(config) => {
-                report.warnings = gents::pack::authoring::self_write_warnings(&config);
+                report.warnings = gents::pack::authoring::self_write_warnings(&config.documents);
                 if let Err(error) =
                     check_filters(dir, &config.documents, &mut report.problems).await
                 {

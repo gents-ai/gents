@@ -2207,7 +2207,7 @@ mod tests {
             .explain_with_runtime(
                 false,
                 &owner,
-                &std::iter::once(summary.default_agent_id.clone()).collect(),
+                &std::iter::once(summary.default_agent_did.clone()).collect(),
             )
     }
 

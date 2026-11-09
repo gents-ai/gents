@@ -833,6 +833,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_callback_arrival_checkpoints_use_invocation_receipts",
         },
         ConformanceConsumer::RustTest {
+            id: "triggers::engine::tests::durable_contract::generated_session_key_cases_match_admission_and_config",
+            package: "gents",
+            source_path: "crates/gents/src/triggers/engine/tests/durable_contract.rs",
+            module_path: "triggers::engine::tests::durable_contract",
+            function: "generated_session_key_cases_match_admission_and_config",
+        },
+        ConformanceConsumer::RustTest {
+            id: "triggers::engine::tests::durable_contract::generated_fire_budget_cases_stop_at_the_modeled_receipt_count",
+            package: "gents",
+            source_path: "crates/gents/src/triggers/engine/tests/durable_contract.rs",
+            module_path: "triggers::engine::tests::durable_contract",
+            function: "generated_fire_budget_cases_stop_at_the_modeled_receipt_count",
+        },
+        ConformanceConsumer::RustTest {
             id: "triggers::engine::tests::durable_contract::generated_terminal_outcome_action_traces_use_native_owners",
             package: "gents",
             source_path: "crates/gents/src/triggers/engine/tests/durable_contract.rs",
