@@ -16,8 +16,7 @@ import { BackgroundToolButton } from "./BackgroundToolButton";
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
-import { agentName } from "./behavior";
-import { AgentInitials } from "./parts";
+import { AgentMark } from "./parts";
 import { Markdown } from "./Markdown";
 import { FiledQuestion, filedQuestion } from "./FiledQuestion";
 import { ToolBody } from "./tool-views";
@@ -161,8 +160,9 @@ function WorkerRunStep({
       label={name}
       icon={
         agentDid ? (
-          <AgentInitials
-            name={agentName(agentDid, deployment)}
+          <AgentMark
+            agentDid={agentDid}
+            deployment={deployment}
             className="size-4 text-[8px]"
           />
         ) : (
