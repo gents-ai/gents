@@ -110,11 +110,7 @@ impl DesktopBridge {
             == Some(node_did)
     }
 
-    pub(crate) fn set_window_selected_node(
-        &mut self,
-        label: &str,
-        node_did: Option<String>,
-    ) -> bool {
+    fn set_window_selected_node(&mut self, label: &str, node_did: Option<String>) -> bool {
         let Some(selected) = self.selected_nodes_by_window.get_mut(label) else {
             return false;
         };
@@ -122,6 +118,29 @@ impl DesktopBridge {
         *selected = node_did;
         self.apply_window_selection();
         changed
+    }
+
+    /// Changes a window's selected node and reports whether it changed. The
+    /// window's pack watches are cancelled first, while the old node is
+    /// still selected: a delivery holds only the watch registry's lock, so
+    /// cancelling after the write would let a watch of the old node deliver
+    /// to a window that already selects the new one (TLA `PackUxWatch`
+    /// `CancelBeforeSelect`). The caller holds the bridge lock across both.
+    pub(crate) fn select_window_node<F>(
+        &mut self,
+        label: &str,
+        node_did: Option<String>,
+        cancel_watches: F,
+    ) -> bool
+    where
+        F: FnOnce(&Self),
+    {
+        match self.selected_nodes_by_window.get(label) {
+            Some(selected) if *selected != node_did => {}
+            _ => return false,
+        }
+        cancel_watches(self);
+        self.set_window_selected_node(label, node_did)
     }
 }
 
@@ -174,7 +193,6 @@ impl DesktopAppState {
         if !matches!(event, tauri::WindowEvent::Destroyed) {
             return;
         }
-        self.ux_watches.cancel_window(label);
         if label == crate::navigation::EXPLORER_WINDOW {
             *self
                 .explorer_origin
@@ -182,6 +200,9 @@ impl DesktopAppState {
                 .expect("explorer origin lock poisoned") = None;
         }
         let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
+        // Under the bridge lock, so a late watch command cannot register a
+        // watch between this cancellation and the selection's removal.
+        self.ux_watches.cancel_window(label);
         bridge.approvals_prompt_subscriptions.remove_window(label);
         for wait in [
             &bridge.codex_login_cancel,
