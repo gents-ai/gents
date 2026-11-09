@@ -13,6 +13,7 @@ pub(crate) mod profile;
 pub(crate) mod skill;
 pub(crate) mod task_run;
 pub(crate) mod tools;
+pub(crate) mod trigger_explain;
 pub(crate) mod validate;
 pub(crate) mod workspace_root;
 
@@ -61,6 +62,9 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Trigger { command } => match command {
             ConfigTriggerCommand::List(args) => crud::config_list(crud::TRIGGER_SPEC, args).await,
             ConfigTriggerCommand::Show(args) => crud::config_show(crud::TRIGGER_SPEC, args).await,
+            ConfigTriggerCommand::Explain(args) => {
+                trigger_explain::config_trigger_explain(args).await
+            }
         },
         ConfigCommand::Schedule { command } => match command {
             ConfigScheduleCommand::List(args) => crud::config_list(crud::SCHEDULE_SPEC, args).await,

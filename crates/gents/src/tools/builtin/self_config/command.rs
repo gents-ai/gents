@@ -22,6 +22,7 @@ mod reads;
 mod skill;
 mod ux_preview;
 mod ux;
+mod trigger_explain;
 mod validate;
 
 use args::{
@@ -131,6 +132,7 @@ impl ConfigCommandParams {
                 | ["agent", "preview", "edit" | "default", ..]
                 | ["backend" | "profile", "preview", "create", ..]
                 | ["pack", "preview", "install" | "update", ..] => 3,
+                ["trigger", "explain", ..] => 2,
                 ["datastore" | "agent-target" | "execution", "get" | "create" | "edit", ..]
                 | ["mcp-service", "get" | "preview" | "edit", ..]
                 | ["agent", "get" | "edit" | "default", ..]
@@ -428,6 +430,7 @@ impl ConfigCommandTool {
                     "backend" => ["discover", "accounts"].contains(&verb.as_str()),
                     "skill" => verb == "import",
                     "task" => verb == "run",
+                    "trigger" => verb == "explain",
                     _ => false,
                 };
                 if !common.contains(&verb.as_str()) && !extra {
@@ -472,6 +475,7 @@ impl ConfigCommandTool {
             "backend" => self.backend(&argv[1..]).await,
             "mcp-service" => self.mcp_service(&argv[1..]).await,
             "automation" => self.automation(&argv[1..]).await,
+            "trigger" => self.trigger_explain(&argv[1..]).await,
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
             "policy" => self.policy(&argv[1..]).await,

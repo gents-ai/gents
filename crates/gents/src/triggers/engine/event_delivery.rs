@@ -611,6 +611,8 @@ mod tests {
             event_source_doc_id: "source-doc".into(),
             task_doc_id: "task-doc".into(),
             session_id_template: None,
+            create_session: false,
+            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: "physical".into(),
             trigger_id: binding.binding_id.clone(),
             task_id: "task".into(),

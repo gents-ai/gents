@@ -212,9 +212,99 @@ fn check_ux_plugins(dir: &Path, manifest: &PackManifest, problems: &mut Vec<Stri
     }
 }
 
+/// Names each event Trigger whose Task's agent can write that Trigger's source
+/// collection, directly or through a datastore write tool: every such write
+/// fires the Task again. A filter may exclude those writes, so this warns.
+pub fn self_write_warnings(config: &crate::documents::PackConfig) -> Vec<String> {
+    use crate::documents::TriggerSource;
+    let mut warnings = Vec::new();
+    for trigger in &config.triggers {
+        let TriggerSource::Event { event_source_id } = &trigger.source else {
+            continue;
+        };
+        let Some(source) = config
+            .event_sources
+            .iter()
+            .find(|source| &source.event_source_id == event_source_id)
+        else {
+            continue;
+        };
+        let Some(task) = config
+            .tasks
+            .iter()
+            .find(|task| task.task_id == trigger.task_id)
+        else {
+            continue;
+        };
+        let Some(tools) = config
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == task.agent_id)
+            .and_then(|agent| agent.context_id.as_ref())
+            .and_then(|id| {
+                config
+                    .contexts
+                    .iter()
+                    .find(|context| &context.context_id == id)
+            })
+            .and_then(|context| context.tools_id.as_ref())
+            .and_then(|id| config.tools.iter().find(|tools| &tools.tools_id == id))
+        else {
+            continue;
+        };
+        let direct = tools
+            .datastore
+            .as_ref()
+            .and_then(|datastore| datastore.write_collections.as_deref())
+            .unwrap_or(&[])
+            .iter()
+            .any(|collection| collection == &source.source_collection);
+        let surfaced = crate::documents::merge_datastore_tool_surfaces(
+            tools,
+            config.datastore_tool_surfaces.iter(),
+        )
+        .is_ok_and(|merged| {
+            merged
+                .write_tools
+                .iter()
+                .any(|tool| tool.collection == source.source_collection)
+        });
+        if direct || surfaced {
+            warnings.push(format!(
+                "trigger {}: agent {} of task {} can write {}, the collection this trigger watches, so each such write fires the task again; filter the event source to exclude them, or confirm the loop is intended (max_fires_per_hour bounds a runaway)",
+                trigger.trigger_id, task.agent_id, task.task_id, source.source_collection
+            ));
+        }
+    }
+    warnings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn self_writing_config(write_collections: &[&str]) -> crate::documents::PackConfig {
+        serde_json::from_value(serde_json::json!({
+            "node": {"node_did": PLACEHOLDER_OWNER},
+            "agents": [{"agent_id": "writer", "node_did": PLACEHOLDER_OWNER, "context_id": "ctx", "inference_profile_id": "p"}],
+            "contexts": [{"context_id": "ctx", "node_did": PLACEHOLDER_OWNER, "tools_id": "t"}],
+            "tools": [{"tools_id": "t", "node_did": PLACEHOLDER_OWNER,
+                "datastore": {"write_collections": write_collections}}],
+            "tasks": [{"task_id": "turn", "node_did": PLACEHOLDER_OWNER, "agent_id": "writer", "prompt_template": "go"}],
+            "event_sources": [{"event_source_id": "moves", "node_did": PLACEHOLDER_OWNER, "source_collection": "Move"}],
+            "triggers": [{"trigger_id": "on-move", "node_did": PLACEHOLDER_OWNER, "task_id": "turn",
+                "source": {"kind": "event", "event_source_id": "moves"}}],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn self_writing_trigger_is_warned_and_an_unrelated_write_grant_is_not() {
+        let warnings = self_write_warnings(&self_writing_config(&["Move"]));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("on-move") && warnings[0].contains("Move"));
+        assert!(self_write_warnings(&self_writing_config(&["Scoreboard"])).is_empty());
+    }
 
     fn scaffold_minimal(dir: &Path, name: &str) {
         super::super::scaffold::scaffold(

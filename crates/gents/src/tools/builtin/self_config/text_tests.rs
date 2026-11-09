@@ -2101,6 +2101,103 @@ async fn receipts_summarize_long_text_by_length_and_sha256() {
     );
 }
 
+#[tokio::test]
+async fn trigger_explain_names_the_first_failed_step_and_what_to_do() {
+    let (node, _owner, tools) = setup("explain", &["automation"]).await;
+    node.add_collection("type ExplainInput { message: String }")
+        .await
+        .unwrap();
+    let edit = |kind: &str, id: &str, set: Value| json!({"argv":["automation","edit",kind],"target_id":id,"set":set});
+    ok(
+        &tools,
+        edit(
+            "event-source",
+            "input",
+            json!({"source_collection":"ExplainInput","filter":"{message: {_eq: \"go\"}}"}),
+        ),
+    )
+    .await;
+    ok(
+        &tools,
+        edit(
+            "task",
+            "work",
+            json!({"prompt_template":"Do {{ doc.message }}"}),
+        ),
+    )
+    .await;
+    ok(&tools, edit("trigger", "on-input", json!({"task_id":"work","source":{"kind":"event","event_source_id":"input"},"session_id_template":"game:{{ doc.message }}","create_session":true,"max_fires_per_hour":50}))).await;
+
+    let healthy = ok(&tools, json!({"argv":["trigger","explain","on-input"]})).await;
+    assert!(
+        healthy["answer"].as_str().unwrap().contains("healthy"),
+        "{healthy}"
+    );
+    assert_eq!(healthy["metadata"]["create_session"], true);
+    assert_eq!(healthy["metadata"]["max_fires_per_hour"], 50);
+    let raw = call_config_tool(
+        &tools,
+        vec!["trigger".into(), "explain".into(), "on-input".into()],
+    )
+    .await
+    .unwrap();
+    let position = |key: &str| raw.find(&format!("\"{key}\"")).unwrap();
+    assert!(position("answer") < position("how_to_proceed"), "{raw}");
+    assert!(position("how_to_proceed") < position("metadata"), "{raw}");
+
+    let response = crate::store::config_client::ConfigAccess::local(node.clone())
+        .write(
+            "test.explain_doc",
+            r#"mutation { create_ExplainInput(input: {message: "stop"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let doc = crate::store::graphql::created_doc_id(&response, "ExplainInput").unwrap();
+    let filtered = ok(
+        &tools,
+        json!({"argv":["trigger","explain"],"target_id":"on-input","options":{"source-doc":doc}}),
+    )
+    .await;
+    assert!(
+        filtered["answer"].as_str().unwrap().starts_with("filter:"),
+        "{filtered}"
+    );
+
+    let missing = ok(
+        &tools,
+        json!({"argv":["trigger","explain","on-input"],"options":{"source-doc":"no-such-doc"}}),
+    )
+    .await;
+    assert!(
+        missing["answer"]
+            .as_str()
+            .unwrap()
+            .starts_with("source_document:"),
+        "{missing}"
+    );
+
+    ok(
+        &tools,
+        edit("trigger", "on-input", json!({"enabled":false})),
+    )
+    .await;
+    let disabled = ok(&tools, json!({"argv":["trigger","explain","on-input"]})).await;
+    assert!(
+        disabled["answer"]
+            .as_str()
+            .unwrap()
+            .starts_with("trigger: disabled"),
+        "{disabled}"
+    );
+    assert!(
+        disabled["how_to_proceed"]
+            .as_str()
+            .unwrap()
+            .contains("enabled: true"),
+        "{disabled}"
+    );
+}
+
 async fn ux_preview_tools(label: &str, home: &std::path::Path) -> Tools {
     let node = build_agent_node().await;
     let identity = node_identity(label);

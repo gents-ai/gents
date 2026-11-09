@@ -14,6 +14,8 @@ pub(crate) struct CheckReport {
     pub(crate) pack: Option<String>,
     pub(crate) digest: Option<String>,
     pub(crate) problems: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) warnings: Vec<String>,
 }
 
 pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
@@ -46,6 +48,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         pack: shared.pack,
         digest: shared.digest,
         problems: shared.problems,
+        warnings: Vec::new(),
     };
     if !report.problems.is_empty() || report.digest.is_none() {
         return report;
@@ -68,6 +71,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     if manifest.metadata.kind == gents::pack::PackKind::Documents {
         match load_config(&archive) {
             Ok(config) => {
+                report.warnings = gents::pack::authoring::self_write_warnings(&config);
                 if let Err(error) =
                     check_filters(dir, &config.documents, &mut report.problems).await
                 {

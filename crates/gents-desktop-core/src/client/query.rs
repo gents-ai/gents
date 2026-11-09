@@ -130,7 +130,7 @@ pub(super) const SKILL_FIELDS: &str = "skill_id node_did name description instru
 pub(super) const SCHEDULE_FIELDS: &str =
     "schedule_id node_did display_name cadence created_at updated_at tags";
 pub(super) const SCHEDULE_OBSERVATION_FIELDS: &str = "trigger_id next_run_at";
-pub(super) const TRIGGER_FIELDS: &str = "node_did trigger_id display_name description task_id source session_id_template enabled concurrency created_at updated_at tags";
+pub(super) const TRIGGER_FIELDS: &str = "node_did trigger_id display_name description task_id source session_id_template create_session max_fires_per_hour enabled concurrency created_at updated_at tags";
 pub(super) const TRIGGER_OBSERVATION_FIELDS: &str =
     "trigger_id last_attempt_at last_fired_source_doc_id last_status last_error fire_count";
 pub(super) const TOOLS_FIELDS: &str = "tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags";

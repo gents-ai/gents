@@ -604,6 +604,16 @@ def caseCoverage : List CoverageEntry :=
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
+      "Triggers.SessionKey"
+      "triggers::engine::tests::durable_contract::generated_session_key_cases_match_admission_and_config")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "trigger_delivery"
+      "Triggers.FireBudget"
+      "triggers::engine::tests::durable_contract::generated_fire_budget_cases_stop_at_the_modeled_receipt_count")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "trigger_delivery"
       "Triggers.Queue"
       "triggers::engine::tests::durable_contract::durable_delivery_predicates_match_executable_lean_owners")
       "triggers" [Surface.runtimeInternal]

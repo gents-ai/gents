@@ -367,6 +367,8 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-1").await,
         schedule_id: "sched-1".to_string(),
@@ -460,6 +462,8 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-1").await,
         schedule_id: "sched-1".to_string(),
@@ -744,6 +748,8 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-e2e").await,
         schedule_id: "sched-e2e".to_string(),
@@ -915,6 +921,8 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-null").await,
         schedule_id: "sched-null".to_string(),
@@ -1001,6 +1009,8 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     };
     let schedule = ResolvedSchedule {
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id,
         schedule_doc_id: schedule_doc_id(&node, &owner_did, "sched-cron-null").await,
         schedule_id: "sched-cron-null".to_string(),

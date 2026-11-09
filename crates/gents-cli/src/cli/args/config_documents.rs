@@ -10,6 +10,26 @@ pub(crate) enum ConfigTriggerCommand {
     List(ConfigListArgs),
     #[command(name = "show", about = "Show a Trigger document")]
     Show(ConfigShowArgs),
+    #[command(
+        name = "explain",
+        about = "Trace why a Trigger did or did not deliver a source document"
+    )]
+    Explain(ConfigTriggerExplainArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ConfigTriggerExplainArgs {
+    #[arg(value_name = "TRIGGER_ID")]
+    pub(crate) trigger_id: String,
+    #[arg(
+        long = "source-doc",
+        help = "Source document to trace; defaults to the last attempted document"
+    )]
+    pub(crate) source_doc: Option<String>,
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
 }
 
 #[derive(Subcommand)]

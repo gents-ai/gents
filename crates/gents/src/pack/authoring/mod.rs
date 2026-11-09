@@ -11,7 +11,10 @@ pub use build::{
     build_all, build_pack, build_plugin, ensure_no_compile_step, pack_built, plugin_entry,
     plugins_with_source, BuildReport, PluginCompiler, PluginReport, BUILDER_ID,
 };
-pub use check::{check_dir, check_files, check_readme, load_config, read_manifest, CheckReport};
+pub use check::{
+    check_dir, check_files, check_readme, load_config, read_manifest, self_write_warnings,
+    CheckReport,
+};
 pub use edit::{PackAddition, PackEdit, PackPart};
 pub use inspect::{preview_config, verify_pack_file};
 pub use names::{to_snake_case, Names};

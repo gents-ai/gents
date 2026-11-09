@@ -1488,9 +1488,12 @@ pub(crate) async fn write_trigger_delivery_with_identity(
 ) -> Result<TaskDeliveryAdmission> {
     let identity = identity.context("trigger delivery requires a managed Agent identity")?;
     let access = crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity)?;
-    access
+    let admitted = access
         .transact_write("lifecycle.admit_trigger_delivery", |txn| {
             Box::pin(async move {
+                if let Some(stop) = prepared.stage_budget(txn).await? {
+                    return Ok::<_, anyhow::Error>(Err(stop));
+                }
                 let fresh =
                     crate::triggers::engine::durable::stage_fire_receipt(txn, &prepared.receipt)
                         .await?;
@@ -1513,6 +1516,7 @@ pub(crate) async fn write_trigger_delivery_with_identity(
                     txn,
                     &prepared.receipt,
                     prepared.target_existing,
+                    prepared.create_session,
                     &create,
                     fresh,
                     prepared.event_source_generation.as_ref(),
@@ -1527,10 +1531,11 @@ pub(crate) async fn write_trigger_delivery_with_identity(
                     )
                     .await?;
                 }
-                Ok::<_, anyhow::Error>(admitted)
+                Ok(Ok(admitted))
             })
         })
-        .await
+        .await?;
+    Ok(admitted?)
 }
 
 #[doc(hidden)]
@@ -1609,13 +1614,14 @@ async fn stage_task_delivery(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
     let fresh = crate::triggers::engine::durable::stage_fire_receipt(txn, fire).await?;
-    stage_task_delivery_with_receipt(txn, fire, continue_existing, create, fresh, None).await
+    stage_task_delivery_with_receipt(txn, fire, continue_existing, false, create, fresh, None).await
 }
 
 async fn stage_task_delivery_with_receipt(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     continue_existing: bool,
+    create_session: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
     fresh: bool,
     expected_event_source: Option<&serde_json::Value>,
@@ -1694,7 +1700,8 @@ async fn stage_task_delivery_with_receipt(
                 crate::triggers::engine::durable::resolve_session_id(
                     &fire.identity,
                     Some(&create.session_id),
-                    session.is_some()
+                    session.is_some(),
+                    create_session,
                 )
                 .is_some(),
                 "Task target session is missing or belongs to another owner"
@@ -1705,7 +1712,8 @@ async fn stage_task_delivery_with_receipt(
                     || crate::triggers::engine::durable::resolve_session_id(
                         &fire.identity,
                         None,
-                        false
+                        false,
+                        false,
                     )
                     .as_deref()
                         == Some(fire.session_id.as_str()),
@@ -1995,6 +2003,155 @@ mod task_delivery_tests {
                 task_for_opening("1", "10", "20", &fires).map(|task| task.parse::<u64>().unwrap());
             assert_eq!(actual, case["task"].as_u64(), "{}", case["name"]);
         }
+    }
+
+    async fn keyed_delivery(
+        node: &std::sync::Arc<EmbeddedNode>,
+        document: &str,
+        session: &str,
+        create_session: bool,
+    ) -> Result<TaskDeliveryAdmission> {
+        let identity = gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: PIN_FIXED_DID.to_owned(),
+            trigger_id: "player-red".to_owned(),
+            source_collection: "Schedule".to_owned(),
+            source_doc_id: document.to_owned(),
+        };
+        let fire = gents_protocol::trigger_delivery::TriggerFire {
+            fire_key: identity.fire_key(),
+            request_id: identity.request_id(),
+            session_id: session.to_owned(),
+            identity,
+            task_id: "play".to_owned(),
+            goal_id: None,
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_assignment_applied: false,
+            emit_outcome: false,
+            queued_serial: false,
+            source_handoff_id: None,
+            reply_session_id: None,
+            shard_id: None,
+            attempt: None,
+            created_at: "2030-06-01T00:00:00Z".to_owned(),
+        };
+        let prepared = crate::triggers::engine::durable::PreparedFire {
+            receipt: fire.clone(),
+            target_existing: true,
+            create_session,
+            replace_prior: false,
+            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
+        };
+        let spec = pending_agent_request_spec(
+            PIN_FIXED_DID,
+            "agent",
+            "play",
+            crate::request::lifecycle::ExecutionOrigin::Scheduled,
+            crate::request::lifecycle::TriggerLineage {
+                trigger_id: Some("player-red".to_owned()),
+                trigger_kind: Some("schedule".to_owned()),
+                ..Default::default()
+            },
+            None,
+            None,
+            &fire.request_id,
+            session,
+            Some(&fire.fire_key),
+            None,
+            Some("player-red-document"),
+        )?;
+        let create = build_request(spec)?;
+        write_trigger_delivery(
+            node,
+            ::identity::Did::new(PIN_FIXED_DID).unwrap(),
+            &prepared,
+            &create,
+        )
+        .await
+    }
+
+    /// The claim owner runs for each request as its own committed transaction;
+    /// the unique `(node_did, session_id)` index resolves the race between them.
+    #[tokio::test]
+    async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
+        let identity_dir = tempfile::tempdir().unwrap();
+        let _identity = pin_fixed_signing_identity(identity_dir.path());
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(PIN_FIXED_DID)
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let key = "game:g1:red";
+        let (first, second, third) = tokio::join!(
+            keyed_delivery(&node, "turn-1", key, true),
+            keyed_delivery(&node, "turn-2", key, true),
+            keyed_delivery(&node, "turn-3", key, true),
+        );
+        let admissions = [first.unwrap(), second.unwrap(), third.unwrap()];
+        assert!(admissions
+            .iter()
+            .all(|admission| admission.request.session_id == key));
+
+        let refused = keyed_delivery(&node, "turn-4", "game:g2:red", false)
+            .await
+            .err()
+            .expect("a literal target without create_session still requires an owned session");
+        assert!(
+            format!("{refused:#}").contains("Task target session is missing"),
+            "{refused:#}"
+        );
+
+        let now = "2030-06-01T00:00:01Z".to_owned();
+        let requests = admissions.iter().map(|admission| {
+            let doc = admission.request.doc_id.clone();
+            let node = node.clone();
+            let now = now.clone();
+            async move {
+                crate::store::config_client::ConfigAccess::transact_local_write(
+                    &node,
+                    None,
+                    "test.project_keyed_claim",
+                    |txn| {
+                        let doc = doc.clone();
+                        let now = now.clone();
+                        Box::pin(async move {
+                            let rows = txn
+                                .execute(&format!(
+                                    "{{AgentRequest(filter: {{_docID: {{_eq: \"{doc}\"}}}}) {{{}}}}}",
+                                    crate::request::admission::SIGNED_REQUEST_FIELDS
+                                ))
+                                .await?;
+                            let row: gents_protocol::row::AgentRequestRow =
+                                serde_json::from_value(rows["data"]["AgentRequest"][0].clone())?;
+                            let request = crate::AgentRequest::try_from(row)
+                                .map_err(anyhow::Error::msg)?;
+                            apply_request_session_projection(txn, &request, &now).await
+                        })
+                    },
+                )
+                .await
+            }
+        });
+        for result in futures::future::join_all(requests).await {
+            result.unwrap();
+        }
+
+        let sessions = crate::store::config_client::ConfigAccess::local(node.clone())
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{session_id: {{_eq: "{key}"}}}}) {{ agent_id provenance }} }}"#
+            ))
+            .await
+            .unwrap();
+        let rows = sessions["data"]["AgentSession"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "one session per key: {rows:?}");
+        assert_eq!(rows[0]["agent_id"], "agent");
+        assert_eq!(
+            rows[0]["provenance"]["task_id"], "play",
+            "AgentSession provenance names the Task from its fire receipt"
+        );
     }
 
     #[test]

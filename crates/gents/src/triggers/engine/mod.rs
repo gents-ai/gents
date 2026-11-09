@@ -118,18 +118,11 @@ impl FireIntent {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MaterializeSkip {
+#[derive(Debug, thiserror::Error)]
+#[error("{reason}")]
+pub(crate) struct MaterializeBudgetExhausted {
     pub reason: String,
 }
-
-impl std::fmt::Display for MaterializeSkip {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.reason)
-    }
-}
-
-impl std::error::Error for MaterializeSkip {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("fire already admitted as {request_id}")]
@@ -141,9 +134,9 @@ pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> Fi
     match result {
         Ok(request_id) => FireResult::Fired { request_id },
         Err(error) => {
-            if let Some(skip) = error.downcast_ref::<MaterializeSkip>() {
-                FireResult::Skipped {
-                    reason: skip.reason.clone(),
+            if let Some(exhausted) = error.downcast_ref::<MaterializeBudgetExhausted>() {
+                FireResult::BudgetExhausted {
+                    reason: exhausted.reason.clone(),
                 }
             } else if let Some(duplicate) = error.downcast_ref::<MaterializeDuplicate>() {
                 FireResult::Duplicate {
@@ -164,11 +157,24 @@ pub(crate) const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
 pub enum FireResult {
-    Duplicate { request_id: String },
-    Fired { request_id: String },
-    Skipped { reason: String },
-    Errored { error: String },
-    Rejected { error: String },
+    Duplicate {
+        request_id: String,
+    },
+    Fired {
+        request_id: String,
+    },
+    Skipped {
+        reason: String,
+    },
+    Errored {
+        error: String,
+    },
+    Rejected {
+        error: String,
+    },
+    BudgetExhausted {
+        reason: String,
+    },
 }
 
 pub trait TriggerSource: Send + Sync {
@@ -645,14 +651,26 @@ impl TriggerEngine {
                 Ok(fire) => {
                     scope.session = Some(serde_json::json!({"session_id": fire.session_id}));
                     scope.request = Some(serde_json::json!({"request_id": fire.request_id}));
+                    let event_trigger = snapshot
+                        .active_event_triggers()
+                        .get(intent.trigger_id.as_deref().unwrap());
                     Some(durable::PreparedFire {
                         replace_prior: intent.concurrency
                             == crate::documents::ConcurrencyMode::LatestOnly,
                         target_existing: targeted_schedule
-                            || snapshot
-                                .active_event_triggers()
-                                .get(intent.trigger_id.as_deref().unwrap())
-                                .is_some_and(|t| t.session_id_template.is_some()),
+                            || event_trigger.is_some_and(|t| t.session_id_template.is_some()),
+                        create_session: event_trigger.map_or_else(
+                            || schedule.is_some_and(|s| s.create_session),
+                            |t| t.create_session,
+                        ),
+                        max_fires_per_hour: event_trigger.map_or_else(
+                            || {
+                                schedule.map_or(crate::documents::DEFAULT_MAX_FIRES_PER_HOUR, |s| {
+                                    s.max_fires_per_hour
+                                })
+                            },
+                            |t| t.max_fires_per_hour,
+                        ),
                         receipt: fire,
                         event_source_generation: intent.event_source_generation.clone(),
                     })

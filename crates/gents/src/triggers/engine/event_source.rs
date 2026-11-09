@@ -1532,6 +1532,11 @@ impl EventSource {
                 | crate::triggers::engine::FireResult::Rejected { error } => {
                     ("error", Some(error.clone()), None)
                 }
+                crate::triggers::engine::FireResult::BudgetExhausted { reason } => (
+                    crate::documents::BUDGET_EXHAUSTED_STATUS,
+                    Some(reason.clone()),
+                    None,
+                ),
             };
             let update = crate::documents::TriggerRuntimeUpdate {
                 next_run_at: None,

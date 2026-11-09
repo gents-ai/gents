@@ -132,7 +132,11 @@ pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
 #[allow(unused_imports)]
 pub use task::{Task, TaskHook, TaskHookPhase};
-pub use trigger::{ConcurrencyMode, Trigger, TriggerObservation, TriggerSource};
+pub use trigger::{
+    ConcurrencyMode, Trigger, TriggerObservation, TriggerSource, BUDGET_EXHAUSTED_STATUS,
+    DEFAULT_MAX_FIRES_PER_HOUR,
+};
+pub mod trigger_explain;
 
 use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
