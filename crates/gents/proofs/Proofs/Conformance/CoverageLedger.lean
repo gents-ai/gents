@@ -1574,7 +1574,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "pack_placement_reader_cases"
       "PackPlacementReaderCases"
-      "pack::installation::tests::pack_install_grants_placement_readers_to_exactly_its_slots")
+      "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "native_route_cases"
