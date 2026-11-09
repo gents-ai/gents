@@ -309,3 +309,131 @@ impl ServedRuntimeHome {
         self.home.node.shutdown().await.unwrap();
     }
 }
+
+/// A proxy in front of a runtime's GraphQL endpoint that holds every request
+/// whose body `held` selects until the test releases it, so a test can change
+/// the runtime while that read is in flight. Each held or plain request gets
+/// its own connection, so none bypasses inspection on a pooled one;
+/// subscriptions stream through untouched.
+pub struct GatedRuntimeProxy {
+    url: String,
+    held: tokio::sync::mpsc::UnboundedReceiver<HeldRequest>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// A request the proxy holds; dropping it without [`Self::release`] fails it.
+pub struct HeldRequest {
+    pub body: String,
+    release: tokio::sync::oneshot::Sender<()>,
+}
+
+impl HeldRequest {
+    pub fn release(self) {
+        let _ = self.release.send(());
+    }
+}
+
+impl GatedRuntimeProxy {
+    pub async fn start(upstream_graphql: &str, held: fn(&str) -> bool) -> Self {
+        let upstream = upstream_graphql
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split('/').next())
+            .expect("an http runtime GraphQL URL")
+            .to_owned();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let (held_tx, held_rx) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let Ok((client, _)) = accepted else { break };
+                        connections.spawn(forward(client, upstream.clone(), held, held_tx.clone()));
+                    }
+                    _ = connections.join_next(), if !connections.is_empty() => {}
+                }
+            }
+        });
+        Self {
+            url,
+            held: held_rx,
+            task,
+        }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// The next held request, in arrival order.
+    pub async fn next(&mut self) -> HeldRequest {
+        tokio::time::timeout(std::time::Duration::from_secs(15), self.held.recv())
+            .await
+            .expect("a held runtime request")
+            .expect("proxy running")
+    }
+}
+
+impl Drop for GatedRuntimeProxy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn forward(
+    mut client: tokio::net::TcpStream,
+    upstream: String,
+    held: fn(&str) -> bool,
+    held_tx: tokio::sync::mpsc::UnboundedSender<HeldRequest>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    let (head_end, length) = loop {
+        let Ok(read) = client.read(&mut buffer).await else {
+            return;
+        };
+        if read == 0 {
+            return;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+            let length = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or_default();
+            break (end, length);
+        }
+    };
+    while request.len() < head_end + 4 + length {
+        let Ok(read) = client.read(&mut buffer).await else {
+            return;
+        };
+        if read == 0 {
+            return;
+        }
+        request.extend_from_slice(&buffer[..read]);
+    }
+    let head = String::from_utf8_lossy(&request[..head_end]).to_ascii_lowercase();
+    if !head.contains("accept: text/event-stream") {
+        let line_end = request.windows(2).position(|w| w == b"\r\n").unwrap() + 2;
+        request.splice(line_end..line_end, b"connection: close\r\n".iter().copied());
+        let body = String::from_utf8_lossy(&request[request.len() - length..]).into_owned();
+        if held(&body) {
+            let (release, released) = tokio::sync::oneshot::channel();
+            if held_tx.send(HeldRequest { body, release }).is_err() || released.await.is_err() {
+                return;
+            }
+        }
+    }
+    let Ok(mut server) = tokio::net::TcpStream::connect(&upstream).await else {
+        return;
+    };
+    if server.write_all(&request).await.is_err() {
+        return;
+    }
+    let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+}

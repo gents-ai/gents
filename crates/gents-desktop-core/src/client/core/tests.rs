@@ -1632,9 +1632,11 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
     Ok(())
 }
 
-#[tokio::test]
-async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Result<()> {
-    let tmp = tempfile::tempdir()?;
+/// A desktop whose client key is the User of a served runtime it reaches over
+/// authenticated HTTP, with its observer stopped so only direct reads publish.
+async fn served_core_without_observer(
+    tmp: &tempfile::TempDir,
+) -> anyhow::Result<(Arc<ClientCore>, crate::test_fixtures::ServedRuntimeHome)> {
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(tmp.path().to_path_buf()),
@@ -1644,40 +1646,96 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
     );
     let observer = core.observer.lock().await.take().expect("observer");
     observer.shutdown().await;
-    let owner = core.node_identity.did().to_owned();
-    let access = gents::ConfigAccess::local(core.node_arc());
+    let runtime = crate::test_fixtures::ServedRuntimeHome::start_unpublished_for(Arc::new(
+        core.node_identity.clone(),
+    ))
+    .await;
+    runtime.publish_node(serde_json::json!({})).await;
+    Ok((core, runtime))
+}
+
+#[tokio::test]
+async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let (core, runtime) = served_core_without_observer(&tmp).await?;
+    runtime.connect(&core).await;
+    let owner = runtime.node_did().to_owned();
+    let agent = runtime.provision_agent().await;
+    let user = runtime.user_access();
+    gents::documents::write_inference_backend_document(
+        &user,
+        &serde_json::from_value(serde_json::json!({
+            "node_did": owner, "backend_id": "backend", "name": "Backend",
+            "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
+            "auth": {"kind": "unauthenticated"}
+        }))?,
+    )
+    .await?;
+    crate::client::mutations::upsert_inference_profile_on(
+        &user,
+        &serde_json::from_value(serde_json::json!({
+            "node_did": owner, "profile_id": "profile", "backend_id": "backend",
+            "model_name": "model"
+        }))?,
+    )
+    .await?;
+    core.save_agent(&serde_json::from_value(
+        runtime.agent_value(&agent, "profile"),
+    )?)
+    .await?;
+    let session_doc = runtime
+        .agent_session(&agent, "terminal-page", core.node_identity.did())
+        .await;
+    let agent_doc = runtime.agent_doc_id(&agent).await;
+    let agent_access = runtime.agent_access(&agent).await;
     let now = chrono::Utc::now().to_rfc3339();
     let mut docs = Vec::new();
     for id in ["older", "latest"] {
-        let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        let input = serde_json::json!({
             "request_id":id,"session_id":"terminal-page","node_did":owner,
-            "agent_did":"agent","purpose":"normal","content":"fixture",
-            "lifecycle_state":"completed","created_at":now,
-        }))?;
-        let result = access
-            .write(
-                "test.terminal_page.request",
-                &format!("mutation {{ create_AgentRequest(input:{input}) {{_docID}} }}"),
-            )
-            .await?;
-        docs.push(gents::store::graphql::created_doc_id(
-            &result,
-            "AgentRequest",
-        )?);
+            "requester_did":core.node_identity.did(),"agent_did":agent.agent_did,
+            "purpose":"normal","content":"fixture","lifecycle_state":"completed","created_at":now,
+        });
+        let (input, agent_doc, session_doc) = (&input, &agent_doc, &session_doc);
+        docs.push(
+            agent_access
+                .transact_write("test.terminal_page.request", |txn| {
+                    Box::pin(async move {
+                        let response = txn
+                            .execute_with_variables(
+                                "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) {_docID} }",
+                                &serde_json::json!({"input": input}),
+                            )
+                            .await?;
+                        let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                        txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
+                            .await?;
+                        txn.add_resource_relationship("AgentRequest", &doc, "session", "sessions", session_doc)
+                            .await?;
+                        Ok::<_, anyhow::Error>(doc)
+                    })
+                })
+                .await?,
+        );
     }
-    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "session_id":"terminal-page","node_did":owner,"agent_did":"agent",
-        "created_at":now,"observation":{"last_activity_at":now,"latest_request":{
+    let observation = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "last_activity_at":now,"latest_request":{
             "request_doc_id":docs[1],"request_id":"latest","lifecycle_state":"completed"
-        }}
+        }
     }))?;
-    access
+    agent_access
         .write(
             "test.terminal_page.session",
-            &format!("mutation {{ create_AgentSession(input:{input}) {{_docID}} }}"),
+            &format!(
+                "mutation {{ update_AgentSession(docID: \"{}\", input: {{observation: {observation}}}) {{_docID}} }}",
+                gents::store::graphql::escape_graphql_string(&session_doc)
+            ),
         )
         .await?;
-    core.refresh_node(&owner).await?;
+    assert!(matches!(
+        core.refresh_node(&owner).await?,
+        Some(StoreRefresh::Published { .. })
+    ));
     let first = core
         .refresh_local_request(&owner, "terminal-page", Some("latest"), None, &docs)
         .await?
@@ -1699,6 +1757,77 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         .request_row_by_doc_id(&docs[0])
         .is_some());
     core.shutdown().await?;
+    runtime.shutdown().await;
+    Ok(())
+}
+
+/// A direct refresh reports whether its read published or was superseded by
+/// a newer publication into the node, and a superseded read hands the node to
+/// the observer instead of reading it again.
+#[tokio::test]
+async fn direct_refresh_distinguishes_published_from_superseded_reads() -> anyhow::Result<()> {
+    use crate::test_fixtures::GatedRuntimeProxy;
+
+    let tmp = tempfile::tempdir()?;
+    let (core, runtime) = served_core_without_observer(&tmp).await?;
+    let mut proxy = GatedRuntimeProxy::start(runtime.graphql(), |body| {
+        body.contains("query DesktopSnapshot")
+    })
+    .await;
+    core.add_local_standard_peer_route_for_test(
+        "Served Runtime",
+        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+        runtime.node_did(),
+        proxy.url(),
+        &runtime.home_path().display().to_string(),
+    )
+    .await?;
+    let node = runtime.node_did().to_owned();
+
+    let refresh = tokio::spawn({
+        let (core, node) = (core.clone(), node.clone());
+        async move { core.refresh_node(&node).await }
+    });
+    proxy.next().await.release();
+    assert!(matches!(
+        refresh.await??,
+        Some(StoreRefresh::Published { .. })
+    ));
+    let _ = core.store.take_resync_requests();
+
+    let refresh = tokio::spawn({
+        let (core, node) = (core.clone(), node.clone());
+        async move { core.refresh_node(&node).await }
+    });
+    let held = proxy.next().await;
+    let newer = core
+        .store
+        .merge_observer_patch(crate::client::store::ClientStore::from_rows(
+            crate::client::store::ClientStoreRows {
+                sessions: vec![serde_json::from_value(serde_json::json!({
+                    "node_did": node, "session_id": "newer", "agent_did": "agent",
+                    "created_at": "2026-01-01T00:00:00Z",
+                }))?],
+                ..Default::default()
+            },
+        ));
+    held.release();
+    assert_eq!(
+        refresh.await??,
+        Some(StoreRefresh::Superseded { version: newer })
+    );
+    assert_eq!(
+        core.store.take_resync_requests(),
+        (false, vec![node.clone()])
+    );
+    assert!(core
+        .store
+        .snapshot()
+        .sessions
+        .iter()
+        .any(|session| session.session_id == "newer"));
+    core.shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 

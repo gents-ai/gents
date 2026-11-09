@@ -331,8 +331,48 @@ pub async fn load_session_goal_observation_state_in_txn(
     else {
         return Ok(SessionGoalObservationState::NoReadableSession);
     };
-    match rows_in_txn(txn, &session).await?.first() {
-        Some(row) => Ok(match verified(verifier, &session, row).await? {
+    session_goal_observation_state_in_txn(txn, verifier, &session).await
+}
+
+/// A client's goal state for its next message in `session_id`, read in one
+/// snapshot with the session row that scopes it. The client acts as
+/// `actor_did` until the session exists and as the session's requester after,
+/// so the requester scope and the goal state come from the same row rather
+/// than two reads of it.
+pub async fn load_client_session_goal_observation_state(
+    access: &ConfigAccess,
+    verifier: &dyn NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+) -> Result<SessionGoalObservationState> {
+    access
+        .transact_readonly("goal.read_client_observation", |txn| {
+            Box::pin(async move {
+                let Some(session) =
+                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await?
+                else {
+                    return Ok(SessionGoalObservationState::NoReadableSession);
+                };
+                anyhow::ensure!(
+                    session.session.requester_did.is_some(),
+                    "existing session has no requester provenance"
+                );
+                session_goal_observation_state_in_txn(txn, verifier, &session).await
+            })
+        })
+        .await
+}
+
+async fn session_goal_observation_state_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    verifier: &dyn NodeIdentity,
+    session: &SessionOwnerRow,
+) -> Result<SessionGoalObservationState> {
+    match rows_in_txn(txn, session).await?.first() {
+        Some(row) => Ok(match verified(verifier, session, row).await? {
             Some(observation) => SessionGoalObservationState::Observed(Box::new(observation)),
             None => SessionGoalObservationState::Unknown,
         }),

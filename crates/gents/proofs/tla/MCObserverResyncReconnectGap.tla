@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncReconnectGap ----
+EXTENDS ObserverResync
+
+====

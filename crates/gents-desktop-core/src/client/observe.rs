@@ -12,6 +12,7 @@ use super::core::sync_state::ClientSyncStateOwner;
 use super::query::load_node_snapshot_on;
 use super::store::ClientStore;
 
+mod delivery;
 mod projection_store;
 mod remote;
 use projection_store::RuntimeConnectionEvent;
@@ -22,6 +23,124 @@ pub use projection_store::{
 
 /// `RuntimeConnectionObservation.snapshotRetryDelayMs`.
 const SNAPSHOT_RETRY_DELAY: Duration = Duration::from_millis(250);
+
+/// `ObserverResync.Settlement` of a finished snapshot load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Settlement {
+    Published,
+    /// A publication into the node since the capture rejected the reload; the
+    /// store already shows newer rows, so the next load needs no back-off.
+    Superseded,
+    TransportFailed,
+    Denied,
+}
+
+impl Settlement {
+    /// The connection event the settlement reports, if any.
+    fn connection_event(self) -> Option<RuntimeConnectionEvent> {
+        match self {
+            Self::Published => Some(RuntimeConnectionEvent::SnapshotSucceeded),
+            Self::Superseded => None,
+            Self::TransportFailed => Some(RuntimeConnectionEvent::TransportFailed),
+            Self::Denied => Some(RuntimeConnectionEvent::PermissionDenied),
+        }
+    }
+}
+
+/// The loop's per-node `ObserverResync.Slot` fields other than `loading`
+/// (`Loads`) and `status` (the store's runtime connection).
+#[derive(Default)]
+struct Queue {
+    pending: BTreeSet<String>,
+    retry_at: BTreeMap<String, Instant>,
+    /// The source generation whose every root is armed, per node. A replaced
+    /// source has a new generation, so it is unarmed until its own notice.
+    armed: BTreeMap<String, u64>,
+}
+
+/// A connection notice from the node's current source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceNotice {
+    /// `ObserverResync.armed`.
+    Armed,
+    /// `ObserverResync.streamFailed`.
+    StreamFailed,
+    /// `ObserverResync.streamDenied`.
+    Denied,
+}
+
+impl SourceNotice {
+    /// The notice a source task's `event` is, by
+    /// `RuntimeConnectionObservation.armedAfter`; `None` for an event no
+    /// source task sends.
+    fn of(event: RuntimeConnectionEvent) -> Option<Self> {
+        match event {
+            RuntimeConnectionEvent::PermissionDenied => Some(Self::Denied),
+            _ if remote::armed_after(false, event) => Some(Self::Armed),
+            _ if !remote::armed_after(true, event) => Some(Self::StreamFailed),
+            _ => None,
+        }
+    }
+
+    /// Whether the node's in-flight load is aborted.
+    fn aborts_load(self) -> bool {
+        !matches!(self, Self::Armed)
+    }
+}
+
+impl Queue {
+    /// Applies `notice` from `node`'s source at `generation`. A denial also
+    /// clears the node's rows, as a denied load does.
+    fn notice(&mut self, store: &ObservedStore, node: &str, generation: u64, notice: SourceNotice) {
+        match notice {
+            SourceNotice::Armed => {
+                self.pending.insert(node.to_owned());
+                self.armed.insert(node.to_owned(), generation);
+            }
+            SourceNotice::StreamFailed => {
+                self.armed.remove(node);
+            }
+            SourceNotice::Denied => {
+                clear_node(store, node);
+                self.settle(node, Settlement::Denied, Instant::now());
+            }
+        }
+    }
+
+    /// `ObserverResync.startable` for `node`'s source at `generation`.
+    fn startable(&self, node: &str, generation: u64, loading: bool) -> bool {
+        self.pending.contains(node)
+            && !self.retry_at.contains_key(node)
+            && !loading
+            && self.armed.get(node) == Some(&generation)
+    }
+
+    /// `ObserverResync.settle`.
+    fn settle(&mut self, node: &str, settlement: Settlement, now: Instant) {
+        match settlement {
+            Settlement::Published => {}
+            Settlement::Superseded => {
+                self.pending.insert(node.to_owned());
+            }
+            Settlement::TransportFailed => {
+                self.pending.insert(node.to_owned());
+                self.retry_at.insert(node.to_owned(), now + SNAPSHOT_RETRY_DELAY);
+            }
+            Settlement::Denied => {
+                self.pending.remove(node);
+                self.retry_at.remove(node);
+                self.armed.remove(node);
+            }
+        }
+    }
+
+    /// A node no longer configured.
+    fn forget(&mut self, node: &str) {
+        self.pending.remove(node);
+        self.retry_at.remove(node);
+        self.armed.remove(node);
+    }
+}
 
 fn resync_retry_ready(retry_not_before: Option<Instant>, now: Instant) -> bool {
     retry_not_before.is_none_or(|deadline| now >= deadline)
@@ -161,8 +280,7 @@ pub fn spawn_observer(
     let task = tokio::spawn(async move {
         let mut sources = remote::Sources::default();
         let mut loads = Loads::default();
-        let mut pending = BTreeSet::<String>::new();
-        let mut retry_at = BTreeMap::<String, Instant>::new();
+        let mut queue = Queue::default();
         sources.reconcile(
             &configured_peers.records(),
             &capability,
@@ -171,7 +289,8 @@ pub fn spawn_observer(
             &metrics_for_task,
         );
         loop {
-            let wake = retry_at
+            let wake = queue
+                .retry_at
                 .values()
                 .copied()
                 .chain(sources.next_reprobe())
@@ -187,38 +306,26 @@ pub fn spawn_observer(
                         &notices, &store, &metrics_for_task);
                     for removed in previous.iter().filter(|node| !sources.entries.contains_key(*node)) {
                         clear_node(&store, removed);
-                        pending.remove(removed);
-                        retry_at.remove(removed);
+                        queue.forget(removed);
                     }
                     loads.cancel_stale(&sources);
                 }
                 notice = notice_rx.recv() => {
                     let Some(notice) = notice else { break; };
-                    if let Some(source) = sources.entries.get_mut(&notice.node).filter(|source| source.generation == notice.generation && !source.denied) {
-                        let event = notice.event;
-                        let armed = remote::armed_after(source.ready, event);
-                        source.ready = armed;
-                        match event {
-                            RuntimeConnectionEvent::PermissionDenied => {
-                                loads.cancel(&notice.node);
-                                clear_node(&store, &notice.node);
-                                pending.remove(&notice.node);
-                                retry_at.remove(&notice.node);
-                            }
-                            RuntimeConnectionEvent::TransportFailed => loads.cancel(&notice.node),
-                            _ => {}
+                    if let Some(generation) = sources.entries.get(&notice.node).filter(|source| source.generation == notice.generation && !source.denied).map(|source| source.generation) {
+                        let Some(kind) = SourceNotice::of(notice.event) else { continue; };
+                        if kind.aborts_load() {
+                            loads.cancel(&notice.node);
                         }
-                        sources.observe(&notice.node, event, &store, Instant::now(), &metrics_for_task);
-                        if armed {
-                            pending.insert(notice.node);
-                        }
+                        queue.notice(&store, &notice.node, generation, kind);
+                        sources.observe(&notice.node, notice.event, &store, Instant::now(), &metrics_for_task);
                     }
                 }
                 changed = resync_requests.changed() => {
                     if changed.is_err() { break; }
                     let (full, scopes) = store.take_resync_requests();
-                    if full { pending.extend(sources.entries.keys().cloned()); }
-                    pending.extend(scopes);
+                    if full { queue.pending.extend(sources.entries.keys().cloned()); }
+                    queue.pending.extend(scopes);
                 }
                 Some(joined) = loads.tasks.join_next(), if !loads.tasks.is_empty() => {
                     let load = match joined {
@@ -226,8 +333,7 @@ pub fn spawn_observer(
                         Err(error) => {
                             if let Some(node) = loads.forget(error.id()) {
                                 tracing::warn!(node_did = %node, error = %error, "runtime snapshot task failed");
-                                pending.insert(node.clone());
-                                retry_at.insert(node, Instant::now() + SNAPSHOT_RETRY_DELAY);
+                                queue.settle(&node, Settlement::TransportFailed, Instant::now());
                             }
                             continue;
                         }
@@ -236,17 +342,15 @@ pub fn spawn_observer(
                         continue;
                     }
                     let Load { node, captured, result, .. } = load;
-                    match result {
+                    let settlement = match result {
                         Ok(snapshot) => {
                             let rows = snapshot.row_count();
                             if store.replace_reloaded_snapshot_at_read(&captured, Some(&node), snapshot) {
-                                let event = remote::snapshot_event(remote::SnapshotOutcome::Succeeded);
-                                sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
                                 metrics_for_task.scope_reloads.fetch_add(1, Ordering::Relaxed);
                                 metrics_for_task.docs_fetched.fetch_add(rows as u64, Ordering::Relaxed);
+                                Settlement::Published
                             } else {
-                                pending.insert(node.clone());
-                                retry_at.insert(node, Instant::now() + SNAPSHOT_RETRY_DELAY);
+                                Settlement::Superseded
                             }
                         }
                         Err(error) => {
@@ -255,16 +359,16 @@ pub fn spawn_observer(
                             let event = remote::snapshot_event(remote::snapshot_outcome(&error));
                             if matches!(event, RuntimeConnectionEvent::PermissionDenied) {
                                 clear_node(&store, &node);
-                                sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
-                                pending.remove(&node);
-                                retry_at.remove(&node);
+                                Settlement::Denied
                             } else {
-                                sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
-                                pending.insert(node.clone());
-                                retry_at.insert(node, Instant::now() + SNAPSHOT_RETRY_DELAY);
+                                Settlement::TransportFailed
                             }
                         }
+                    };
+                    if let Some(event) = settlement.connection_event() {
+                        sources.observe(&node, event, &store, Instant::now(), &metrics_for_task);
                     }
+                    queue.settle(&node, settlement, Instant::now());
                 }
                 _ = async {
                     if let Some(deadline) = wake {
@@ -282,21 +386,21 @@ pub fn spawn_observer(
                     &metrics_for_task,
                 );
             }
-            retry_at.retain(|_, due| !resync_retry_ready(Some(*due), now));
-            let runnable: Vec<_> = pending
+            queue
+                .retry_at
+                .retain(|_, due| !resync_retry_ready(Some(*due), now));
+            let runnable: Vec<_> = queue
+                .pending
                 .iter()
                 .filter(|node| {
-                    !retry_at.contains_key(*node)
-                        && !loads.in_flight.contains_key(*node)
-                        && sources
-                            .entries
-                            .get(*node)
-                            .is_some_and(|source| source.ready)
+                    sources.entries.get(*node).is_some_and(|source| {
+                        queue.startable(node, source.generation, loads.in_flight.contains_key(*node))
+                    })
                 })
                 .cloned()
                 .collect();
             for node in runnable {
-                pending.remove(&node);
+                queue.pending.remove(&node);
                 if let Some(source) = sources.entries.get(&node) {
                     loads.start(node, source, &store);
                 }

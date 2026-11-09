@@ -45,73 +45,97 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         ClientCoreOptions::local_only(),
     )
     .await?;
-    let created = core
-        .node()
-        .execute(
-            r#"mutation {
-        session: create_AgentSession(input: {
-            session_id: "session-1", node_did: "did:test:amy", requester_did: null,
-            agent_did: "default", created_at: "2026-08-21T18:07:35Z"
-        }) { _docID }
-        request: create_AgentRequest(input: {
-            purpose: "normal", request_id: "request-1", node_did: "did:test:amy", agent_did: "default",
-            session_id: "session-1", content: "run it", lifecycle_state: "processing",
-            created_at: "2026-08-21T18:07:35Z"
-        }) { _docID }
-    }"#,
-        )
-        .await;
-    assert!(!created.has_errors(), "seed request: {:?}", created.errors);
-    let request_doc_id = created
-        .data
-        .as_ref()
-        .and_then(|value| value.get("request"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(|value| value.as_str())
-        .context("created request doc id")?;
-    let request_doc_id = gents::store::graphql::escape_graphql_string(request_doc_id);
-    let output = core.node().execute(&format!(r#"mutation {{
-        segment: create_AgentOutputSegment(input: {{
-            node_did: "did:test:amy", session_id: "session-1",
-            request_doc_id: "{request_doc_id}",
-            source: {{kind: "authored", key: "answer"}},
-            ordinal: 0,
-            writer: {{kind: "request_execution", execution_generation: "generation"}},
-            runs: [{{stream: 0, bytes: 8, declaration: {{block_index: 0, part_index: 0, payload: {{kind: "text"}}}}}}],
-            payload: "complete",
-            close: {{kind: "closed", outcome: "complete", segments: 1, stream_bytes: [8]}},
-            created_at: "2026-08-21T18:07:36Z"
-        }}) {{ _docID }}
-    }}"#)).await;
-    assert!(!output.has_errors(), "seed output: {:?}", output.errors);
-    let close_doc_id = output
-        .data
-        .as_ref()
-        .and_then(|v| v.get("segment"))
-        .and_then(|v| v.as_array())
-        .and_then(|v| v.first())
-        .and_then(|v| v.get("_docID"))
-        .and_then(|v| v.as_str())
-        .context("created close doc id")?;
-    let close_doc_id = gents::store::graphql::escape_graphql_string(close_doc_id);
-    let header = core.node().execute(&format!(r#"mutation {{
-        create_AgentMessage(input: {{
-            message_key: "session-1:2", session_id: "session-1", node_did: "did:test:amy",
-            request_doc_id: "{request_doc_id}",
-            publication: {{kind: "request_execution", execution_generation: "generation"}},
-            outcome: "complete", sequence: 2, role: "assistant", native_id: "assistant-2",
-            blocks: [{{type: "text", text: {{output: {{close_doc_id: "{close_doc_id}", stream: 0}}, presentation: {{kind: "full"}}}}}}],
-            created_at: "2026-08-21T18:07:36Z"
-        }}) {{ _docID }}
-    }}"#)).await;
-    assert!(!header.has_errors(), "seed header: {:?}", header.errors);
+    let user = core.node_identity().did().to_owned();
+    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+        Arc::new(core.node_identity().clone()),
+    )
+    .await;
+    runtime.publish_node(serde_json::json!({})).await;
+    runtime.connect(&core).await;
+    let node_did = runtime.node_did().to_owned();
+    core.save_backend(&serde_json::from_value(serde_json::json!({
+        "node_did": node_did, "backend_id": "backend", "name": "Backend",
+        "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
+        "auth": {"kind": "unauthenticated"}
+    }))?)
+    .await?;
+    core.save_inference_profile(&serde_json::from_value(serde_json::json!({
+        "node_did": node_did, "profile_id": "profile", "backend_id": "backend",
+        "model_name": "model"
+    }))?)
+    .await?;
+    let agent = runtime.provision_agent().await;
+    core.save_agent(&serde_json::from_value(
+        runtime.agent_value(&agent, "profile"),
+    )?)
+    .await?;
+    let session_doc = runtime.agent_session(&agent, "session-1", &user).await;
+    let agent_doc = runtime.agent_doc_id(&agent).await;
+    let (node, user, agent_did) = (&node_did, &user, &agent.agent_did);
+    let (session_doc, agent_doc) = (&session_doc, &agent_doc);
+    runtime
+        .agent_access(&agent)
+        .await
+        .transact_write("test.request_refresh.transcript", |txn| {
+            Box::pin(async move {
+                let create = |collection: &'static str, input: serde_json::Value| async move {
+                    let response = txn
+                        .execute_with_variables(
+                            &format!("mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{_docID}} }}"),
+                            &serde_json::json!({"input": input}),
+                        )
+                        .await?;
+                    gents::store::graphql::created_doc_id(&response, collection)
+                };
+                let request = create("AgentRequest", serde_json::json!({
+                    "purpose": "normal", "request_id": "request-1", "node_did": node,
+                    "requester_did": user, "agent_did": agent_did, "session_id": "session-1",
+                    "content": "run it", "lifecycle_state": "processing",
+                    "created_at": "2026-08-21T18:07:35Z"
+                }))
+                .await?;
+                txn.add_resource_relationship("AgentRequest", &request, "parent", "agents", agent_doc)
+                    .await?;
+                txn.add_resource_relationship("AgentRequest", &request, "session", "sessions", session_doc)
+                    .await?;
+                let child = |extra: serde_json::Value| {
+                    let mut value = serde_json::json!({
+                        "node_did": node, "requester_did": user, "session_id": "session-1",
+                        "session_doc_id": session_doc, "agent_did": agent_did,
+                        "creator_did": agent_did, "parent_linked": true,
+                        "request_doc_id": request, "created_at": "2026-08-21T18:07:36Z",
+                    });
+                    value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+                    value
+                };
+                let segment = create("AgentOutputSegment", child(serde_json::json!({
+                    "source": {"kind": "authored", "key": "answer"}, "ordinal": 0,
+                    "writer": {"kind": "request_execution", "execution_generation": "generation"},
+                    "runs": [{"stream": 0, "bytes": 8, "declaration": {"block_index": 0, "part_index": 0, "payload": {"kind": "text"}}}],
+                    "payload": "complete",
+                    "close": {"kind": "closed", "outcome": "complete", "segments": 1, "stream_bytes": [8]}
+                })))
+                .await?;
+                txn.add_resource_relationship("AgentOutputSegment", &segment, "parent", "sessions", session_doc)
+                    .await?;
+                let message = create("AgentMessage", child(serde_json::json!({
+                    "message_key": "session-1:2",
+                    "publication": {"kind": "request_execution", "execution_generation": "generation"},
+                    "outcome": "complete", "sequence": 2, "role": "assistant", "native_id": "assistant-2",
+                    "blocks": [{"type": "text", "text": {"output": {"close_doc_id": segment, "stream": 0}, "presentation": {"kind": "full"}}}]
+                })))
+                .await?;
+                txn.add_resource_relationship("AgentMessage", &message, "parent", "sessions", session_doc)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await?;
 
     core.refresh_store().await?;
     assert!(core.store().snapshot().transcript_messages.is_empty());
     assert!(core.store().snapshot().output_segments.is_empty());
-    core.refresh_local_request("did:test:amy", "session-1", Some("request-1"), None, &[])
+    core.refresh_local_request(&node_did, "session-1", Some("request-1"), None, &[])
         .await?;
     let refreshed = core.store().snapshot();
     assert!(refreshed.transcript_messages.is_empty());
@@ -120,11 +144,11 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .requests
         .iter()
         .any(|row| row.request_id == "request-1"));
-    let page = load_session_transcript_page(
-        core.node(),
+    let page = gents_desktop_core::client::load_session_transcript_page_on(
+        &runtime.user_access(),
         "session-1",
-        Some("did:test:amy"),
-        None,
+        Some(&node_did),
+        Some(user),
         None,
         Some(40),
     )
@@ -132,6 +156,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     assert_eq!(page.store.transcript_messages.len(), 1);
     assert_eq!(page.store.output_segments.len(), 1);
     Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
     Ok(())
 }
 

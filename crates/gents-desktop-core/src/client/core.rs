@@ -242,6 +242,33 @@ impl PairingCollectionStatus {
     }
 }
 
+/// How a direct refresh read settled (`ObserverResync.Settlement`). Both
+/// carry the store version after the refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreRefresh {
+    /// The read replaced its scope.
+    Published { version: u64 },
+    /// A newer publication into the scope rejected the read; the observer was
+    /// asked to read the scope again and owns its catch-up.
+    Superseded { version: u64 },
+}
+
+impl StoreRefresh {
+    fn at(published: bool, version: u64) -> Self {
+        if published {
+            Self::Published { version }
+        } else {
+            Self::Superseded { version }
+        }
+    }
+
+    pub fn version(self) -> u64 {
+        match self {
+            Self::Published { version } | Self::Superseded { version } => version,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum P2PHealthStatus {
     Healthy,
@@ -569,7 +596,10 @@ impl ClientCore {
         self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
     }
 
-    pub async fn refresh_store(&self) -> Result<u64> {
+    /// Reads the selected node, or every routed node, and publishes the read
+    /// through the store fence. A read superseded by a newer publication is
+    /// handed to the observer, which reads the node again.
+    pub async fn refresh_store(&self) -> Result<StoreRefresh> {
         let scoped = self.selected_node_did();
         let captured = self.store.capture_read();
         let records = self.sync_state.records();
@@ -602,19 +632,19 @@ impl ClientCore {
         for node_did in &denied {
             self.store.invalidate_node_after_denied_read(node_did);
         }
-        let version = self.store.projection_revision().store_version;
+        let refresh = StoreRefresh::at(published, self.store.projection_revision().store_version);
         tracing::debug!(
             target: "gents_desktop_core::replication",
-            version,
+            ?refresh,
             rows,
-            published,
             scoped = scoped.is_some(),
-            "desktop local replica snapshot refreshed"
+            "desktop runtime snapshot refreshed"
         );
-        Ok(version)
+        Ok(refresh)
     }
 
-    pub async fn refresh_node(&self, node_did: &str) -> Result<Option<u64>> {
+    /// [`Self::refresh_store`] for one node; `None` when `node_did` is blank.
+    pub async fn refresh_node(&self, node_did: &str) -> Result<Option<StoreRefresh>> {
         let node_did = node_did.trim();
         if node_did.is_empty() {
             return Ok(None);
@@ -624,34 +654,35 @@ impl ClientCore {
         let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
             self.node_identity.private_key_bytes(),
         )?;
-        let snapshot =
-            match load_node_scoped_snapshot_with_peer_records(node_did, &records, &capability)
-                .await
-            {
-                Ok(snapshot) => snapshot,
-                Err(error) => {
-                    self.observe_refresh_failure(node_did, &error);
-                    return Err(error);
-                }
-            };
+        let snapshot = match load_node_scoped_snapshot_with_peer_records(
+            node_did,
+            &records,
+            &capability,
+        )
+        .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.observe_refresh_failure(node_did, &error);
+                return Err(error);
+            }
+        };
         let rows = snapshot.row_count();
         let published =
             self.store
                 .replace_reloaded_snapshot_at_read(&captured, Some(node_did), snapshot);
         if !published {
             self.store.request_resync(Some(node_did));
-            return Ok(None);
         }
-        let version = self.store.projection_revision().store_version;
+        let refresh = StoreRefresh::at(published, self.store.projection_revision().store_version);
         tracing::debug!(
             target: "gents_desktop_core::replication",
             node_did,
-            version,
+            ?refresh,
             rows,
-            published,
-            "desktop refreshed agent projection from local replica"
+            "desktop refreshed node projection from its runtime"
         );
-        Ok(Some(version))
+        Ok(Some(refresh))
     }
 
     /// The observer owns runtime connection state: a refusal clears the

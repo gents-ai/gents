@@ -103,6 +103,34 @@ See `../README.md` for how this fits the broader formal-verification model.
   renewal reported as a transport failure), `NoEndpoint`,
   `StaleGeneration` and `EarlyReady`. Durations are not modeled: Lean
   `renewalStartMs` spaces renewals a full period after each completed arm.
+- `ObserverResync` — the desktop observer's delivery and resync loop for
+  runtime documents and the direct refresh beside it. A runtime write emits a
+  subscription event only after the stream is armed; the observer queues the
+  node, starts one load that captures the store fence, reads and publishes
+  through the fence; a direct refresh does the same once per user mutation.
+  `NoLostWrite`, `NoStaleCommit`, `NoReadWithoutReason`,
+  `EventualPublication` and `Convergence` hold when request events stay off
+  the reload fence, are scoped to their source node, a rejected load requeues
+  without back-off and a rejected refresh hands its node to the observer (Lean
+  `ClientDataPublication.acceptsReloadFor`, `ObserverResync`).
+  `NoReadWithoutReason` bounds hosted reads by batches of reasons to read, not
+  below them: with a lease renewal during every load the node is read back to
+  back. `Widen` adds loads whose first publication overwrites an unowned row
+  and moves every node's fence (Lean `reloadFootprint`,
+  `reload_converts_unowned_rows`); a widened load checks only its own node's
+  fence (`reloadCheck`). `PersistentWiden` is the footprint computed from the
+  raw snapshot: one node's steady widened publications reject every load of
+  another, with or without the 250 ms wait. `WidenedCheckAll` makes a widened
+  load check every scope, so another node's steady publications reject it
+  forever. `RejectDelay` restores the wait in the widened model and still
+  passes: the delay is a latency choice, not a guard.
+  `SustainedEvents` is the found livelock: one lease renewal during every
+  load, with `observe_request_event(None)` moving the fence every reload
+  checks, rejects every load forever and the node stays connecting with stale
+  rows. `CrossNode` is the same with another node's events. `ReconnectGap`
+  keeps the code before the fix without renewals as a regression guard for
+  arm-then-snapshot. `NodeScopeOnly`, `NoPublicationFence`, `NoEventQueue`,
+  `SnapshotBeforeArm` and `RefreshFallback` each break one remaining guard.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -227,6 +255,36 @@ violates `DenialObserved`, `BreakBeforeMake` and `EarlyReady` violate
 ./scripts/run-tlc.sh MCRuntimeConnectionEarlyReady
 ```
 
+For ObserverResync — the green model (two nodes, a renewal during every
+load on both, a write, a drop and a direct refresh per node) and the widened
+green model check clean; `ReconnectGap` and `RejectDelay` are passing
+diagnostics:
+```bash
+./scripts/run-tlc.sh MCObserverResync
+./scripts/run-tlc.sh MCObserverResyncWiden
+./scripts/run-tlc.sh MCObserverResyncReconnectGap
+./scripts/run-tlc.sh MCObserverResyncRejectDelay
+```
+
+Its ten diagnostics are EXPECTED to report violations: `SustainedEvents`,
+`CrossNode`, `NodeScopeOnly`, `PersistentWiden` and `WidenedCheckAll`
+violate `EventualPublication` and `Convergence`; `NoPublicationFence`,
+`NoEventQueue` and `SnapshotBeforeArm` violate `NoLostWrite`;
+`StaleCommit` violates `NoStaleCommit`; `RefreshFallback` violates
+`NoReadWithoutReason`:
+```bash
+./scripts/run-tlc.sh MCObserverResyncSustainedEvents
+./scripts/run-tlc.sh MCObserverResyncCrossNode
+./scripts/run-tlc.sh MCObserverResyncNodeScopeOnly
+./scripts/run-tlc.sh MCObserverResyncPersistentWiden
+./scripts/run-tlc.sh MCObserverResyncWidenedCheckAll
+./scripts/run-tlc.sh MCObserverResyncNoPublicationFence
+./scripts/run-tlc.sh MCObserverResyncNoEventQueue
+./scripts/run-tlc.sh MCObserverResyncSnapshotBeforeArm
+./scripts/run-tlc.sh MCObserverResyncStaleCommit
+./scripts/run-tlc.sh MCObserverResyncRefreshFallback
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -320,6 +378,20 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCRuntimeConnectionNoEndpoint.cfg` | as green, `NamedNoEndpoint = FALSE` | `NoEndpointNamed` intentionally VIOLATED: the peer loses its endpoint and reconcile leaves no status | 50 distinct states before counterexample; 111 generated | 4 | <1s |
 | `MCRuntimeConnectionStaleGeneration.cfg` | as green, `GenerationCheck = FALSE` | `StaleNoticeInert` intentionally VIOLATED: the replaced source's queued notice moves the new source's status | 220 distinct states before counterexample; 596 generated | 5 | <1s |
 | `MCRuntimeConnectionEarlyReady.cfg` | as green, `ArmBeforeReady = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: ready before any subscription is armed, snapshot, Connected | 909 distinct states before counterexample; 2,713 generated | 6 | <1s |
+| `MCObserverResync.cfg` | 2 nodes, `MaxWrites = 1`, `K = 1`, `MaxDrops = 1`, `MaxRefreshes = 1`, node-scoped events off the reload fence, immediate requeue, no refresh fallback, no widening | Passes `TypeOK`, `NoLostWrite`, `NoReadWithoutReason`, `NoStaleCommit`, `EventualPublication`, `Convergence` | 2,835,856 distinct states; 16,250,601 generated | 33 | 7min 5s |
+| `MCObserverResyncWiden.cfg` | 2 nodes, renewals during every load on both, each node's first publication widens (`MaxWidens = 1`), widened loads check their own node | Passes every invariant and property | 23,689 distinct states; 100,043 generated | 34 | 2s |
+| `MCObserverResyncRejectDelay.cfg` | `Widen` with the 250 ms wait after a rejected load | Passes every invariant and property: the wait is not a guard | 25,109 distinct states; 105,521 generated | 36 | 2s |
+| `MCObserverResyncSustainedEvents.cfg` | 1 node, renewals during every load, events touch every scope on the reload fence, 250 ms retry | `EventualPublication` and `Convergence` intentionally VIOLATED: Arm, Start, Write, Deliver, Read, Publish (rejected), Timer, then Start, Renew, Deliver, Read, Publish (rejected) forever | 118 distinct states; 229 generated | 17 | <1s |
+| `MCObserverResyncCrossNode.cfg` | 2 nodes, only `b` renews, events touch every scope | `EventualPublication` and `Convergence` intentionally VIOLATED for `a`: each of `b`'s events rejects `a`'s in-flight load | 10,322 distinct states; 33,989 generated | 38 | 1s |
+| `MCObserverResyncPersistentWiden.cfg` | 2 nodes, `a` renews and every publication of `a` widens, 250 ms retry | `EventualPublication` and `Convergence` intentionally VIOLATED for `b`: each of `a`'s widened publications rejects `b`'s in-flight load | 4,615 distinct states; 15,136 generated | 29 | <1s |
+| `MCObserverResyncWidenedCheckAll.cfg` | 2 nodes, `b` renews, `a`'s first publication widens, a widened load checks every scope | `EventualPublication` and `Convergence` intentionally VIOLATED for `a`: each of `b`'s publications rejects `a`'s widened load | 5,652 distinct states; 18,225 generated | 25 | <1s |
+| `MCObserverResyncReconnectGap.cfg` | 2 nodes, `MaxWrites = 2`, `MaxDrops = 2`, no renewals, the code before the fix | Passes every invariant and property: writes between a drop and its re-arm are read by the post-arm snapshot | 626,865 distinct states; 2,738,115 generated | 33 | 43s |
+| `MCObserverResyncNodeScopeOnly.cfg` | 1 node, node-scoped events still on the reload fence, immediate requeue | `EventualPublication` and `Convergence` intentionally VIOLATED: the node's own renewals reject each load | 112 distinct states; 220 generated | 17 | <1s |
+| `MCObserverResyncNoPublicationFence.cfg` | 1 node, publications do not fence reloads; `NoStaleCommit` unchecked | `NoLostWrite` intentionally VIOLATED: the observer publishes its newer read, then the older direct refresh publishes over it | 140 distinct states before counterexample; 253 generated | 11 | <1s |
+| `MCObserverResyncStaleCommit.cfg` | `NoPublicationFence` checking only `TypeOK` and `NoStaleCommit` | `NoStaleCommit` intentionally VIOLATED: the same older refresh replaces the newer published version | 118 distinct states before counterexample; 207 generated | 9 | <1s |
+| `MCObserverResyncNoEventQueue.cfg` | 1 node, a delivered event does not queue its node | `NoLostWrite` intentionally VIOLATED: a write after the snapshot read is delivered and never loaded | 21 distinct states before counterexample; 25 generated | 7 | <1s |
+| `MCObserverResyncSnapshotBeforeArm.cfg` | 1 node, the snapshot is queued before the streams arm | `NoLostWrite` intentionally VIOLATED: a write between the read and the arm has no event and no later load | 65 distinct states before counterexample; 102 generated | 7 | <1s |
+| `MCObserverResyncRefreshFallback.cfg` | 1 node, a rejected refresh reads again | `NoReadWithoutReason` intentionally VIOLATED: the observer's publication rejects the refresh, which reads its node a second time | 114 distinct states before counterexample; 176 generated | 9 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and
@@ -334,6 +406,10 @@ liveness rows checked `ReplyObserved` over the complete state space.
 The ten RuntimeConnectionTransport rows used TLC2 `2026.11.06.222357` (rev
 `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the
 green rows checked their temporal properties over the complete state space.
+
+The fourteen ObserverResync rows used TLC2 `2026.11.06.222357` (rev `d8fb231`)
+with Homebrew OpenJDK 25.0.2 on macOS arm64 and `-workers 2`; the liveness
+rows checked their temporal properties over the complete state space.
 
 ## PairingTransport derived requirements
 

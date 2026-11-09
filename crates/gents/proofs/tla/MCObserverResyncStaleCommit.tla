@@ -1,0 +1,4 @@
+---- MODULE MCObserverResyncStaleCommit ----
+EXTENDS ObserverResync
+
+====

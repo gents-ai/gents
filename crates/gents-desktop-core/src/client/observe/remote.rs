@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::store::config_client::{ConfigAccess, GraphqlEndpoint, TransactionFailure};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use super::{ObservedStore, ObserverMetrics, RuntimeConnectionEvent};
 use crate::client::SnapshotReadError;
 use gents::store::config_client::SubscriptionEnd;
-use crate::client::query::{is_transcript_content_collection, OBSERVED_COLLECTIONS};
+use crate::client::query::OBSERVED_COLLECTIONS;
 use crate::client::PeerRecord;
 
 /// One event of a source task (`RuntimeConnectionObservation.armedEvent` or
@@ -82,7 +82,6 @@ pub(super) fn renewal_start(started: Instant, arm: Duration, period: Duration) -
 pub(super) struct Source {
     pub endpoint: GraphqlEndpoint,
     pub generation: u64,
-    pub ready: bool,
     pub denied: bool,
     reprobe_at: Option<Instant>,
     abort: AbortHandle,
@@ -156,7 +155,6 @@ impl Sources {
         let denials = self.denials.get(node).copied().unwrap_or_default();
         if matches!(event, RuntimeConnectionEvent::PermissionDenied) {
             if let Some(source) = self.entries.get_mut(node) {
-                source.ready = false;
                 source.denied = true;
                 source.reprobe_at = Some(now + reprobe_delay(denials));
                 source.abort.abort();
@@ -240,7 +238,6 @@ impl Sources {
                 Source {
                     endpoint,
                     generation: current,
-                    ready: false,
                     denied: false,
                     reprobe_at: None,
                     abort: task.abort_handle(),
@@ -390,27 +387,7 @@ async fn arm(
         let metrics = metrics.clone();
         tasks.spawn(async move {
             while let Some(envelope) = stream.recv().await? {
-                let rows = envelope
-                    .get("data")
-                    .and_then(|data| data.get(collection))
-                    .and_then(serde_json::Value::as_array)
-                    .context("runtime subscription omitted selected root")?;
-                metrics
-                    .events_received
-                    .fetch_add(rows.len() as u64, Ordering::Relaxed);
-                if matches!(collection, "AgentToolControl" | "AgentToolControlClaim") {
-                    store.invalidate_projection(false);
-                } else if is_transcript_content_collection(collection) {
-                    store.invalidate_projection(
-                        collection == gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
-                    );
-                    metrics
-                        .transcript_invalidations
-                        .fetch_add(1, Ordering::Relaxed);
-                } else {
-                    store.observe_request_event(None);
-                    store.request_resync(Some(&node));
-                }
+                super::delivery::deliver(&store, &metrics, &node, collection, &envelope)?;
             }
             Ok::<_, anyhow::Error>(stream.end().unwrap_or(SubscriptionEnd::Completed))
         });
