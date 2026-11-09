@@ -328,9 +328,31 @@ const PER_CALL_TRAILING_FIELDS: [&str; 5] = [
     "max_tokens",
 ];
 
-pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
+/// A capture payload in block layout, with the extent of the fields that stay
+/// the same across the calls of a session.
+pub(crate) struct CaptureLayout {
+    pub(crate) json: String,
+    /// Length of the leading run of stable fields in `json`, through the
+    /// separator before the first `APPEND_GROWING_FIELDS` key. Zero when
+    /// that run is shorter than `CHUNK_MIN_SIZE`, where a block of its own
+    /// would cost more in manifest entries than it saves, or when no growing
+    /// field follows it.
+    stable_len: usize,
+}
+
+impl CaptureLayout {
+    /// A payload that has no stable fields to keep apart.
+    pub(crate) fn unsplit(json: String) -> Self {
+        Self {
+            json,
+            stable_len: 0,
+        }
+    }
+}
+
+pub(crate) fn capture_block_layout(value: &Value) -> Result<CaptureLayout> {
     let Value::Object(map) = super::canonical_json(value) else {
-        return Ok(super::canonical_json_string(value)?);
+        return Ok(CaptureLayout::unsplit(super::canonical_json_string(value)?));
     };
     let (trailing, rest): (Vec<_>, Vec<_>) = map
         .iter()
@@ -338,7 +360,9 @@ pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
     let (growing, stable): (Vec<_>, Vec<_>) = rest
         .into_iter()
         .partition(|(key, _)| APPEND_GROWING_FIELDS.contains(&key.as_str()));
-    let mut layout = String::from("{");
+    let first_growing = (!growing.is_empty()).then_some(stable.len());
+    let mut json = String::from("{");
+    let mut stable_len = 0;
     for (index, (key, field)) in stable
         .into_iter()
         .chain(growing)
@@ -346,14 +370,17 @@ pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
         .enumerate()
     {
         if index > 0 {
-            layout.push(',');
+            json.push(',');
         }
-        layout.push_str(&serde_json::to_string(key)?);
-        layout.push(':');
-        layout.push_str(&serde_json::to_string(field)?);
+        if first_growing == Some(index) && json.len() >= CHUNK_MIN_SIZE {
+            stable_len = json.len();
+        }
+        json.push_str(&serde_json::to_string(key)?);
+        json.push(':');
+        json.push_str(&serde_json::to_string(field)?);
     }
-    layout.push('}');
-    Ok(layout)
+    json.push('}');
+    Ok(CaptureLayout { json, stable_len })
 }
 
 pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
@@ -377,7 +404,25 @@ pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
 /// wherever it sits. The cut must not depend on whether the other payload
 /// repeats the string: a trace that starts retaining `effective_messages`
 /// would otherwise re-cut the whole history of the wire body once.
-pub(crate) fn chunk_capture_layout(payload: &str) -> Vec<ChunkedBlock> {
+///
+/// The stable fields of the layout (model, tool schemas and other request
+/// settings) end on a cut of their own for the same reason. Left to the
+/// rolling hash, whether they share a block with the opening messages depends
+/// on bytes the request does not control, such as the Agent DID in the system
+/// prompt: a session whose first cut falls past the tool schemas stores them
+/// again on every call that changes how its message list opens (#3605).
+pub(crate) fn chunk_capture_layout(layout: &CaptureLayout) -> Vec<ChunkedBlock> {
+    let (stable, rest) = layout.json.split_at(layout.stable_len);
+    let mut blocks = chunk_long_strings_apart(stable);
+    blocks.extend(chunk_long_strings_apart(rest));
+    if blocks.len() > MAX_MANIFEST_BLOCKS {
+        chunk_capture_body(&layout.json)
+    } else {
+        blocks
+    }
+}
+
+fn chunk_long_strings_apart(payload: &str) -> Vec<ChunkedBlock> {
     let mut blocks = Vec::new();
     let mut start = 0;
     for (value_start, value_end) in long_json_strings(payload) {
@@ -386,11 +431,7 @@ pub(crate) fn chunk_capture_layout(payload: &str) -> Vec<ChunkedBlock> {
         start = value_end;
     }
     blocks.extend(chunk_capture_body(&payload[start..]));
-    if blocks.len() > MAX_MANIFEST_BLOCKS {
-        chunk_capture_body(payload)
-    } else {
-        blocks
-    }
+    blocks
 }
 
 fn long_json_strings(encoded: &str) -> Vec<(usize, usize)> {
@@ -463,8 +504,18 @@ pub(crate) fn block_content_key(bytes: &[u8]) -> String {
 
 pub(crate) const MAX_MANIFEST_BLOCKS: usize = 10_000;
 pub(crate) const MAX_MANIFEST_HEIGHT: u8 = 8;
+/// The most entries a manifest node may hold; readers reject a larger node.
 pub(crate) const MANIFEST_FANOUT: usize = 32;
-const MANIFEST_MIN_GROUP: usize = 8;
+/// The fewest entries a group holds before a content boundary may close it.
+/// Appending a block rewrites the open tail group and one node per level
+/// above it, so the group size is what a call pays in manifest bytes on top
+/// of its new content. With a boundary at every second key a group averages
+/// five entries, and `MAX_MANIFEST_BLOCKS` leaves stay within
+/// `MAX_MANIFEST_HEIGHT` levels at four entries per group. Eight entries
+/// closing at every sixteenth key let a tail group reach ~24 entries, so a
+/// call's manifest bytes grew with the calls since that group last closed;
+/// short groups keep them flat for one more node per level (#3605).
+const MANIFEST_MIN_GROUP: usize = 4;
 pub(crate) const TREE_RESOLUTION_FUEL: usize =
     MAX_MANIFEST_BLOCKS * 2 + MAX_MANIFEST_HEIGHT as usize;
 
@@ -490,25 +541,43 @@ impl ManifestTree {
     }
 }
 
-pub(crate) fn manifest_groups(entries: &[ManifestEntry]) -> Vec<&[ManifestEntry]> {
+/// Splits one level of a manifest tree into the index ranges of its nodes,
+/// given each entry's boundary key: a leaf's content key, or for a node the
+/// `manifest_node_boundary_key` of its children. Boundary keys follow block
+/// content only, never a node's bytes, which carry the document IDs and
+/// commit CIDs of the session's scope; the shape of a payload's tree, and so
+/// the rows each call adds, then depends on its content alone (#3605).
+pub(crate) fn manifest_groups(boundary_keys: &[String]) -> Vec<std::ops::Range<usize>> {
     let mut groups = Vec::new();
     let mut start = 0;
-    for (index, entry) in entries.iter().enumerate() {
+    for (index, key) in boundary_keys.iter().enumerate() {
         let size = index + 1 - start;
-        let boundary = entry
-            .content_key
-            .as_bytes()
-            .last()
-            .is_some_and(|byte| *byte == b'0');
-        if size == MANIFEST_FANOUT || (size >= MANIFEST_MIN_GROUP && boundary) {
-            groups.push(&entries[start..=index]);
+        if size == MANIFEST_FANOUT || (size >= MANIFEST_MIN_GROUP && manifest_group_boundary(key)) {
+            groups.push(start..index + 1);
             start = index + 1;
         }
     }
-    if start < entries.len() {
-        groups.push(&entries[start..]);
+    if start < boundary_keys.len() {
+        groups.push(start..boundary_keys.len());
     }
     groups
+}
+
+/// The boundary key of a manifest node: a digest of its children's boundary
+/// keys, which are fixed-width hex digests.
+pub(crate) fn manifest_node_boundary_key(children: &[String]) -> String {
+    block_content_key(children.concat().as_bytes())
+}
+
+/// Whether a group may close after the entry with this boundary key: its
+/// last hex digit is even. The key is a digest of content, so the boundary
+/// follows content and a group survives an edit elsewhere in the payload.
+fn manifest_group_boundary(boundary_key: &str) -> bool {
+    boundary_key
+        .as_bytes()
+        .last()
+        .and_then(|digit| char::from(*digit).to_digit(16))
+        .is_some_and(|digit| digit % 2 == 0)
 }
 
 pub(crate) fn manifest_children(bytes: &[u8]) -> Result<Vec<ManifestEntry>> {
@@ -1364,7 +1433,9 @@ mod tests {
         let shared = layouts
             .each_ref()
             .map(|layout| chunk_capture_layout(layout));
-        let baseline = layouts.each_ref().map(|layout| chunk_capture_body(layout));
+        let baseline = layouts
+            .each_ref()
+            .map(|layout| chunk_capture_body(&layout.json));
         let unique_bytes = |payloads: &[Vec<ChunkedBlock>; 2]| {
             let mut unique = BTreeMap::new();
             for block in payloads.iter().flatten() {
@@ -1432,8 +1503,9 @@ mod tests {
     fn repeated_string_framing_cannot_exceed_the_existing_manifest_limit() {
         let text = deterministic_capture_text(CHUNK_MIN_SIZE);
         let payload = serde_json::to_string(&vec![&text; MAX_MANIFEST_BLOCKS / 2 + 1]).unwrap();
-        let chunks = chunk_capture_layout(&payload);
-        let baseline = chunk_capture_body(&payload);
+        let layout = CaptureLayout::unsplit(payload);
+        let chunks = chunk_capture_layout(&layout);
+        let baseline = chunk_capture_body(&layout.json);
         assert!(chunks.len() <= MAX_MANIFEST_BLOCKS);
         assert_eq!(
             chunks
@@ -1503,7 +1575,7 @@ mod tests {
         after["messages"].as_array_mut().unwrap().push(message(3));
 
         let layout = capture_block_layout(&after).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&layout).unwrap(), after);
+        assert_eq!(serde_json::from_str::<Value>(&layout.json).unwrap(), after);
         let fresh = |encode: fn(&Value) -> String| {
             let stored = chunk_capture_body(&encode(&before))
                 .into_iter()
@@ -1521,7 +1593,7 @@ mod tests {
                 .all(|fresh| *fresh)
         };
         assert!(
-            is_tail(&fresh(|value| capture_block_layout(value).unwrap())),
+            is_tail(&fresh(|value| capture_block_layout(value).unwrap().json)),
             "only trailing blocks may be fresh when the growing list is last"
         );
         assert!(
@@ -1529,6 +1601,202 @@ mod tests {
                 |value| super::super::canonical_json_string(value).unwrap()
             )),
             "canonical order re-cuts the stable fields that follow the growing list"
+        );
+    }
+
+    /// The provider bodies of a six-turn tool-using session whose system
+    /// prompt names its Agent by `did`: each turn posts once before its tool
+    /// call and once after it with the result in full; later turns replay that
+    /// result as a stub. Tool schemas and settings stay the same throughout.
+    fn session_bodies(did: &str) -> Vec<[Value; 2]> {
+        let tools = (0..10)
+            .map(|index| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": format!("tool_{index}"),
+                        "description": format!("{index}: {}", deterministic_capture_text(200)),
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut history = vec![json!({
+            "role": "system",
+            "content": format!(
+                "You are the {did} agent.\n\n{}",
+                deterministic_capture_text(1200)
+            ),
+        })];
+        let mut bodies = Vec::new();
+        for turn in 0..6 {
+            let body = |messages: &[Value]| json!({"model": "m", "stream": true, "tools": tools, "messages": messages});
+            let call = json!({"role": "assistant", "tool_calls": [{"id": format!("call-{turn}"),
+                "type": "function", "function": {"name": "tool_0", "arguments": "{}"}}]});
+            let result = |content: String| json!({"role": "tool", "tool_call_id": format!("call-{turn}"), "content": content});
+            history.push(
+                json!({"role": "user", "content": format!("turn {turn}: audit the next module")}),
+            );
+            let before_tool = body(&history);
+            let mut after_tool = history.clone();
+            after_tool.push(call.clone());
+            after_tool.push(result(format!(
+                "turn {turn} {}",
+                deterministic_capture_text(3000)
+            )));
+            bodies.push([before_tool, body(&after_tool)]);
+            history.push(call);
+            history.push(result(format!(
+                "[tool: tool_0, call_id: call-{turn}, 3007 bytes]"
+            )));
+            history.push(json!({"role": "assistant",
+                "content": format!("turn {turn} {}", deterministic_capture_text(2400))}));
+        }
+        bodies
+    }
+
+    /// Fresh block bytes each turn of `session_bodies(did)` stores under
+    /// `chunk`, and the byte offsets of its first call's cuts.
+    fn session_block_bytes(
+        did: &str,
+        chunk: fn(&CaptureLayout) -> Vec<ChunkedBlock>,
+    ) -> (Vec<usize>, Vec<usize>) {
+        let mut stored = std::collections::BTreeSet::new();
+        let mut cuts = Vec::new();
+        let fresh = session_bodies(did)
+            .iter()
+            .map(|calls| {
+                let mut fresh = 0;
+                for body in calls {
+                    let blocks = chunk(&capture_block_layout(body).unwrap());
+                    if cuts.is_empty() {
+                        cuts = blocks
+                            .iter()
+                            .scan(0, |end, block| {
+                                *end += block.bytes.len();
+                                Some(*end)
+                            })
+                            .collect();
+                    }
+                    for block in blocks {
+                        if stored.insert(block.content_key) {
+                            fresh += block.bytes.len();
+                        }
+                    }
+                }
+                fresh
+            })
+            .collect();
+        (fresh, cuts)
+    }
+
+    fn hash_cut_only(layout: &CaptureLayout) -> Vec<ChunkedBlock> {
+        chunk_capture_body(&layout.json)
+    }
+
+    /// Two Agent DIDs of the same length. Under rolling-hash cuts alone, the
+    /// first hosts a cut inside its own bytes in `session_bodies`, so the
+    /// leading block holding the tool schemas closes before the messages that
+    /// change; with the second that block runs on into them and the session
+    /// stores the tool schemas again (#3605).
+    const DID_HOSTING_A_CUT: &str = "did:key:z6Mkc6f3ac57944a531490cd39902d0f777715fd005efac9";
+    const ORDINARY_DID: &str = "did:key:z6Mk5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e";
+
+    #[test]
+    fn a_session_stores_the_same_blocks_whichever_did_its_prompt_names() {
+        let hosts_a_cut = |did: &str| {
+            let json = capture_block_layout(&session_bodies(did)[0][0])
+                .unwrap()
+                .json;
+            let at = json.find(did).unwrap();
+            let (_, cuts) = session_block_bytes(did, hash_cut_only);
+            cuts.iter().any(|cut| (at..at + did.len()).contains(cut))
+        };
+        assert_eq!(DID_HOSTING_A_CUT.len(), ORDINARY_DID.len());
+        assert!(hosts_a_cut(DID_HOSTING_A_CUT) && !hosts_a_cut(ORDINARY_DID));
+        assert_ne!(
+            session_block_bytes(DID_HOSTING_A_CUT, hash_cut_only).0,
+            session_block_bytes(ORDINARY_DID, hash_cut_only).0,
+            "rolling-hash cuts alone no longer make block storage depend on the DID, so these \
+             DIDs no longer reproduce #3605"
+        );
+
+        assert_eq!(
+            session_block_bytes(DID_HOSTING_A_CUT, chunk_capture_layout).0,
+            session_block_bytes(ORDINARY_DID, chunk_capture_layout).0,
+            "every turn must store the same block bytes whichever DID the prompt names"
+        );
+        let mut stable_blocks = None;
+        for did in [DID_HOSTING_A_CUT, ORDINARY_DID] {
+            for body in session_bodies(did).iter().flatten() {
+                let layout = capture_block_layout(body).unwrap();
+                assert!(layout.stable_len >= CHUNK_MIN_SIZE);
+                assert!(layout.json[layout.stable_len..].starts_with("\"messages\":"));
+                let (mut covered, mut stable) = (0, Vec::new());
+                for block in chunk_capture_layout(&layout) {
+                    if covered >= layout.stable_len {
+                        break;
+                    }
+                    covered += block.bytes.len();
+                    stable.push(block.content_key);
+                }
+                assert_eq!(
+                    covered, layout.stable_len,
+                    "{did}: the stable fields must end on a cut"
+                );
+                assert_eq!(
+                    stable_blocks.get_or_insert_with(|| stable.clone()),
+                    &stable,
+                    "{did}: the stable fields must keep their blocks on every call"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn appending_a_block_rewrites_one_short_group_per_manifest_level() {
+        const LEAVES: usize = 600;
+        fn levels(leaves: &[String]) -> Vec<Vec<Vec<String>>> {
+            let mut levels = Vec::new();
+            let mut keys = leaves.to_vec();
+            while keys.len() > 1 {
+                let groups = manifest_groups(&keys)
+                    .into_iter()
+                    .map(|range| keys[range].to_vec())
+                    .collect::<Vec<_>>();
+                keys = groups
+                    .iter()
+                    .map(|group| manifest_node_boundary_key(group))
+                    .collect();
+                levels.push(groups);
+            }
+            levels
+        }
+        let leaves = (0..LEAVES)
+            .map(|index| block_content_key(index.to_string().as_bytes()))
+            .collect::<Vec<_>>();
+        let (mut fresh_groups, mut fresh_entries) = (0, 0);
+        for len in 1..LEAVES {
+            let before = levels(&leaves[..len]);
+            let after = levels(&leaves[..=len]);
+            assert!(after.len() <= usize::from(MAX_MANIFEST_HEIGHT));
+            for (level, groups) in after.iter().enumerate() {
+                let fresh = groups
+                    .iter()
+                    .filter(|group| before.get(level).is_none_or(|old| !old.contains(group)))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    fresh.len(),
+                    1,
+                    "{len} leaves: an append must rewrite only the tail group of level {level}"
+                );
+                fresh_groups += 1;
+                fresh_entries += fresh[0].len();
+            }
+        }
+        assert!(
+            fresh_entries <= fresh_groups * MANIFEST_MIN_GROUP,
+            "a rewritten group must average at most {MANIFEST_MIN_GROUP} entries: \
+             {fresh_entries} entries in {fresh_groups} groups"
         );
     }
 
