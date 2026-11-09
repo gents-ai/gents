@@ -231,3 +231,66 @@ async fn stopped_budget_wait_finishes_without_waiting_for_unrelated_capacity() {
     assert_eq!(outcome.abandoned, 0);
     assert_eq!(budget.0.available_permits(), 1);
 }
+
+#[tokio::test]
+async fn embedded_run_holds_trials_to_the_process_ceiling() {
+    let (launching, pack) = launching("captured_rows_count").await;
+    let mut request = request(&launching, &pack, "embedded-ceiling");
+    one_slot(&mut request);
+    let trials = EMBEDDED_TRIAL_CEILING + 2;
+    request.trials_per_case = trials as u32;
+    request.concurrency = (EMBEDDED_TRIAL_CEILING * 4) as u32;
+    let frozen = prepare_run(&launching.access, &request, Isolation::Embedded)
+        .await
+        .unwrap();
+    let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
+    let executor = BudgetExecutor {
+        started,
+        active: 0.into(),
+        peak: 0.into(),
+    };
+    let recorder = DocumentRecorder::new(&launching.access);
+    let registry = CheckRegistry::builtin();
+    let opts = options();
+    let observe = async {
+        let mut held = Vec::new();
+        for _ in 0..EMBEDDED_TRIAL_CEILING {
+            held.push(starts.recv().await.unwrap());
+        }
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            executor.active.load(Ordering::SeqCst),
+            EMBEDDED_TRIAL_CEILING,
+            "no embedded trial starts beyond the ceiling while the others run"
+        );
+        for (_, release) in held {
+            release.send(()).unwrap();
+        }
+        for _ in EMBEDDED_TRIAL_CEILING..trials {
+            starts.recv().await.unwrap().1.send(()).unwrap();
+        }
+    };
+    let (outcome, ()) = tokio::join!(
+        execute_frozen(
+            &frozen,
+            &recorder,
+            &executor,
+            &registry,
+            CancellationToken::new(),
+            &opts
+        ),
+        observe,
+    );
+    assert_eq!(outcome.unwrap().completed, trials as u32);
+    assert_eq!(executor.peak.load(Ordering::SeqCst), EMBEDDED_TRIAL_CEILING);
+}
+
+#[test]
+fn trial_ceiling_holds_only_embedded_trials() {
+    assert_eq!(trial_ceiling(16, Isolation::Embedded), EMBEDDED_TRIAL_CEILING);
+    assert_eq!(trial_ceiling(2, Isolation::Embedded), 2);
+    assert_eq!(trial_ceiling(0, Isolation::Embedded), 1);
+    assert_eq!(trial_ceiling(16, Isolation::Process), 16);
+}

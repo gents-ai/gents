@@ -402,7 +402,7 @@ PYFINALPLAN
 BATCH_LOG="$EVAL_HOME/batch-$STAMP.log"
 FIRST_RUN_ID=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["runs"][0]["args"]; print(a[a.index("--run-id")+1])' "$PLAN")
 echo "saved batch plan: $PLAN" >&2
-echo "global active trial cap: $TRIAL_CONCURRENCY (floor($CONCURRENCY / $PER_TRIAL)); provider/background calls are not globally capped" >&2
+echo "requested active trial cap: $TRIAL_CONCURRENCY (floor($CONCURRENCY / $PER_TRIAL)); the eval runner holds embedded trials to its per-process ceiling; provider/background calls are not globally capped" >&2
 (cd "$EVAL_HOME/work" && exec "$GENTS" utils eval batch --plan "$PLAN" --concurrency "$TRIAL_CONCURRENCY" --home "$EVAL_HOME") >"$BATCH_LOG" 2>&1 &
 BATCH_PID=$!
 WATCH_COMMAND="$GENTS utils eval watch $FIRST_RUN_ID --home $EVAL_HOME"
