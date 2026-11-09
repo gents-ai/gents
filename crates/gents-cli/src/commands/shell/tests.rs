@@ -4944,11 +4944,13 @@ async fn choosing_a_profile_moves_only_that_agent() {
 fn the_key_set_survives_a_restart() {
     use super::prefs::{read_keys, save_keys};
     let home = tempfile::tempdir().unwrap();
-    assert_eq!(read_keys(home.path()), KeySet::Vim);
-    save_keys(home.path(), KeySet::Emacs).unwrap();
-    assert_eq!(read_keys(home.path()), KeySet::Emacs);
+    assert_eq!(read_keys(home.path()), KeySet::Regular);
+    for set in [KeySet::Vim, KeySet::Emacs, KeySet::Regular] {
+        save_keys(home.path(), set).unwrap();
+        assert_eq!(read_keys(home.path()), set);
+    }
     std::fs::write(home.path().join("shell.json"), "garbage").unwrap();
-    assert_eq!(read_keys(home.path()), KeySet::Vim);
+    assert_eq!(read_keys(home.path()), KeySet::Regular);
 }
 
 #[tokio::test]

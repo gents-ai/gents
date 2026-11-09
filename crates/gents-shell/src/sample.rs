@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use crate::app::{sample_chat, ChatLine, NOT_WIRED};
+use crate::keys::KeySet;
 use crate::source::{
     Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Discovered, Doc, FieldKind, Form,
     FormAct, FormAction, FormField, FormRef, Intent, Job, MenuAct, MenuRow, Prompt, PromptKind,
@@ -37,7 +38,7 @@ pub enum RowAction {
     /// A position in the menu's rows as the source read them.
     MenuRow(usize),
     NodeForm,
-    SwitchKeys,
+    UseKeys(KeySet),
     NotWired,
 }
 
@@ -98,6 +99,8 @@ pub enum MenuId {
     /// The source's question, as `Update::Ask` titles it.
     Ask,
     General,
+    /// The key sets to choose from.
+    KeySets,
     Developer,
     Experimental,
 }
@@ -127,6 +130,7 @@ impl MenuId {
             MenuId::More => "Actions",
             MenuId::Ask => "Question",
             MenuId::General => "General",
+            MenuId::KeySets => "Key set",
             MenuId::Developer => "Developer",
             MenuId::Experimental => "Experimental features",
         }
@@ -1100,6 +1104,7 @@ pub fn menu(id: MenuId) -> (&'static [SidebarRow], &'static str) {
         MenuId::More => (&[], " enter choose · esc back"),
         MenuId::Ask => (&[], " enter choose · esc cancel"),
         MenuId::General => (&[], " enter change · esc back"),
+        MenuId::KeySets => (&[], " enter use · esc back"),
     }
 }
 
@@ -1133,27 +1138,68 @@ pub fn empty(id: MenuId) -> &'static [&'static str] {
     }
 }
 
-pub const KEY_ROWS: &[(&str, &str, &str)] = &[
-    ("Normal and input modes", "i / esc", "always typing"),
-    ("Move between panes", "h / l, ctrl-w h/j/k/l", "ctrl-x o"),
-    ("Next or previous tab", "gt / gT", "ctrl-x n / ctrl-x p"),
-    ("Open a tab", ":tabnew", "ctrl-x t"),
-    ("Close the pane or tab", "ctrl-w q · :close", "ctrl-x 0"),
-    ("Toggle the sessions sidebar", "[ or ctrl-w [", "ctrl-x ["),
-    ("Toggle the right sidebar", "] or ctrl-w ]", "ctrl-x ]"),
-    ("Quick-jump bar", ": / ctrl-p", "alt-x / ctrl-x x"),
-    ("Slash commands", "/ while writing", "/"),
-    ("Search the focused pane", "/ in normal mode", "ctrl-s"),
-    ("Back one layer", "esc", "ctrl-g"),
-    ("Keys overlay", "?", "ctrl-x ?"),
-    (
-        "Scroll the focused pane",
-        "j/k · pgup/pgdn",
-        "ctrl-n/p · pgup/pgdn",
-    ),
-    ("Send, or stop the turn", "enter · s", "enter · ctrl-c"),
-    ("Quit", ":q then enter", "ctrl-x ctrl-c"),
-    ("ctrl-c", "clears, or says how to quit", ""),
+/// The keys overlay's rows for `set`: what each does, then its keys.
+pub fn key_rows(set: KeySet) -> &'static [(&'static str, &'static str)] {
+    match set {
+        KeySet::Regular => REGULAR_KEYS,
+        KeySet::Vim => VIM_KEYS,
+        KeySet::Emacs => EMACS_KEYS,
+    }
+}
+
+const REGULAR_KEYS: &[(&str, &str)] = &[
+    ("Send, or stop the turn", "enter · ctrl-c"),
+    ("Back one layer", "esc"),
+    ("Quick-jump bar", "ctrl-p"),
+    ("Slash commands", "/"),
+    ("Keys overlay", "? on an empty box · /help"),
+    ("Search the focused pane", "ctrl-f, up/down for matches"),
+    ("Move between panes", "ctrl-o"),
+    ("Open a tab", "ctrl-t"),
+    ("Next or previous tab", "ctrl-pgdn / ctrl-pgup"),
+    ("Close the tab", "ctrl-p, then Close tab"),
+    ("Toggle the sessions sidebar", "ctrl-b"),
+    ("Toggle the right sidebar", "ctrl-r"),
+    ("Scroll the focused pane", "up/down · pgup/pgdn"),
+    ("Quit", "ctrl-q"),
+    ("ctrl-c", "clears, or says how to quit"),
+];
+
+const VIM_KEYS: &[(&str, &str)] = &[
+    ("Normal and input modes", "i / esc"),
+    ("Move between panes", "h / l, ctrl-w h/j/k/l"),
+    ("Next or previous tab", "gt / gT"),
+    ("Open a tab", ":tabnew"),
+    ("Close the pane or tab", "ctrl-w q · :close"),
+    ("Toggle the sessions sidebar", "[ or ctrl-w ["),
+    ("Toggle the right sidebar", "] or ctrl-w ]"),
+    ("Quick-jump bar", ": / ctrl-p"),
+    ("Slash commands", "/ while writing"),
+    ("Search the focused pane", "/ in normal mode"),
+    ("Back one layer", "esc"),
+    ("Keys overlay", "?"),
+    ("Scroll the focused pane", "j/k · pgup/pgdn"),
+    ("Send, or stop the turn", "enter · s"),
+    ("Quit", ":q then enter"),
+    ("ctrl-c", "clears, or says how to quit"),
+];
+
+const EMACS_KEYS: &[(&str, &str)] = &[
+    ("Move between panes", "ctrl-x o"),
+    ("Next or previous tab", "ctrl-x n / ctrl-x p"),
+    ("Open a tab", "ctrl-x t"),
+    ("Close the pane or tab", "ctrl-x 0"),
+    ("Toggle the sessions sidebar", "ctrl-x ["),
+    ("Toggle the right sidebar", "ctrl-x ]"),
+    ("Quick-jump bar", "alt-x / ctrl-x x"),
+    ("Slash commands", "/"),
+    ("Search the focused pane", "ctrl-s"),
+    ("Back one layer", "ctrl-g"),
+    ("Keys overlay", "ctrl-x ?"),
+    ("Scroll the focused pane", "ctrl-n/p · pgup/pgdn"),
+    ("Send, or stop the turn", "enter · ctrl-c"),
+    ("Quit", "ctrl-x ctrl-c"),
+    ("ctrl-c", "clears, or says how to quit"),
 ];
 
 pub const DIFF_BACK_ROW: &str = " esc back to files";

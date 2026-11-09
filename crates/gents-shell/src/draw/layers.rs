@@ -12,11 +12,11 @@ use crate::app::layers::{Layer, LayerKind};
 use crate::app::App;
 use crate::jump;
 use crate::keys::KeySet;
-use crate::layout::{keys_rows_area, layer_rect, KEYS_FULL_W};
-use crate::sample::{note, MenuId, SidebarRow, Tone, KEY_ROWS, PICKER_FOOTER};
+use crate::layout::{keys_rows_area, layer_rect};
+use crate::sample::{key_rows, note, MenuId, SidebarRow, Tone, PICKER_FOOTER};
 
 const KEYS_FOOTNOTE: &str = "Sample bindings to react to. Switch sets from the jump bar.";
-const KEYS_FOOTNOTE_VIM: &str = "Sample bindings to react to. Switch sets from the jump bar. \
+const KEYS_FOOTNOTE_WORD: &str = "Sample bindings to react to. Switch sets from the jump bar. \
     While writing, ctrl-w deletes a word.";
 const PROMPT_W: u16 = 3;
 const JUMP_FOOTER: &str = " enter jump · ctrl-n/ctrl-p move · esc back";
@@ -148,38 +148,33 @@ fn draw_jump(app: &App, layer: &Layer, rect: Rect, focused: bool, buf: &mut Buff
     }
 }
 
-fn key_row(both: bool, set: KeySet, (name, vim, emacs): (&str, &str, &str)) -> String {
-    if both {
-        return format!("{name:<34}{vim:<22}{emacs}");
-    }
-    let active = match set {
-        KeySet::Emacs if !emacs.is_empty() => emacs,
-        _ => vim,
-    };
-    format!("{name:<28}{active}")
+fn key_row(name: &str, keys: &str) -> String {
+    format!("{name:<28}{keys}")
 }
 
+/// Only the key set in use, so its people read their keys and no one else's.
 fn draw_keys(app: &App, layer: &Layer, rect: Rect, focused: bool, buf: &mut Buffer) {
     pane_box(buf, rect, "Keys", focused);
     let rows = keys_rows_area(rect);
-    let (both, set) = (rect.width >= KEYS_FULL_W, app.keymap.set());
+    let set = app.keymap.set();
     let width = usize::from(rows.width);
 
-    let header = key_row(both, set, ("", "vim", "emacs"));
+    let header = key_row("", set.name());
     buf.set_stringn(rows.x, rows.y - 2, header, width, theme::tone(Tone::Label));
 
+    let keys = key_rows(set);
     let first = layer
         .selected
-        .min(KEY_ROWS.len().saturating_sub(usize::from(rows.height)));
-    for (&row, y) in KEY_ROWS[first..].iter().zip(rows.top()..rows.bottom()) {
-        let text = key_row(both, set, row);
+        .min(keys.len().saturating_sub(usize::from(rows.height)));
+    for (&(name, keys), y) in keys[first..].iter().zip(rows.top()..rows.bottom()) {
+        let text = key_row(name, keys);
         buf.set_stringn(rows.x, y, text, width, theme::tone(Tone::Plain));
     }
 
     let footnote = Rect::new(rows.x, rows.bottom(), rows.width, 2);
     let text = match set {
-        KeySet::Vim => KEYS_FOOTNOTE_VIM,
         KeySet::Emacs => KEYS_FOOTNOTE,
+        KeySet::Regular | KeySet::Vim => KEYS_FOOTNOTE_WORD,
     };
     Paragraph::new(text)
         .style(theme::tone(Tone::Label))

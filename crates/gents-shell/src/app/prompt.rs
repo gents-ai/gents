@@ -91,12 +91,12 @@ impl App {
         first.filter(|_| self.focus == Pane::Agent)
     }
 
-    /// `enter` accepts in vim's normal mode, and in emacs from an empty box.
+    /// `enter` accepts in vim's normal mode, and elsewhere from an empty box.
     pub(super) fn enter_accepts(&self) -> bool {
         self.shown_prompt().is_some()
             && match self.keymap.set() {
                 KeySet::Vim => self.ctx() == KeyCtx::Normal,
-                KeySet::Emacs => {
+                KeySet::Regular | KeySet::Emacs => {
                     self.ctx() == KeyCtx::Input && self.tabs[self.active].input.is_empty()
                 }
             }
@@ -119,7 +119,9 @@ impl App {
             }
             Answer::Reply | Answer::Choose { .. } => match self.keymap.set() {
                 KeySet::Vim => self.mode = Mode::Input,
-                KeySet::Emacs => self.notice = Some("type your reply".to_string()),
+                KeySet::Regular | KeySet::Emacs => {
+                    self.notice = Some("type your reply".to_string());
+                }
             },
         }
     }
@@ -169,7 +171,7 @@ mod tests {
     use std::sync::mpsc::Receiver;
 
     use crate::app::{App, Mode, Tab};
-    use crate::keys::KeySet::{self, Emacs, Vim};
+    use crate::keys::KeySet::{self, Emacs, Regular, Vim};
     use crate::sample::Tone;
     use crate::source::{Answer, Intent, Prompt, PromptKind, Update};
     use crate::testing::{connected, find, numbered, press, screen, sent, type_text};
@@ -337,14 +339,14 @@ mod tests {
 
     #[test]
     fn a_typed_reply_goes_to_the_prompt_not_a_turn() {
-        for set in [Vim, Emacs] {
+        for set in [Regular, Vim, Emacs] {
             let question = prompt("q1", choose(&["yes", "no"], true, false), false);
             let (mut app, intended) = showing(set, vec![question]);
             assert!(find(&screen(&app), "answer the prompt above").is_some());
             press(&mut app, "enter");
             match set {
                 Vim => assert_eq!(app.mode, Mode::Input),
-                Emacs => assert_eq!(app.notice.as_deref(), Some("type your reply")),
+                Regular | Emacs => assert_eq!(app.notice.as_deref(), Some("type your reply")),
             }
             type_text(&mut app, "1");
             press(&mut app, "enter");

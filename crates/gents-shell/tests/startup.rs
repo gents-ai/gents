@@ -13,7 +13,7 @@ fn run(args: &[&str]) -> Output {
 fn assert_usage_error(out: &Output) {
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("--keys vim|emacs"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--keys regular|vim|emacs"));
 }
 
 #[test]

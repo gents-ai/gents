@@ -32,7 +32,7 @@ fn clicks_reach_the_app() {
         let (row, column) = (row + 1, column + 1);
         s.send(&format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m"));
     };
-    let s = Shell::start(&[], 36, 132);
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["sample data", "Sessions"]);
     click(&s, 6, 5);
     s.wait_for_all(&["Reviewer · auth", "Triage · inbox", "NORMAL"]);
@@ -52,7 +52,7 @@ fn clicks_reach_the_app() {
 /// A real bracketed paste: one badge in the box, one message in the chat, its lines kept.
 #[test]
 fn a_bracketed_paste_is_one_message() {
-    let s = Shell::start(&[], 36, 132);
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["sample data", "INPUT", "Message Engineer"]);
     s.send("\x1b[200~first line\n\n    second line\x1b[201~");
     s.wait_for_all(&["[Pasted text #1 +3 lines]"]);
@@ -67,7 +67,7 @@ fn a_bracketed_paste_is_one_message() {
 
 #[test]
 fn vim_flow() {
-    let s = Shell::start(&[], 36, 132);
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["sample data", "INPUT", "Message Engineer", "Sessions"]);
 
     s.send("hello");
@@ -222,7 +222,7 @@ fn emacs_flow() {
 
 #[test]
 fn vim_ctrl_w_deletes_a_word_while_writing_and_is_a_chord_in_normal_mode() {
-    let s = Shell::start(&[], 36, 132);
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["INPUT"]);
     s.send("hello there");
     s.wait_for_all(&["> hello there"]);
@@ -240,7 +240,7 @@ fn vim_ctrl_w_deletes_a_word_while_writing_and_is_a_chord_in_normal_mode() {
 
 #[test]
 fn vim_esc_and_a_key_in_one_write_act_as_two_keys() {
-    let s = Shell::start(&[], 36, 132);
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["INPUT"]);
     s.send("\x1b:");
     s.wait_for_all(&["Jump to", "JUMP"]);
@@ -274,12 +274,12 @@ fn capture_screens_for_review() {
         ("06-medium", 30, 104),
         ("07-narrow", 24, 70),
     ] {
-        let s = Shell::start(&[], rows, cols);
+        let s = Shell::start(&["--keys", "vim"], rows, cols);
         s.wait_for_all(&["sample data", "INPUT"]);
         shot(&s, name);
     }
 
-    let s = Shell::start(&[], 36, 138);
+    let s = Shell::start(&["--keys", "vim"], 36, 138);
     s.wait_for_all(&["INPUT"]);
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);
@@ -293,7 +293,7 @@ fn capture_screens_for_review() {
     s.wait_for_all(&["3 background"]);
     shot(&s, "15-sidebar-agents");
 
-    let s = Shell::start(&[], 36, 132);
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["INPUT"]);
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);

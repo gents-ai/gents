@@ -9,7 +9,7 @@ use crate::jump::{self, Target};
 use crate::keys::{Action, Dir, KeyCtx, KeySet};
 pub use crate::layout::LayerKind;
 use crate::layout::{keys_rows_area, layer_rect, sessions_can_dock, sidebar_can_dock};
-use crate::sample::{empty, menu, note, MenuId, RowAction, SidebarRow, Tone, KEY_ROWS};
+use crate::sample::{empty, key_rows, menu, note, MenuId, RowAction, SidebarRow, Tone};
 use crate::source::{Agent, Connection, FormRef, Intent, MenuAct, MenuRow};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,13 +35,23 @@ impl App {
         let rows = match (id, self.menus.get(&id), &self.connection) {
             (MenuId::NodeSettings | MenuId::AppSettings, ..) => rows.to_vec(),
             (MenuId::General, ..) => {
-                let set = match self.keymap.set() {
-                    KeySet::Vim => "vim",
-                    KeySet::Emacs => "emacs",
-                };
-                let keys = format!(" Keys      {set}");
-                vec![item(keys, Tone::Plain, RowAction::SwitchKeys)]
+                let keys = format!(" Keys      {}", self.keymap.set().name());
+                vec![item(
+                    keys,
+                    Tone::Plain,
+                    RowAction::OpenMenu(MenuId::KeySets),
+                )]
             }
+            (MenuId::KeySets, ..) => [KeySet::Regular, KeySet::Vim, KeySet::Emacs]
+                .into_iter()
+                .map(|set| {
+                    let (text, tone) = match set == self.keymap.set() {
+                        true => (format!(" ● {}", set.name()), Tone::Accent),
+                        false => (format!("   {}", set.name()), Tone::Plain),
+                    };
+                    item(text, tone, RowAction::UseKeys(set))
+                })
+                .collect(),
             (MenuId::Developer | MenuId::Experimental, ..) => notes(),
             (_, Some(Err(why)), _) | (_, None, Connection::Lost(why)) => {
                 vec![item(
@@ -257,6 +267,7 @@ impl App {
                 | MenuId::More
                 | MenuId::Ask
                 | MenuId::General
+                | MenuId::KeySets
                 | MenuId::Developer
                 | MenuId::Experimental,
             ) => {}
@@ -360,7 +371,10 @@ impl App {
                     Some(RowAction::OpenMenu(next)) => self.push_layer(LayerKind::Menu(next)),
                     Some(RowAction::MenuRow(row)) => self.run_row(id, row, false),
                     Some(RowAction::NodeForm) => self.open_form(FormRef::Node),
-                    Some(RowAction::SwitchKeys) => self.switch_keys(),
+                    Some(RowAction::UseKeys(set)) => {
+                        self.layers.pop();
+                        self.use_keys(set);
+                    }
                     Some(RowAction::NotWired) => self.not_wired(),
                     _ => {}
                 }
@@ -417,7 +431,7 @@ impl App {
             LayerKind::Keys => {
                 if let Some(rect) = rect {
                     let height = usize::from(keys_rows_area(rect).height);
-                    let max = KEY_ROWS.len().saturating_sub(height);
+                    let max = key_rows(self.keymap.set()).len().saturating_sub(height);
                     top.selected = stepped(top.selected, forward, max);
                 }
             }
@@ -446,7 +460,7 @@ mod tests {
     use super::*;
     use crate::app::{Mode, Pane};
     use crate::draw::theme;
-    use crate::keys::KeySet::{Emacs, Vim};
+    use crate::keys::KeySet::{Emacs, Regular, Vim};
     use crate::sample::{self, MENUS};
     use crate::source::{Doc, EditedChoice, FormRef, PackAct, Update};
     use crate::testing::{
@@ -811,7 +825,10 @@ mod tests {
     #[test]
     fn app_settings_saves_the_key_set() {
         let (mut app, intended) = connected(Vim, 132, 36);
-        let general = LayerKind::Menu(MenuId::General);
+        let (general, sets) = (
+            LayerKind::Menu(MenuId::General),
+            LayerKind::Menu(MenuId::KeySets),
+        );
         app.push_layer(APP);
         app.layers[0].selected = row_named(MenuId::AppSettings, "General");
         press(&mut app, "enter");
@@ -822,25 +839,32 @@ mod tests {
         assert!(find(&s, " enter change · esc back").is_some());
 
         press(&mut app, "enter");
+        assert_eq!(kinds(&app), [APP, general, sets]);
+        press(&mut app, "down down enter");
         assert_eq!(app.keymap.set(), Emacs);
         assert_eq!(drain(&intended), [Intent::SaveKeys(Emacs)]);
         assert_eq!(kinds(&app), [APP, general]);
         assert!(find(&screen(&app), " Keys      emacs").is_some());
-
-        press(&mut app, "enter");
-        assert_eq!(app.keymap.set(), Vim);
-        assert_eq!(drain(&intended), [Intent::SaveKeys(Vim)]);
     }
 
     #[test]
-    fn switching_keys_from_the_bar_saves_them() {
-        let (mut app, intended) = connected(Vim, 132, 36);
+    fn switching_keys_from_the_bar_lists_each_set() {
+        let (mut app, intended) = connected(Regular, 132, 36);
         press(&mut app, "ctrl-p");
         intended.try_iter().for_each(drop);
         type_text(&mut app, "Switch key set");
         press(&mut app, "enter");
-        assert_eq!(app.keymap.set(), Emacs);
-        assert_eq!(drain(&intended), [Intent::SaveKeys(Emacs)]);
+        assert_eq!(kinds(&app), [LayerKind::Menu(MenuId::KeySets)]);
+        let s = screen(&app);
+        for row in [" ● regular", "   vim", "   emacs", " enter use · esc back"] {
+            assert!(find(&s, row).is_some(), "{row}");
+        }
+        assert_eq!(drain(&intended), [], "the list reads nothing");
+
+        press(&mut app, "down enter");
+        assert_eq!(app.keymap.set(), Vim);
+        assert_eq!(drain(&intended), [Intent::SaveKeys(Vim)]);
+        assert!(app.layers.is_empty());
     }
 
     #[test]
@@ -1396,23 +1420,25 @@ mod tests {
 
     #[test]
     fn keys_overlay_at_each_width() {
-        for (set, open) in [(Vim, "esc ?"), (Emacs, "ctrl-x ?")] {
+        let sets = [
+            (Regular, "?", "ctrl-o"),
+            (Vim, "esc ?", "ctrl-w h/j/k/l"),
+            (Emacs, "ctrl-x ?", "ctrl-x o"),
+        ];
+        for (set, open, moves) in sets {
             let mut app = App::new(set, 132, 36);
             press(&mut app, open);
             assert_eq!(top(&app), LayerKind::Keys);
             let s = screen(&app);
-            for text in [
-                "Move between panes",
-                "ctrl-w h/j/k/l",
-                "ctrl-x o",
-                "vim",
-                "emacs",
-            ] {
-                assert!(find(&s, text).is_some(), "{text}");
+            for text in ["Move between panes", moves, set.name()] {
+                assert!(find(&s, text).is_some(), "{set:?} {text}");
+            }
+            for (other, _, others) in sets.iter().filter(|(other, ..)| *other != set) {
+                assert_eq!(find(&s, others), None, "{set:?} shows {other:?}'s keys");
             }
             assert!(find(&s, "Sample bindings to react to. Switch sets").is_some());
             assert_eq!(find(&s, "HELP"), Some((35, 1)));
-            assert_eq!(find(&s, "clears, or says how to quit"), Some((24, 61)));
+            assert!(find(&s, "clears, or says how to quit").is_some());
         }
 
         let mut app = App::new(Vim, 60, 16);
@@ -1440,9 +1466,29 @@ mod tests {
     }
 
     #[test]
+    fn a_question_mark_opens_the_keys_only_from_an_empty_box_in_regular() {
+        let mut app = App::new(Regular, 132, 36);
+        type_text(&mut app, "why?");
+        assert_eq!(app.tabs[0].input.text(), "why?");
+        assert!(app.layers.is_empty());
+        press(&mut app, "ctrl-u ?");
+        assert_eq!(kinds(&app), [LayerKind::Keys]);
+
+        let mut app = App::new(Emacs, 132, 36);
+        type_text(&mut app, "?");
+        assert_eq!(app.tabs[0].input.text(), "?");
+        assert!(app.layers.is_empty());
+    }
+
+    #[test]
     fn the_keys_hint_says_the_hidden_row_is_a_scroll_away() {
-        for (set, open, down) in [(Vim, "esc ?", "j"), (Emacs, "ctrl-x ?", "ctrl-n")] {
-            let mut app = App::new(set, 80, 23);
+        let sets = [
+            (Regular, "?", "down", 22),
+            (Vim, "esc ?", "j", 23),
+            (Emacs, "ctrl-x ?", "ctrl-n", 22),
+        ];
+        for (set, open, down, height) in sets {
+            let mut app = App::new(set, 80, height);
             press(&mut app, open);
             let last = "clears, or says how to quit";
             assert_eq!(find(&screen(&app), last), None);

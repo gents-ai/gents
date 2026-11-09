@@ -10,7 +10,6 @@ pub enum Effect {
     ShowSidebar(View),
     ShowDiff(Scope),
     Goal,
-    SwitchKeys,
     DismissPrompt,
     Quit,
 }
@@ -71,7 +70,7 @@ pub const COMMANDS: &[Command] = &[
     command(Some("help"), "/help", &[], "show the keys", Effect::OpenKeys),
     command(Some("quit"), "Quit", &["q", "q!", "qa", "wq"], "quit", Effect::Quit),
     slash_only("dismiss", "/dismiss", "dismiss the prompt above", Effect::DismissPrompt),
-    command(None, "Switch key set", &["vim", "emacs", "keys"], "vim to emacs or back", Effect::SwitchKeys),
+    command(None, "Switch key set", &["regular", "vim", "emacs", "keys"], "regular, vim or emacs", Effect::OpenMenu(MenuId::KeySets)),
     command(Some("diff"), "Sidebar: Diff", &["diff", "changes"], SIDEBAR_VIEW, Effect::ShowDiff(Scope::Session)),
     command(Some("workflows"), "Sidebar: This session's workflows", &["workflows"], SIDEBAR_VIEW, Effect::ShowSidebar(View::Workflows)),
     command(None, "Sidebar: Diff, working tree", &["tree", "worktree", "git"], SIDEBAR_VIEW, Effect::ShowDiff(Scope::Tree)),

@@ -18,7 +18,15 @@ use crate::source::Intent;
 /// One token of the `press` grammar. SHIFT follows uppercase as crossterm reports it
 /// (`crossterm-0.29.0/src/event/sys/unix/parse.rs:129-135`).
 fn key(token: &str) -> KeyEvent {
-    let named = match token {
+    if token == "shift-tab" {
+        return KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+    }
+    let (modifiers, text) = match token.split_once('-') {
+        Some(("ctrl", text)) if !text.is_empty() => (KeyModifiers::CONTROL, text),
+        Some(("alt", text)) if !text.is_empty() => (KeyModifiers::ALT, text),
+        _ => (KeyModifiers::NONE, token),
+    };
+    let named = match text {
         "esc" => Some(KeyCode::Esc),
         "enter" => Some(KeyCode::Enter),
         "tab" => Some(KeyCode::Tab),
@@ -35,16 +43,8 @@ fn key(token: &str) -> KeyEvent {
         _ => None,
     };
     if let Some(code) = named {
-        return KeyEvent::new(code, KeyModifiers::NONE);
+        return KeyEvent::new(code, modifiers);
     }
-    if token == "shift-tab" {
-        return KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
-    }
-    let (modifiers, text) = match token.split_once('-') {
-        Some(("ctrl", text)) if !text.is_empty() => (KeyModifiers::CONTROL, text),
-        Some(("alt", text)) if !text.is_empty() => (KeyModifiers::ALT, text),
-        _ => (KeyModifiers::NONE, token),
-    };
     let mut chars = text.chars();
     let (Some(c), None) = (chars.next(), chars.next()) else {
         panic!("unknown key token: {token}");

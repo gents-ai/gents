@@ -797,6 +797,7 @@ impl App {
             None if self.search.is_some() => "SEARCH",
             None if self.in_running() => "AGENTS",
             None => match (self.keymap.set(), self.mode) {
+                (KeySet::Regular, _) => "INPUT",
                 (KeySet::Emacs, _) => "EMACS",
                 (KeySet::Vim, Mode::Input) => "INPUT",
                 (KeySet::Vim, Mode::Normal) => "NORMAL",
@@ -1045,8 +1046,16 @@ impl App {
         }
     }
 
+    /// Regular has no key for the keys overlay but `?` before anything is typed, as chat apps do.
+    fn question_opens_keys(&self) -> bool {
+        self.keymap.set() == KeySet::Regular
+            && self.ctx() == KeyCtx::Input
+            && self.tabs[self.active].input.is_empty()
+    }
+
     fn act(&mut self, action: Action) {
         match action {
+            Action::Insert('?') if self.question_opens_keys() => self.push_layer(LayerKind::Keys),
             Action::Insert(_)
             | Action::Backspace
             | Action::Delete
@@ -1262,16 +1271,11 @@ impl App {
                 self.slash = Some(0);
             }
             Effect::DismissPrompt => self.dismiss(),
-            Effect::SwitchKeys => self.switch_keys(),
             Effect::Quit => self.quit = true,
         }
     }
 
-    fn switch_keys(&mut self) {
-        let set = match self.keymap.set() {
-            KeySet::Vim => KeySet::Emacs,
-            KeySet::Emacs => KeySet::Vim,
-        };
+    fn use_keys(&mut self, set: KeySet) {
         self.keymap = Keymap::new(set);
         self.activate_tab(self.active);
         self.emit(Intent::SaveKeys(set));
@@ -1308,7 +1312,7 @@ impl App {
         } else if self.diff.is_some() && self.focus == Pane::Sidebar {
             self.diff = None;
         } else if self.tabs[self.active].parent.is_some()
-            && (self.mode == Mode::Normal || self.keymap.set() == KeySet::Emacs)
+            && (self.mode == Mode::Normal || self.keymap.set() != KeySet::Vim)
         {
             self.step_out();
         } else {
@@ -1430,6 +1434,7 @@ impl App {
             None => self.mode == Mode::Input,
         };
         match (self.keymap.set(), self.ctx()) {
+            (KeySet::Regular, _) => "ctrl-q to quit",
             (KeySet::Emacs, _) => "ctrl-x ctrl-c to quit",
             (KeySet::Vim, KeyCtx::Normal | KeyCtx::Menu) => ":q then enter to quit",
             (KeySet::Vim, KeyCtx::Filter) if esc_twice => "esc twice, then :q then enter to quit",

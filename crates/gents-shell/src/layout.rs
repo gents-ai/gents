@@ -193,6 +193,7 @@ pub fn layer_rect(kind: LayerKind, area: Rect, depth: u16, on_top: bool) -> Rect
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keys::KeySet;
 
     const ON: Wanted = Wanted {
         sessions: true,
@@ -328,6 +329,9 @@ mod tests {
     fn keys_table_has_room_for_every_row_when_the_layer_is_full_size() {
         let rows = keys_rows_area(Rect::new(24, 5, 84, 23));
         assert_eq!(rows, Rect::new(27, 9, 80, 16));
-        assert_eq!(usize::from(rows.height), crate::sample::KEY_ROWS.len());
+        for set in [KeySet::Regular, KeySet::Vim, KeySet::Emacs] {
+            let keys = crate::sample::key_rows(set);
+            assert!(keys.len() <= usize::from(rows.height), "{set:?}");
+        }
     }
 }

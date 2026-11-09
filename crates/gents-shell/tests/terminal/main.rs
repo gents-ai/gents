@@ -41,11 +41,26 @@ fn assert_cooked(e: &Exit) {
 
 #[test]
 fn vim_quit_restores_the_terminal() {
-    let s = Shell::start(&[], 36, 132);
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["sample data", "INPUT"]);
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);
     s.send(":q\r");
+    let e = s.finish();
+    assert_eq!(e.code, 0);
+    assert_restored(&e);
+}
+
+/// Regular is what starts with no flag: `?` shows only its keys and `ctrl-q` quits.
+#[test]
+fn regular_is_the_default_and_quits_with_ctrl_q() {
+    let s = Shell::start(&[], 36, 132);
+    s.wait_for_all(&["sample data", "INPUT", "ctrl-o next pane"]);
+    s.send("?");
+    s.wait_for_all(&["HELP", "regular", "ctrl-pgdn / ctrl-pgup"]);
+    s.send("\x1b");
+    s.wait_gone("ctrl-pgdn / ctrl-pgup");
+    s.send("\x11");
     let e = s.finish();
     assert_eq!(e.code, 0);
     assert_restored(&e);
@@ -143,7 +158,7 @@ fn panic_restores_the_terminal() {
 
 #[test]
 fn resizes_through_too_small_and_quits() {
-    let s = Shell::start(&[], 36, 132);
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["sample data"]);
 
     s.resize(12, 40);

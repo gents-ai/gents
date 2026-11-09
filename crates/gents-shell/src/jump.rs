@@ -166,7 +166,7 @@ mod tests {
     use crate::app::Mode;
     use crate::commands::Effect;
     use crate::draw::theme;
-    use crate::keys::KeySet::{self, Emacs, Vim};
+    use crate::keys::KeySet::{self, Emacs, Regular, Vim};
     use crate::sample::{Tone, View};
     use crate::source::{MenuAct, MenuRow, Update};
     use crate::testing::{
@@ -571,7 +571,7 @@ mod tests {
         let mut app = App::new(Vim, 132, 36);
         press(&mut app, "esc :");
         type_text(&mut app, "switch");
-        press(&mut app, "enter");
+        press(&mut app, "enter down down enter");
         assert_eq!(app.keymap.set(), Emacs);
         assert_eq!(app.chip(), "EMACS");
         assert!(app.layers.is_empty());
@@ -581,16 +581,19 @@ mod tests {
 
         app.open_session(session_row("flaky"));
         press(&mut app, "alt-x");
-        type_text(&mut app, "emacs");
-        press(&mut app, "enter");
+        type_text(&mut app, "vim");
+        press(&mut app, "enter down enter");
         assert_eq!(app.keymap.set(), Vim);
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.chip(), "NORMAL");
 
-        let mut app = App::new(Emacs, 132, 36);
+        let mut app = App::new(Regular, 132, 36);
         press(&mut app, "esc");
         assert_eq!(app.mode, Mode::Normal);
-        app.run_effect(Effect::SwitchKeys);
+        press(&mut app, "ctrl-p");
+        type_text(&mut app, "switch");
+        press(&mut app, "enter down enter");
+        assert_eq!(app.keymap.set(), Vim);
         assert_eq!(app.mode, Mode::Input);
         assert_eq!(app.chip(), "INPUT");
     }

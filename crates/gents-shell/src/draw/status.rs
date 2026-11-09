@@ -28,10 +28,15 @@ fn layer_hints(kind: LayerKind, set: KeySet) -> &'static str {
         (LayerKind::Picker, _) => "each tab keeps its own agent, side by side",
         (LayerKind::Setup, _) => "a provider, its connection and a model make one backend",
         (LayerKind::Form, _) => "shift-tab back a field · enter on an action runs it",
+        (LayerKind::Menu(_), KeySet::Regular) => "esc back one layer · ctrl-o cycles layers",
         (LayerKind::Menu(_), KeySet::Vim) => "esc back one layer · ctrl-w h/j/k/l cycles layers",
         (LayerKind::Menu(_), KeySet::Emacs) => "ctrl-g back one layer · ctrl-x o cycles layers",
+        (LayerKind::Keys, KeySet::Regular) => "up/down scroll · esc close",
         (LayerKind::Keys, KeySet::Vim) => "j/k scroll · esc close",
         (LayerKind::Keys, KeySet::Emacs) => "ctrl-n/ctrl-p scroll · ctrl-g close",
+        (LayerKind::Sessions | LayerKind::Sidebar, KeySet::Regular) => {
+            "esc close · up/down move · enter open"
+        }
         (LayerKind::Sessions | LayerKind::Sidebar, KeySet::Vim) => {
             "esc close · j/k move · enter open"
         }
@@ -47,6 +52,7 @@ fn hints(app: &App) -> &'static str {
     }
     if let Some(search) = &app.search {
         return match (app.keymap.set(), search.committed) {
+            (KeySet::Regular, _) => "down next · up previous · enter keep · esc cancel",
             (KeySet::Vim, false) => "enter keep · esc cancel",
             (KeySet::Vim, true) => "n next · N previous · esc clear",
             (KeySet::Emacs, _) => "ctrl-s next · ctrl-r previous · enter end · ctrl-g cancel",
@@ -54,24 +60,28 @@ fn hints(app: &App) -> &'static str {
     }
     if app.in_running() {
         return match app.keymap.set() {
+            KeySet::Regular => "enter open · up/down move · esc back",
             KeySet::Vim => "enter open · j/k move · esc back",
             KeySet::Emacs => "enter open · ctrl-n/ctrl-p move · ctrl-g back",
         };
     }
     let stepped_in = app.tabs[app.active].parent.is_some();
-    if stepped_in && (app.mode == Mode::Normal || app.keymap.set() == KeySet::Emacs) {
+    if stepped_in && (app.mode == Mode::Normal || app.keymap.set() != KeySet::Vim) {
         return match app.keymap.set() {
+            KeySet::Regular => "esc step out · ctrl-p jump · ? keys",
             KeySet::Vim => "esc step out · : jump · ? keys",
             KeySet::Emacs => "ctrl-g step out · ctrl-x x jump · ctrl-x ? keys",
         };
     }
     if app.slash.is_some() {
         return match app.keymap.set() {
+            KeySet::Regular => "tab complete · enter run · esc close",
             KeySet::Vim => "/ at the start of a message opens commands · esc closes the list",
             KeySet::Emacs => "tab complete · enter run · ctrl-g close",
         };
     }
     match (app.keymap.set(), app.mode) {
+        (KeySet::Regular, _) => "ctrl-o next pane · ctrl-p jump · ? keys",
         (KeySet::Vim, Mode::Input) if stepped_in => "esc normal mode · / commands",
         (KeySet::Vim, Mode::Input) => "esc normal mode · / commands · enter send",
         (KeySet::Vim, Mode::Normal) => "h/l move · [ ] sidebars · : jump · ? keys",

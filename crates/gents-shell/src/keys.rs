@@ -2,15 +2,27 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySet {
+    /// Always typing, with one ctrl key per command, as most apps have them.
+    Regular,
     Vim,
     Emacs,
 }
 
-/// Sample copy names `esc`, which means back in both key sets; emacs people are shown theirs.
+impl KeySet {
+    pub fn name(self) -> &'static str {
+        match self {
+            KeySet::Regular => "regular",
+            KeySet::Vim => "vim",
+            KeySet::Emacs => "emacs",
+        }
+    }
+}
+
+/// Sample copy names `esc`, which means back in every key set; emacs people are shown theirs.
 pub fn in_key_set(set: KeySet, text: &str) -> String {
     match set {
-        KeySet::Vim => text.to_string(),
         KeySet::Emacs => text.replace("esc", "ctrl-g"),
+        _ => text.to_string(),
     }
 }
 
@@ -156,9 +168,12 @@ impl Keymap {
                 _ => Action::None,
             };
         }
+        let regular_search = self.set == KeySet::Regular && ctx == KeyCtx::SearchLine;
         match key.code {
             KeyCode::Esc => Action::Back,
             KeyCode::Enter => Action::Submit,
+            KeyCode::Down if regular_search => Action::SearchNext,
+            KeyCode::Up if regular_search => Action::SearchPrev,
             KeyCode::Down => Action::Next,
             KeyCode::Up => Action::Prev,
             KeyCode::PageUp if matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::PageUp,
@@ -218,16 +233,22 @@ impl Keymap {
     }
 
     fn control(&mut self, ctx: KeyCtx, code: KeyCode) -> Action {
-        let KeyCode::Char(c) = code else {
-            return Action::None;
+        let (vim, emacs) = (self.set == KeySet::Vim, self.set == KeySet::Emacs);
+        let regular = self.set == KeySet::Regular;
+        let c = match code {
+            KeyCode::Char(c) => c,
+            KeyCode::PageDown if regular => return Action::NextTab,
+            KeyCode::PageUp if regular => return Action::PrevTab,
+            _ => return Action::None,
         };
-        let emacs = self.set == KeySet::Emacs;
         let line = in_line(ctx);
         match c {
             'c' => Action::Interrupt,
             'g' => Action::Back,
             'n' => Action::Next,
-            'p' if !emacs && matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::Palette,
+            'p' if vim && matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::Palette,
+            'p' if regular && ctx == KeyCtx::Input => Action::Palette,
+            'p' if regular && ctx == KeyCtx::Menu => Action::OpenBar,
             'p' => Action::Prev,
             'a' if line => Action::Home,
             'e' if line => Action::End,
@@ -235,12 +256,18 @@ impl Keymap {
             'w' if !emacs && matches!(ctx, KeyCtx::Input | KeyCtx::SearchLine) => {
                 Action::DeleteWord
             }
-            'w' if !emacs => self.wait_for(Prefix::CtrlW),
+            'w' if vim => self.wait_for(Prefix::CtrlW),
             'x' if emacs => self.wait_for(Prefix::CtrlX),
             's' if ctx == KeyCtx::Filter => Action::Save,
             's' if emacs && ctx == KeyCtx::Input => Action::OpenSearch,
             's' if emacs && ctx == KeyCtx::SearchLine => Action::SearchNext,
             'r' if emacs && ctx == KeyCtx::SearchLine => Action::SearchPrev,
+            'f' if regular && ctx == KeyCtx::Input => Action::OpenSearch,
+            'o' if regular => Action::NextPane,
+            't' if regular => Action::NewTab,
+            'b' if regular => Action::ToggleSessions,
+            'r' if regular => Action::ToggleSidebar,
+            'q' if regular => Action::Quit,
             _ => Action::None,
         }
     }
@@ -282,7 +309,7 @@ impl Keymap {
 }
 
 /// A box that takes typed text. macOS terminals send readline keys for Cmd-Backspace and
-/// Cmd or Option with the arrows (Ghostty's defaults), so those edit it in both key sets.
+/// Cmd or Option with the arrows (Ghostty's defaults), so those edit it in every key set.
 pub fn in_line(ctx: KeyCtx) -> bool {
     matches!(ctx, KeyCtx::Input | KeyCtx::Filter | KeyCtx::SearchLine)
 }
@@ -351,6 +378,22 @@ mod tests {
         (Menu, "ctrl-u", A::None), (Menu, "alt-b", A::None), (Menu, "alt-f", A::None),
     ];
 
+    #[rustfmt::skip]
+    const REGULAR: &[(KeyCtx, &str, Action)] = &[
+        (Input, "x", A::Insert('x')), (Input, "?", A::Insert('?')), (Input, "/", A::Insert('/')), (Input, "enter", A::Submit), (Input, "esc", A::Back), (Input, "ctrl-c", A::Interrupt), (Input, "tab", A::Complete),
+        (Input, "ctrl-p", A::Palette), (Menu, "ctrl-p", A::OpenBar), (Filter, "ctrl-p", A::Prev), (Filter, "ctrl-n", A::Next),
+        (Input, "ctrl-f", A::OpenSearch), (Menu, "ctrl-f", A::None),
+        (SearchLine, "down", A::SearchNext), (SearchLine, "up", A::SearchPrev), (SearchLine, "enter", A::Submit), (SearchLine, "esc", A::Back), (SearchLine, "x", A::Insert('x')),
+        (Input, "ctrl-o", A::NextPane), (Menu, "ctrl-o", A::NextPane), (Filter, "ctrl-o", A::NextPane),
+        (Input, "ctrl-t", A::NewTab), (Input, "ctrl-pgdn", A::NextTab), (Input, "ctrl-pgup", A::PrevTab), (Menu, "ctrl-pgdn", A::NextTab),
+        (Input, "ctrl-b", A::ToggleSessions), (Input, "ctrl-r", A::ToggleSidebar), (Menu, "ctrl-b", A::ToggleSessions), (Menu, "ctrl-r", A::ToggleSidebar),
+        (Input, "ctrl-q", A::Quit), (Menu, "ctrl-q", A::Quit), (Filter, "ctrl-q", A::Quit),
+        (Input, "up", A::Prev), (Input, "down", A::Next), (Input, "pgup", A::PageUp), (Input, "pgdn", A::PageDown),
+        (Menu, "up", A::Prev), (Menu, "down", A::Next), (Menu, "enter", A::Submit), (Menu, "esc", A::Back), (Menu, "d", A::SecondAct), (Menu, ".", A::More), (Menu, ":", A::None), (Menu, "[", A::None),
+        (Input, "ctrl-a", A::Home), (Input, "ctrl-e", A::End), (Input, "ctrl-u", A::DeleteToStart), (Input, "ctrl-w", A::DeleteWord), (SearchLine, "ctrl-w", A::DeleteWord), (Input, "alt-b", A::WordLeft), (Input, "alt-f", A::WordRight),
+        (Filter, "ctrl-s", A::Save), (Filter, "shift-tab", A::CompleteBack), (Input, "ctrl-x", A::None), (Input, "alt-x", A::None), (Input, "ctrl-s", A::None),
+    ];
+
     /// Earlier keys of a sequence return `None`; the action comes from the last.
     fn check(set: KeySet, table: &[(KeyCtx, &str, Action)]) {
         for &(ctx, sequence, want) in table {
@@ -379,6 +422,11 @@ mod tests {
     #[test]
     fn emacs_table() {
         check(KeySet::Emacs, EMACS);
+    }
+
+    #[test]
+    fn regular_table() {
+        check(KeySet::Regular, REGULAR);
     }
 
     #[test]

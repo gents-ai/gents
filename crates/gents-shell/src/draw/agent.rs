@@ -34,7 +34,7 @@ pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
 
     let tab = &app.tabs[app.active];
     if tab.lines.is_empty() && tab.running.is_empty() && tab.prompts.is_empty() {
-        let typing = app.keymap.set() == KeySet::Emacs || app.mode == Mode::Input;
+        let typing = app.keymap.set() != KeySet::Vim || app.mode == Mode::Input;
         startup(area, sessions_docked, typing, buf);
     } else {
         let rows = app.visible_rows(Pane::Agent, app.conversation_rect(area));

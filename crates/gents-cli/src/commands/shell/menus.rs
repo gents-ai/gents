@@ -99,6 +99,7 @@ pub(super) async fn read_menu(
         | MenuId::More
         | MenuId::Ask
         | MenuId::General
+        | MenuId::KeySets
         | MenuId::Developer
         | MenuId::Experimental => Ok(Vec::new()),
         // Asked for by agent, which `read_profiles` knows.
