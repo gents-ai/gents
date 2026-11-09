@@ -2439,6 +2439,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "EnrollmentPendingRequests".into(),
         ));
     }
+    if !snapshot.client_sync_health_cases.is_empty() {
+        emitted.insert((
+            "client_sync_health_cases".into(),
+            "ClientSyncHealthCases".into(),
+        ));
+    }
     if !snapshot.pending_user_turn_cases.is_empty() {
         emitted.insert((
             "pending_user_turn_cases".into(),

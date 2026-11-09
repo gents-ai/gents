@@ -174,8 +174,8 @@ impl ClientCore {
                 &mut || checkpoint("saved_peer"),
             )
             .await;
-            let (initial_health, initial_database_sync, initial_database_sync_error) =
-                super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
+            let initial_health =
+                super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
             checkpoint("bootstrap_and_health");
             for status in peer_statuses {
                 if let Some(expected) = records
@@ -185,11 +185,7 @@ impl ClientCore {
                     sync_state.replace_peer(expected, status);
                 }
             }
-            sync_state.replace_database_observation(
-                initial_health,
-                initial_database_sync,
-                initial_database_sync_error,
-            );
+            sync_state.replace_transport_observation(initial_health);
             let observer = spawn_observer(
                 Arc::clone(&store),
                 sync_state.clone(),

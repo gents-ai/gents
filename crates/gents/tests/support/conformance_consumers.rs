@@ -1120,6 +1120,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_pending_request_satisfaction_matches_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "client::sync_projection::tests::generated_sync_health_cases_match_lean",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/sync_projection.rs",
+            module_path: "client::sync_projection::tests",
+            function: "generated_sync_health_cases_match_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::live_overlay::pending_user_turn_cases_match_lean_table",
             package: "gents",
             source_path: "crates/gents/tests/conformance/live_overlay.rs",

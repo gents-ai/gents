@@ -57,10 +57,10 @@ pub use registry::{
     REGISTRY_STALE_AFTER,
 };
 pub use templates::{
-    builtin_templates, combine_filters, compare_client_replicated_schema, decode_pairing_filters,
-    equality_filter, filter_conditions, read_client_replicated_schema, read_replicated_schema,
-    resolve_template, scope_filter, single_string_eq, to_replication_filters, Delivery, DidSource,
-    FilterPredicate, PairingFilters, Scope, ScopeTemplate, CLIENT_COLLECTIONS, CLIENT_TEMPLATE,
-    CLIENT_TO_RUNTIME_COLLECTIONS, NODE_DIRECTORY_COLLECTION,
+    builtin_templates, combine_filters, decode_pairing_filters, equality_filter, filter_conditions,
+    read_client_replicated_schema, read_replicated_schema, resolve_template, scope_filter,
+    single_string_eq, to_replication_filters, Delivery, DidSource, FilterPredicate, PairingFilters,
+    Scope, ScopeTemplate, CLIENT_COLLECTIONS, CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
+    NODE_DIRECTORY_COLLECTION,
 };
 pub use trait_def::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};

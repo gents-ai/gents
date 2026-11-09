@@ -20,7 +20,6 @@ use gents_protocol::network_token::EndpointRecord;
 use serde_json::Value;
 use tokio::time::timeout;
 
-use super::sync_state::RuntimeSchemaObservation;
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
 use projection::{
     assemble_durable_enrollment_documents, listing_assembly_requests, listing_revision_rows,
@@ -76,26 +75,6 @@ pub struct EnrollmentRequestResult {
 }
 
 impl ClientCore {
-    pub fn begin_runtime_schema_observation(
-        &self,
-        runtime_did: &str,
-        endpoint: &str,
-    ) -> Option<RuntimeSchemaObservation> {
-        self.sync_state
-            .begin_runtime_schema_observation(runtime_did, Some(endpoint))
-    }
-
-    pub async fn finish_runtime_schema_observation(
-        &self,
-        observation: &RuntimeSchemaObservation,
-        status: &Value,
-    ) -> Result<()> {
-        self.sync_state
-            .finish_runtime_schema_observation(&self.node, observation, status)
-            .await
-            .context("runtime cannot sync with this app")
-    }
-
     pub async fn request_status_enrollment(
         &self,
         status: &Value,
@@ -118,10 +97,6 @@ impl ClientCore {
             .filter(|token| !token.trim().is_empty())
             .context("server does not advertise authenticated status enrollment")?;
         let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
-        self.sync_state
-            .compare_runtime_schema(&self.node, &offer.owner_node_did, status)
-            .await
-            .context("refusing to enroll with an incompatible runtime")?;
         let _lifecycle = self.route_manager.lock().await;
         verify_enrollment_offer(&self.p2p, &self.node_identity, &offer).await?;
         confirm_network_admin_pin(&self.node, &offer).await?;

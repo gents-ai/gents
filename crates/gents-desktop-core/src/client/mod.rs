@@ -18,12 +18,10 @@ pub use core::{
     ChatRouteRefusal, ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
     ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
     EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
-    LocalHomeAccessError,
-    InferenceTarget, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
-    RefreshedRequestProjection, RetainedGoalSubmission, RuntimeSchemaObservation, StoreRefresh,
-    STUCK_THRESHOLD_ATTEMPTS,
+    InferenceTarget, LocalHomeAccessError, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
+    RefreshedRequestProjection, RetainedGoalSubmission, StoreRefresh, STUCK_THRESHOLD_ATTEMPTS,
 };
-pub use gents::P2pSyncStatusSnapshot;
+
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
@@ -55,4 +53,6 @@ pub use store::{
     session_turn_request, source_matches_node, ClientStore, ClientStoreRows, TaskRecentRuns,
     TranscriptView,
 };
-pub use sync_projection::{project_sync_health, SyncHealth, SyncHealthState};
+pub use sync_projection::{
+    project_sync_health, SyncHealth, SyncHealthCause, SyncHealthState, SyncNextAction,
+};
