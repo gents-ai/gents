@@ -7,8 +7,7 @@ namespace Conformance.Contracts
 open Conformance.ContractCases
 
 def hydrationRequest : FileInventory.Request :=
-  { key := "peer-1:session-1"
-  , peer := "peer-1"
+  { key := "inventory-1:session-1"
   , requester := "did:key:requester-1"
   , node := "did:key:node-1"
   , session := "session-1"
@@ -108,7 +107,6 @@ def accessStateName : CanonicalOutput.Hydration.AccessState → String
 def hydrationAccessJson (access : CanonicalOutput.Hydration.ProvenanceAccess) : String :=
   "{" ++ "\"key\":" ++ hydrationDocumentKeyJson access.key ++ "," ++
     "\"state\":" ++ jsonString (accessStateName access.state) ++ "," ++
-    "\"peer\":" ++ jsonString access.scope.peer ++ "," ++
     "\"requester\":" ++ jsonString access.scope.requester ++ "," ++
     "\"node\":" ++ jsonString access.scope.node ++ "," ++
     "\"session\":" ++ jsonString access.scope.session ++ "," ++
@@ -116,7 +114,6 @@ def hydrationAccessJson (access : CanonicalOutput.Hydration.ProvenanceAccess) : 
 
 def hydrationRequestJson (request : FileInventory.Request) : String :=
   "{" ++ "\"key\":" ++ jsonString request.key ++ "," ++
-    "\"peer\":" ++ jsonString request.peer ++ "," ++
     "\"requester\":" ++ jsonString request.requester ++ "," ++
     "\"node\":" ++ jsonString request.node ++ "," ++
     "\"session\":" ++ jsonString request.session ++ "," ++
@@ -202,7 +199,7 @@ def fileInventoryClosureCasesJson : String := jsonArray
       (deniedClosureInput ⟨.agentOutputSegment, 100⟩)
   , closureCaseJson "foreign_scope_evidence_rejected"
       { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
-          { observation with scope := { observation.scope with peer := "peer-foreign" } } }
+          { observation with scope := { observation.scope with requester := "did:key:requester-foreign" } } }
   , closureCaseJson "fork_copy_without_origin" hydrationForkCopyInput
   , closureCaseJson "fork_copy_preferred_over_visible_origin"
       { hydrationForkCopyInput with

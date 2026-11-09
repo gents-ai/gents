@@ -1,12 +1,12 @@
 use super::*;
-use crate::file_inventory::SessionDocument;
 use crate::file_inventory::closure::CanonicalPublicationOrigin;
+use crate::file_inventory::SessionCollection;
+use crate::file_inventory::SessionDocument;
+use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{FileChangeMetadata, FileImageMetadata};
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::output::{OutputOutcome, PayloadRef, TranscriptMessage};
-use crate::file_inventory::SessionCollection;
-use gents_protocol::file_inventory::FileInventoryRequest;
 use serde_json::{json, Value};
 
 // These labels bind metadata representations; source admission and capture
@@ -24,7 +24,6 @@ fn admission(value: &Value) -> FileInventoryAdmission {
         session_doc_id: document(&value["native_session"]),
         request: FileInventoryRequest {
             request_key: text(&value["key"]),
-            peer_id: text(&value["peer"]),
             requester_did: text(&value["requester"]),
             node_did: text(&value["node"]),
             session_id: text(&value["session"]),
@@ -248,10 +247,12 @@ fn selection(case: &Value) -> SessionSelection {
         .collect::<Vec<_>>();
     let observed_segments = output_segments
         .iter()
-        .map(|row| gents_protocol::output::reconstruction::ObservedSegment {
-            doc_id: &row.doc_id,
-            segment: &row.segment,
-        })
+        .map(
+            |row| gents_protocol::output::reconstruction::ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            },
+        )
         .collect::<Vec<_>>();
     let mut publications = Vec::new();
     for row in &documents {

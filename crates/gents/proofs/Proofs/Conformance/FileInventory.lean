@@ -94,19 +94,13 @@ private def sessionOwnerJson (row : SessionOwner) : String := object
    ("requester", jsonString row.requester), ("node", jsonString row.node)]
 
 private def sessionReadJson (value : SessionReadObservation) : String := object
-  [("scope", object [("peer", jsonString value.scope.peer),
-      ("requester", jsonString value.scope.requester), ("node", jsonString value.scope.node),
+  [("scope", object [("requester", jsonString value.scope.requester), ("node", jsonString value.scope.node),
       ("session", jsonString value.scope.session),
       ("native_session", toString value.scope.nativeSession)]),
    ("source", sessionOwnerJson value.source), ("visible", boolString value.visible)]
 
 private def catalogJson (value : CatalogInput) : String := object
-  [("applied_pairing_routes", jsonArray (value.appliedPairingRoutes.map fun row => object
-      [("peer", jsonString row.peer), ("requester", jsonString row.requester), ("node", jsonString row.node)])),
-   ("selected_network", jsonString value.selectedNetwork),
-   ("verified_active_memberships", jsonArray (value.verifiedActiveMemberships.map fun row => object
-      [("network", jsonString row.network), ("member", jsonString row.member)])),
-   ("sessions", jsonArray (value.sessions.map sessionOwnerJson)),
+  [("sessions", jsonArray (value.sessions.map sessionOwnerJson)),
    ("session_reads", jsonArray (value.sessionReads.map sessionReadJson)),
    ("closure_inputs", jsonArray (value.closureInputs.map closureJson))]
 
@@ -120,8 +114,7 @@ private def sourceJson (value : SourceInput) : String := object
   [("catalog", catalogJson value.catalog), ("tools", jsonArray (value.tools.map toolJson)),
    ("projections", jsonArray (value.projections.map projectionJson)),
    ("read_scope", match value.boundary with
-    | .readerBound scope => object [("peer", jsonString scope.peer),
-        ("requester", jsonString scope.requester), ("node", jsonString scope.node),
+    | .readerBound scope => object [("requester", jsonString scope.requester), ("node", jsonString scope.node),
         ("session", jsonString scope.session), ("native_session", toString scope.nativeSession)]
     | _ => "null"),
    ("boundary", jsonString (boundaryName value.boundary)),
@@ -224,8 +217,8 @@ def readerCasesJson : String := jsonArray ((FileInventory.ReaderExamples.cases.f
    "shared_root_physical_identity_changed", "shared_missing_capture_is_not_empty_complete",
    "shared_unreadable_projection_owner_is_not_trusted"].contains value.name).map fun value =>
   object [("name", jsonString value.name), ("source", sourceJson value.source),
-    ("expected", selectionJson value.source admission),
-    ("coverage", match snapshot value.source.model admission with
+    ("expected", selectionResultJson (directSnapshot value.source.model admission.requester admission)),
+    ("coverage", match directSnapshot value.source.model admission.requester admission with
       | .error _ => "null"
       | .ok current => coverageJson current.coverage)])
 
@@ -255,59 +248,12 @@ private def wirePageJson (value : WirePage) : String := object
   [("binding", bindingJson value.binding), ("offset", toString value.offset),
    ("entries", jsonArray (value.entries.map entryJson)), ("next", optional pageCursorJson value.next)]
 
-private def envelopeJson (value : PageEnvelope) : String := object
-  [("purpose", jsonString (match value.purpose with
-      | .transcriptV1 => "transcript_v1"
-      | .fileInventoryV2 => "file_inventory_v2")),
-   ("request_key", jsonString value.requestKey), ("signer", jsonString value.signer),
-   ("signature_verified", boolString value.signatureVerified), ("page", wirePageJson value.page)]
-
-private def demandJson (value : PageDemand) : String := object
-  [("admission", hydrationRequestJson value.admission), ("attempt", jsonString value.attempt),
-   ("cursor", optional pageCursorJson value.cursor)]
-
-def selectedImageCasesJson : String := jsonArray (FileInventory.ReaderExamples.imageCases.map fun value =>
-  object [("name", jsonString value.name), ("catalog", catalogJson value.catalog),
-    ("admission", hydrationRequestJson value.demand.image.admission),
-    ("request_doc_id", jsonString value.demand.image.requestDocId),
-    ("tool_doc_id", jsonString value.demand.image.toolDocId),
-    ("metadata", demandJson value.demand.metadata),
-    ("digest", jsonString value.demand.digest), ("entry_index", toString value.demand.entryIndex),
-    ("page", envelopeJson value.page), ("nonce_matches", boolString value.nonceMatches),
-    ("page_owner", jsonString value.pageOwner),
-    ("read", object [("scope", object [("peer", jsonString value.read.scope.peer),
-        ("requester", jsonString value.read.scope.requester), ("node", jsonString value.read.scope.node),
-        ("session", jsonString value.read.scope.session), ("native_session", toString value.read.scope.nativeSession)]),
-      ("projection", toString value.read.projection), ("observation", toString value.read.observation),
-      ("projection_visible", boolString value.read.projectionVisible),
-      ("image_visible", boolString value.read.imageVisible),
-      ("projection_owner", jsonString value.read.projectionOwner),
-      ("image_owner", jsonString value.read.imageOwner)]),
-    ("tools", jsonArray (value.tools.map fun tool => object
-      [("doc_id", jsonString tool.docId), ("request_doc_id", jsonString tool.requestDocId),
-       ("scope", scopeJson tool.scope), ("accepted", boolString tool.accepted), ("terminal", boolString tool.terminal)])),
-    ("images", jsonArray (value.images.map fun image => object
-      [("doc_id", jsonString image.docId), ("tool_call_doc_id", jsonString image.toolDocId),
-       ("request_doc_id", jsonString image.requestDocId), ("scope", scopeJson image.scope),
-       ("contents", jsonArray (image.contents.map fun content => object
-         [("doc_id", jsonString content.docId), ("tool_call_doc_id", jsonString content.toolDocId), ("scope", scopeJson content.scope)]))])),
-    ("delivery_documents", jsonArray (match value.result with
-      | .selected document => match value.images.find? (fun image => image.docId == document) with
-        | some image => (FileImages.deliveryDocuments image).map jsonString
-        | none => []
-      | _ => [])),
-    ("expected", match value.result with
-      | .rejected => tagged "rejected"
-      | .missing => tagged "missing"
-      | .selected document => tagged "selected" [("document", jsonString document)])])
 private def directSource (visible : Bool) : SourceInput :=
   let current := Examples.source 1
   let root := { ownedSession admission with requester := "session-creator" }
   { current with
     boundary := .readerBound admission.authorizationScope
     catalog := { current.catalog with
-      appliedPairingRoutes := []
-      verifiedActiveMemberships := []
       sessions := [root]
       sessionReads := [⟨admission.authorizationScope, root, visible⟩] } }
 

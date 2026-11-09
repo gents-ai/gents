@@ -1,6 +1,5 @@
-use gents_protocol::file_image_hydration::FileImageScope;
 use gents_protocol::file_inventory::{
-    FileInventoryAdmission, FileInventoryEntry, FileInventoryOrdinal,
+    FileImageScope, FileInventoryAdmission, FileInventoryEntry, FileInventoryOrdinal,
 };
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
@@ -71,8 +70,7 @@ impl<'a> Publications<'a> {
             .documents
             .iter()
             .filter(|row| {
-                row.collection
-                    == crate::file_inventory::SessionCollection::AgentMessage
+                row.collection == crate::file_inventory::SessionCollection::AgentMessage
                     && row.session_id == expected.request.session_id
             })
             .map(|row| row.doc_id.as_str())
@@ -99,11 +97,9 @@ impl<'a> Publications<'a> {
                 return Self::default();
             };
             if publication.origin_doc_id == publication.header_doc_id {
-                if let Some(copies) =
-                    gents_protocol::output::reconstruction::fork_copy_observations(
-                        message, &segments,
-                    )
-                {
+                if let Some(copies) = gents_protocol::output::reconstruction::fork_copy_observations(
+                    message, &segments,
+                ) {
                     result.observe_copy(message, &copies, publication.sequence);
                     continue;
                 }
@@ -200,7 +196,12 @@ impl<'a> Publications<'a> {
                 if !seen.insert(tool_call_doc_id) {
                     continue;
                 }
-                for tool in self.tools.get(tool_call_doc_id.as_str()).into_iter().flatten() {
+                for tool in self
+                    .tools
+                    .get(tool_call_doc_id.as_str())
+                    .into_iter()
+                    .flatten()
+                {
                     observe(&mut self.calls, tool_call_doc_id, &tool.request, sequence);
                 }
             }
@@ -221,8 +222,18 @@ impl<'a> Publications<'a> {
                 )
             });
             if owned {
-                for tool in self.tools.get(tool_call_doc_id.as_str()).into_iter().flatten() {
-                    observe(&mut self.deliveries, tool_call_doc_id, &tool.request, sequence);
+                for tool in self
+                    .tools
+                    .get(tool_call_doc_id.as_str())
+                    .into_iter()
+                    .flatten()
+                {
+                    observe(
+                        &mut self.deliveries,
+                        tool_call_doc_id,
+                        &tool.request,
+                        sequence,
+                    );
                 }
             }
         }

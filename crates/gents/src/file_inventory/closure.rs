@@ -1,4 +1,5 @@
 use super::SessionDocument;
+use crate::file_inventory::SessionCollection;
 use anyhow::anyhow;
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::reconstruction::{
@@ -10,7 +11,6 @@ use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputSource, OutputWriter, PayloadRef, ReconstructionError,
     SourceClose,
 };
-use crate::file_inventory::SessionCollection;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,9 +246,9 @@ fn collect_fork_copy(
     let physical = segments
         .iter()
         .filter(|row| {
-            references
-                .iter()
-                .any(|reference| is_fork_copy_for(root.message, row.segment, &reference.close_doc_id))
+            references.iter().any(|reference| {
+                is_fork_copy_for(root.message, row.segment, &reference.close_doc_id)
+            })
         })
         .collect::<Vec<_>>();
     if let Some(denied) = physical
@@ -440,12 +440,7 @@ fn collect_message_dependencies(
     selected: &mut BTreeSet<SessionDocument>,
 ) -> ClosureResult<()> {
     if let Some(id) = message.message.request_doc_id.as_deref() {
-        retain_base(
-            SessionCollection::AgentRequest,
-            id,
-            bases,
-            selected,
-        )?;
+        retain_base(SessionCollection::AgentRequest, id, bases, selected)?;
     }
     if let MessagePublication::ToolDelivery { tool_call_doc_id } = &message.message.publication {
         retain_base(
@@ -581,15 +576,12 @@ mod tests {
     fn generated_modeled_closure_input_selects_exact_native_manifest() {
         fn assert_input(
             input: &crate::lean_vocab_test::LeanSessionClosureInput,
-            expected_documents: Option<
-                &Vec<crate::lean_vocab_test::LeanSessionClosureDocumentKey>,
-            >,
+            expected_documents: Option<&Vec<crate::lean_vocab_test::LeanSessionClosureDocumentKey>>,
         ) {
             let request = &input.request;
             let target_session = request.session.as_str();
             let agent = request.node.as_str();
             let requester = request.requester.as_str();
-            let peer = request.peer.as_str();
             let session_for = |native: u64| {
                 if native == request.native_session {
                     target_session.to_string()
@@ -772,8 +764,7 @@ mod tests {
                 .access
                 .iter()
                 .filter(|access| {
-                    access.peer == peer
-                        && access.requester == requester
+                    access.requester == requester
                         && access.node == agent
                         && access.session == target_session
                         && access.native_session == request.native_session
@@ -814,8 +805,7 @@ mod tests {
                     .access
                     .iter()
                     .filter(|&access| {
-                        access.peer == peer
-                            && access.requester == requester
+                        access.requester == requester
                             && access.node == agent
                             && access.session == target_session
                             && access.native_session == request.native_session
@@ -834,8 +824,7 @@ mod tests {
                     .access
                     .iter()
                     .filter(|&access| {
-                        access.peer == peer
-                            && access.requester == requester
+                        access.requester == requester
                             && access.node == agent
                             && access.session == target_session
                             && access.native_session == request.native_session
@@ -894,7 +883,10 @@ mod tests {
             );
         }
         for case in cases {
-            assert_input(&case.closure_input, case.expected_closure_documents.as_ref());
+            assert_input(
+                &case.closure_input,
+                case.expected_closure_documents.as_ref(),
+            );
         }
     }
 }

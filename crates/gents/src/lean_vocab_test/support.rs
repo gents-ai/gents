@@ -215,16 +215,13 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) file_inventory_direct_reader_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_fork_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_reader_cases: Vec<serde_json::Value>,
-    pub(crate) file_inventory_selected_image_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_source_projection_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_window_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_resolution_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_comparison_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_entry_cases: Vec<serde_json::Value>,
-    pub(crate) file_image_hydration_route_cases: Vec<serde_json::Value>,
+    pub(crate) file_review_route_cases: Vec<serde_json::Value>,
     pub(crate) file_review_subscription_cases: Vec<serde_json::Value>,
-    pub(crate) stored_file_image_access_cases: Vec<serde_json::Value>,
-    pub(crate) file_image_read_grant_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
     pub(crate) count_carrier_cases: serde_json::Value,
@@ -2332,7 +2329,6 @@ pub(crate) struct LeanSessionClosureSegment {
 pub(crate) struct LeanSessionClosureAccess {
     pub(crate) key: LeanSessionClosureDocumentKey,
     pub(crate) state: String,
-    pub(crate) peer: String,
     pub(crate) requester: String,
     pub(crate) node: String,
     pub(crate) session: String,
@@ -2342,7 +2338,6 @@ pub(crate) struct LeanSessionClosureAccess {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanSessionClosureRequest {
     pub(crate) key: String,
-    pub(crate) peer: String,
     pub(crate) requester: String,
     pub(crate) node: String,
     pub(crate) session: String,

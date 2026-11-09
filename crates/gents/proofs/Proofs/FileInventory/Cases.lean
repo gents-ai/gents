@@ -4,7 +4,7 @@ namespace FileInventory.Examples
 
 open ToolExecution
 
-def admission : Request := ⟨"inventory-1", "peer-1", "reader-1", "node-1", "session-1", 2⟩
+def admission : Request := ⟨"inventory-1", "reader-1", "node-1", "session-1", 2⟩
 def scope : FileImages.Scope := ⟨admission.requester, admission.node, admission.session⟩
 
 def tool (id : Nat) : Tool := ⟨id, 1000 + id, scope, "agent-1", true, .completed⟩
@@ -27,9 +27,6 @@ def input (ids : List Nat) : ClosureInput :=
   , deniedHeaders := [], deniedSegments := [] }
 
 structure CatalogInput where
-  appliedPairingRoutes : List AppliedPairingRoute
-  selectedNetwork : String
-  verifiedActiveMemberships : List VerifiedActiveMembership
   sessions : List SessionOwner
   closureInputs : List ClosureInput
   sessionReads : List SessionReadObservation := []
@@ -37,9 +34,7 @@ structure CatalogInput where
 /-- List inputs retain their wire representation; the existing catalog owns
 set membership and canonical closure interpretation. -/
 def CatalogInput.model (input : CatalogInput) : Catalog :=
-  ⟨input.appliedPairingRoutes.toFinset, input.selectedNetwork,
-    input.verifiedActiveMemberships.toFinset, input.sessions.toFinset, input.closureInputs,
-    input.sessionReads⟩
+  ⟨input.sessions.toFinset, input.closureInputs, input.sessionReads⟩
 
 structure SourceInput where
   catalog : CatalogInput
@@ -52,10 +47,7 @@ def SourceInput.model (input : SourceInput) : Source :=
   ⟨input.catalog.model, input.tools, input.projections, input.boundary, input.sessionOwner⟩
 
 def catalog (ids : List Nat) : CatalogInput :=
-  { appliedPairingRoutes := [appliedPairingRoute admission]
-  , selectedNetwork := "network-1"
-  , verifiedActiveMemberships := [⟨"network-1", admission.requester⟩]
-  , sessions := [ownedSession admission]
+  { sessions := [ownedSession admission]
   , closureInputs := [input ids] }
 
 def source (count : Nat) : SourceInput :=
@@ -105,10 +97,6 @@ def selectionCases : List SelectionCase :=
   , ⟨"canonical_denied_provenance", {source 1 with catalog :=
         {catalog [1] with closureInputs := [{input [1] with access :=
           [⟨admission.authorizationScope, ⟨.agentToolCall, 1⟩, .denied⟩]}]}}, .rejected⟩
-  , ⟨"revoked_membership", {source 1 with catalog :=
-        {catalog [1] with verifiedActiveMemberships := []}}, .rejected⟩
-  , ⟨"missing_applied_route", {source 1 with catalog :=
-        {catalog [1] with appliedPairingRoutes := []}}, .rejected⟩
   , ⟨"foreign_session_owner", {source 1 with catalog :=
         {catalog [1] with sessions := [⟨admission.session, 2, "foreign", admission.node⟩]}}, .rejected⟩
   , ⟨"physical_binding_not_accepted", {source 1 with tools := [{tool 1 with accepted := false}]}, .rejected⟩
@@ -323,34 +311,30 @@ theorem old_cursor_was_legitimately_issued :
     (makePage lateSnapshot 0).next = some ⟨lateSnapshot, 64⟩ := by native_decide
 
 theorem old_terminal_behind_cursor_is_stale :
-    page lateAfter.model admission (.metadata lateSnapshot) (some ⟨lateSnapshot, 64⟩) = .stale := by
+    pageFromSnapshot (getSnapshot lateAfter) (some ⟨lateSnapshot, 64⟩) = .stale := by
   native_decide
 
 theorem membership_change_is_stale :
-    page (source 66).model admission (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩) = .stale := by
+    pageFromSnapshot (getSnapshot (source 66)) (some ⟨largeSnapshot, 64⟩) = .stale := by
   native_decide
 
 theorem metadata_change_is_stale :
-    page ({large with projections := large.projections.map (fun value =>
-      if value.tool = 1 then {value with observation := some 9999} else value)} : SourceInput).model
-      admission (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩) = .stale := by native_decide
-
-theorem v1_receipt_is_not_upgraded_to_snapshot :
-    page large.model admission (.transcriptV1 admission largeSnapshot.documents) none = .stale := by
-  native_decide
+    pageFromSnapshot (getSnapshot ({large with projections := large.projections.map (fun value =>
+      if value.tool = 1 then {value with observation := some 9999} else value)} : SourceInput))
+      (some ⟨largeSnapshot, 64⟩) = .stale := by native_decide
 
 theorem cursor_scope_cannot_be_replayed :
-    page large.model admission (.metadata largeSnapshot)
+    pageFromSnapshot largeSnapshot
       (some ⟨{largeSnapshot with admission := forkRequest}, 64⟩) = .stale := by native_decide
 
 theorem cursor_cannot_skip_partial_page :
-    page large.model admission (.metadata largeSnapshot) (some ⟨largeSnapshot, 1⟩) = .rejected := by
+    pageFromSnapshot largeSnapshot (some ⟨largeSnapshot, 1⟩) = .rejected := by
   native_decide
 
-theorem owner_change_invalidates_continuation :
-    page ({large with projections := large.projections.map fun value =>
-      if value.tool = 1 then {value with owner := "foreign-node"} else value} : SourceInput).model
-      admission (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩) = .rejected := by native_decide
+theorem owner_change_rejects_the_snapshot :
+    summary ({large with projections := large.projections.map fun value =>
+      if value.tool = 1 then {value with owner := "foreign-node"} else value} : SourceInput) =
+      .rejected := by native_decide
 
 theorem physical_input_reordering_preserves_snapshot :
     (snapshot ({ source 2 with

@@ -10,7 +10,6 @@ async fn canonical_selection_reuses_the_callers_read_snapshot() {
     let did = node.node_identity_did().unwrap().to_owned();
     let request = FileInventoryRequest {
         request_key: "atomic-peer:atomic-session".into(),
-        peer_id: "atomic-peer".into(),
         requester_did: did.clone(),
         node_did: did,
         session_id: "atomic-session".into(),
@@ -48,8 +47,11 @@ async fn canonical_selection_reuses_the_callers_read_snapshot() {
     .unwrap();
     let fresh = load_session_selection(&node, &request).await.unwrap();
     assert_eq!(fresh.documents.len(), 1);
-    assert!(fresh.documents.iter().all(|document| document.collection
-        == crate::file_inventory::SessionCollection::CompactionEntry));
+    assert!(fresh
+        .documents
+        .iter()
+        .all(|document| document.collection
+            == crate::file_inventory::SessionCollection::CompactionEntry));
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -76,7 +78,6 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
     let did = node.node_identity_did().unwrap().to_owned();
     let request = FileInventoryRequest {
         request_key: "paged-peer:paged-session".into(),
-        peer_id: "paged-peer".into(),
         requester_did: did.clone(),
         node_did: did,
         session_id: "paged-session".into(),
@@ -149,8 +150,7 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
                 assert!(selected
                     .documents
                     .iter()
-                    .all(|document| document.collection
-                        == SessionCollection::CompactionEntry));
+                    .all(|document| document.collection == SessionCollection::CompactionEntry));
                 let actual = selected
                     .documents
                     .iter()
@@ -177,7 +177,6 @@ async fn hydration_segment_selection_uses_the_session_index() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let request = FileInventoryRequest {
         request_key: "plan-test".into(),
-        peer_id: "peer-1".into(),
         session_id: "session-1".into(),
         node_did: "did:key:agent-1".into(),
         requester_did: "did:key:requester-1".into(),
@@ -228,7 +227,6 @@ async fn generated_terminal_selections_preserve_superseded_requests() -> Result<
         let physical = gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?;
         let request = FileInventoryRequest {
             request_key: format!("peer:{session}"),
-            peer_id: "peer".into(),
             requester_did: did.clone(),
             node_did: did.clone(),
             session_id: session,

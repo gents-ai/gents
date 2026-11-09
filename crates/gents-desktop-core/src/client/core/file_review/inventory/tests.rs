@@ -1,11 +1,11 @@
 use super::*;
 use gents_protocol::file_changes::{FileChangeImages, FileImage, FilePermissions};
-use gents_protocol::file_image_hydration::FileImageScope;
+use gents_protocol::file_inventory::FileImageScope;
+use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{
     FileInventoryAdmission, FileInventoryBinding, FileInventoryCoverage, FileInventorySnapshotView,
     FileInventoryViewCursor,
 };
-use gents_protocol::file_inventory::FileInventoryRequest;
 
 fn fixture() -> (
     FileInventoryObservation,
@@ -44,7 +44,6 @@ fn fixture() -> (
     let admission = FileInventoryAdmission {
         request: FileInventoryRequest {
             request_key: "target-request".into(),
-            peer_id: "client-peer".into(),
             requester_did: "target-requester".into(),
             node_did: "target-node".into(),
             session_id: "target-session".into(),

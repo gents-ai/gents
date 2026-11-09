@@ -379,7 +379,6 @@ const FILE_COLLECTION_POLICIES: &[(&str, bool)] = &[
     (gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME, false),
     (gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME, false),
     (gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME, false),
-    (gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME, false),
 ];
 
 fn manages_file_images(registry: &Registry<'_>) -> bool {
@@ -394,22 +393,13 @@ async fn register_file_image_policy<'n>(
     node: &'n EmbeddedNode,
     registry: &Registry<'_>,
 ) -> Result<Option<&'n str>> {
-    if !manages_file_images(registry)
-        && !registry
-            .managed_names()
-            .any(|name| name == gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
-    {
+    if !manages_file_images(registry) {
         return Ok(None);
     }
     for (name, branchable) in FILE_COLLECTION_POLICIES {
         if let Some(collection) = node.get_collection(name)? {
             validate_file_image_policy(&collection, *branchable)?;
         }
-    }
-    if let Some(collection) =
-        node.get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)?
-    {
-        validate_file_image_policy(&collection, false)?;
     }
     let owner = node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
     let policy = node

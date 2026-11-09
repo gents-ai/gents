@@ -61,14 +61,14 @@ async fn explicit_file_image_push_refuses_runtime_local_collections() {
     let refused = receiver_admin
         .add_replicator(
             &sender_addresses,
-            &["FileImageHydrationRequest".into()],
+            &["FileInventoryRequest".into()],
             &PairingFilters::default(),
         )
         .await;
     assert!(
         matches!(
             refused,
-            Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == "FileImageHydrationRequest"
+            Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == "FileInventoryRequest"
         ),
         "{refused:?}"
     );

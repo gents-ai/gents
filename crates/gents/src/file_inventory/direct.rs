@@ -2,9 +2,9 @@ use super::FileInventorySnapshot;
 use crate::store::config_client::ConfigAccess;
 use anyhow::{ensure, Context, Result};
 use gents_protocol::file_inventory::{
-    DirectFileInventoryRequest, FileInventoryAdmission, FileInventoryCursor, FileInventoryRequest,
-    FileInventoryObservation, FileInventoryReadAction, FileInventorySnapshotView,
-    FileInventoryViewCursor,
+    DirectFileInventoryRequest, FileInventoryAdmission, FileInventoryCursor,
+    FileInventoryObservation, FileInventoryReadAction, FileInventoryRequest,
+    FileInventorySnapshotView, FileInventoryViewCursor,
 };
 
 /// Read one native snapshot using the authenticated client's actor. Owner
@@ -34,8 +34,6 @@ pub async fn read_direct_inventory(
     let admission = FileInventoryAdmission {
         request: FileInventoryRequest {
             request_key: format!("direct:{session_id}"),
-            // A direct read has no peer route.
-            peer_id: String::new(),
             requester_did: access
                 .actor_did()
                 .context("file inventory requires an authenticated reader")?,

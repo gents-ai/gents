@@ -1,10 +1,9 @@
-import Proofs.FileInventory.FileImages
 import Proofs.ScopeTemplates
 import Proofs.Conformance.Contracts.Json.Helpers
 
-namespace Conformance.FileImageHydrationContracts
+namespace Conformance.FileReviewRouteContracts
 
-open FileInventory.FileImages Conformance.Contracts
+open Conformance.Contracts
 
 private def boolJson (value : Bool) := if value then "true" else "false"
 
@@ -30,36 +29,14 @@ private def routeCaseJson (direction : ScopeTemplates.RouteDirection)
 
 def routeCasesJson := jsonArray (
   ([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
-    [routeCaseJson direction "requester-1" "node-1" "FileImageHydrationRequest" "ToolFileChange",
-     routeCaseJson direction "requester-\"quoted" "node-\\path" "FileImageHydrationRequest" "ToolFileChange",
-     routeCaseJson direction "requester-1" "node-1" "FileInventoryRequest" "FileInventoryPage",
-     routeCaseJson direction "requester-\"quoted" "node-\\path" "FileInventoryRequest" "FileInventoryPage"])
+    [routeCaseJson direction "requester-1" "node-1" "FileInventoryRequest" "ToolFileChange",
+     routeCaseJson direction "requester-\"quoted" "node-\\path" "FileInventoryRequest" "ToolFileChange",
+     routeCaseJson direction "requester-1" "node-1" "FileInventoryRequest" "ToolFileInventory",
+     routeCaseJson direction "requester-\"quoted" "node-\\path" "FileInventoryRequest" "ToolFileInventory"])
 
 def subscriptionCasesJson := jsonArray (
   ScopeTemplates.transcriptCollections.map fun collection =>
     "{\"collection\":" ++ jsonString collection ++
     ",\"replicated\":" ++ boolJson false ++ "}")
 
-def storageCasesJson := jsonArray (
-  ["node", "client"].flatMap fun owner =>
-    [some "node", some "client", some "outsider", none].map fun actor =>
-      "{\"owner\":" ++ jsonString owner ++
-      ",\"actor\":" ++ (actor.map jsonString).getD "null" ++
-      ",\"expected\":" ++ boolJson (storedImageReadable "node" "client" (owner == "client") actor) ++ "}")
-
-def readGrantCasesJson := jsonArray (
-  ["node", ""].flatMap fun source =>
-    ["client", ""].flatMap fun requester =>
-      ["node", "other"].flatMap fun signer =>
-        ["client", "other"].flatMap fun localActor =>
-          ["node", "other", ""].flatMap fun storedCreator =>
-            [true, false].map fun verified =>
-              "{\"source\":" ++ jsonString source ++
-              ",\"requester\":" ++ jsonString requester ++
-              ",\"signer\":" ++ jsonString signer ++
-              ",\"local_actor\":" ++ jsonString localActor ++
-              ",\"stored_creator\":" ++ jsonString storedCreator ++
-              ",\"verified\":" ++ boolJson verified ++
-              ",\"expected\":" ++ boolJson (authorizesReadGrant source requester signer localActor storedCreator verified) ++ "}")
-
-end Conformance.FileImageHydrationContracts
+end Conformance.FileReviewRouteContracts

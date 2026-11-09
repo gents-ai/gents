@@ -11,12 +11,12 @@ use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::store::graphql::escape_graphql_string;
-#[cfg(test)]
-use gents_protocol::file_inventory::FileInventoryRequest;
 use closure::{
     build_canonical_selection, CanonicalClosureInput, CanonicalPublicationOrigin, ScopedDocument,
     ToolEffectRow,
 };
+#[cfg(test)]
+use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::output::rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -25,7 +25,6 @@ use gents_protocol::output::rows::{
 pub mod admission;
 mod closure;
 mod direct;
-pub mod images;
 mod order;
 mod selection;
 mod snapshot;

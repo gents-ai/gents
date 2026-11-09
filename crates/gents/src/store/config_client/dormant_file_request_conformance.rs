@@ -20,7 +20,7 @@ fn client(endpoint: &str, key: &crate::KeyIdentity) -> anyhow::Result<ConfigAcce
     ))
 }
 
-/// These schemas remain dormant in production. This exercises a native
+/// This schema remains dormant in production. This exercises a native
 /// ownership boundary without treating payload identity fields as grants.
 #[tokio::test]
 async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Result<()> {
@@ -77,20 +77,10 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
     let node_doc = crate::store::graphql::created_doc_id(&node_response, "Node")?;
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().node_file_request_access_cases;
     assert!(!cases.is_empty());
-    let schemas = [
-        (
-            "FileImageHydrationRequest",
-            gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST,
-        ),
-        (
-            "FileInventoryImageRequest",
-            gents_protocol::schemas::FILE_INVENTORY_IMAGE_REQUEST,
-        ),
-        (
-            "FileInventoryRequest",
-            gents_protocol::schemas::FILE_INVENTORY_REQUEST,
-        ),
-    ];
+    let schemas = [(
+        "FileInventoryRequest",
+        gents_protocol::schemas::FILE_INVENTORY_REQUEST,
+    )];
     for (name, schema) in schemas {
         let binding = format!(
             "type {name} @policy(id: \"{}\", resource: \"configuration\") {{",
@@ -101,15 +91,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
             "production schema must carry the modeled binding"
         );
         node.add_collection_as(&context, schema).await?;
-        let mut input = json!({"request_key": format!("request-{name}"), "requester_did": user.did(), "node_did":runtime.did(), "session_id":"session", "status":"pending"});
-        input["peer_id"] = json!("peer");
-        if name == "FileImageHydrationRequest" || name == "FileInventoryImageRequest" {
-            input["request_doc_id"] = json!("request");
-            input["tool_call_doc_id"] = json!("tool");
-        }
-        if name == "FileInventoryImageRequest" {
-            input["inventory_reference"] = json!({"fixture":true});
-        }
+        let input = json!({"request_key": format!("request-{name}"), "requester_did": user.did(), "node_did":runtime.did(), "session_id":"session", "status":"pending"});
         let mutation = format!("mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID _version {{ cid }} }} }}");
         let variables = json!({"input":input});
         let response = user_access

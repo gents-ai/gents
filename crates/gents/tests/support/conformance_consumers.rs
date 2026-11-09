@@ -588,13 +588,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_fork_inventory_retains_only_selected_native_origins",
         },
         ConformanceConsumer::RustTest {
-            id: "file_inventory::images::tests::generated_inventory_images_keep_reader_root_snapshot_and_source_distinct",
-            package: "gents",
-            source_path: "crates/gents/src/file_inventory/images/tests.rs",
-            module_path: "file_inventory::images::tests",
-            function: "generated_inventory_images_keep_reader_root_snapshot_and_source_distinct",
-        },
-        ConformanceConsumer::RustTest {
             id: "file_inventory::snapshot::tests::readers::shared_reader_metadata_preserves_canonical_authorship_and_image_privacy",
             package: "gents",
             source_path: "crates/gents/src/file_inventory/snapshot/tests/readers.rs",
@@ -1309,13 +1302,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_workspace_path_capability_cases_drive_real_git_executor",
         },
         ConformanceConsumer::RustTest {
-            id: "runtime::agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_refuses_runtime_local_collections",
-            package: "gents",
-            source_path: "crates/gents/src/runtime/agent/p2p_reconcile/embedded_impl/tests.rs",
-            module_path: "runtime::agent::p2p_reconcile::embedded_impl::tests",
-            function: "explicit_file_image_push_refuses_runtime_local_collections",
-        },
-        ConformanceConsumer::RustTest {
             id: "client_journal_isolation::private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull",
             package: "gents",
             source_path: "crates/gents/tests/client_journal_isolation.rs",
@@ -1349,13 +1335,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents-desktop-core/src/client/mutations/chat/request/receipt.rs",
             module_path: "client::mutations::chat::request::receipt::tests",
             function: "client_submission_refuses_a_different_local_signer_before_journal_write",
-        },
-        ConformanceConsumer::RustTest {
-            id: "tool_call_lifecycle::file_review_access::tests::file_image_read_grant_matches_signed_receipt_contract",
-            package: "gents",
-            source_path: "crates/gents/src/tools/call/lifecycle/file_review_access/tests.rs",
-            module_path: "tool_call_lifecycle::file_review_access::tests",
-            function: "file_image_read_grant_matches_signed_receipt_contract",
         },
         ConformanceConsumer::RustTest {
             id: "runtime::agent::p2p_reconcile::templates::file_route_tests::generated_routes_follow_executable_scope_filters",

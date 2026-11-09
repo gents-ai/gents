@@ -4,7 +4,7 @@ namespace FileInventory.Order.Examples
 
 open CanonicalOutput
 
-def admission : Request := ⟨"inventory", "peer", "reader", "node", "session", 1⟩
+def admission : Request := ⟨"inventory", "reader", "node", "session", 1⟩
 
 def tool : Tool := ⟨90, 700, ⟨"reader", "node", "session"⟩, "agent", true, .completed⟩
 
@@ -151,9 +151,9 @@ theorem physical_page_order_preserves_canonical_resource_ordinals :
     capturedSnapshot.entries.map (fun entry => (entry.tool, entry.order)) =
       [(2, .ordered 1 2), (90, .ordered 0 2)] := by native_decide
 
-theorem changing_only_ordering_invalidates_the_receipt :
-    (VerifiedReceipt.metadata capturedSnapshot).proves
-      { capturedSnapshot with ordering := [] } = false := by native_decide
+theorem changing_only_ordering_invalidates_the_cursor :
+    pageFromSnapshot { capturedSnapshot with ordering := [] } (some ⟨capturedSnapshot, 64⟩) =
+      .stale := by native_decide
 
 theorem interleaved_physical_inventory_uses_one_resource_and_canonical_session :
     comparison capturedSnapshot (input sequentialHeaders) "node" "workspace" "file.rs" =

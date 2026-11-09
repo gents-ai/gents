@@ -42,8 +42,6 @@ mod editor_history;
 mod editor_images;
 #[path = "support/editor_inventory.rs"]
 mod editor_inventory;
-#[path = "support/editor_inventory_permissions.rs"]
-mod editor_inventory_permissions;
 #[path = "support/editor_questions.rs"]
 mod editor_questions;
 #[path = "support/editor_related_work.rs"]
@@ -110,8 +108,6 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReview,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
-    EditorReviewPermissions,
-    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorInventory,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorUndo,
@@ -149,7 +145,6 @@ impl Journey {
             Self::EditorDelivery => Some("delivery"),
             Self::EditorGoalDelivery => Some("goal-delivery"),
             Self::EditorReview => Some("review"),
-            Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorInventory => Some("review-inventory"),
             Self::EditorUndo => Some("undo"),
             Self::EditorWorkspace => Some("workspace"),
@@ -496,30 +491,6 @@ async fn editor_pages_real_file_captures_across_reload_and_new_activity() -> Res
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn editor_retries_recorded_file_review_after_reenrollment() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::EditorReviewPermissions)
-        .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
-    copy_editor_evidence(temp.path(), "editor-review-permissions-canonical.json")
-}
-
-#[cfg(feature = "editor-e2e")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRecovery)
@@ -834,10 +805,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     return action;
                 }
             }
-            if matches!(
-                journey,
-                Journey::EditorReview | Journey::EditorReviewPermissions
-            ) {
+            if matches!(journey, Journey::EditorReview) {
                 if let Some(action) = editor_review::reply(request) {
                     return action;
                 }
@@ -2183,23 +2151,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             node_did,
             session,
             &client_did,
-            &identity,
-        )
-        .await?;
-        let permissions = editor_review::verify_permission_recovery(
-            &mut client,
-            &mut id,
-            &access,
-            root,
-            &node_home,
-            &client_did,
-            &evidence,
-            &identity,
-        )
-        .await?;
-        tokio::fs::write(
-            root.join("editor-inventory-permissions-canonical.json"),
-            serde_json::to_vec_pretty(&permissions)?,
         )
         .await?;
         tokio::fs::write(
@@ -2208,10 +2159,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
     }
-    if matches!(
-        journey,
-        Journey::EditorReview | Journey::EditorReviewPermissions
-    ) {
+    if matches!(journey, Journey::EditorReview) {
         editor_review::prepare(root)?;
         configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         ensure!(
@@ -2254,23 +2202,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-review-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
-        if matches!(journey, Journey::EditorReviewPermissions) {
-            let permissions = editor_review::verify_permission_recovery(
-                &mut client,
-                &mut id,
-                &access,
-                root,
-                &node_home,
-                &client_did,
-                &evidence,
-                &identity,
-            )
-            .await?;
-            std::fs::write(
-                root.join("editor-review-permissions-canonical.json"),
-                serde_json::to_vec_pretty(&permissions)?,
-            )?;
-        }
     }
     if matches!(journey, Journey::EditorUndo) {
         editor_undo::prepare(root)?;
