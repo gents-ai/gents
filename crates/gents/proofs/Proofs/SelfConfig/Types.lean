@@ -10,7 +10,7 @@ def allTargets : List Target :=
   [.agent, .agentContext, .compaction, .tools, .agentTarget, .inferenceProfile,
    .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy,
    .inferenceBackend, .toolServiceRegistry, .task, .schedule, .trigger, .eventSource,
-   .datastoreToolSurface, .skill, .page]
+   .datastoreToolSurface, .skill, .page, .pluginSource]
 abbrev Target.collectionName (t : Target) := ConfigDocuments.Collection.collectionName t
 abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField t
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
@@ -109,6 +109,18 @@ theorem page_module_and_grants_editable :
 
 theorem page_identity_protected :
     "page_id" ∉ writableFields .page ∧ "node_did" ∉ writableFields .page := by decide
+
+/-- Maintainer direction (2026-11-09): the Engineer writes, compiles and
+installs a plugin without the filesystem, so a plugin's source is a document:
+its language, entry file text, input schema, data declaration and test cases
+are its desired fields. The built artifact stays in the plugin store and is
+not a field here, because a digest is an observation of one build. -/
+theorem plugin_source_and_cases_editable :
+    "source" ∈ writableFields .pluginSource ∧ "tests" ∈ writableFields .pluginSource ∧
+    "input_schema" ∈ writableFields .pluginSource ∧ "data" ∈ writableFields .pluginSource := by decide
+
+theorem plugin_source_identity_protected :
+    "plugin_id" ∉ writableFields .pluginSource ∧ "node_did" ∉ writableFields .pluginSource := by decide
 
 theorem datastore_owner_and_identity_protected :
     "node_did" ∉ writableFields .datastoreToolSurface ∧

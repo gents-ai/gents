@@ -1,5 +1,5 @@
-//! Pages held on the node: built through `config` alone by an agent with no
-//! shell and no file tools.
+//! Pages and plugin sources held on the node: built through `config` alone by
+//! an agent with no shell and no file tools.
 
 use super::*;
 
@@ -159,7 +159,7 @@ async fn a_fileless_agent_creates_edits_lints_disables_and_removes_a_page() {
 }
 
 #[tokio::test]
-async fn page_help_names_the_document_verbs() {
+async fn page_and_plugin_help_name_the_document_verbs() {
     let home = tempfile::tempdir().unwrap();
     let (_fixture, tools) = fileless_tool("live-help", home.path()).await;
     let page = call(&tools, json!({"argv":["help","page"]})).await.unwrap();
@@ -174,4 +174,107 @@ async fn page_help_names_the_document_verbs() {
     ] {
         assert!(page.contains(expected), "{expected}: {page}");
     }
+    let index = call(&tools, json!({"argv":["help"]})).await.unwrap();
+    assert!(
+        index.as_str().unwrap().contains("plugin-source:"),
+        "{index}"
+    );
+    let plugin = call(&tools, json!({"argv":["help","plugin"]})).await.unwrap();
+    let plugin = plugin.as_str().unwrap();
+    assert!(plugin.contains("plugin build NAME"), "{plugin}");
+    assert!(plugin.contains("\"plugin\",\"build\""), "{plugin}");
+    let source = call(&tools, json!({"argv":["help","plugin-source"]}))
+        .await
+        .unwrap();
+    assert!(source.as_str().unwrap().contains("tests"), "{source}");
+}
+
+/// `plugin build` keeps the source as a document whether or not the build
+/// succeeds, reports a failed compile and each failed case, and installs
+/// nothing for either. The compiler is stubbed; the real one is the
+/// `__plugin-build` process this stub stands in for.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn plugin_build_saves_the_source_and_reports_build_and_case_failures() {
+    let home = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let builder = outside.path().join("builder.sh");
+    let stub = |body: &str| {
+        std::fs::write(&builder, format!("#!/bin/sh\n{body}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let _stub = PLUGIN_BUILDER_STUB.lock().await;
+    stub("echo 'main.js:1: unexpected token' >&2; exit 1");
+    let _builder =
+        crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
+    let (_fixture, tools) = fileless_tool("live-plugin", home.path()).await;
+    let set = json!({
+        "language": "js", "description": "Doubles n.",
+        "source": "module.exports = (input) => ({ n: input.n * 2 }",
+        "input_schema": {"type":"object","properties":{"n":{"type":"number"}}},
+        "tests": [{"name":"two","input":{"n":2},"expect":{"n":4}}],
+    });
+    let error = call(
+        &tools,
+        json!({"argv":["plugin","build"],"target_id":"double","set":set}),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("did not build"), "{error}");
+    assert!(error.contains("unexpected token"), "{error}");
+    assert!(error.contains("source document is saved"), "{error}");
+
+    let saved = ok(
+        &tools,
+        json!({"argv":["plugin-source","get"],"target_id":"double"}),
+    )
+    .await;
+    assert_eq!(saved["document"]["language"], "js", "{saved}");
+    assert_eq!(
+        saved["document"]["tests"]["cases"][0]["expect"],
+        json!({"n": 4}),
+        "{saved}"
+    );
+    let dir = home.path().join("plugin-builds/double/double");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("plugins/double/source/main.js")).unwrap(),
+        set["source"].as_str().unwrap()
+    );
+    assert!(dir.join("plugins/double/tests/01_two.json").is_file());
+
+    stub("printf '{\"cases\":[{\"plugin\":\"double\",\"passed\":0,\"failures\":[\"01_two.json: returned {\\\\\"n\\\\\":3} instead of {\\\\\"n\\\\\":4}\"]}]}'");
+    let error = call(
+        &tools,
+        json!({"argv":["plugin","build"],"target_id":"double","set":{
+            "source":"module.exports = (input) => ({ n: input.n + 1 });"}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("1 of 1 test cases failed"), "{error}");
+    assert!(error.contains("01_two.json"), "{error}");
+    assert!(
+        crate::plugin::store::read_record(home.path(), "node", "double").is_err(),
+        "a failed case installs nothing"
+    );
+    let saved = ok(
+        &tools,
+        json!({"argv":["plugin-source","get"],"target_id":"double"}),
+    )
+    .await;
+    assert!(
+        saved["document"]["source"]
+            .as_str()
+            .unwrap()
+            .contains("input.n + 1"),
+        "the edit is saved: {saved}"
+    );
+
+    let refused = call(
+        &tools,
+        json!({"argv":["plugin","build"],"target_id":"cobol_tool","set":{"language":"cobol","source":"x"}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.contains("supported languages"), "{refused}");
 }

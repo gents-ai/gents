@@ -207,6 +207,7 @@ def examples : List (Target × FieldKey × FieldValue) :=
   , (.skill, "instructions", "Read the checklist before reviewing.")
   , (.datastoreToolSurface, "entries", "[{tool_name: submit_job, collection: Job}]")
   , (.page, "module", "export default { id: 'board', register() {} }")
+  , (.pluginSource, "source", "module.exports = (input) => input;")
   , (.inferenceProfile, "model_name", "model-1")
   , (.inferenceSampling, "temperature", "0.2")
   , (.inferenceExecution, "max_turns", "40")

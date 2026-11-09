@@ -242,6 +242,7 @@ pub(super) fn cleanup_target(name: &str) -> Result<SelfConfigTarget> {
         "datastore" => Ok(SelfConfigTarget::DatastoreToolSurface),
         "skill" => Ok(SelfConfigTarget::Skill),
         "page" => Ok(SelfConfigTarget::Page),
+        "plugin-source" => Ok(SelfConfigTarget::PluginSource),
         other => bail!("unknown cleanup resource {other:?}; see [\"help\",\"cleanup\"]"),
     }
 }

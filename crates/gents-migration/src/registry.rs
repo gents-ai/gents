@@ -273,6 +273,10 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::PAGE
     ),
     baseline_entry!(
+        gents_protocol::schemas::PLUGIN_SOURCE_NAME,
+        gents_protocol::schemas::PLUGIN_SOURCE
+    ),
+    baseline_entry!(
         gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
         gents_protocol::schemas::PENDING_CHAT_SUBMISSION
     ),

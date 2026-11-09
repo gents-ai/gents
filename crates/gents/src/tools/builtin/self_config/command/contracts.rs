@@ -61,6 +61,18 @@ pub(in crate::tools::builtin::self_config) fn help_patch_contracts(
                 "tags":"array<string>; default []"
             }),
         )],
+        Some("plugin-source") => vec![patch_contract(
+            SelfConfigTarget::PluginSource,
+            json!({
+                "description":"string|null; what a model is shown for the tool",
+                "language":"string (required); rust, go, c, cpp, js, ts, python or ruby",
+                "source":"string (required); the text of the one entry file, at most 1024 KiB. js/ts: module.exports = (input) => output. Others read JSON on stdin and write JSON on stdout",
+                "input_schema":"object|null; JSON Schema of the input, default {type: object}",
+                "data":"{collections: [string], ops: [query|insert|update|delete], stamped?: object}|null; absent means no data access",
+                "tests":"array<{name?: string, input: any, expect?: any}>|null; each case must succeed, and return expect when given; at most 64",
+                "tags":"array<string>; default []"
+            }),
+        )],
         Some("datastore") => vec![patch_contract(
             SelfConfigTarget::DatastoreToolSurface,
             json!({
@@ -207,6 +219,7 @@ pub(in crate::tools::builtin::self_config) fn field_shape(
         "datastore",
         "skill",
         "page",
+        "plugin-source",
         "profile",
         "backend",
         "mcp-service",

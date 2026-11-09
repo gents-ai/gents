@@ -397,9 +397,15 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             notes: "Each set replaces the whole field. set.enabled false unloads the page and withdraws its data access. A page document registers nav and plugin.pages only. No file or pack is needed; to ship pages in a pack instead, see pack scaffold (options.page true) and pack add page in [\"help\",\"pack\"].",
             next: "page lint ID, then ux preview page/ID; fix what the report names before saying the page works.",
         },
+        "plugin-source" => Page {
+            what: "a plugin's source held on this node as a document: its language, one entry file's text, input schema, data declaration and test cases (tools grant). plugin build NAME compiles, tests and installs it.",
+            commands: &[],
+            notes: "The document's ID is the plugin's name; it installs as node/NAME. Each set replaces the whole field. Deleting the document does not uninstall a plugin already built from it.",
+            next: "plugin build NAME; it reports the digest, the build error, or each failing case.",
+        },
         "plugin" => Page {
-            what: "inspect and try installed plugins; installation and model tool selection are separate steps.",
-            commands: &["plugin list  options: limit, cursor", "plugin get NAMESPACE/NAME", "plugin run NAMESPACE/NAME  options.input: the plugin's JSON input; runs it once, sealed, and returns its output"],
+            what: "build a plugin from source held on this node, then inspect and try installed plugins; installation and model tool selection are separate steps.",
+            commands: &["plugin build NAME  set: the plugin-source fields (language, source, input_schema, data, tests, description); saves them as the PluginSource document NAME, compiles in the command sandbox, runs the cases and installs node/NAME. Omit set to rebuild the saved document. Needs the pack and pack authority grants", "plugin list  options: limit, cursor", "plugin get NAMESPACE/NAME", "plugin run NAMESPACE/NAME  options.input: the plugin's JSON input; runs it once, sealed, and returns its output"],
             notes: "get returns the exact artifact digest and pinned selection. Read the target Tools document, preserve its other fields and existing integration/plugin entries, then explicitly select integrations.plugins through tools update. Operator authority is enforced by the plugin store; model input cannot grant it.",
             next: "Read tools get and effective config get to verify resolved selection. Start a fresh request to call the selected plugin.",
         },
@@ -452,6 +458,19 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                 (
                     json!({"argv":["ux","preview","page/notes"]}),
                     Some("read the report: the visible text, console errors and each data call's rows"),
+                ),
+            ],
+        )],
+        "plugin" => vec![(
+            "write, test, install and run a plugin without a file",
+            vec![
+                (
+                    json!({"argv":["plugin","build"],"target_id":"double","set":{"language":"js","description":"Doubles n.","source":"module.exports = (input) => ({ n: input.n * 2 });","input_schema":{"type":"object","properties":{"n":{"type":"number"}},"required":["n"]},"tests":[{"name":"two","input":{"n":2},"expect":{"n":4}}]}}),
+                    Some("a failed build or case installs nothing; fix set.source and build again"),
+                ),
+                (
+                    json!({"argv":["plugin","run","node/double"],"options":{"input":{"n":21}}}),
+                    None,
                 ),
             ],
         )],

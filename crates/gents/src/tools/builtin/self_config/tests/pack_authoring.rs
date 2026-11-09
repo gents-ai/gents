@@ -296,6 +296,7 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _stub = PLUGIN_BUILDER_STUB.lock().await;
     let _builder =
         crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
     let (_fixture, tools) =

@@ -80,6 +80,7 @@ impl ConfigCommandTool {
                 | "execution"
                 | "agent-target"
                 | "page"
+                | "plugin-source"
         );
         let handled = match verb {
             "list" | "update" => true,

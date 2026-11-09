@@ -495,6 +495,7 @@ impl ConfigReferences {
             Collection::RepositoryPlacement => decode::<RepositoryPlacement>(value)?.validate()?,
             Collection::EvalDefinition => decode::<EvalDefinition>(value)?.validate()?,
             Collection::Page => decode::<PageDocument>(value)?.validate()?,
+            Collection::PluginSource => decode::<PluginSourceDocument>(value)?.validate()?,
             Collection::Skill | Collection::CallbackModule => {}
         }
         Ok(())
@@ -691,6 +692,7 @@ pub(crate) fn references_of(
         | Collection::EvalDefinition
         | Collection::Skill
         | Collection::Page
+        | Collection::PluginSource
         | Collection::CallbackModule => {}
     }
     Ok(references)

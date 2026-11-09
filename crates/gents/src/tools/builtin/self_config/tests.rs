@@ -771,6 +771,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         "datastore",
         "skill",
         "page",
+        "plugin-source",
         "agent-target",
         "execution",
     ]
@@ -8615,6 +8616,10 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     assert_eq!(installed["effective"]["digest"], Value::String(digest));
     assert!(node.get_collection("FixtureJob").unwrap().is_some());
 }
+
+/// `GENTS_PLUGIN_BUILDER` is process-wide, so the tests that point it at a
+/// stub builder hold this for as long as their stub is the builder.
+static PLUGIN_BUILDER_STUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 mod live_documents;
 mod pack_authoring;

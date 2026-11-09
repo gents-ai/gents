@@ -11,6 +11,7 @@ pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<
         ("tools", "datastore"),
         ("tools", "skill"),
         ("tools", "page"),
+        ("tools", "plugin-source"),
         ("tools", "agent-target"),
         ("profile", "profile"),
         ("profile", "execution"),

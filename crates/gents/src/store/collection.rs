@@ -29,15 +29,16 @@ pub enum Collection {
     RepositoryPlacement,
     EvalDefinition,
     Page,
+    PluginSource,
 }
 
 /// This enumeration provides no reference-safety guarantee; publication must
 /// validate the complete manifest and atomically commit it, including legal
 /// reference cycles.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 25] = Collection::ALL;
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 26] = Collection::ALL;
 
 impl Collection {
-    pub const ALL: [Collection; 25] = [
+    pub const ALL: [Collection; 26] = [
         Self::Node,
         Self::Agent,
         Self::AgentContext,
@@ -63,6 +64,7 @@ impl Collection {
         Self::RepositoryPlacement,
         Self::EvalDefinition,
         Self::Page,
+        Self::PluginSource,
     ];
 
     pub fn file_name(self) -> Option<&'static str> {
@@ -99,6 +101,7 @@ impl Collection {
             Self::RepositoryPlacement => Some("repository_placements"),
             Self::EvalDefinition => Some("eval_definitions"),
             Self::Page => Some("pages"),
+            Self::PluginSource => Some("plugin_sources"),
         }
     }
 
@@ -129,6 +132,7 @@ impl Collection {
             Self::RepositoryPlacement => "RepositoryPlacement",
             Self::EvalDefinition => "EvalDefinition",
             Self::Page => "Page",
+            Self::PluginSource => "PluginSource",
         }
     }
 
@@ -161,6 +165,7 @@ impl Collection {
             Self::RepositoryPlacement => "repository_id",
             Self::EvalDefinition => "definition_id",
             Self::Page => "page_id",
+            Self::PluginSource => "plugin_id",
         }
     }
 }

@@ -25,6 +25,7 @@ mod schedule;
 pub mod schedule_cron;
 mod serde_helpers;
 mod page;
+mod plugin_source;
 mod skill;
 pub mod skills;
 mod surface_tool;
@@ -123,6 +124,9 @@ pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurf
 pub use page::{
     is_snake_case_name, is_valid_ux_data_tool_name, list_pages, validate_ux_data, PageDocument,
     UxDataSurface, MAX_PAGE_SOURCE_BYTES, MAX_UX_DATA_SURFACE_ID_LEN, PAGE_AREAS,
+};
+pub use plugin_source::{
+    PluginSourceCase, PluginSourceDocument, MAX_PLUGIN_SOURCE_BYTES, PLUGIN_SOURCE_NAMESPACE,
 };
 pub use skill::SkillDocument;
 

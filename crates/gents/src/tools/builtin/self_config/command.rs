@@ -68,12 +68,16 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "a desktop page held on this node as a document, or shipped in a pack",
     ),
     (
+        "plugin-source",
+        "a plugin's source held on this node; plugin build compiles it",
+    ),
+    (
         "policy",
         "node permissions and document relationships, delegated as this agent",
     ),
     (
         "plugin",
-        "installed plugin inspection and explicit Tools selection",
+        "build from source on this node, run, inspect and select plugins",
     ),
     (
         "ux",
@@ -150,7 +154,7 @@ impl ConfigCommandParams {
                 | ["profile", "create", ..]
                 | ["skill", "get", ..]
                 | ["pack", "get" | "install" | "update" | "remove", ..]
-                | ["plugin", "get" | "run", ..]
+                | ["plugin", "get" | "run" | "build", ..]
                 | ["page", "lint", ..] => 2,
                 ["task", "run", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
@@ -537,6 +541,9 @@ impl ConfigCommandTool {
             "task" => self.task_run(&argv[1..]).await,
             "plugin" if argv.get(1).is_some_and(|verb| verb == "run") => {
                 self.plugin_run(&argv[2..]).await
+            }
+            "plugin" if argv.get(1).is_some_and(|verb| verb == "build") => {
+                self.plugin_build(&argv[2..]).await
             }
             "plugin" => self.plugin(&argv[1..]),
             "page" => self.page(&argv[1..]).await,
