@@ -7,6 +7,7 @@ import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.ClientShell.OptimisticSend
 import Proofs.Conformance.ClientChatReadinessCases
+import Proofs.Conformance.ClientSyncHealthCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
@@ -546,6 +547,8 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.ChatReadinessCases.legsJson ++ ","
     ++ "\"client_chat_readiness_causes\":"
       ++ Conformance.ChatReadinessCases.causesJson ++ ","
+    ++ "\"client_sync_health_cases\":"
+      ++ Conformance.ClientSyncHealthCases.casesJson ++ ","
     ++ "\"enrollment_route_readiness_cases\":"
       ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"
