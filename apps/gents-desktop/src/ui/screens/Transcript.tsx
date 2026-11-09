@@ -622,6 +622,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   const [retrying, setRetrying] = useState(false);
   const sessionKey = session?.sessionId ?? null;
   const rows = useHeldRows(
+    session?.nodeDid ?? null,
     sessionKey,
     session?.timelineItems ?? EMPTY_ITEMS,
     session?.timelinePage?.hasOlder ?? false,
