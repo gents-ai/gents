@@ -234,6 +234,6 @@ async fn schema(paths: &DesktopPaths, did: &str) -> Result<defra_node::Collectio
     let schema = node
         .get_collection("InferenceCall")?
         .context("inference collection")?;
-    node.shutdown().await;
+    node.shutdown().await?;
     Ok(schema)
 }

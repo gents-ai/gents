@@ -92,13 +92,13 @@ impl LiveTopologyGuard {
             agent.shutdown().await;
         }
         if let Some(db) = self.owner.take() {
-            db.node.shutdown().await;
+            db.node.shutdown().await.expect("node shutdown");
         }
         if let Some(db) = self.peer_a.take() {
-            db.node.shutdown().await;
+            db.node.shutdown().await.expect("node shutdown");
         }
         if let Some(db) = self.peer_b.take() {
-            db.node.shutdown().await;
+            db.node.shutdown().await.expect("node shutdown");
         }
     }
 }
@@ -118,7 +118,9 @@ impl Drop for LiveTopologyGuard {
             .collect();
         self.runtime.spawn(async move {
             for node in nodes {
-                node.shutdown().await;
+                if let Err(error) = node.shutdown().await {
+                    tracing::warn!(?error, "live topology node shutdown failed during drop");
+                }
             }
         });
     }

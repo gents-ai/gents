@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Refuses, in a test build, a resolved home inside the operator's real Gents
 /// state: `$HOME/.gents` or the platform data folder's `gents` directory.
@@ -28,7 +28,7 @@ pub fn refuse_real_gents_home(resolved: &Path, variable: &str) {
 pub fn refuse_real_gents_home(_resolved: &Path, _variable: &str) {}
 
 #[cfg(any(test, feature = "test-home-guard"))]
-fn real_gents_homes() -> impl Iterator<Item = PathBuf> {
+fn real_gents_homes() -> impl Iterator<Item = std::path::PathBuf> {
     [
         dirs::home_dir().map(|home| home.join(".gents")),
         dirs::data_local_dir().map(|data| data.join("gents")),
@@ -38,7 +38,7 @@ fn real_gents_homes() -> impl Iterator<Item = PathBuf> {
 }
 
 #[cfg(any(test, feature = "test-home-guard"))]
-fn absolute(path: &Path) -> PathBuf {
+fn absolute(path: &Path) -> std::path::PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
