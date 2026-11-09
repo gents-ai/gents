@@ -443,7 +443,9 @@ describe("canonical tool selections", () => {
       <ToolsPanel deployment={{ ...view, tools: [saved] }} item="tools-a" />,
     );
     await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Read and update goals" })).toBeChecked(),
+      expect(
+        screen.getByRole("switch", { name: "Read and update goals" }),
+      ).toBeChecked(),
     );
   });
 

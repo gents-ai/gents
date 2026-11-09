@@ -198,151 +198,142 @@ function session(
 }
 
 describe("session timeline page merging", () => {
-  it(
-    "keeps a queued input when only the request's context row is saved on the tip page",
-    () => {
-      const page = {
-        totalItems: 3,
-        pageItems: 2,
-        hasOlder: true,
-        hasNewer: false,
-        oldestItemKey: "k1",
-        newestItemKey: "k2",
-      };
-      const current = session(["k1", "k2"], page);
-      current.timelineItems.unshift({
-        kind: "pendingUserTurn",
-        itemKey: "pending-r",
-        requestId: "r",
-        content: "same text",
-        selectedSkillIds: [],
-        lifecycleState: "pending",
-        foldedIntoRequestId: null,
-        origin: null,
-        createdAt: null,
-      });
-      const incoming = session(["k1", "k2"], page);
-      incoming.timelineItems.push({
-        kind: "userMessage",
-        itemKey: "authored-r-context",
-        requestId: "r",
-        ownsTurn: false,
-        sequence: 3,
-        content: "<context>\nworkspace instructions\n</context>",
-        timestamp: null,
-        reconstruction: { state: "ready" },
-      });
-      const merged = mergeSessionTipSnapshot(current, incoming);
-      expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
-        "pending-r",
-        "k1",
-        "k2",
-        "authored-r-context",
-      ]);
-    },
-  );
+  it("keeps a queued input when only the request's context row is saved on the tip page", () => {
+    const page = {
+      totalItems: 3,
+      pageItems: 2,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k2",
+    };
+    const current = session(["k1", "k2"], page);
+    current.timelineItems.unshift({
+      kind: "pendingUserTurn",
+      itemKey: "pending-r",
+      requestId: "r",
+      content: "same text",
+      selectedSkillIds: [],
+      lifecycleState: "pending",
+      foldedIntoRequestId: null,
+      origin: null,
+      createdAt: null,
+    });
+    const incoming = session(["k1", "k2"], page);
+    incoming.timelineItems.push({
+      kind: "userMessage",
+      itemKey: "authored-r-context",
+      requestId: "r",
+      ownsTurn: false,
+      sequence: 3,
+      content: "<context>\nworkspace instructions\n</context>",
+      timestamp: null,
+      reconstruction: { state: "ready" },
+    });
+    const merged = mergeSessionTipSnapshot(current, incoming);
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+      "pending-r",
+      "k1",
+      "k2",
+      "authored-r-context",
+    ]);
+  });
 
-  it(
-    "replaces a queued input with its durable owner when the tip page arrives",
-    () => {
-      const page = {
-        totalItems: 3,
-        pageItems: 2,
-        hasOlder: true,
-        hasNewer: false,
-        oldestItemKey: "k1",
-        newestItemKey: "k2",
-      };
-      const current = session(["k1", "k2"], page);
-      current.timelineItems.unshift({
-        kind: "pendingUserTurn",
-        itemKey: "pending-r",
-        requestId: "r",
-        content: "same text",
-        selectedSkillIds: [],
-        lifecycleState: "pending",
-        foldedIntoRequestId: null,
-        origin: null,
-        createdAt: null,
-      });
-      const incoming = session(["k1", "k2"], page);
-      incoming.timelineItems.push({
-        kind: "userMessage",
-        itemKey: "authored-r",
-        requestId: "r",
-        ownsTurn: true,
-        inputRequestId: "r",
-        sequence: 3,
-        content: "same text",
-        timestamp: null,
-        reconstruction: { state: "ready" },
-      });
-      const merged = mergeSessionTipSnapshot(current, incoming);
-      expect(
-        merged.timelineItems
-          .filter(
-            (item) =>
-              (item.kind === "userMessage" || item.kind === "pendingUserTurn") &&
-              item.requestId === "r",
-          )
-          .map((item) => item.kind),
-      ).toEqual(["userMessage"]);
-      expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
-        "k1",
-        "k2",
-        "authored-r",
-      ]);
-    },
-  );
+  it("replaces a queued input with its durable owner when the tip page arrives", () => {
+    const page = {
+      totalItems: 3,
+      pageItems: 2,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k2",
+    };
+    const current = session(["k1", "k2"], page);
+    current.timelineItems.unshift({
+      kind: "pendingUserTurn",
+      itemKey: "pending-r",
+      requestId: "r",
+      content: "same text",
+      selectedSkillIds: [],
+      lifecycleState: "pending",
+      foldedIntoRequestId: null,
+      origin: null,
+      createdAt: null,
+    });
+    const incoming = session(["k1", "k2"], page);
+    incoming.timelineItems.push({
+      kind: "userMessage",
+      itemKey: "authored-r",
+      requestId: "r",
+      ownsTurn: true,
+      inputRequestId: "r",
+      sequence: 3,
+      content: "same text",
+      timestamp: null,
+      reconstruction: { state: "ready" },
+    });
+    const merged = mergeSessionTipSnapshot(current, incoming);
+    expect(
+      merged.timelineItems
+        .filter(
+          (item) =>
+            (item.kind === "userMessage" || item.kind === "pendingUserTurn") &&
+            item.requestId === "r",
+        )
+        .map((item) => item.kind),
+    ).toEqual(["userMessage"]);
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+      "k1",
+      "k2",
+      "authored-r",
+    ]);
+  });
 
-  it(
-    "replaces a queued trigger input with its published automated item when the tip page arrives",
-    () => {
-      const page = {
-        totalItems: 3,
-        pageItems: 2,
-        hasOlder: true,
-        hasNewer: false,
-        oldestItemKey: "k1",
-        newestItemKey: "k2",
-      };
-      const origin = {
-        kind: "trigger" as const,
-        triggerId: "nightly",
-        triggerKind: "schedule",
-      };
-      const current = session(["k1", "k2"], page);
-      current.timelineItems.unshift({
-        kind: "pendingUserTurn",
-        itemKey: "pending-t",
-        requestId: "t",
-        content: "write the report",
-        selectedSkillIds: [],
-        lifecycleState: "pending",
-        foldedIntoRequestId: null,
-        origin,
-        createdAt: null,
-      });
-      const incoming = session(["k1", "k2"], page);
-      incoming.timelineItems.push({
-        kind: "automatedInput",
-        itemKey: "authored:doc-t:prompt",
-        requestId: "doc-t",
-        inputRequestId: "t",
-        sequence: 3,
-        origin,
-        content: "write the report",
-        timestamp: null,
-        reconstruction: { state: "ready" },
-      });
-      const merged = mergeSessionTipSnapshot(current, incoming);
-      expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
-        "k1",
-        "k2",
-        "authored:doc-t:prompt",
-      ]);
-    },
-  );
+  it("replaces a queued trigger input with its published automated item when the tip page arrives", () => {
+    const page = {
+      totalItems: 3,
+      pageItems: 2,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k2",
+    };
+    const origin = {
+      kind: "trigger" as const,
+      triggerId: "nightly",
+      triggerKind: "schedule",
+    };
+    const current = session(["k1", "k2"], page);
+    current.timelineItems.unshift({
+      kind: "pendingUserTurn",
+      itemKey: "pending-t",
+      requestId: "t",
+      content: "write the report",
+      selectedSkillIds: [],
+      lifecycleState: "pending",
+      foldedIntoRequestId: null,
+      origin,
+      createdAt: null,
+    });
+    const incoming = session(["k1", "k2"], page);
+    incoming.timelineItems.push({
+      kind: "automatedInput",
+      itemKey: "authored:doc-t:prompt",
+      requestId: "doc-t",
+      inputRequestId: "t",
+      sequence: 3,
+      origin,
+      content: "write the report",
+      timestamp: null,
+      reconstruction: { state: "ready" },
+    });
+    const merged = mergeSessionTipSnapshot(current, incoming);
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+      "k1",
+      "k2",
+      "authored:doc-t:prompt",
+    ]);
+  });
 
   it.each(["userMessage", "assistantMessage"] as const)(
     "updates %s reconstruction when blank content is unchanged",
@@ -518,5 +509,4 @@ describe("transcript cursor ownership", () => {
     expect(merged.timelinePage?.oldestItemKey).toBe("k8");
     expect(merged.timelineItems[0]).toEqual(pending);
   });
-
 });

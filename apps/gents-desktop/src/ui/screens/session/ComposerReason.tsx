@@ -40,7 +40,8 @@ export function composerReason(
   if (!deployment) return null;
   const name = deployment.node.displayName ?? deployment.label;
   if (deployment.runtimeConnection === "disconnected") return { kind: "offline", name };
-  if (deployment.runtimeConnection === "noEndpoint") return { kind: "noEndpoint", name };
+  if (deployment.runtimeConnection === "noEndpoint")
+    return { kind: "noEndpoint", name };
   if (status.reason !== "agentUnavailable") return null;
   const decision = selectedNodeReadinessDecision(deployment, agentDid);
   if (decision.kind !== "unavailable") return null;
