@@ -35,13 +35,121 @@ pub enum RuntimeNoticeError {
     MissingClaimProvenance,
 }
 
+/// The receipt's request label only locates the signed AgentRequest as its
+/// held target Agent sees it. The recipient is that record's verified client
+/// signer, and only once its native claim committed (`claimed_at` is written
+/// solely by the claim transaction after client authorization).
 pub(crate) async fn publish(
-    _node: &Arc<EmbeddedNode>,
-    _node_did: &str,
-    _identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
-    _notice: RuntimeNotice,
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
+    notice: RuntimeNotice,
 ) -> std::result::Result<MailboxItem, RuntimeNoticeError> {
-    Err(RuntimeNoticeError::MissingClaimProvenance)
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} claimed_at }} }}"#,
+        escape_graphql_string(node_did),
+        escape_graphql_string(&notice.request_id),
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+    );
+    let mut claimed = None;
+    for identity in identities {
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(identity.did()).map_err(anyhow::Error::new)?,
+            identity.as_ref(),
+        )
+        .map_err(anyhow::Error::new)?;
+        let response = access.execute(&query).await.map_err(anyhow::Error::new)?;
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
+            .context("runtime notice request lookup")?;
+        let row = match rows.as_slice() {
+            [] => continue,
+            [row] => row,
+            _ => return Err(RuntimeNoticeScopeError::InvalidRequest.into()),
+        };
+        if claimed.is_some() {
+            return Err(RuntimeNoticeScopeError::InvalidRequest.into());
+        }
+        let committed = row["claimed_at"].as_str().is_some_and(|at| !at.is_empty());
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(row.clone()).context("decode runtime notice request")?;
+        claimed = Some((access, identity.did().to_owned(), row, committed));
+    }
+    let Some((access, agent_did, row, committed)) = claimed else {
+        return Err(RuntimeNoticeError::MissingClaimProvenance);
+    };
+    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)
+        .map_err(|_| RuntimeNoticeScopeError::InvalidRequest)?;
+    let admission = crate::store::identity::request_receipt::row_admission(&row)
+        .map_err(|_| RuntimeNoticeScopeError::InvalidRequest)?;
+    if row.node_did.as_deref() != Some(node_did)
+        || row.agent_did.as_deref() != Some(agent_did.as_str())
+        || row.session_id.as_deref() != Some(notice.session_id.as_str())
+    {
+        return Err(RuntimeNoticeScopeError::ScopeMismatch.into());
+    }
+    if admission.kind != gents_protocol::request_admission::AgentRequestAdmissionKind::Client {
+        return Err(RuntimeNoticeScopeError::MissingRecipient.into());
+    }
+    if !committed {
+        return Err(RuntimeNoticeError::MissingClaimProvenance);
+    }
+    let context = MailboxStampContext {
+        requester_did: admission.signer_did,
+        node_did: node_did.to_owned(),
+        agent_did,
+        session_id: Some(notice.session_id.clone()),
+    };
+    let kind = if notice.failed {
+        MailboxKind::Failed
+    } else {
+        MailboxKind::Finished
+    };
+    // An acknowledged terminal event must not reappear after a restart or a
+    // crash between the database commit and the local publication marker.
+    if let Some(existing) = load_prefix_items(
+        &access,
+        &context.requester_did,
+        MailboxSourceKind::Runtime,
+        &notice.source_id,
+        kind,
+    )
+    .await?
+    .into_iter()
+    .next()
+    {
+        if existing.node_did != node_did
+            || existing.session_id.as_deref() != Some(notice.session_id.as_str())
+            || existing.request_id.as_deref() != Some(notice.request_id.as_str())
+        {
+            return Err(RuntimeNoticeScopeError::SourceCollision.into());
+        }
+        return Ok(existing);
+    }
+    stamp_create_with_access(
+        node,
+        &access,
+        &context,
+        FileMailboxItemArgs {
+            kind,
+            action: MailboxAction::Ack,
+            title: notice.title,
+            summary: Some(notice.summary),
+            payload: None,
+            source_kind: MailboxSourceKind::Runtime,
+            source_id: notice.source_id,
+            session_id: Some(notice.session_id),
+            request_id: Some(notice.request_id),
+            cause_doc_id: None,
+            expected_collection: None,
+            parent_item_id: None,
+            deadline_at: None,
+        },
+        MAILBOX_CLOSE_COLLECTIONS,
+    )
+    .await
+    .map_err(Into::into)
 }
 
 #[cfg(test)]

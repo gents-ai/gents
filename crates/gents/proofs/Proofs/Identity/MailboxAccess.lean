@@ -108,17 +108,37 @@ def nativeCasesJson : String :=
          ("expected", Lean.toJson (permitted fixture actor permission)),
          ("revoked_expected", Lean.toJson (permitted revoked actor permission))]))]).compress
 
-/-- A restart notice without an authenticated claim receipt is deferred. Its
-durable source receipt remains available for later repair; session fields and
-logical request labels do not establish an immediate requester. -/
-def runtimeNoticeWithoutClaim : Publication := publish true false true
+/-- A restart notice names its request only by a logical label in a durable
+source receipt. The label locates the request's signed record as its held
+target Agent sees it; the recipient is that record's claimed recipient, so a
+session field or label never establishes the requester. Without a committed
+claim the notice is deferred and its durable source receipt remains available
+for later repair. -/
+def runtimeNotice (admitted : Option AdmittedRequest) (claimCommitted committed : Bool) :
+    Publication :=
+  publish true (claimedRecipient admitted claimCommitted).isSome committed
+
+def runtimeNoticeWithoutClaim : Publication :=
+  runtimeNotice (some ⟨"delegate", "request", "session", "agent"⟩) false true
 
 theorem unavailable_runtime_notice_has_no_publication :
     runtimeNoticeWithoutClaim = ⟨false, false⟩ := by rfl
 
+theorem claimed_runtime_notice_reaches_admitted_signer :
+    runtimeNotice (some ⟨"delegate", "request", "session", "agent"⟩) true true = ⟨true, true⟩ := by rfl
+
+theorem missing_request_runtime_notice_has_no_publication :
+    runtimeNotice none true true = ⟨false, false⟩ := by rfl
+
+private def runtimeNoticeJson (p : Publication) : Lean.Json :=
+  Lean.Json.mkObj [("document", Lean.toJson p.document),
+    ("recipient", Lean.toJson p.recipient), ("deferred", Lean.toJson (!p.document))]
+
 def runtimeNoticeCasesJson : String :=
   (Lean.Json.mkObj [("document", Lean.toJson runtimeNoticeWithoutClaim.document),
     ("recipient", Lean.toJson runtimeNoticeWithoutClaim.recipient),
-    ("deferred", Lean.toJson true)]).compress
+    ("deferred", Lean.toJson (!runtimeNoticeWithoutClaim.document)),
+    ("claimed", runtimeNoticeJson
+      (runtimeNotice (some ⟨"delegate", "request", "session", "agent"⟩) true true))]).compress
 
 end Identity.MailboxAccess

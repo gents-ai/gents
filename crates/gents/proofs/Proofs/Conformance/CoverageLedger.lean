@@ -1607,7 +1607,7 @@ def caseCoverage : List CoverageEntry :=
       "mailbox_claimed_recipient_cases"
       "MailboxClaimedRecipientCases"
       "request::lifecycle::client::tests::mailbox_claim_tests::delegated_http_claim_routes_mailbox_to_immediate_signer"
-      "Connects a native User-authored client claim to the mailbox tool and recipient relationship; restart and unattended provenance remain unavailable.")
+      "Connects a native User-authored client claim to the mailbox tool and recipient relationship, and after restart to the runtime notice; unattended provenance remains unavailable.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "mailbox_sweep_actor_cases"
@@ -1619,7 +1619,7 @@ def caseCoverage : List CoverageEntry :=
       "mailbox_runtime_notice_case"
       "MailboxRuntimeNoticeCase"
       "session::mailbox::runtime_notice::tests::runtime_notice_without_claim_is_deferred"
-      "Checks deferred publication when the durable update receipt lacks verified claim provenance.")
+      "Checks deferred publication without a committed claim; delegated_http_claim_routes_mailbox_to_immediate_signer checks signer-addressed publication and acknowledgement replay after the claim.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "mailbox_native_policy"
