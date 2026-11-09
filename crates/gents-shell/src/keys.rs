@@ -57,6 +57,8 @@ pub enum Action {
     WordRight,
     Home,
     End,
+    /// A line break in the message box.
+    NewLine,
     Submit,
     Back,
     Interrupt,
@@ -154,6 +156,7 @@ impl Keymap {
     }
 
     pub fn map(&mut self, ctx: KeyCtx, key: KeyEvent) -> Action {
+        let key = legacy(key);
         if let Some(prefix) = self.pending.take() {
             return Self::chord(prefix, key);
         }
@@ -163,14 +166,18 @@ impl Keymap {
         if key.modifiers.contains(KeyModifiers::ALT) {
             return match key.code {
                 KeyCode::Char('x') if self.set == KeySet::Emacs => Action::OpenBar,
-                KeyCode::Char('b') if in_line(ctx) => Action::WordLeft,
-                KeyCode::Char('f') if in_line(ctx) => Action::WordRight,
+                KeyCode::Char('b') | KeyCode::Left if in_line(ctx) => Action::WordLeft,
+                KeyCode::Char('f') | KeyCode::Right if in_line(ctx) => Action::WordRight,
+                KeyCode::Backspace if in_line(ctx) => Action::DeleteWord,
+                KeyCode::Enter if ctx == KeyCtx::Input => Action::NewLine,
                 _ => Action::None,
             };
         }
         let regular_search = self.set == KeySet::Regular && ctx == KeyCtx::SearchLine;
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Esc => Action::Back,
+            KeyCode::Enter if shift && ctx == KeyCtx::Input => Action::NewLine,
             KeyCode::Enter => Action::Submit,
             KeyCode::Down if regular_search => Action::SearchNext,
             KeyCode::Up if regular_search => Action::SearchPrev,
@@ -185,7 +192,7 @@ impl Keymap {
             KeyCode::Char(c) => self.character(ctx, c),
             KeyCode::Tab if matches!(ctx, KeyCtx::Input | KeyCtx::Filter) => Action::Complete,
             KeyCode::BackTab if ctx == KeyCtx::Filter => Action::CompleteBack,
-            code if in_line(ctx) => edit_key(code),
+            code if in_line(ctx) => edit_key(code, key.modifiers.contains(KeyModifiers::SUPER)),
             _ => Action::None,
         }
     }
@@ -239,13 +246,17 @@ impl Keymap {
     fn control(&mut self, ctx: KeyCtx, code: KeyCode) -> Action {
         let (vim, emacs) = (self.set == KeySet::Vim, self.set == KeySet::Emacs);
         let regular = self.set == KeySet::Regular;
+        let line = in_line(ctx);
         let c = match code {
             KeyCode::Char(c) => c,
             KeyCode::PageDown if regular => return Action::NextTab,
             KeyCode::PageUp if regular => return Action::PrevTab,
+            KeyCode::Enter if ctx == KeyCtx::Input => return Action::NewLine,
+            KeyCode::Left if line => return Action::WordLeft,
+            KeyCode::Right if line => return Action::WordRight,
+            KeyCode::Backspace if line => return Action::DeleteWord,
             _ => return Action::None,
         };
-        let line = in_line(ctx);
         match c {
             'c' => Action::Interrupt,
             'g' => Action::Back,
@@ -257,6 +268,8 @@ impl Keymap {
             'a' if line => Action::Home,
             'e' if line => Action::End,
             'u' if line => Action::DeleteToStart,
+            // Raw mode reads a line feed as ctrl-j, in every terminal.
+            'j' if ctx == KeyCtx::Input => Action::NewLine,
             'w' if !emacs && matches!(ctx, KeyCtx::Input | KeyCtx::SearchLine) => {
                 Action::DeleteWord
             }
@@ -312,14 +325,32 @@ impl Keymap {
     }
 }
 
+/// Without the keyboard protocol, ctrl-m, ctrl-i and ctrl-[ are enter's, tab's and esc's own
+/// bytes; with it they arrive as themselves, and keep meaning those keys.
+fn legacy(key: KeyEvent) -> KeyEvent {
+    let code = match key.code {
+        _ if key.modifiers != KeyModifiers::CONTROL => return key,
+        KeyCode::Char('m') => KeyCode::Enter,
+        KeyCode::Char('i') => KeyCode::Tab,
+        KeyCode::Char('[') => KeyCode::Esc,
+        _ => return key,
+    };
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
 /// A box that takes typed text. macOS terminals send readline keys for Cmd-Backspace and
-/// Cmd or Option with the arrows (Ghostty's defaults), so those edit it in every key set.
+/// Cmd or Option with the arrows (Ghostty's defaults), so those edit it in every key set, as
+/// those keys themselves do where the terminal reports them.
 pub fn in_line(ctx: KeyCtx) -> bool {
     matches!(ctx, KeyCtx::Input | KeyCtx::Filter | KeyCtx::SearchLine)
 }
 
-fn edit_key(code: KeyCode) -> Action {
+/// With Cmd, the arrows and Backspace take the line, as in macOS text boxes.
+fn edit_key(code: KeyCode, cmd: bool) -> Action {
     match code {
+        KeyCode::Backspace if cmd => Action::DeleteToStart,
+        KeyCode::Left if cmd => Action::Home,
+        KeyCode::Right if cmd => Action::End,
         KeyCode::Backspace => Action::Backspace,
         KeyCode::Delete => Action::Delete,
         KeyCode::Left => Action::CursorLeft,
@@ -364,6 +395,27 @@ mod tests {
         (Input, "alt-b", A::WordLeft), (Input, "alt-f", A::WordRight), (Filter, "alt-b", A::WordLeft), (Filter, "alt-f", A::WordRight), (SearchLine, "alt-b", A::WordLeft), (SearchLine, "alt-f", A::WordRight),
         (Normal, "ctrl-u", A::None), (Normal, "ctrl-a", A::None), (Normal, "ctrl-e", A::None), (Menu, "ctrl-u", A::None), (Normal, "alt-b", A::None), (Menu, "alt-f", A::None),
         (Menu, "pgup", A::PageUp), (Menu, "pgdn", A::PageDown), (Filter, "pgup", A::None), (Menu, "s", A::Stop),
+        (Normal, "ctrl-m", A::Submit), (Normal, "ctrl-[", A::Back), (Normal, "ctrl-i", A::None), (Normal, "ctrl-w ctrl-m", A::None),
+        (Normal, "shift-enter", A::Submit), (Normal, "ctrl-j", A::None), (Normal, "alt-left", A::None), (Normal, "super-left", A::None), (Normal, "ctrl-bs", A::None),
+    ];
+
+    /// The message box's line breaks and every line's text-editing keys, the same in each set.
+    #[rustfmt::skip]
+    const EVERY_SET: &[(KeyCtx, &str, Action)] = &[
+        (Input, "shift-enter", A::NewLine), (Input, "alt-enter", A::NewLine), (Input, "ctrl-enter", A::NewLine), (Input, "ctrl-j", A::NewLine),
+        (Filter, "shift-enter", A::Submit), (SearchLine, "shift-enter", A::Submit), (Menu, "shift-enter", A::Submit),
+        (Filter, "ctrl-j", A::None), (SearchLine, "ctrl-j", A::None), (Menu, "ctrl-j", A::None), (Filter, "alt-enter", A::None), (SearchLine, "ctrl-enter", A::None),
+        (Input, "alt-left", A::WordLeft), (Input, "alt-right", A::WordRight), (Input, "ctrl-left", A::WordLeft), (Input, "ctrl-right", A::WordRight),
+        (Input, "super-left", A::Home), (Input, "super-right", A::End), (Input, "alt-bs", A::DeleteWord), (Input, "ctrl-bs", A::DeleteWord), (Input, "super-bs", A::DeleteToStart),
+        (Filter, "alt-left", A::WordLeft), (Filter, "alt-right", A::WordRight), (Filter, "ctrl-left", A::WordLeft), (Filter, "ctrl-right", A::WordRight),
+        (Filter, "super-left", A::Home), (Filter, "super-right", A::End), (Filter, "alt-bs", A::DeleteWord), (Filter, "ctrl-bs", A::DeleteWord), (Filter, "super-bs", A::DeleteToStart),
+        (SearchLine, "alt-left", A::WordLeft), (SearchLine, "alt-right", A::WordRight), (SearchLine, "ctrl-left", A::WordLeft), (SearchLine, "ctrl-right", A::WordRight),
+        (SearchLine, "super-left", A::Home), (SearchLine, "super-right", A::End), (SearchLine, "alt-bs", A::DeleteWord), (SearchLine, "ctrl-bs", A::DeleteWord), (SearchLine, "super-bs", A::DeleteToStart),
+        (Input, "home", A::Home), (Input, "end", A::End), (Input, "ctrl-a", A::Home), (Input, "ctrl-e", A::End), (Input, "ctrl-u", A::DeleteToStart), (Input, "alt-b", A::WordLeft), (Input, "alt-f", A::WordRight),
+        (Menu, "alt-left", A::None), (Menu, "ctrl-right", A::None), (Menu, "super-left", A::None), (Menu, "ctrl-bs", A::None), (Menu, "super-bs", A::None),
+        (Input, "ctrl-[", A::Back), (Filter, "ctrl-[", A::Back), (Menu, "ctrl-[", A::Back), (SearchLine, "ctrl-[", A::Back),
+        (Input, "ctrl-m", A::Submit), (Filter, "ctrl-m", A::Submit), (Menu, "ctrl-m", A::Submit), (SearchLine, "ctrl-m", A::Submit),
+        (Input, "ctrl-i", A::Complete), (Filter, "ctrl-i", A::Complete), (Menu, "ctrl-i", A::None), (SearchLine, "ctrl-i", A::None),
     ];
 
     #[rustfmt::skip]
@@ -422,16 +474,19 @@ mod tests {
     #[test]
     fn vim_table() {
         check(KeySet::Vim, VIM);
+        check(KeySet::Vim, EVERY_SET);
     }
 
     #[test]
     fn emacs_table() {
         check(KeySet::Emacs, EMACS);
+        check(KeySet::Emacs, EVERY_SET);
     }
 
     #[test]
     fn regular_table() {
         check(KeySet::Regular, REGULAR);
+        check(KeySet::Regular, EVERY_SET);
     }
 
     #[test]

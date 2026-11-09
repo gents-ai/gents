@@ -1152,6 +1152,11 @@ pub fn key_rows(set: KeySet) -> &'static [(&'static str, &'static str)] {
 
 const REGULAR_KEYS: &[(&str, &str)] = &[
     ("Send, or stop the turn", "enter · ctrl-c"),
+    ("New line", "shift-enter · alt-enter · ctrl-j"),
+    (
+        "Text editing",
+        "opt/ctrl-arrows word · cmd-arrows line · opt-bs word",
+    ),
     ("Back one layer", "esc"),
     ("Quick-jump bar", "ctrl-p"),
     ("Slash commands", "/"),
@@ -1183,6 +1188,11 @@ const VIM_KEYS: &[(&str, &str)] = &[
     ("Keys overlay", "?"),
     ("Scroll the focused pane", "j/k · pgup/pgdn"),
     ("Send, or stop the turn", "enter · s"),
+    ("New line", "shift-enter · alt-enter · ctrl-j"),
+    (
+        "Text editing",
+        "opt/ctrl-arrows word · cmd-arrows line · opt-bs word",
+    ),
     ("Quit", ":q then enter"),
     ("ctrl-c", "clears, or says how to quit"),
 ];
@@ -1201,6 +1211,11 @@ const EMACS_KEYS: &[(&str, &str)] = &[
     ("Keys overlay", "ctrl-x ?"),
     ("Scroll the focused pane", "ctrl-n/p · pgup/pgdn"),
     ("Send, or stop the turn", "enter · ctrl-c"),
+    ("New line", "shift-enter · alt-enter · ctrl-j"),
+    (
+        "Text editing",
+        "opt/ctrl-arrows word · cmd-arrows line · opt-bs word",
+    ),
     ("Quit", "ctrl-x ctrl-c"),
     ("ctrl-c", "clears, or says how to quit"),
 ];

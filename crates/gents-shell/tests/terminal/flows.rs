@@ -49,19 +49,80 @@ fn clicks_reach_the_app() {
     assert_restored(&s.finish());
 }
 
-/// A real bracketed paste: one badge in the box, one message in the chat, its lines kept.
+/// Real bracketed pastes: a short one is typed in with its lines, a long one is a badge, and
+/// one message sends both.
 #[test]
 fn a_bracketed_paste_is_one_message() {
     let s = Shell::start(&["--keys", "vim"], 36, 132);
     s.wait_for_all(&["sample data", "INPUT", "Message Engineer"]);
     s.send("\x1b[200~first line\n\n    second line\x1b[201~");
-    s.wait_for_all(&["[Pasted text #1 +3 lines]"]);
+    s.wait_for_all(&["> first line", "    second line"]);
+    s.send("\x1b[200~p1\np2\np3\np4\np5\np6\x1b[201~");
+    s.wait_for_all(&["second line[Pasted text #1 +6 lines]"]);
     s.send("\r");
-    s.wait_for_all(&["first line", "    second line"]);
+    s.wait_for_all(&["first line", "    second linep1", "p6", "Message Engineer"]);
     s.wait_gone("[Pasted text #1");
     s.send("\x1b");
     s.wait_for_all(&["NORMAL"]);
     s.send(":q\r");
+    assert_restored(&s.finish());
+}
+
+/// Each word on a row of the box of its own, under the box's left edge: a key that broke no
+/// line, or sent, leaves `> alphabravo` or `> bravo` instead.
+const BOX_LINES: [&str; 4] = ["> alpha ", "│   bravo ", "│   charlie ", "│   delta "];
+
+/// Shift-enter as the keyboard protocol sends it, then alt-enter and ctrl-j as any terminal
+/// does: each breaks the line, and enter sends the lines as one message.
+#[test]
+fn real_line_break_keys_make_one_message_of_many_lines() {
+    let s = Shell::start(&[], 36, 132);
+    s.wait_for_all(&["sample data", "INPUT", "Message Engineer"]);
+    s.send("alpha\x1b[13;2ubravo\x1b\rcharlie\ndelta");
+    s.wait_for_all(&BOX_LINES);
+    s.send("\r");
+    let bubble = [" alpha ", " bravo ", " charlie ", " delta "];
+    s.wait_for_all(&[&["sample reply", "Message Engineer"][..], &bubble].concat());
+    s.send("\x11");
+    assert_restored(&s.finish());
+}
+
+/// Typing in vim, `esc enter` in one read is alt-enter: the line breaks and typing goes on.
+#[test]
+fn vim_alt_enter_breaks_the_line_while_typing() {
+    let s = Shell::start(&["--keys", "vim"], 36, 132);
+    s.wait_for_all(&["INPUT", "Message Engineer"]);
+    s.send("alpha\x1b\rbravo");
+    s.wait_for_all(&[BOX_LINES[0], BOX_LINES[1], "INPUT"]);
+    s.send("\x1b");
+    s.wait_for_all(&["NORMAL"]);
+    s.send(":q\r");
+    assert_eq!(s.finish().code, 0);
+}
+
+/// Word and line keys in the forms the keyboard protocol and legacy terminals send.
+#[test]
+fn real_word_and_line_keys_edit_the_box() {
+    let s = Shell::start(&[], 36, 132);
+    s.wait_for_all(&["INPUT", "Message Engineer"]);
+    s.send("alpha bravo charlie");
+    s.wait_for_all(&["> alpha bravo charlie"]);
+    // alt-backspace, as the protocol and then as a legacy terminal sends it
+    s.send("\x1b[127;3u");
+    s.wait_gone("charlie");
+    s.send("\x1b\x7f");
+    s.wait_gone("bravo");
+    // cmd-left, alt-right, ctrl-left
+    s.send("\x1b[1;9DX");
+    s.wait_for_all(&["> Xalpha"]);
+    s.send("\x1b[1;3CY");
+    s.wait_for_all(&["> XalphaY"]);
+    s.send("\x1b[1;5DZ");
+    s.wait_for_all(&["> ZXalphaY"]);
+    // cmd-right, cmd-backspace
+    s.send("\x1b[1;9C\x1b[127;9u");
+    s.wait_for_all(&["Message Engineer"]);
+    s.send("\x11");
     assert_restored(&s.finish());
 }
 

@@ -18,8 +18,26 @@ fn assert_mouse_off(e: &Exit) {
     }
 }
 
+/// Pushed on the alternate screen and popped before leaving it, whose stack is its own.
+fn assert_keyboard_popped(e: &Exit) {
+    let pushed = e
+        .raw
+        .find(r"\u001b[>5u")
+        .expect("the keyboard flags pushed");
+    let popped = e
+        .raw
+        .rfind(r"\u001b[<1u")
+        .expect("the keyboard flags popped");
+    let left = e
+        .raw
+        .rfind(r"\u001b[?1049l")
+        .expect("the alternate screen left");
+    assert!(pushed < popped && popped < left, "{}", e.raw);
+}
+
 fn assert_restored(e: &Exit) {
     assert_mouse_off(e);
+    assert_keyboard_popped(e);
     assert!(
         e.raw.contains(r"\u001b[?2004l"),
         "bracketed paste off: {}",
@@ -151,6 +169,7 @@ fn panic_restores_the_terminal() {
     assert!(e.text.contains("rc=101"), "{}", e.text);
     assert!(e.text.contains("panicked"), "{}", e.text);
     assert_mouse_off(&e);
+    assert_keyboard_popped(&e);
     assert_cooked(&e);
     assert!(!e.alternate_screen);
     assert!(e.cursor_visible);

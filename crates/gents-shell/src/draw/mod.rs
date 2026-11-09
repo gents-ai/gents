@@ -56,7 +56,7 @@ pub fn draw(app: &App, frame: &mut Frame) {
     status::draw(app, panes.status, buf);
     match (app.ctx(), &app.search) {
         (KeyCtx::Input, _) => {
-            frame.set_cursor_position(agent::cursor(&app.tabs[app.active], panes.agent));
+            frame.set_cursor_position(agent::cursor(app, panes.agent));
         }
         (KeyCtx::SearchLine, Some(search)) => {
             if let Some(rows) = app.pane_rows(search.pane) {

@@ -2,7 +2,7 @@ use std::io::{self, stdout, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use ratatui::crossterm::event::Event;
+use ratatui::crossterm::event::{Event, KeyboardEnhancementFlags};
 use ratatui::crossterm::{cursor, event, execute, terminal};
 use ratatui::DefaultTerminal;
 
@@ -10,6 +10,12 @@ use crate::app::App;
 use crate::draw;
 use crate::keys::KeySet;
 use crate::source::{Input, Intent};
+
+/// The kitty keyboard protocol's least, as Codex asks for it: shift-enter, and cmd with the
+/// arrows or backspace, arrive as themselves, and a multiplexer such as herdr encodes them so
+/// only for a pane that asked. No event types: each key would also report its release.
+const KEYBOARD: KeyboardEnhancementFlags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+    .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
 
 pub struct TerminalGuard {
     terminal: Option<DefaultTerminal>,
@@ -23,6 +29,11 @@ pub fn enter() -> io::Result<TerminalGuard> {
         event::EnableBracketedPaste
     )
     .inspect_err(|_| ratatui::restore())?;
+    // Pushed without asking, as Codex does: a terminal without the protocol ignores it, and a
+    // query waits up to 2 s on one that never answers. Pushed on the alternate screen, whose
+    // stack is its own, so it is popped before leaving it. Fails only on the legacy Windows
+    // console, which keeps today's keys.
+    let _ = execute!(stdout(), event::PushKeyboardEnhancementFlags(KEYBOARD));
     // Runs before the hook `try_init` installed, which leaves the alternate screen.
     let restore_and_report = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -30,7 +41,8 @@ pub fn enter() -> io::Result<TerminalGuard> {
             stdout(),
             event::DisableMouseCapture,
             event::DisableBracketedPaste,
-            cursor::Show
+            cursor::Show,
+            event::PopKeyboardEnhancementFlags
         );
         restore_and_report(info);
     }));
@@ -61,7 +73,8 @@ impl Drop for TerminalGuard {
             stdout(),
             event::DisableMouseCapture,
             event::DisableBracketedPaste,
-            cursor::Show
+            cursor::Show,
+            event::PopKeyboardEnhancementFlags
         );
         ratatui::restore();
     }

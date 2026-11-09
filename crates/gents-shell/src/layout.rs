@@ -100,17 +100,21 @@ pub fn layout(width: u16, height: u16, wanted: Wanted) -> Screen {
     })
 }
 
+/// No rows tall when the rows under it take the pane.
 pub fn conversation_area(pane: Rect) -> Rect {
-    Rect::new(pane.x + 2, pane.y + 4, pane.width - 4, pane.height - 8)
-}
-
-pub fn running_area(pane: Rect, rows: u16) -> Rect {
     Rect::new(
         pane.x + 2,
-        pane.y + pane.height - 4 - rows,
+        pane.y + 4,
         pane.width - 4,
-        rows,
+        pane.height.saturating_sub(8),
     )
+}
+
+/// Above the message box, and below the tab chips' rule however many rows there are.
+pub fn running_area(pane: Rect, rows: u16) -> Rect {
+    let bottom = pane.y + pane.height - 4;
+    let top = bottom.saturating_sub(rows).max(pane.y + 3);
+    Rect::new(pane.x + 2, top, pane.width - 4, bottom - top)
 }
 
 /// The pane's inside, below the Diff view's scope line and its rule.
@@ -153,7 +157,7 @@ fn size_of(kind: LayerKind, on_top: bool) -> (u16, u16) {
             | MenuId::Experimental,
         ) => (76, 20),
         LayerKind::Menu(_) => (50, 13),
-        LayerKind::Keys => (KEYS_FULL_W, 23),
+        LayerKind::Keys => (KEYS_FULL_W, 25),
         LayerKind::Sessions => (36, 15),
         LayerKind::Sidebar => (40, 20),
         LayerKind::Setup => (72, 20),
@@ -327,8 +331,8 @@ mod tests {
 
     #[test]
     fn keys_table_has_room_for_every_row_when_the_layer_is_full_size() {
-        let rows = keys_rows_area(Rect::new(24, 5, 84, 23));
-        assert_eq!(rows, Rect::new(27, 9, 80, 16));
+        let rows = keys_rows_area(Rect::new(24, 5, 84, 25));
+        assert_eq!(rows, Rect::new(27, 9, 80, 18));
         for set in [KeySet::Regular, KeySet::Vim, KeySet::Emacs] {
             let keys = crate::sample::key_rows(set);
             assert!(keys.len() <= usize::from(rows.height), "{set:?}");

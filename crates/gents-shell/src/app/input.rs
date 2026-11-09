@@ -15,9 +15,9 @@ pub struct LineInput {
     pastes: Vec<(String, String)>,
 }
 
-/// A paste of one line up to this many characters is typed in; a longer one, or one of more
-/// lines, shows as a badge, because the box is one row.
-const INLINE_PASTE_CHARS: usize = 400;
+/// A message-box paste of more lines or characters than these shows as a badge, as Gemini CLI's.
+const BADGE_LINES: usize = 5;
+const BADGE_CHARS: usize = 500;
 
 /// How a tab is drawn.
 pub const TAB: &str = "    ";
@@ -36,25 +36,6 @@ impl LineInput {
             self.text.insert(self.cursor, c);
             self.cursor += c.len_utf8();
         }
-    }
-
-    /// A terminal's bracketed paste: typed in when it is short and one line, else a badge.
-    pub fn paste(&mut self, text: &str) {
-        let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        let text = text.trim_end_matches('\n');
-        let lines = text.lines().count();
-        let chars = text.chars().count();
-        if lines <= 1 && chars <= INLINE_PASTE_CHARS {
-            return self.paste_inline(text);
-        }
-        let n = self.pastes.len() + 1;
-        let badge = match lines {
-            1 => format!("[Pasted text #{n} {chars} chars]"),
-            _ => format!("[Pasted text #{n} +{lines} lines]"),
-        };
-        self.text.insert_str(self.cursor, &badge);
-        self.cursor += badge.len();
-        self.pastes.push((badge, text.to_string()));
     }
 
     /// A paste into a box that holds one line: line breaks and tabs become spaces.
@@ -82,25 +63,15 @@ impl LineInput {
         self.pastes.iter().map(|(badge, _)| badge.as_str())
     }
 
-    /// Removes the cluster before the cursor, or the whole badge that ends there.
     pub fn backspace(&mut self) {
-        let before = &self.text[..self.cursor];
-        let badge = self.badges().find(|badge| before.ends_with(badge));
-        if let Some(len) = badge.map(str::len) {
-            let start = self.cursor - len;
-            self.text.drain(start..self.cursor);
-            self.cursor = start;
-            return;
-        }
         let end = self.cursor;
         self.left();
-        self.text.drain(self.cursor..end);
+        self.remove(self.cursor..end);
     }
 
     pub fn delete(&mut self) {
-        if let Some(&(len, _)) = clusters(&self.text[self.cursor..]).first() {
-            self.text.drain(self.cursor..self.cursor + len);
-        }
+        let len = self.after().map_or(0, str::len);
+        self.remove(self.cursor..self.cursor + len);
     }
 
     /// Back over spaces, then back to the next space, as `ctrl-w` does in readline.
@@ -112,55 +83,74 @@ impl LineInput {
         while self.cursor > 0 && !self.text[..self.cursor].ends_with(char::is_whitespace) {
             self.left();
         }
-        self.text.drain(self.cursor..end);
+        self.remove(self.cursor..end);
     }
 
     pub fn delete_to_start(&mut self) {
-        self.text.drain(..self.cursor);
-        self.cursor = 0;
+        self.remove(0..self.cursor);
+    }
+
+    /// Takes `range` out of the text, with the cursor at its start, and forgets each badge it took.
+    fn remove(&mut self, range: std::ops::Range<usize>) {
+        self.cursor = range.start;
+        self.text.drain(range);
+        let text = &self.text;
+        self.pastes
+            .retain(|(badge, _)| text.contains(badge.as_str()));
     }
 
     /// Back over what is not a word, then to the word's start, as readline's `backward-word`,
-    /// whose words are letters and digits.
+    /// whose words are letters and digits. A badge is a word.
     pub fn word_left(&mut self) {
-        while self.before().is_some_and(|cluster| !is_word(cluster)) {
+        while self.before().is_some_and(|unit| !self.is_word(unit)) {
             self.left();
         }
-        while self.before().is_some_and(is_word) {
+        while self.before().is_some_and(|unit| self.is_word(unit)) {
             self.left();
         }
     }
 
     /// On over what is not a word, then to the word's end, as readline's `forward-word`.
     pub fn word_right(&mut self) {
-        while self.after().is_some_and(|cluster| !is_word(cluster)) {
+        while self.after().is_some_and(|unit| !self.is_word(unit)) {
             self.right();
         }
-        while self.after().is_some_and(is_word) {
+        while self.after().is_some_and(|unit| self.is_word(unit)) {
             self.right();
         }
     }
 
+    /// A cluster's first character carries its class: a combining mark after a letter is part of it.
+    fn is_word(&self, unit: &str) -> bool {
+        unit.chars().next().is_some_and(char::is_alphanumeric) || self.badges().any(|b| b == unit)
+    }
+
+    /// The badge that ends at the cursor, else the cluster: what the cursor moves over, so no
+    /// move or edit stops inside a badge.
     fn before(&self) -> Option<&str> {
-        let &(len, _) = clusters(&self.text[..self.cursor]).last()?;
+        let before = &self.text[..self.cursor];
+        let len = match self.badges().find(|badge| before.ends_with(badge)) {
+            Some(badge) => badge.len(),
+            None => clusters(before).last()?.0,
+        };
         Some(&self.text[self.cursor - len..self.cursor])
     }
 
     fn after(&self) -> Option<&str> {
-        let &(len, _) = clusters(&self.text[self.cursor..]).first()?;
+        let after = &self.text[self.cursor..];
+        let len = match self.badges().find(|badge| after.starts_with(badge)) {
+            Some(badge) => badge.len(),
+            None => clusters(after).first()?.0,
+        };
         Some(&self.text[self.cursor..self.cursor + len])
     }
 
     pub fn left(&mut self) {
-        if let Some(&(len, _)) = clusters(&self.text[..self.cursor]).last() {
-            self.cursor -= len;
-        }
+        self.cursor -= self.before().map_or(0, str::len);
     }
 
     pub fn right(&mut self) {
-        if let Some(&(len, _)) = clusters(&self.text[self.cursor..]).first() {
-            self.cursor += len;
-        }
+        self.cursor += self.after().map_or(0, str::len);
     }
 
     pub fn home(&mut self) {
@@ -227,11 +217,17 @@ impl LineInput {
 const LINES_SHOWN: usize = 6;
 
 /// A box of many lines, never none. Enter breaks the line at the cursor, and Backspace at a
-/// line's start joins it to the end of the one above.
+/// line's start joins it to the end of the one above. A badge's text stays with its line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lines {
     lines: Vec<LineInput>,
     row: usize,
+}
+
+impl Default for Lines {
+    fn default() -> Lines {
+        Lines::new("")
+    }
 }
 
 impl Lines {
@@ -252,6 +248,28 @@ impl Lines {
         lines.join("\n")
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.lines.len() == 1 && self.lines[0].is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        *self = Lines::default();
+    }
+
+    pub fn set(&mut self, text: &str) {
+        *self = Lines::new(text);
+    }
+
+    /// What sending the box sends: its lines, each badge replaced by the text it stands for.
+    pub fn sent(&self) -> String {
+        let lines: Vec<String> = self.lines.iter().map(LineInput::sent).collect();
+        lines.join("\n")
+    }
+
+    pub fn badges(&self) -> impl Iterator<Item = &str> {
+        self.lines.iter().flat_map(LineInput::badges)
+    }
+
     pub fn lines(&self) -> &[LineInput] {
         &self.lines
     }
@@ -266,16 +284,26 @@ impl Lines {
 
     /// The rows shown, which keep the cursor's in view.
     pub fn shown(&self) -> std::ops::Range<usize> {
-        let first = self.row.saturating_sub(LINES_SHOWN - 1);
-        first..(first + LINES_SHOWN).min(self.lines.len())
+        self.shown_in(LINES_SHOWN)
+    }
+
+    /// The rows shown in `most`, which keep the cursor's in view.
+    pub fn shown_in(&self, most: usize) -> std::ops::Range<usize> {
+        let first = self.row.saturating_sub(most.saturating_sub(1));
+        first..(first + most).min(self.lines.len())
     }
 
     pub fn break_line(&mut self) {
         let line = &mut self.lines[self.row];
+        let text = line.text.split_off(line.cursor);
+        let (pastes, kept) = std::mem::take(&mut line.pastes)
+            .into_iter()
+            .partition(|(badge, _)| text.contains(badge.as_str()));
+        line.pastes = kept;
         let rest = LineInput {
-            text: line.text.split_off(line.cursor),
+            text,
             cursor: 0,
-            pastes: Vec::new(),
+            pastes,
         };
         self.row += 1;
         self.lines.insert(self.row, rest);
@@ -290,9 +318,11 @@ impl Lines {
         let above = &mut self.lines[self.row];
         above.cursor = above.text.len();
         above.text.push_str(&line.text);
+        above.pastes.extend(line.pastes);
     }
 
-    /// To the line below, or above, at the same character: false past the last or first.
+    /// To the line below, or above, at the same character, a badge counting as one: false past
+    /// the last or first.
     pub fn step(&mut self, down: bool) -> bool {
         let to = if down {
             self.row.checked_add(1)
@@ -305,11 +335,8 @@ impl Lines {
         let from = &self.lines[self.row];
         let at = clusters(&from.text[..from.cursor]).len();
         let line = &mut self.lines[to];
-        line.cursor = clusters(&line.text)
-            .into_iter()
-            .take(at)
-            .map(|(len, _)| len)
-            .sum();
+        line.cursor = 0;
+        (0..at).for_each(|_| line.right());
         self.row = to;
         true
     }
@@ -325,6 +352,48 @@ impl Lines {
         }
     }
 
+    /// A terminal's bracketed paste into the message box: a long one shows as a badge, and the
+    /// same text pasted again right after its badge takes the badge's place, to be edited.
+    pub fn paste_message(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let text = text.trim_end_matches('\n');
+        let line = &mut self.lines[self.row];
+        let before = &line.text[..line.cursor];
+        let again = |(badge, pasted): &(String, String)| pasted == text && before.ends_with(badge);
+        if line.pastes.iter().any(again) {
+            line.backspace();
+            return self.paste(text);
+        }
+        if text.lines().count() <= BADGE_LINES && text.chars().count() <= BADGE_CHARS {
+            return self.paste(text);
+        }
+        let taken = |n: usize| {
+            let mark = format!("[Pasted text #{n} ");
+            self.badges().any(|badge| badge.starts_with(&mark))
+        };
+        let mut n = 1;
+        while taken(n) {
+            n += 1;
+        }
+        let badge = match text.lines().count() {
+            1 => format!("[Pasted text #{n} {} chars]", text.chars().count()),
+            lines => format!("[Pasted text #{n} +{lines} lines]"),
+        };
+        let line = &mut self.lines[self.row];
+        line.text.insert_str(line.cursor, &badge);
+        line.cursor += badge.len();
+        line.pastes.push((badge, text.to_string()));
+    }
+
+    /// `text` in front of the first line, with the cursor at the box's end.
+    pub fn put_first(&mut self, text: &str) {
+        let first = &mut self.lines[0];
+        first.home();
+        first.paste_inline(text);
+        self.row = self.lines.len() - 1;
+        self.lines[self.row].end();
+    }
+
     /// At a line's end, joins the line below to it.
     fn delete(&mut self) {
         let line = &self.lines[self.row];
@@ -332,21 +401,19 @@ impl Lines {
             return self.lines[self.row].delete();
         }
         let below = self.lines.remove(self.row + 1);
-        self.lines[self.row].text.push_str(&below.text);
+        let line = &mut self.lines[self.row];
+        line.text.push_str(&below.text);
+        line.pastes.extend(below.pastes);
     }
 
     pub fn edit(&mut self, action: Action) {
         match action {
             Action::Backspace => self.backspace(),
             Action::Delete => self.delete(),
+            Action::NewLine => self.break_line(),
             action => self.lines[self.row].edit(action),
         }
     }
-}
-
-/// A cluster's first character carries its class: a combining mark after a letter is part of it.
-fn is_word(cluster: &str) -> bool {
-    cluster.chars().next().is_some_and(char::is_alphanumeric)
 }
 
 /// Each cluster's bytes and columns. A tab, which `styled_graphemes` skips, is always a cluster
@@ -370,48 +437,103 @@ fn clusters(text: &str) -> Vec<(usize, usize)> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_paste_of_many_lines_is_one_badge_that_sends_its_text() {
-        let mut i = LineInput::default();
-        i.insert('s');
-        i.insert(' ');
-        i.paste("one\r\n\n  two\n");
-        i.insert(' ');
-        i.insert('!');
-        assert_eq!(i.text(), "s [Pasted text #1 +3 lines] !");
-        assert_eq!(i.sent(), "s one\n\n  two !");
-    }
+    const SIX: &str = "1\n2\n3\n4\n5\n6";
 
     #[test]
-    fn backspace_removes_a_whole_badge() {
-        let mut i = LineInput::default();
-        i.paste("a\nb");
-        i.backspace();
-        assert!(i.is_empty());
-        assert_eq!(i.sent(), "");
-    }
-
-    #[test]
-    fn a_short_paste_is_typed_where_the_cursor_is() {
-        let mut i = LineInput::default();
-        i.paste("hello\tworld\n");
-        assert_eq!(i.text(), "hello world");
-        assert_eq!(i.sent(), "hello world");
-    }
-
-    #[test]
-    fn a_long_line_is_a_badge_and_each_paste_has_its_number() {
-        let mut i = LineInput::default();
-        i.paste(&"x".repeat(401));
-        i.paste("a\nb");
+    fn a_paste_of_more_than_five_lines_is_one_badge_that_sends_its_text() {
+        let mut l = Lines::new("s ");
+        l.paste_message("1\r\n2\n\n4\n5\n  6\n");
+        l.paste(" !");
+        assert_eq!(l.text(), "s [Pasted text #1 +6 lines] !");
+        assert_eq!(l.sent(), "s 1\n2\n\n4\n5\n  6 !");
+        l.edit(Action::End);
+        (0..2).for_each(|_| l.edit(Action::CursorLeft));
+        l.edit(Action::Backspace);
         assert_eq!(
-            i.text(),
-            "[Pasted text #1 401 chars][Pasted text #2 +2 lines]"
+            (l.text(), l.sent()),
+            ("s  !".to_string(), "s  !".to_string())
         );
-        assert_eq!(i.sent(), format!("{}a\nb", "x".repeat(401)));
-        i.clear();
-        i.paste("c\nd");
-        assert_eq!(i.text(), "[Pasted text #1 +2 lines]");
+        assert_eq!(l.badges().count(), 0);
+    }
+
+    #[test]
+    fn a_paste_of_five_lines_or_500_characters_is_typed_in_with_its_breaks() {
+        let mut l = Lines::default();
+        l.paste_message("one\n\ttwo\r\n3\n4\n5\n");
+        assert_eq!(l.text(), "one\n\ttwo\n3\n4\n5");
+        assert_eq!((l.row(), l.current().text()), (4, "5"));
+        let mut l = Lines::default();
+        l.paste_message(&"x".repeat(500));
+        assert_eq!(l.text(), "x".repeat(500));
+        assert_eq!(l.badges().count(), 0);
+    }
+
+    #[test]
+    fn a_long_line_is_a_badge_and_each_badge_takes_a_free_number() {
+        let mut l = Lines::default();
+        l.paste_message(&"x".repeat(501));
+        l.paste_message(SIX);
+        assert_eq!(
+            l.text(),
+            "[Pasted text #1 501 chars][Pasted text #2 +6 lines]"
+        );
+        assert_eq!(l.sent(), format!("{}{SIX}", "x".repeat(501)));
+        l.edit(Action::CursorLeft);
+        l.edit(Action::Backspace);
+        l.edit(Action::End);
+        let other = "a\nb\nc\nd\ne\nf";
+        l.paste_message(other);
+        assert_eq!(
+            l.text(),
+            "[Pasted text #2 +6 lines][Pasted text #1 +6 lines]"
+        );
+        assert_eq!(l.sent(), format!("{SIX}{other}"));
+        l.clear();
+        l.paste_message(SIX);
+        assert_eq!(l.text(), "[Pasted text #1 +6 lines]");
+    }
+
+    #[test]
+    fn the_same_text_pasted_right_after_its_badge_takes_its_place() {
+        let mut l = Lines::new("a ");
+        l.paste_message(SIX);
+        l.paste_message(SIX);
+        assert_eq!(l.text(), format!("a {SIX}"));
+        assert_eq!(l.badges().count(), 0);
+        assert_eq!((l.row(), l.current().text()), (5, "6"));
+
+        let mut l = Lines::default();
+        l.paste_message(SIX);
+        l.paste_message("1\n2\n3\n4\n5\n7");
+        assert_eq!(l.badges().count(), 2);
+        let mut l = Lines::default();
+        l.paste_message(SIX);
+        l.paste(" ");
+        l.paste_message(SIX);
+        assert_eq!(
+            l.text(),
+            "[Pasted text #1 +6 lines] [Pasted text #2 +6 lines]"
+        );
+    }
+
+    #[test]
+    fn breaking_and_joining_lines_keeps_each_badge_with_its_text() {
+        let mut l = Lines::new("a ");
+        l.paste_message(SIX);
+        l.paste(" b");
+        l.edit(Action::Home);
+        (0..2).for_each(|_| l.edit(Action::CursorRight));
+        l.edit(Action::NewLine);
+        assert_eq!(l.text(), "a \n[Pasted text #1 +6 lines] b");
+        assert_eq!(l.sent(), format!("a \n{SIX} b"));
+        l.edit(Action::Backspace);
+        assert_eq!(l.sent(), format!("a {SIX} b"));
+        l.edit(Action::NewLine);
+        l.step(false);
+        l.edit(Action::End);
+        l.edit(Action::Delete);
+        assert_eq!(l.sent(), format!("a {SIX} b"));
+        assert_eq!(l.lines().len(), 1);
     }
 
     #[test]

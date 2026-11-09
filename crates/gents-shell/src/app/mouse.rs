@@ -166,12 +166,14 @@ impl App {
             self.click_chip(pane, at);
             return;
         }
-        if self.slash.is_some() && slash_area(pane).contains(at) {
-            self.click_slash(slash_rows(slash_area(pane)), at);
+        let message_rows = self.message_rows(pane);
+        let slash = slash_area(pane, message_rows);
+        if self.slash.is_some() && slash.contains(at) {
+            self.click_slash(slash_rows(slash), at);
             return;
         }
         let rows = self.tabs[self.active].running.len() as u16;
-        let running = running_area(pane, rows);
+        let running = running_area(self.above_message(pane), rows);
         if running.contains(at) {
             self.tabs[self.active].running_sel = Some(usize::from(at.y - running.y));
             self.activate_running();
@@ -183,7 +185,7 @@ impl App {
             return;
         }
         self.focus_pane(Pane::Agent);
-        if message_box_area(pane).contains(at) {
+        if message_box_area(pane, message_rows).contains(at) {
             self.act(Action::EnterInput);
         }
     }

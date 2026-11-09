@@ -154,10 +154,7 @@ impl App {
                 self.layers.clear();
                 self.act(Action::EnterInput);
                 self.slash = None;
-                let input = &mut self.tabs[self.active].input;
-                input.home();
-                input.paste_inline(&text);
-                input.end();
+                self.tabs[self.active].input.put_first(&text);
             }
             MenuAct::Open(form) => self.open_form(form),
             MenuAct::ConfirmDelete {
@@ -1437,7 +1434,16 @@ mod tests {
             press(&mut app, open);
             assert_eq!(top(&app), LayerKind::Keys);
             let s = screen(&app);
-            for text in ["Move between panes", moves, set.name()] {
+            let texts = [
+                "Move between panes",
+                moves,
+                set.name(),
+                "New line",
+                "shift-enter · alt-enter · ctrl-j",
+                "Text editing",
+                "opt/ctrl-arrows word · cmd-arrows line",
+            ];
+            for text in texts {
                 assert!(find(&s, text).is_some(), "{set:?} {text}");
             }
             for (other, _, others) in sets.iter().filter(|(other, ..)| *other != set) {
@@ -1490,9 +1496,9 @@ mod tests {
     #[test]
     fn the_keys_hint_says_the_hidden_row_is_a_scroll_away() {
         let sets = [
-            (Regular, "?", "down", 22),
-            (Vim, "esc ?", "j", 23),
-            (Emacs, "ctrl-x ?", "ctrl-n", 22),
+            (Regular, "?", "down", 24),
+            (Vim, "esc ?", "j", 25),
+            (Emacs, "ctrl-x ?", "ctrl-n", 24),
         ];
         for (set, open, down, height) in sets {
             let mut app = App::new(set, 80, height);

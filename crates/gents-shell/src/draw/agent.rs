@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Widget};
 
 use super::layers::list_start;
 use super::{draw_footer, draw_no_matches, draw_row, logo, pane_box, theme};
+use crate::app::input::TAB;
 use crate::app::{App, Mode, Pane, Tab};
 use crate::keys::KeySet;
 use crate::layout::running_area;
@@ -31,32 +32,42 @@ pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
     buf.set_string(x + 1, y + 2, rule, theme::edge(false));
 
     let tab = &app.tabs[app.active];
+    let message = message_box_area(area, app.message_rows(area));
     if tab.lines.is_empty() && tab.running.is_empty() && tab.prompts.is_empty() {
         let typing = app.keymap.set() != KeySet::Vim || app.mode == Mode::Input;
-        startup(area, sessions_docked, typing, buf);
+        startup(area, message.y, sessions_docked, typing, buf);
     } else {
         let rows = app.visible_rows(Pane::Agent, app.conversation_rect(area));
         chat(&app.conversation_rows(rows.width), tab.scroll, rows, buf);
     }
     running_rows(app, tab, area, buf);
-    message_box(app, message_box_area(area), focused, buf);
+    message_box(app, message, focused, buf);
     if let Some(selected) = app.slash {
         slash_list(app, selected, area, buf);
     }
 }
 
-pub fn message_box_area(pane: Rect) -> Rect {
-    Rect::new(pane.x + 2, pane.y + pane.height - 4, pane.width - 4, 3)
+/// `rows` of text between its edges, above the pane's bottom edge.
+pub fn message_box_area(pane: Rect, rows: u16) -> Rect {
+    Rect::new(
+        pane.x + 2,
+        pane.y + pane.height - 3 - rows,
+        pane.width - 4,
+        rows + 2,
+    )
 }
 
 fn text_room(message_box: Rect) -> u16 {
     message_box.width.saturating_sub(TEXT_X + 2)
 }
 
-pub fn cursor(tab: &Tab, pane: Rect) -> Position {
-    let area = message_box_area(pane);
-    let (_, column) = tab.input.view(text_room(area));
-    Position::new(area.x + TEXT_X + column, area.y + 1)
+pub fn cursor(app: &App, pane: Rect) -> Position {
+    let rows = app.message_rows(pane);
+    let area = message_box_area(pane, rows);
+    let input = &app.tabs[app.active].input;
+    let (_, column) = input.current().view(text_room(area));
+    let row = input.row() - input.shown_in(usize::from(rows)).start;
+    Position::new(area.x + TEXT_X + column, area.y + 1 + row as u16)
 }
 
 /// Each tab chip's label and width, and the first chip that keeps the active one in `room`.
@@ -117,7 +128,8 @@ fn chips_width(widths: &[usize]) -> usize {
     widths.iter().sum::<usize>() + widths.len() - 1
 }
 
-fn startup(pane: Rect, sessions_docked: bool, typing: bool, buf: &mut Buffer) {
+/// A grown message box, whose top is `box_top`, can take the hint's row but none higher.
+fn startup(pane: Rect, box_top: u16, sessions_docked: bool, typing: bool, buf: &mut Buffer) {
     let (x, y, w, h) = (pane.x, pane.y, pane.width, pane.height);
     logo::draw(buf, Rect::new(x + 1, y + 3, w - 2, h - 13));
     let hint = match (sessions_docked, typing) {
@@ -127,7 +139,9 @@ fn startup(pane: Rect, sessions_docked: bool, typing: bool, buf: &mut Buffer) {
         (false, false) => HINT_NORMAL,
     };
     centered(buf, pane, y + h - 10, WORD, Tone::Accent);
-    centered(buf, pane, y + h - 8, hint, Tone::Label);
+    if y + h - 8 < box_top {
+        centered(buf, pane, y + h - 8, hint, Tone::Label);
+    }
 }
 
 fn centered(buf: &mut Buffer, pane: Rect, y: u16, text: &str, tone: Tone) {
@@ -215,7 +229,7 @@ fn running_rows(app: &App, tab: &Tab, pane: Rect, buf: &mut Buffer) {
     if tab.running.is_empty() {
         return;
     }
-    let area = running_area(pane, tab.running.len() as u16);
+    let area = running_area(app.above_message(pane), tab.running.len() as u16);
     let heads: Vec<(String, Tone)> = tab.running.iter().map(running_head).collect();
     let width = |text: &str| Span::raw(text).width() as u16;
     // One status column, clear of the longest title, unless the statuses need the room.
@@ -271,13 +285,16 @@ fn message_box(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
     let room = text_room(area);
     let text_x = area.x + TEXT_X;
     if !tab.input.is_empty() {
-        let (text, _) = tab.input.view(room);
-        buf.set_stringn(text_x, y, text, room as usize, theme::tone(Tone::Plain));
-        for badge in tab.input.badges() {
-            for (at, _) in text.match_indices(badge) {
-                let x = text_x + Span::raw(&text[..at]).width() as u16;
-                let w = (Span::raw(badge).width() as u16).min(room.saturating_sub(x - text_x));
-                buf.set_style(Rect::new(x, y, w, 1), theme::tone(Tone::Accent));
+        let shown = tab.input.shown_in(usize::from(area.height - 2));
+        for (line, y) in tab.input.lines()[shown].iter().zip(y..) {
+            let text = line.view(room).0.replace('\t', TAB);
+            buf.set_stringn(text_x, y, &text, room as usize, theme::tone(Tone::Plain));
+            for badge in line.badges() {
+                for (at, _) in text.match_indices(badge) {
+                    let x = text_x + Span::raw(&text[..at]).width() as u16;
+                    let w = (Span::raw(badge).width() as u16).min(room.saturating_sub(x - text_x));
+                    buf.set_style(Rect::new(x, y, w, 1), theme::tone(Tone::Accent));
+                }
             }
         }
         return;
@@ -288,33 +305,29 @@ fn message_box(app: &App, area: Rect, focused: bool, buf: &mut Buffer) {
     }
 }
 
-pub fn slash_area(pane: Rect) -> Rect {
-    let message = message_box_area(pane);
+pub fn slash_area(pane: Rect, message_rows: u16) -> Rect {
+    let message = message_box_area(pane, message_rows);
     let top = message.y.saturating_sub(SLASH_H).max(pane.y + 3);
-    Rect::new(message.x, top, message.width, message.y - top)
+    Rect::new(message.x, top, message.width, message.y.saturating_sub(top))
 }
 
-/// The list's rows inside `slash_area`, above its footer.
+/// The list's rows inside `slash_area`, above its footer: none where there is no room.
 pub fn slash_rows(rect: Rect) -> Rect {
     let area = rect.inner(Margin::new(1, 1));
     Rect {
-        height: area.height - 2,
+        height: area.height.saturating_sub(2),
         ..area
     }
 }
 
 fn slash_list(app: &App, selected: usize, pane: Rect, buf: &mut Buffer) {
-    let rect = slash_area(pane);
+    let rect = slash_area(pane, app.message_rows(pane));
     Clear.render(rect, buf);
     buf.set_style(rect, Style::new().fg(theme::FG).bg(theme::BG));
     pane_box(buf, rect, "Commands and skills", false);
 
-    let area = rect.inner(Margin::new(1, 1));
-    draw_footer(app, area, area.bottom() - 2, SLASH_FOOTER, buf);
-    let list = Rect {
-        height: area.height - 2,
-        ..area
-    };
+    let list = slash_rows(rect);
+    draw_footer(app, list, list.bottom(), SLASH_FOOTER, buf);
     let matches = app.slash_matches();
     if matches.is_empty() {
         draw_no_matches(list, buf);
@@ -383,9 +396,10 @@ mod tests {
     #[test]
     fn a_paste_badge_is_drawn_as_a_badge() {
         let mut app = App::new(Vim, 132, 36);
-        app.handle(ratatui::crossterm::event::Event::Paste("a\nb".to_string()));
+        let six = "1\n2\n3\n4\n5\n6".to_string();
+        app.handle(ratatui::crossterm::event::Event::Paste(six));
         let s = screen(&app);
-        let (y, x) = find(&s, "[Pasted text #1 +2 lines]").expect("the badge");
+        let (y, x) = find(&s, "[Pasted text #1 +6 lines]").expect("the badge");
         assert_eq!(buffer(&app)[(x, y)].fg, theme::ACCENT);
     }
 

@@ -20,6 +20,7 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::commands::{Effect, COMMANDS};
+use crate::draw::agent::{slash_area, slash_rows};
 use crate::filter::subsequence;
 use crate::keys::{in_line, Action, Dir, KeyCtx, KeySet, Keymap};
 use crate::layout::{
@@ -36,7 +37,7 @@ use crate::source::{
 };
 use fields::Field;
 use form::FormState;
-use input::LineInput;
+use input::Lines;
 use layers::{Layer, LayerKind};
 use search::Search;
 use setup::Setup;
@@ -113,7 +114,7 @@ pub struct Tab {
     pub agent_id: String,
     pub lines: Vec<ChatLine>,
     pub scroll: usize,
-    pub input: LineInput,
+    pub input: Lines,
     pub agent_picked: bool,
     pub running: Vec<Running>,
     /// The selected running row, while those rows have the keys.
@@ -170,7 +171,7 @@ impl Tab {
             agent_id: "Engineer".to_string(),
             lines: Vec::new(),
             scroll: 0,
-            input: LineInput::default(),
+            input: Lines::default(),
             agent_picked: false,
             running: Vec::new(),
             running_sel: None,
@@ -421,7 +422,7 @@ pub struct App {
 /// The box's first word after `/`, and the rest trimmed.
 fn slash_words(text: &str) -> (&str, &str) {
     let text = text.strip_prefix('/').unwrap_or(text);
-    let (name, rest) = text.split_once(' ').unwrap_or((text, ""));
+    let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     (name, rest.trim())
 }
 
@@ -955,23 +956,50 @@ impl App {
 
     pub fn conversation_rect(&self, pane: Rect) -> Rect {
         let rows = self.tabs[self.active].running.len() as u16;
+        let pane = self.above_message(pane);
         conversation_area(Rect {
-            height: pane.height - rows,
+            height: pane.height.saturating_sub(rows),
             ..pane
         })
     }
 
+    /// The message box's text rows: one a line, up to six, leaving the conversation a row, and
+    /// the open slash list one of its own.
+    pub fn message_rows(&self, pane: Rect) -> u16 {
+        let tab = &self.tabs[self.active];
+        let room = conversation_area(pane)
+            .height
+            .saturating_sub(tab.running.len() as u16);
+        let mut rows = (tab.input.shown().len() as u16).min(room.max(1));
+        while self.slash.is_some() && rows > 1 && slash_rows(slash_area(pane, rows)).height == 0 {
+            rows -= 1;
+        }
+        rows
+    }
+
+    /// The pane less the rows the message box grew by, as the rows above the box see it.
+    pub fn above_message(&self, pane: Rect) -> Rect {
+        Rect {
+            height: pane.height + 1 - self.message_rows(pane),
+            ..pane
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         // Esc and the next key in one read reach crossterm as alt-<key>
-        // (crossterm-0.29.0/src/event/sys/unix/parse.rs:34-42). In a line, `esc b` and `esc f`
-        // are also what terminals send for option-left and option-right, so they move by word.
-        let word_move = key.modifiers == KeyModifiers::ALT
-            && matches!(key.code, KeyCode::Char('b' | 'f'))
-            && in_line(self.ctx());
-        if self.keymap.set() == KeySet::Vim
-            && key.modifiers.contains(KeyModifiers::ALT)
-            && !word_move
-        {
+        // (crossterm-0.29.0/src/event/sys/unix/parse.rs:34-42). In a line, `esc b`, `esc f` and
+        // `esc backspace` are also what terminals send for option-left, option-right and
+        // option-backspace, so they edit it, as alt-left and alt-right do; alt-enter is a line break.
+        let ctx = self.ctx();
+        let edits = key.modifiers == KeyModifiers::ALT
+            && match key.code {
+                KeyCode::Char('b' | 'f') | KeyCode::Left | KeyCode::Right | KeyCode::Backspace => {
+                    in_line(ctx)
+                }
+                KeyCode::Enter => ctx == KeyCtx::Input,
+                _ => false,
+            };
+        if self.keymap.set() == KeySet::Vim && key.modifiers.contains(KeyModifiers::ALT) && !edits {
             self.press(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
             self.press(KeyEvent::new(key.code, key.modifiers - KeyModifiers::ALT));
         } else {
@@ -1014,7 +1042,7 @@ impl App {
                 }
                 self.focus = Pane::Agent;
                 let input = &mut self.tabs[self.active].input;
-                input.paste(text);
+                input.paste_message(text);
                 if !input.text().starts_with('/') {
                     self.slash = None;
                 }
@@ -1060,11 +1088,18 @@ impl App {
             | Action::WordLeft
             | Action::WordRight
             | Action::Home
-            | Action::End => self.edit(action),
+            | Action::End
+            | Action::NewLine => self.edit(action),
             Action::Submit if self.ctx() == KeyCtx::SearchLine => self.submit_search(),
             Action::Submit if self.in_running() => self.activate_running(),
             Action::Next if self.in_running() => self.step_running(true),
             Action::Prev if self.in_running() => self.step_running(false),
+            Action::Next if self.can_step_line(true) => {
+                self.tabs[self.active].input.step(true);
+            }
+            Action::Prev if self.can_step_line(false) => {
+                self.tabs[self.active].input.step(false);
+            }
             Action::Next if self.can_fall_into_running() => {
                 self.tabs[self.active].running_sel = Some(0);
             }
@@ -1121,12 +1156,20 @@ impl App {
         }
     }
 
+    /// Up and Down move between the message box's lines; from its first or last they do what
+    /// they do from a box of one.
+    fn can_step_line(&self, down: bool) -> bool {
+        let input = &self.tabs[self.active].input;
+        let edge = if down { input.lines().len() - 1 } else { 0 };
+        self.ctx() == KeyCtx::Input && self.focus == Pane::Agent && input.row() != edge
+    }
+
     fn edit(&mut self, action: Action) {
         if self.ctx() == KeyCtx::SearchLine {
             self.edit_search(action);
             return;
         }
-        if matches!(action, Action::Insert(_)) {
+        if matches!(action, Action::Insert(_) | Action::NewLine) {
             self.focus = Pane::Agent;
         }
         if self.focus == Pane::Agent {
@@ -1154,6 +1197,7 @@ impl App {
                 | Action::Delete
                 | Action::DeleteWord
                 | Action::DeleteToStart
+                | Action::NewLine
         ) {
             self.slash = self.slash.map(|_| 0);
         }
@@ -1162,7 +1206,8 @@ impl App {
     /// The commands, then the tab agent's skills, that match the box's first word.
     pub fn slash_matches(&self) -> Vec<SlashRow> {
         let tab = &self.tabs[self.active];
-        let (query, _) = slash_words(tab.input.text());
+        let text = tab.input.text();
+        let (query, _) = slash_words(&text);
         let commands = COMMANDS.iter().filter_map(|command| {
             Some(SlashRow {
                 name: command.slash?.to_string(),
@@ -1191,7 +1236,7 @@ impl App {
 
     /// A command ignores the text after its name.
     fn run_slash(&mut self) {
-        let text = self.tabs[self.active].input.text().to_string();
+        let text = self.tabs[self.active].input.text();
         let Some(row) = self.selected_slash() else {
             self.notice = Some(format!("unknown command: {text}"));
             return;
@@ -1389,13 +1434,12 @@ impl App {
 
     fn interrupt(&mut self) {
         let searching = self.ctx() == KeyCtx::SearchLine;
-        let input = match (self.layers.last_mut(), self.search.as_mut()) {
-            (Some(top), _) => &mut top.filter,
-            (None, Some(search)) if searching => &mut search.query,
-            _ => &mut self.tabs[self.active].input,
+        let was_empty = match (self.layers.last_mut(), self.search.as_mut()) {
+            (Some(top), _) => std::mem::take(&mut top.filter).is_empty(),
+            (None, Some(search)) if searching => std::mem::take(&mut search.query).is_empty(),
+            _ => std::mem::take(&mut self.tabs[self.active].input).is_empty(),
         };
-        if !input.is_empty() {
-            input.clear();
+        if !was_empty {
             if self.layers.is_empty() {
                 self.slash = None;
             }
@@ -2056,7 +2100,7 @@ mod tests {
     fn a_paste_sends_as_one_message_with_its_lines() {
         let (mut app, intents) = connected();
         app.handle(Event::Paste("line one\n\n    line two".to_string()));
-        assert_eq!(app.tabs[0].input.text(), "[Pasted text #1 +3 lines]");
+        assert_eq!(app.tabs[0].input.text(), "line one\n\n    line two");
         press(&mut app, "enter");
         let sent = intents.try_recv().expect("one send");
         assert!(
@@ -2064,6 +2108,295 @@ mod tests {
             "{sent:?}"
         );
         assert!(intents.try_recv().is_err(), "one message, not one a line");
+    }
+
+    const SIX_LINES: &str = "1\n2\n3\n4\n5\n6";
+    const BADGE: &str = "[Pasted text #1 +6 lines]";
+
+    /// `a [badge] b` after `keys`, with `|` typed where the cursor is, and what it sends.
+    fn around_a_badge(keys: &str) -> (String, String) {
+        let mut app = App::new(Regular, 132, 36);
+        type_text(&mut app, "a ");
+        app.handle(Event::Paste(SIX_LINES.to_string()));
+        type_text(&mut app, " b");
+        press(&mut app, keys);
+        type_text(&mut app, "|");
+        let input = &app.tabs[0].input;
+        let held = input.badges().count();
+        assert_eq!(held, usize::from(input.text().contains(BADGE)), "{keys}");
+        (input.text().to_string(), input.sent())
+    }
+
+    #[test]
+    fn every_move_and_delete_takes_a_badge_whole() {
+        let kept = |at: &str| {
+            let text = at.replace('B', BADGE);
+            let sent = at.replace('B', SIX_LINES);
+            (text, sent)
+        };
+        let gone = |at: &str| (at.to_string(), at.to_string());
+        let cases = [
+            ("left left left", kept("a |B b")),
+            ("home right right right", kept("a B| b")),
+            ("left left alt-b", kept("a |B b")),
+            ("home alt-f alt-f", kept("a B| b")),
+            ("home right right del", gone("a | b")),
+            ("left left bs", gone("a | b")),
+            ("left left ctrl-w", gone("a | b")),
+            ("left left ctrl-u", gone("| b")),
+        ];
+        for (keys, want) in cases {
+            assert_eq!(around_a_badge(keys), want, "{keys}");
+        }
+    }
+
+    #[test]
+    fn a_badges_text_pasted_again_right_after_it_is_typed_in_to_edit() {
+        let (mut app, intents) = connected();
+        app.handle(Event::Paste(SIX_LINES.to_string()));
+        assert_eq!(app.tabs[0].input.text(), BADGE);
+        app.handle(Event::Paste(SIX_LINES.to_string()));
+        assert_eq!(app.tabs[0].input.text(), SIX_LINES);
+        assert_eq!(app.tabs[0].input.badges().count(), 0);
+        press(&mut app, "up");
+        type_text(&mut app, "x");
+        press(&mut app, "enter");
+        let sends = sent(&intents);
+        let edited = "1\n2\n3\n4\n5x\n6";
+        let whole = matches!(&sends[..], [Intent::Send { text, .. }] if text == edited);
+        assert!(whole, "{sends:?}");
+    }
+
+    #[test]
+    fn a_paste_of_up_to_five_lines_is_typed_into_the_box_and_a_field_gets_one_line() {
+        let (mut app, _intents) = connected();
+        app.handle(Event::Paste("1\n2\n3\n4\n5".to_string()));
+        assert_eq!(app.tabs[0].input.text(), "1\n2\n3\n4\n5");
+        press(&mut app, "esc /");
+        app.handle(Event::Paste(SIX_LINES.to_string()));
+        let query = app.search.as_ref().expect("the search line").query.text();
+        assert_eq!(query, "1 2 3 4 5 6");
+    }
+
+    fn ready(set: KeySet) -> (App, std::sync::mpsc::Receiver<Intent>) {
+        let (mut app, intents) = crate::testing::connected(set, 132, 36);
+        app.agents = crate::sample::agents();
+        (app, intents)
+    }
+
+    #[test]
+    fn modified_enter_and_ctrl_j_break_the_line_and_enter_sends_every_line() {
+        for set in [Regular, Vim, Emacs] {
+            for newline in ["shift-enter", "alt-enter", "ctrl-enter", "ctrl-j"] {
+                let (mut app, intents) = ready(set);
+                type_text(&mut app, "one");
+                press(&mut app, newline);
+                type_text(&mut app, "two");
+                assert_eq!(app.tabs[0].input.text(), "one\ntwo", "{set:?} {newline}");
+                press(&mut app, "enter");
+                let sends = sent(&intents);
+                let whole = matches!(&sends[..], [Intent::Send { text, .. }] if text == "one\ntwo");
+                assert!(whole, "{set:?} {newline}: {sends:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn up_and_down_cross_the_lines_then_do_what_a_one_line_box_does() {
+        for (set, up, down) in [
+            (Regular, "up", "down"),
+            (Vim, "up", "down"),
+            (Emacs, "ctrl-p", "ctrl-n"),
+        ] {
+            let mut app = App::new(set, 132, 36);
+            app.tabs[0].lines = numbered(80);
+            type_text(&mut app, "one");
+            press(&mut app, "shift-enter");
+            type_text(&mut app, "two");
+            press(&mut app, up);
+            type_text(&mut app, "!");
+            assert_eq!(app.tabs[0].input.text(), "one!\ntwo", "{set:?}");
+            assert_eq!(app.tabs[0].scroll, 0, "{set:?}");
+            press(&mut app, up);
+            assert_eq!(
+                app.tabs[0].scroll, 1,
+                "{set:?}: up from the first line scrolls"
+            );
+            press(&mut app, down);
+            type_text(&mut app, "?");
+            assert_eq!(app.tabs[0].input.text(), "one!\ntwo?", "{set:?}");
+            assert_eq!(app.tabs[0].scroll, 1, "{set:?}");
+            press(&mut app, down);
+            assert_eq!(
+                app.tabs[0].scroll, 0,
+                "{set:?}: down from the last line scrolls"
+            );
+        }
+    }
+
+    #[test]
+    fn the_box_grows_to_six_rows_then_scrolls_and_the_conversation_gives_way() {
+        let mut app = App::new(Regular, 132, 36);
+        app.tabs[0].lines = numbered(80);
+        let row_of = |app: &App, text: &str| find(&screen(app), text).map(|(row, _)| row);
+        let end = row_of(&app, "message 79").expect("the conversation's end");
+        type_text(&mut app, "line 1");
+        for n in 2..=8 {
+            press(&mut app, "shift-enter");
+            type_text(&mut app, &format!("line {n}"));
+        }
+        assert_eq!(row_of(&app, "message 79"), Some(end - 5));
+        let rows = |app: &App| -> Vec<Option<u16>> {
+            (1..=8).map(|n| row_of(app, &format!("line {n}"))).collect()
+        };
+        // Under the conversation's new last row and the box's top edge.
+        let top = end - 3;
+        let shown = |first: u16| (1..=8).map(move |n| (first..first + 6).contains(&n));
+        let at = |first: u16| -> Vec<Option<u16>> {
+            shown(first)
+                .zip(1..)
+                .map(|(on, n)| on.then_some(top + n - first))
+                .collect()
+        };
+        assert_eq!(rows(&app), at(3));
+        let mut terminal = Terminal::new(TestBackend::new(132, 36)).unwrap();
+        terminal.draw(|frame| draw::draw(&app, frame)).unwrap();
+        terminal.backend_mut().assert_cursor_position((40, top + 5));
+        press(&mut app, "up up up up up up up");
+        assert_eq!(rows(&app), at(1));
+        terminal.draw(|frame| draw::draw(&app, frame)).unwrap();
+        terminal.backend_mut().assert_cursor_position((40, top));
+    }
+
+    #[test]
+    fn in_the_smallest_window_the_box_grows_only_while_the_conversation_keeps_a_row() {
+        let mut app = App::new(Regular, 60, 16);
+        app.tabs[0].lines = numbered(80);
+        app.tabs[0].running = crate::sample::running();
+        let rows = app.tabs[0].running.len();
+        for n in 1..=8 {
+            type_text(&mut app, &format!("line {n}"));
+            press(&mut app, "shift-enter");
+        }
+        let s = screen(&app);
+        assert!(find(&s, "message 79").is_some(), "{s:#?}");
+        let shown = (1..=8).filter(|n| find(&s, &format!("line {n}")).is_some());
+        assert_eq!(shown.count(), 7 - rows - 1, "{s:#?}");
+    }
+
+    /// `/goal` and `more` lines under it, with the slash list open.
+    fn goal_and_lines(width: u16, height: u16, more: usize) -> App {
+        let mut app = App::new(Regular, width, height);
+        type_text(&mut app, "/goal");
+        for n in 1..=more {
+            press(&mut app, "shift-enter");
+            type_text(&mut app, &format!("step {n}"));
+        }
+        assert!(app.slash.is_some());
+        app
+    }
+
+    #[test]
+    fn the_slash_list_keeps_a_row_over_a_grown_box_in_the_smallest_windows() {
+        const GOAL_ROW: &str = "/goal      set a goal";
+        for height in [16, 17] {
+            let mut app = goal_and_lines(60, height, 5);
+            let s = screen(&app);
+            let (row, column) = find(&s, GOAL_ROW).expect("the list's row");
+            assert!(find(&s, "step 5").is_some(), "{height}: {s:#?}");
+            app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent {
+                kind: ratatui::crossterm::event::MouseEventKind::Down(
+                    ratatui::crossterm::event::MouseButton::Left,
+                ),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+            assert_eq!(app.slash, None, "{height}: the click ran the row");
+        }
+        let app = goal_and_lines(132, 36, 5);
+        assert_eq!(
+            find(&screen(&app), "step 5").map(|(row, _)| row),
+            Some(32),
+            "where there is room the box keeps its six rows"
+        );
+    }
+
+    #[test]
+    fn many_running_rows_in_the_smallest_window_leave_the_box_drawn() {
+        let mut app = App::new(Regular, 60, 16);
+        app.tabs[0].lines = numbered(3);
+        app.tabs[0].running = (0..3).flat_map(|_| crate::sample::running()).collect();
+        assert!(app.tabs[0].running.len() >= 8);
+        type_text(&mut app, "hi");
+        press(&mut app, "esc ctrl-f");
+        let s = screen(&app);
+        assert!(find(&s, "> hi").is_some(), "{s:#?}");
+    }
+
+    #[test]
+    fn the_startup_hint_gives_way_to_a_grown_box() {
+        let mut app = App::new(Regular, 132, 36);
+        type_text(&mut app, "a");
+        for line in ["b", "c", "d", "e", "f"] {
+            press(&mut app, "shift-enter");
+            type_text(&mut app, line);
+        }
+        let s = screen(&app);
+        let (row, _) = find(&s, "> a").expect("the box's first line");
+        let after = s[usize::from(row)].split_once("> a").expect("the line").1;
+        assert!(after.trim_start().starts_with('│'), "{after:?}");
+        assert_eq!(find(&s, "start typing"), None, "{s:#?}");
+        assert!(find(&s, "g e n t s").is_some());
+    }
+
+    #[test]
+    fn a_click_on_the_grown_box_starts_typing_in_it() {
+        let mut app = App::new(Vim, 132, 36);
+        type_text(&mut app, "one");
+        press(&mut app, "shift-enter");
+        type_text(&mut app, "two");
+        press(&mut app, "esc");
+        let (row, column) = find(&screen(&app), "one").expect("the box's first line");
+        app.handle(Event::Mouse(ratatui::crossterm::event::MouseEvent {
+            kind: ratatui::crossterm::event::MouseEventKind::Down(
+                ratatui::crossterm::event::MouseButton::Left,
+            ),
+            column,
+            row: row - 1,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert_eq!(app.mode, Mode::Input);
+    }
+
+    #[test]
+    fn line_keys_take_the_cursors_line_in_a_box_of_lines() {
+        let cases = [
+            ("home", "one\n|two"),
+            ("super-left", "one\n|two"),
+            ("ctrl-a", "one\n|two"),
+            ("home end", "one\ntwo|"),
+            ("super-right", "one\ntwo|"),
+            ("ctrl-u", "one\n|"),
+            ("super-bs", "one\n|"),
+            ("alt-bs", "one\n|"),
+            ("ctrl-bs", "one\n|"),
+            ("alt-left", "one\n|two"),
+            ("ctrl-left", "one\n|two"),
+            ("home alt-right", "one\ntwo|"),
+            ("home ctrl-right", "one\ntwo|"),
+        ];
+        for set in [Regular, Vim, Emacs] {
+            for (keys, want) in cases {
+                let mut app = App::new(set, 132, 36);
+                type_text(&mut app, "one");
+                press(&mut app, "shift-enter");
+                type_text(&mut app, "two");
+                press(&mut app, keys);
+                type_text(&mut app, "|");
+                assert_eq!(app.tabs[0].input.text(), want, "{set:?} {keys}");
+            }
+        }
     }
 
     #[test]
@@ -3908,11 +4241,12 @@ mod tests {
         app.handle(alt_enter.clone());
         assert_eq!(app.tabs[0].name, "flaky");
 
+        // While typing, `esc enter` in one read is taken as alt-enter, a line break.
         let mut app = App::new(Vim, 132, 36);
         type_text(&mut app, "hi");
         app.handle(alt_enter);
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.tabs[0].input.text(), "hi");
+        assert_eq!(app.mode, Mode::Input);
+        assert_eq!(app.tabs[0].input.text(), "hi\n");
         assert!(app.tabs[0].lines.is_empty());
     }
 
@@ -4814,6 +5148,22 @@ mod tests {
         assert!(!app.tabs[0].following);
         assert!(app.tabs[0].input.is_empty());
         assert_eq!(app.slash, None);
+    }
+
+    #[test]
+    fn a_line_break_after_a_command_starts_its_argument() {
+        let (mut app, intents) = connected();
+        type_text(&mut app, "/goal");
+        press(&mut app, "shift-enter");
+        type_text(&mut app, "ship it");
+        press(&mut app, "enter");
+        let goal = Intent::SetGoal {
+            tab: app.tabs[0].id,
+            session: None,
+            agent: app.tabs[0].agent_id.clone(),
+            objective: "ship it".to_string(),
+        };
+        assert_eq!(sent(&intents), [goal]);
     }
 
     #[test]

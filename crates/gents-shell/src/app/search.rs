@@ -200,7 +200,7 @@ impl App {
             .as_ref()
             .is_some_and(|search| search.pane == pane);
         Rect {
-            height: rows.height - u16::from(line),
+            height: rows.height.saturating_sub(u16::from(line)),
             ..rows
         }
     }

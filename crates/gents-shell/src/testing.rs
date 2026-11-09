@@ -25,6 +25,8 @@ fn key(token: &str) -> KeyEvent {
     let (modifiers, text) = match token.split_once('-') {
         Some(("ctrl", text)) if !text.is_empty() => (KeyModifiers::CONTROL, text),
         Some(("alt", text)) if !text.is_empty() => (KeyModifiers::ALT, text),
+        Some(("shift", text)) if !text.is_empty() => (KeyModifiers::SHIFT, text),
+        Some(("super", text)) if !text.is_empty() => (KeyModifiers::SUPER, text),
         _ => (KeyModifiers::NONE, token),
     };
     let named = match text {
