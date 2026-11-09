@@ -1023,13 +1023,23 @@ fn two_slot_dependee(dir: &std::path::Path) -> Result<std::path::PathBuf> {
         .as_array_mut()
         .context("the fixture has agents")?
         .push(serde_json::json!({
-            "agent_id": "fixture-checker",
+            "agent_slot": "fixture-checker",
             "display_name": "Fixture checker",
             "context_id": "fixture-dependee-context",
             "inference_profile_id": "gents:inference-slot:checker",
         }));
     std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
     Ok(pack)
+}
+
+/// The node's default inference profile: the default agent's DID with
+/// `-profile`, as initialization names it.
+fn default_profile_from_init(initialized: &serde_json::Value) -> Result<String> {
+    let agent = initialized["default_agent_did"]
+        .as_str()
+        .or_else(|| initialized["init"]["default_agent_did"].as_str())
+        .with_context(|| format!("init reports no default agent: {initialized}"))?;
+    Ok(gents::default_inference_profile_id_for_agent(agent))
 }
 
 fn slot<'a>(needs: &'a serde_json::Value, name: &str) -> Result<&'a serde_json::Value> {
@@ -1051,7 +1061,7 @@ fn pack_install_preview_reports_the_slots_still_to_bind() -> Result<()> {
         temp.path(),
         &["--node-name", "pack-slots", "--home", dir_arg(&home)],
     )?;
-    let profile = format!("{}:default-profile", node_did_from_init(&initialized)?);
+    let profile = default_profile_from_init(&initialized)?;
     let pack = two_slot_dependee(temp.path())?;
     let install = |extra: &[&str]| {
         let mut args = vec![
@@ -1192,7 +1202,7 @@ fn pack_install_preview_reports_the_binding_it_chooses_itself() -> Result<()> {
         temp.path(),
         &["--node-name", "pack-auto-slot", "--home", dir_arg(&home)],
     )?;
-    let profile = format!("{}:default-profile", node_did_from_init(&initialized)?);
+    let profile = default_profile_from_init(&initialized)?;
     let preview = run_cli_json(
         temp.path(),
         &[
