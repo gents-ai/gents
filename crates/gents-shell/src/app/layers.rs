@@ -1442,6 +1442,7 @@ mod tests {
                 "shift-enter · alt-enter · ctrl-j",
                 "Text editing",
                 "opt/ctrl-arrows word · cmd-arrows line",
+                "ctrl-c twice",
             ];
             for text in texts {
                 assert!(find(&s, text).is_some(), "{set:?} {text}");
@@ -1451,7 +1452,7 @@ mod tests {
             }
             assert!(find(&s, "Sample bindings to react to. Switch sets").is_some());
             assert_eq!(find(&s, "HELP"), Some((35, 1)));
-            assert!(find(&s, "clears, or says how to quit").is_some());
+            assert!(find(&s, "clears, then stops the turn").is_some());
         }
 
         let mut app = App::new(Vim, 60, 16);
@@ -1466,7 +1467,7 @@ mod tests {
         }
         let s = screen(&app);
         assert!(find(&s, "Quit").is_some());
-        assert!(find(&s, "clears, or says how to quit").is_some());
+        assert!(find(&s, "clears, then stops the turn").is_some());
         assert_eq!(find(&s, "ctrl-w h/j/k/l"), None);
         press(&mut app, "k");
         assert!(find(&screen(&app), "Scroll the focused pane").is_some());
@@ -1503,7 +1504,7 @@ mod tests {
         for (set, open, down, height) in sets {
             let mut app = App::new(set, 80, height);
             press(&mut app, open);
-            let last = "clears, or says how to quit";
+            let last = "clears, then stops the turn";
             assert_eq!(find(&screen(&app), last), None);
             press(&mut app, down);
             assert!(find(&screen(&app), last).is_some());
@@ -1532,7 +1533,7 @@ mod tests {
             press(&mut app, "ctrl-n");
         }
         let s = screen(&app);
-        assert!(find(&s, "clears, or says how to quit").is_some());
+        assert!(find(&s, "clears, then stops the turn").is_some());
         assert!(find(&s, "ctrl-x ctrl-c").is_some());
     }
 
@@ -1694,10 +1695,7 @@ mod tests {
         assert_eq!(kinds(&app), [LayerKind::Picker]);
         assert_eq!(app.notice, None);
         press(&mut app, "ctrl-c");
-        assert_eq!(
-            app.notice.as_deref(),
-            Some("esc twice, then :q then enter to quit")
-        );
+        assert_eq!(app.notice.as_deref(), Some("ctrl-c again to quit"));
         assert_eq!(kinds(&app), [LayerKind::Picker]);
     }
 
@@ -1708,7 +1706,7 @@ mod tests {
         app.push_layer(ACCOUNTS);
         press(&mut app, "ctrl-c");
         assert_eq!(app.tabs[0].input.text(), "hi");
-        assert_eq!(app.notice.as_deref(), Some("ctrl-x ctrl-c to quit"));
+        assert_eq!(app.notice.as_deref(), Some("ctrl-c again to quit"));
     }
 
     #[test]

@@ -1169,8 +1169,8 @@ const REGULAR_KEYS: &[(&str, &str)] = &[
     ("Toggle the sessions sidebar", "ctrl-b"),
     ("Toggle the right sidebar", "ctrl-r"),
     ("Scroll the focused pane", "up/down · pgup/pgdn"),
-    ("Quit", "ctrl-q"),
-    ("ctrl-c", "clears, or says how to quit"),
+    ("Quit", "ctrl-q · ctrl-c twice"),
+    ("ctrl-c", "clears, then stops the turn"),
 ];
 
 const VIM_KEYS: &[(&str, &str)] = &[
@@ -1193,8 +1193,8 @@ const VIM_KEYS: &[(&str, &str)] = &[
         "Text editing",
         "opt/ctrl-arrows word · cmd-arrows line · opt-bs word",
     ),
-    ("Quit", ":q then enter"),
-    ("ctrl-c", "clears, or says how to quit"),
+    ("Quit", ":q then enter · ctrl-c twice"),
+    ("ctrl-c", "clears, then stops the turn"),
 ];
 
 const EMACS_KEYS: &[(&str, &str)] = &[
@@ -1219,8 +1219,8 @@ const EMACS_KEYS: &[(&str, &str)] = &[
         "Text editing",
         "opt/ctrl-arrows word · cmd-arrows line · opt-bs word",
     ),
-    ("Quit", "ctrl-x ctrl-c"),
-    ("ctrl-c", "clears, or says how to quit"),
+    ("Quit", "ctrl-x ctrl-c · ctrl-c twice"),
+    ("ctrl-c", "clears, then stops the turn"),
 ];
 
 pub const DIFF_BACK_ROW: &str = " esc back to files";

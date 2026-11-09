@@ -84,6 +84,19 @@ fn regular_is_the_default_and_quits_with_ctrl_q() {
     assert_restored(&e);
 }
 
+/// In raw mode ctrl-c is a key, not SIGINT: the first says how to quit, the second quits.
+#[test]
+fn ctrl_c_twice_quits_and_restores_the_terminal() {
+    let s = Shell::start(&[], 36, 132);
+    s.wait_for_all(&["sample data", "INPUT"]);
+    s.send("\x03");
+    s.wait_for_all(&["ctrl-c again to quit"]);
+    s.send("\x03");
+    let e = s.finish();
+    assert_eq!(e.code, 0);
+    assert_restored(&e);
+}
+
 #[test]
 fn emacs_quit_restores_the_terminal() {
     let s = Shell::start(&["--keys", "emacs"], 36, 132);

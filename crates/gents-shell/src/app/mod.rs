@@ -47,6 +47,7 @@ const SOURCE_GONE: &str = "the runtime source stopped: reopen the shell";
 const CONNECTING: &str = "still connecting to the runtime";
 const STOPPING: &str = "stopping the turn";
 const NOTHING_RUNNING: &str = "nothing is running";
+const CTRL_C_AGAIN: &str = "ctrl-c again to quit";
 const STARTING: &str = "starting the session, try again in a moment";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1070,10 +1071,17 @@ impl App {
         }
     }
 
+    /// A ctrl-c quits only while the previous one's hint still shows, so any key or paste
+    /// between them starts over.
     fn press(&mut self, key: KeyEvent) {
-        self.notice = None;
+        let armed = self
+            .notice
+            .take()
+            .is_some_and(|notice| notice == CTRL_C_AGAIN);
         let action = self.keymap.map(self.ctx(), key);
-        if self.layers.is_empty() {
+        if armed && action == Action::Interrupt {
+            self.quit = true;
+        } else if self.layers.is_empty() {
             self.act(action);
         } else {
             self.act_on_layer(action);
@@ -1465,7 +1473,7 @@ impl App {
             return;
         }
         if !self.stop() {
-            self.notice = Some(self.quit_hint().to_string());
+            self.notice = Some(CTRL_C_AGAIN.to_string());
         }
     }
 
@@ -1487,22 +1495,6 @@ impl App {
             self.notice = Some(STOPPING.to_string());
         }
         true
-    }
-
-    /// `:` opens the bar only in normal mode and menus. Anywhere else it is text, and `esc` leaves
-    /// each layer before it leaves input mode.
-    fn quit_hint(&self) -> &'static str {
-        let esc_twice = match self.layers.iter().rev().nth(1) {
-            Some(beneath) => matches!(beneath.kind, LayerKind::Jump | LayerKind::Picker),
-            None => self.mode == Mode::Input,
-        };
-        match (self.keymap.set(), self.ctx()) {
-            (KeySet::Regular, _) => "ctrl-q to quit",
-            (KeySet::Emacs, _) => "ctrl-x ctrl-c to quit",
-            (KeySet::Vim, KeyCtx::Normal | KeyCtx::Menu) => ":q then enter to quit",
-            (KeySet::Vim, KeyCtx::Filter) if esc_twice => "esc twice, then :q then enter to quit",
-            (KeySet::Vim, _) => "esc first, then :q then enter to quit",
-        }
     }
 
     fn not_wired(&mut self) {
@@ -1940,10 +1932,7 @@ mod tests {
         let mut app = App::new(Vim, 80, 24);
         press(&mut app, "ctrl-x ctrl-c");
         assert!(!app.should_quit());
-        assert_eq!(
-            app.notice.as_deref(),
-            Some("esc first, then :q then enter to quit")
-        );
+        assert_eq!(app.notice.as_deref(), Some("ctrl-c again to quit"));
     }
 
     #[test]
@@ -2042,24 +2031,32 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_clears_then_explains() {
-        for (set, hint) in [
-            (Vim, "esc first, then :q then enter to quit"),
-            (Emacs, "ctrl-x ctrl-c to quit"),
-        ] {
+    fn ctrl_c_clears_then_quits_when_pressed_twice() {
+        let hint = "ctrl-c again to quit";
+        for set in [Regular, Vim, Emacs] {
             let mut app = App::new(set, 132, 36);
             type_text(&mut app, "hi");
             press(&mut app, "ctrl-c");
-            assert!(app.tabs[0].input.is_empty());
-            assert_eq!(app.notice, None);
+            assert!(app.tabs[0].input.is_empty(), "{set:?}");
+            assert_eq!(app.notice, None, "{set:?}");
 
             press(&mut app, "ctrl-c");
-            assert_eq!(app.notice.as_deref(), Some(hint));
-            assert!(find(&screen(&app), hint).is_some());
-            assert!(!app.should_quit());
+            assert_eq!(app.notice.as_deref(), Some(hint), "{set:?}");
+            assert!(find(&screen(&app), hint).is_some(), "{set:?}");
+            assert!(!app.should_quit(), "{set:?}");
 
             press(&mut app, "esc");
-            assert_eq!(app.notice, None);
+            assert_eq!(app.notice, None, "{set:?}");
+            press(&mut app, "ctrl-c");
+            assert!(!app.should_quit(), "a key between starts over: {set:?}");
+
+            app.handle(Event::Paste("x".to_string()));
+            press(&mut app, "ctrl-c");
+            assert!(!app.should_quit(), "so does a paste: {set:?}");
+            assert!(app.tabs[0].input.is_empty(), "{set:?}");
+
+            press(&mut app, "ctrl-c ctrl-c");
+            assert!(app.should_quit(), "{set:?}");
         }
     }
 
@@ -4344,55 +4341,27 @@ mod tests {
         assert_eq!(app.tabs[0].input.text(), "hix");
     }
 
+    /// Wherever the keys are: normal mode, a menu, the search line, a picker over the bar.
     #[test]
-    fn the_quit_hint_fits_where_it_is_read() {
-        let hint = ":q then enter to quit";
-        let mut app = App::new(Vim, 132, 36);
-        press(&mut app, "esc ctrl-c");
-        assert_eq!(app.notice.as_deref(), Some(hint));
-
-        app.push_layer(LayerKind::Menu(crate::sample::MenuId::Accounts));
-        press(&mut app, "ctrl-c");
-        assert_eq!(app.notice.as_deref(), Some(hint));
-
-        let esc_first = "esc first, then :q then enter to quit";
-        let mut app = App::new(Vim, 132, 36);
-        press(&mut app, "esc /");
-        press(&mut app, "ctrl-c");
-        assert_eq!(app.notice.as_deref(), Some(esc_first));
-    }
-
-    #[test]
-    fn the_quit_hint_counts_what_esc_leaves_first() {
-        let esc_twice = "esc twice, then :q then enter to quit";
-        let mut app = App::new(Vim, 132, 36);
-        type_text(&mut app, "/agent");
-        press(&mut app, "enter ctrl-c");
-        assert_eq!(app.notice.as_deref(), Some(esc_twice));
-        press(&mut app, "esc esc : q enter");
-        assert!(app.should_quit());
-
-        let mut app = App::new(Vim, 132, 36);
-        press(&mut app, "esc :");
-        type_text(&mut app, "tabnew");
-        press(&mut app, "enter ctrl-c");
-        assert_eq!(app.notice.as_deref(), Some(esc_twice));
-        press(&mut app, "esc esc : q enter");
-        assert!(app.should_quit());
-
-        let mut app = App::new(Vim, 132, 36);
-        press(&mut app, "esc : ctrl-c");
-        let esc_first = "esc first, then :q then enter to quit";
-        assert_eq!(app.notice.as_deref(), Some(esc_first));
-        press(&mut app, "esc : q enter");
-        assert!(app.should_quit());
-
-        let mut app = App::new(Vim, 132, 36);
-        type_text(&mut app, "/help");
-        press(&mut app, "enter : ctrl-c");
-        assert_eq!(app.notice.as_deref(), Some(esc_first));
-        press(&mut app, "esc : q enter");
-        assert!(app.should_quit());
+    fn a_second_ctrl_c_quits_from_any_layer() {
+        let setups: [&dyn Fn(&mut App); 4] = [
+            &|app| press(app, "esc"),
+            &|app| app.push_layer(LayerKind::Menu(crate::sample::MenuId::Accounts)),
+            &|app| press(app, "esc /"),
+            &|app| {
+                type_text(app, "/agent");
+                press(app, "enter");
+            },
+        ];
+        for (at, setup) in setups.iter().enumerate() {
+            let mut app = App::new(Vim, 132, 36);
+            setup(&mut app);
+            press(&mut app, "ctrl-c");
+            assert_eq!(app.notice.as_deref(), Some("ctrl-c again to quit"), "{at}");
+            assert!(!app.should_quit(), "{at}");
+            press(&mut app, "ctrl-c");
+            assert!(app.should_quit(), "{at}");
+        }
     }
 
     #[test]
@@ -4703,8 +4672,11 @@ mod tests {
         app.apply(ended("t1"));
         press(&mut app, "ctrl-c");
         assert!(intents.try_recv().is_err());
-        let hint = "esc first, then :q then enter to quit";
-        assert_eq!(app.notice.as_deref(), Some(hint));
+        assert_eq!(app.notice.as_deref(), Some("ctrl-c again to quit"));
+        assert!(
+            !app.should_quit(),
+            "the press that stopped the turn was not the first"
+        );
     }
 
     #[test]

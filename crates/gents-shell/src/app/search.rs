@@ -727,10 +727,7 @@ mod tests {
         assert_eq!(app.tabs[0].scroll, 0);
         assert_eq!(app.tabs[0].input.text(), "draft");
         press(&mut app, "ctrl-c");
-        assert_eq!(
-            app.notice.as_deref(),
-            Some("esc first, then :q then enter to quit")
-        );
+        assert_eq!(app.notice.as_deref(), Some("ctrl-c again to quit"));
     }
 
     #[test]
