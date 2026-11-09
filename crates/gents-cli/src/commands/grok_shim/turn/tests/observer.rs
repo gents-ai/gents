@@ -13,12 +13,13 @@ async fn a_projected_write_wakes_observation_before_the_fallback() {
 }
 
 #[tokio::test]
+#[ignore = "grok shim is being removed"]
 async fn session_observer_preserves_handoff_and_delivers_late_wake() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();

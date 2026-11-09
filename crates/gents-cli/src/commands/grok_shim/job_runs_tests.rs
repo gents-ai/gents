@@ -213,7 +213,7 @@ fn agents_carry_the_child_session_title_tokens_and_duration() {
     let mut view = view(JobState::Running);
     view.children = vec![child("c1", JobChildState::Completed)];
     let agent = &view.project(1, now())["agents"][0];
-    assert_eq!(agent["agent_id"], "c1");
+    assert_eq!(agent["agent_did"], "c1");
     assert_eq!(agent["label"], "title-c1");
     assert_eq!(agent["state"], "done");
     assert_eq!(agent["tokens_used"], 7);
@@ -422,7 +422,7 @@ pub(super) async fn harness() -> (
     gents::store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
-    let projections = ProjectionEngine::new(
+    let projections = ProjectionEngine::new_for_test(
         node,
         BoundModelContext::new("model".into(), "Model".into(), 1000),
     );

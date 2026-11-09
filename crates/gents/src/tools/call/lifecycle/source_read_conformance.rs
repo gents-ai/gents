@@ -42,6 +42,6 @@ async fn tool_append_and_delivery_read_only_their_source() {
     assert_eq!(queries, 2, "delivery reads only the tool's source");
 
     drop(owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }

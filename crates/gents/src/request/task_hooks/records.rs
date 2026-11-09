@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use tokio_util::sync::CancellationToken;
 
 use super::{run_finally, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation};
 use crate::documents::{TaskHook, TaskHookPhase};
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::exec::ownership::{
     HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder,
 };
@@ -20,6 +20,7 @@ pub(crate) struct TaskHookRecord {
     pub(crate) request_doc_id: String,
     pub(crate) request_id: String,
     pub(crate) node_did: String,
+    pub(crate) agent_did: String,
     pub(crate) cwd: PathBuf,
     #[serde(default)]
     pub(crate) root_guard: Option<crate::tools::surface::RootExecutionGuard>,
@@ -260,32 +261,32 @@ impl TaskHookRecordHandle {
     }
 }
 
-async fn request_resolved(node: &EmbeddedNode, request_doc_id: &str) -> Result<bool> {
+async fn request_resolved(access: &crate::ConfigAccess, record: &TaskHookRecord) -> Result<bool> {
     #[derive(Deserialize)]
     struct Row {
         lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     }
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-            escape_graphql_string(request_doc_id),
-        ),
-        "task hook recovery request state",
-    )
-    .await?;
-    Ok(
-        match crate::store::graphql::first_row::<Row>(&response, "AgentRequest")? {
-            None => true,
-            Some(row) => row.lifecycle_state.is_some_and(|state| state.is_terminal()),
-        },
-    )
+    let doc_id = escape_graphql_string(&record.request_doc_id);
+    let node_did = escape_graphql_string(&record.node_did);
+    let agent_did = escape_graphql_string(&record.agent_did);
+    let response = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }}, agent_did: {{ _eq: "{agent_did}" }} }}, limit: 2) {{ lifecycle_state }} }}"#,
+    )).await?;
+    let rows = response["data"]["AgentRequest"]
+        .as_array()
+        .context("task hook recovery query omitted request rows")?;
+    let [row] = rows.as_slice() else {
+        return Ok(false);
+    };
+    let row: Row = serde_json::from_value(row.clone())?;
+    Ok(row.lifecycle_state.is_some_and(|state| state.is_terminal()))
 }
 
 async fn recover_record(
     node: Arc<EmbeddedNode>,
     record: TaskHookRecord,
     handle: TaskHookRecordHandle,
+    agent_identity: Option<Arc<dyn crate::store::identity::NodeIdentity>>,
     shutdown: CancellationToken,
 ) {
     for attempt in record
@@ -309,7 +310,13 @@ async fn recover_record(
         return;
     }
     let admitted = match &record.root_guard {
-        Some(guard) => guard.validate(node.as_ref()).await,
+        Some(guard) => match agent_identity.as_deref() {
+            Some(identity) => guard.validate(&node, identity).await,
+            None => {
+                tracing::warn!(agent_did = %guard.agent_did, "task hook cleanup awaits the selected Agent identity");
+                return;
+            }
+        },
         None => Ok(()),
     };
     if let Err(error) = admitted {
@@ -348,6 +355,7 @@ async fn recover_record(
 pub(crate) async fn recover_task_hook_records(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
+    identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
     store: &TaskHookRecordStore,
 ) -> Result<usize> {
     let mut started = 0;
@@ -367,10 +375,44 @@ pub(crate) async fn recover_task_hook_records(
         if record.node_did != node_did {
             continue;
         }
+        let Some(agent_identity) = identities
+            .iter()
+            .find(|identity| identity.did() == record.agent_did)
+            .cloned()
+        else {
+            tracing::warn!(agent_did = %record.agent_did, "task hook recovery awaits the selected Agent identity");
+            continue;
+        };
+        if record
+            .root_guard
+            .as_ref()
+            .is_some_and(|guard| guard.agent_did != record.agent_did)
+        {
+            tracing::warn!(agent_did = %record.agent_did, "task hook recovery root belongs to another Agent");
+            continue;
+        }
+        let actor = match identity::Did::new(&record.agent_did) {
+            Ok(actor) => actor,
+            Err(error) => {
+                tracing::warn!(agent_did = %record.agent_did, %error, "task hook recovery has an invalid Agent DID");
+                continue;
+            }
+        };
+        let access = match crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            actor,
+            agent_identity.as_ref(),
+        ) {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(agent_did = %record.agent_did, %error, "task hook recovery could not authenticate its Agent");
+                continue;
+            }
+        };
         let Some(handle) = store.claim(record.clone()) else {
             continue;
         };
-        match request_resolved(node, &record.request_doc_id).await {
+        match request_resolved(&access, &record).await {
             Ok(true) => {}
             Ok(false) => continue,
             Err(error) => {
@@ -383,6 +425,7 @@ pub(crate) async fn recover_task_hook_records(
             node.clone(),
             record,
             handle,
+            Some(agent_identity),
             store.shutdown.clone(),
         ));
         let mut recoveries = locked(&store.recoveries);

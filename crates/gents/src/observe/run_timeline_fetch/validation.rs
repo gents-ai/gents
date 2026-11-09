@@ -165,12 +165,9 @@ pub(super) fn request_scoped_row_is_in_timeline(
     request_doc_id: Option<&str>,
 ) -> bool {
     let request_id = nonempty(request_id);
-    let request_doc_id = nonempty(request_doc_id);
-    match (request_id, request_doc_id) {
-        (None, None) => true,
-        // Legacy logical-only labels are not evidence for a physical join.
-        (Some(_), None) => false,
-        (request_id, Some(doc_id)) => {
+    match nonempty(request_doc_id) {
+        None => request_id.is_none(),
+        Some(doc_id) => {
             bindings.contains_key(doc_id)
                 || request_id.is_some_and(|request_id| bindings.values().any(|id| id == request_id))
         }

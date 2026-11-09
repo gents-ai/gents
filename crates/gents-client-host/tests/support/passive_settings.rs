@@ -60,7 +60,7 @@ pub async fn exercise(
                         *id += 1;
                         if settings["node"]["displayName"] == "editor-fixture"
                             && settings["node"]["enabled"] == true
-                            && settings["node"]["defaultAgentId"]
+                            && settings["node"]["defaultAgentDid"]
                                 .as_str()
                                 .is_some_and(|id| !id.is_empty())
                         {
@@ -121,6 +121,7 @@ async fn installed_editor(paths: &DesktopPaths, node: &str) -> Result<()> {
         .parent()
         .context("disposable settings fixture root")?;
     let output = tokio::process::Command::new("node")
+        .envs(super::support::homes::ProcessHomes::under(root).env())
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/support/editor_passive_settings.mjs"

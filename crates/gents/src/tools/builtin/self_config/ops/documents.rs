@@ -89,14 +89,14 @@ pub(crate) async fn read_owned_doc(
         })
         .transpose()
 }
-/// The agents that select this Context, by `agent_id`, sorted and deduplicated.
+/// The agents that select this Context, by `agent_did`, sorted and deduplicated.
 async fn context_agents(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     context_id: &str,
 ) -> Result<Vec<String>> {
     let query = format!(
-        "{{ Agent(filter: {{node_did: {{_eq: \"{}\"}}, context_id: {{_eq: \"{}\"}}}}) {{agent_id}} }}",
+        "{{ Agent(filter: {{node_did: {{_eq: \"{}\"}}, context_id: {{_eq: \"{}\"}}}}) {{agent_did}} }}",
         escape_graphql_string(owner),
         escape_graphql_string(context_id)
     );
@@ -108,7 +108,7 @@ async fn context_agents(
     let mut agents = Vec::new();
     for row in &rows {
         agents.push(
-            row["agent_id"]
+            row["agent_did"]
                 .as_str()
                 .context("referring agent ID missing")?
                 .to_owned(),
@@ -119,7 +119,7 @@ async fn context_agents(
     Ok(agents)
 }
 
-/// Every agent that selects this Context or Tools, by `agent_id`, sorted and
+/// Every agent that selects this Context or Tools, by `agent_did`, sorted and
 /// deduplicated. Empty for targets that are not shared by reference.
 ///
 /// A Context is shared when more than one Agent selects it; Tools are shared

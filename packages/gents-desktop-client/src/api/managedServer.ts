@@ -4,9 +4,11 @@ import type { DesktopApiAdapter } from "./types.js";
 type ManagedServerCommand =
   | "managedServerStatus"
   | "startManagedServer"
+  | "enrollManagedServer"
   | "restartManagedServer"
   | "resetManagedServer"
   | "validateManagedServerRoot"
+  | "selectAgentWorkspaceRoot"
   | "openManagedServerLoginItems"
   | "commitManagedServerAutoStart"
   | "stopManagedServer"
@@ -17,6 +19,7 @@ export function createManagedServerCommands(
 ): Pick<DesktopApiAdapter, ManagedServerCommand> {
   return {
     managedServerStatus: () => invokeDesktop("desktop_managed_server_status"),
+    enrollManagedServer: () => invokeDesktop("desktop_managed_server_enroll"),
     startManagedServer: (nodeName, authority) =>
       invokeDesktop("desktop_managed_server_start", {
         request: {
@@ -41,6 +44,10 @@ export function createManagedServerCommands(
       invokeDesktop("desktop_managed_server_validate_root", {
         request: { path },
       }).then((result) => result.canonicalPath),
+    selectAgentWorkspaceRoot: (nodeDid, agentDid, path) =>
+      invokeDesktop("desktop_agent_workspace_root_select", {
+        request: { nodeDid, agentDid, path },
+      }),
     openManagedServerLoginItems: () =>
       invokeDesktop("desktop_managed_server_open_login_items"),
     commitManagedServerAutoStart: (_nodeName) =>

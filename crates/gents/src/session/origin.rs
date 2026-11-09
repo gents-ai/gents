@@ -3,40 +3,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::session::{
-    decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
-};
+use crate::session::public_request_filter;
 use crate::store::config_client::{ConfigAccess, ConfigRead};
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use gents_protocol::row::AgentRequestRow;
-use gents_protocol::session::AgentSession;
+use gents_protocol::session::{
+    decode_session_row, session_scope_filter, AgentSession, SessionScope, AGENT_SESSION_FIELDS,
+};
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SessionScope {
-    pub node_did: String,
-    pub session_id: String,
-    pub requester_did: Option<String>,
-}
-
-impl SessionScope {
-    pub fn of_request(request: &crate::AgentRequest) -> Self {
-        Self {
-            node_did: request.node_did.clone(),
-            session_id: request.session_id.clone(),
-            requester_did: request.requester_did.clone(),
-        }
-    }
-
-    fn of_row(row: &Value) -> Option<Self> {
-        Some(Self {
-            node_did: row.get("node_did")?.as_str()?.to_string(),
-            session_id: row.get("session_id")?.as_str()?.to_string(),
-            requester_did: row
-                .get("requester_did")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-        })
-    }
+fn scope_of_row(row: &Value) -> Option<SessionScope> {
+    Some(SessionScope {
+        node_did: row.get("node_did")?.as_str()?.to_string(),
+        session_id: row.get("session_id")?.as_str()?.to_string(),
+        requester_did: row
+            .get("requester_did")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,10 +59,13 @@ where
         .unwrap_or_default())
 }
 
-async fn session_rows(
-    access: &ConfigAccess,
+async fn session_rows<R>(
+    access: &R,
     filter: &str,
-) -> Result<Vec<crate::session::SessionOwnerRow>> {
+) -> Result<Vec<gents_protocol::session::SessionOwnerRow>>
+where
+    R: ConfigRead + ?Sized,
+{
     collection(
         access,
         &format!("{{AgentSession(filter: {{{filter}}}) {{{AGENT_SESSION_FIELDS}}}}}"),
@@ -87,7 +73,7 @@ async fn session_rows(
     )
     .await?
     .iter()
-    .map(decode_session_row)
+    .map(|row| decode_session_row(row).map_err(anyhow::Error::from))
     .collect()
 }
 
@@ -103,33 +89,13 @@ async fn sessions(access: &ConfigAccess, filter: &str) -> Result<Vec<AgentSessio
 /// same row as [`AGENT_SESSION_FIELDS`].
 pub const STARTER_INDEX_FIELDS: &str = "started_by_node_did started_by_session_id";
 
-impl From<&AgentSession> for SessionScope {
-    fn from(session: &AgentSession) -> Self {
-        Self {
-            node_did: session.node_did.clone(),
-            session_id: session.session_id.clone(),
-            requester_did: session.requester_did.clone(),
-        }
-    }
-}
-
-impl From<&gents_protocol::session::SessionReference> for SessionScope {
-    fn from(source: &gents_protocol::session::SessionReference) -> Self {
-        Self {
-            node_did: source.node_did.clone(),
-            session_id: source.session_id.clone(),
-            requester_did: source.requester_did.clone(),
-        }
-    }
-}
-
-fn decode_indexed_session(row: &Value) -> Result<crate::session::SessionOwnerRow> {
+fn decode_indexed_session(row: &Value) -> Result<gents_protocol::session::SessionOwnerRow> {
     let mut row = row.clone();
     if let Some(fields) = row.as_object_mut() {
         fields.remove("started_by_node_did");
         fields.remove("started_by_session_id");
     }
-    decode_session_row(&row)
+    Ok(decode_session_row(&row)?)
 }
 
 /// The verified starter of one `AgentSession` row selected with
@@ -270,10 +236,7 @@ where
                 .await?
                 .iter()
                 .filter_map(|row| {
-                    Some((
-                        row.get("_docID")?.as_str()?.to_owned(),
-                        SessionScope::of_row(row)?,
-                    ))
+                    Some((row.get("_docID")?.as_str()?.to_owned(), scope_of_row(row)?))
                 }),
         );
     }
@@ -400,7 +363,7 @@ pub async fn task_triggered_opening(access: &ConfigAccess, scope: &SessionScope)
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -422,17 +385,18 @@ pub async fn task_triggered_opening(access: &ConfigAccess, scope: &SessionScope)
     if request.node_did.as_deref() != Some(scope.node_did.as_str())
         || request.session_id.as_deref() != Some(scope.session_id.as_str())
         || request.requester_did != scope.requester_did
-        || request.agent_id.as_deref() != Some(session.agent_id.as_str())
+        || request.agent_did.as_deref() != Some(session.agent_did.as_str())
         || request.admission_kind.as_deref() != Some("runtime-internal")
-        || request.admission_signer_did.as_deref() != Some(scope.node_did.as_str())
-        || request.runtime_issuer_did.as_deref() != Some(scope.node_did.as_str())
+        || request.admission_signer_did.as_deref() != Some(session.agent_did.as_str())
+        || request.runtime_issuer_did.as_deref() != Some(session.agent_did.as_str())
         || request.runtime_source_kind.as_deref() != Some("automated-trigger")
         || request.runtime_source_request_id.as_deref() != Some(trigger_id)
         || !matches!(
             request.caused_by_trigger_kind.as_deref(),
             Some("event" | "schedule")
         )
-        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&request)
+            .is_err()
     {
         return Ok(false);
     }
@@ -441,7 +405,7 @@ pub async fn task_triggered_opening(access: &ConfigAccess, scope: &SessionScope)
 }
 
 /// The `AgentRequestRow` fields lineage readers select.
-pub const REQUEST_FIELDS: &str = "_docID request_id node_did session_id requester_did agent_id \
+pub const REQUEST_FIELDS: &str = "_docID request_id node_did session_id requester_did agent_did \
      content lifecycle_state superseded_by_request failure_reason created_at request_hop \
      caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id \
      caused_by_parent_tool_call_doc_id";
@@ -539,7 +503,7 @@ pub fn group_caused(rows: &[Value]) -> BTreeMap<String, Vec<CausedRequest>> {
             text("request_id"),
             text("_docID"),
             text("created_at"),
-            SessionScope::of_row(row),
+            scope_of_row(row),
         ) else {
             continue;
         };
@@ -718,7 +682,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
     );
     for row in collection(access, &query, "AgentRequest").await? {
         let (Some(target), Some(cause)) = (
-            SessionScope::of_row(&row),
+            scope_of_row(&row),
             row.get("caused_by_parent_request_doc_id")
                 .and_then(Value::as_str),
         ) else {
@@ -753,7 +717,7 @@ pub(crate) async fn verified_starter_in_txn(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<Option<gents_protocol::session::SessionReference>> {
     let (Some(source), Some(opening), Some(parent)) = (
         provenance.started_by.as_ref(),
@@ -766,7 +730,7 @@ pub(crate) async fn verified_starter_in_txn(
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let Some([row]) = response["data"]["AgentRequest"]
@@ -781,9 +745,7 @@ pub(crate) async fn verified_starter_in_txn(
     if request.node_did.as_deref() != Some(node_did)
         || request.session_id.as_deref() != Some(session_id)
         || request.requester_did.as_deref() != requester_did
-        || request.agent_id.as_deref() != Some(agent_id)
-        || request.requester_did.as_deref() != Some(source.node_did.as_str())
-        || request.admission_signer_did.as_deref() != Some(source.node_did.as_str())
+        || request.agent_did.as_deref() != Some(agent_did)
         || request.caused_by_parent_request_doc_id.as_deref() != Some(parent)
         || request.caused_by_parent_tool_call_doc_id.is_none()
         || request
@@ -792,7 +754,17 @@ pub(crate) async fn verified_starter_in_txn(
             .and_then(|input| input.started_by.as_ref())
             != Some(source)
         || source.session_id.is_empty()
-        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&request)
+            .is_err()
+    {
+        return Ok(None);
+    }
+    let Some(verified) = verified_agent_source(txn, &request).await? else {
+        return Ok(None);
+    };
+    if verified.node_did != source.node_did
+        || verified.session_id != source.session_id
+        || verified.requester_did != source.requester_did
     {
         return Ok(None);
     }
@@ -805,7 +777,7 @@ pub(crate) async fn issue_creation_receipt_in_txn(
     session_id: &str,
     session_doc_id: &str,
     requester_did: Option<&str>,
-    agent_id: &str,
+    agent_did: &str,
     opening: Option<&str>,
 ) -> Result<Option<gents_protocol::session::SessionCreationReceipt>> {
     use crate::store::identity::NodeIdentity;
@@ -817,7 +789,7 @@ pub(crate) async fn issue_creation_receipt_in_txn(
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let Some(rows) = response["data"]["AgentRequest"].as_array() else {
@@ -832,8 +804,9 @@ pub(crate) async fn issue_creation_receipt_in_txn(
     if request.node_did.as_deref() != Some(node_did)
         || request.session_id.as_deref() != Some(session_id)
         || request.requester_did.as_deref() != requester_did
-        || request.agent_id.as_deref() != Some(agent_id)
-        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
+        || request.agent_did.as_deref() != Some(agent_did)
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&request)
+            .is_err()
     {
         return Ok(None);
     }
@@ -887,34 +860,38 @@ pub(crate) async fn issue_creation_receipt_in_txn(
         } else {
             return Ok(None);
         };
-    let Ok(identity) =
-        crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)
-    else {
+    let Some(identity) = txn.managed_agent_signer() else {
         return Ok(None);
     };
+    let Some(creator) = creation_receipt_signer(cause, requester_did, agent_did) else {
+        return Ok(None);
+    };
+    if identity.did() != creator || txn.actor_did() != Some(creator) {
+        return Ok(None);
+    }
     let mut receipt = SessionCreationReceipt {
         node_did: node_did.into(),
         session_id: session_id.into(),
         session_doc_id: session_doc_id.into(),
         requester_did: requester_did.map(str::to_owned),
-        agent_id: agent_id.into(),
+        agent_did: agent_did.into(),
         opening_request_doc_id: opening.into(),
         cause,
         cause_binding,
-        starter: request
-            .input
-            .as_ref()
-            .and_then(|input| input.started_by.as_ref())
+        starter: verified_agent_source(txn, &request)
+            .await?
             .and_then(|source| {
-                let parent = request.caused_by_parent_request_doc_id.as_ref()?;
-                (request.requester_did.as_deref() == Some(source.node_did.as_str())
-                    && request.admission_signer_did.as_deref() == Some(source.node_did.as_str())
-                    && request.caused_by_parent_tool_call_doc_id.is_some()
-                    && !source.session_id.is_empty())
-                .then(|| gents_protocol::session::SessionCreationStarter {
-                    source: source.clone(),
-                    parent_request_doc_id: parent.clone(),
-                })
+                let claimed = request.input.as_ref()?.started_by.as_ref()?;
+                (claimed.node_did == source.node_did
+                    && claimed.session_id == source.session_id
+                    && claimed.requester_did == source.requester_did)
+                    .then(|| gents_protocol::session::SessionCreationStarter {
+                        source: claimed.clone(),
+                        parent_request_doc_id: request
+                            .caused_by_parent_request_doc_id
+                            .clone()
+                            .expect("verified source has physical parent"),
+                    })
             }),
         signature: Vec::new(),
     };
@@ -928,14 +905,16 @@ fn verified_creation_receipt<'a>(
     cause: gents_protocol::session::SessionCreationCause,
 ) -> Option<&'a gents_protocol::session::SessionCreationReceipt> {
     let receipt = session.provenance.as_ref()?.creation_receipt.as_ref()?;
+    let signer =
+        creation_receipt_signer(cause, session.requester_did.as_deref(), &session.agent_did)?;
     if receipt.node_did != session.node_did
         || receipt.session_id != session.session_id
         || receipt.session_doc_id != session_doc_id
         || receipt.requester_did != session.requester_did
-        || receipt.agent_id != session.agent_id
+        || receipt.agent_did != session.agent_did
         || receipt.cause != cause
         || !crate::store::identity::verify_did_signature(
-            &session.node_did,
+            signer,
             &receipt.signing_payload(),
             &receipt.signature,
         )
@@ -946,12 +925,57 @@ fn verified_creation_receipt<'a>(
     Some(receipt)
 }
 
+fn creation_receipt_signer<'a>(
+    cause: gents_protocol::session::SessionCreationCause,
+    requester: Option<&'a str>,
+    agent: &'a str,
+) -> Option<&'a str> {
+    match cause {
+        gents_protocol::session::SessionCreationCause::AgentNew
+        | gents_protocol::session::SessionCreationCause::PluginJob => {
+            requester.filter(|did| !did.is_empty())
+        }
+        gents_protocol::session::SessionCreationCause::TaskTrigger => Some(agent),
+    }
+}
+
 pub async fn verified_agent_new_creation(
     access: &ConfigAccess,
     target: &SessionScope,
     caller: &SessionScope,
 ) -> Result<bool> {
+    verified_agent_new_creation_matching(access, target, caller, None).await
+}
+
+pub(crate) async fn verified_agent_new_creation_for_opening(
+    access: &ConfigAccess,
+    target: &SessionScope,
+    caller: &SessionScope,
+    expected_opening: &str,
+) -> Result<bool> {
+    verified_agent_new_creation_matching(access, target, caller, Some(expected_opening)).await
+}
+
+async fn verified_agent_new_creation_matching(
+    access: &ConfigAccess,
+    target: &SessionScope,
+    caller: &SessionScope,
+    expected_opening: Option<&str>,
+) -> Result<bool> {
     use gents_protocol::session::SessionCreationCause;
+    let callers = session_rows(
+        access,
+        &session_scope_filter(
+            &caller.node_did,
+            &caller.session_id,
+            caller.requester_did.as_deref(),
+        ),
+    )
+    .await?;
+    let [caller_session] = callers.as_slice() else {
+        return Ok(false);
+    };
+    let caller_agent = caller_session.session.agent_did.as_str();
     let own = session_rows(
         access,
         &session_scope_filter(
@@ -965,10 +989,7 @@ pub async fn verified_agent_new_creation(
         return Ok(false);
     };
     let session = &owner.session;
-    let receipt = verified_creation_receipt(session, &owner.doc_id, SessionCreationCause::AgentNew)
-        .or_else(|| {
-            verified_creation_receipt(session, &owner.doc_id, SessionCreationCause::PluginJob)
-        });
+    let receipt = verified_agent_creation_receipt(session, &owner.doc_id, expected_opening);
     let Some(receipt) = receipt else {
         return Ok(false);
     };
@@ -977,7 +998,7 @@ pub async fn verified_agent_new_creation(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(&receipt.opening_request_doc_id),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -991,10 +1012,11 @@ pub async fn verified_agent_new_creation(
     if request.node_did.as_deref() != Some(target.node_did.as_str())
         || request.session_id.as_deref() != Some(target.session_id.as_str())
         || request.requester_did != target.requester_did
-        || request.agent_id.as_deref() != Some(session.agent_id.as_str())
-        || request.requester_did.as_deref() != Some(caller.node_did.as_str())
-        || request.admission_signer_did.as_deref() != Some(caller.node_did.as_str())
-        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
+        || request.agent_did.as_deref() != Some(session.agent_did.as_str())
+        || request.requester_did.as_deref() != Some(caller_agent)
+        || request.admission_signer_did.as_deref() != Some(caller_agent)
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&request)
+            .is_err()
     {
         return Ok(false);
     }
@@ -1034,7 +1056,7 @@ pub async fn verified_agent_new_creation(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1049,7 +1071,8 @@ pub async fn verified_agent_new_creation(
         || parent.session_id.as_deref() != Some(caller.session_id.as_str())
         || parent.requester_did != caller.requester_did
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&parent)
+            .is_err()
     {
         return Ok(false);
     }
@@ -1089,6 +1112,24 @@ pub async fn verified_agent_new_creation(
         true,
         agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id),
     ))
+}
+
+fn verified_agent_creation_receipt<'a>(
+    session: &'a AgentSession,
+    session_doc_id: &str,
+    expected_opening: Option<&str>,
+) -> Option<&'a gents_protocol::session::SessionCreationReceipt> {
+    use gents_protocol::session::SessionCreationCause;
+    let receipt =
+        verified_creation_receipt(session, session_doc_id, SessionCreationCause::AgentNew)
+            .or_else(|| {
+                verified_creation_receipt(session, session_doc_id, SessionCreationCause::PluginJob)
+            })?;
+    if expected_opening.is_some_and(|expected| expected != receipt.opening_request_doc_id.as_str())
+    {
+        return None;
+    }
+    Some(receipt)
 }
 
 fn deferred_creation_allowed(kind: bool, receipt: bool, opening: bool, cause: bool) -> bool {
@@ -1134,7 +1175,7 @@ fn job_creation_matches(parent: bool, job: bool, key: bool, spawn: bool) -> bool
     parent && job && key && spawn
 }
 
-async fn plugin_job_creation_binding<R>(
+pub(super) async fn plugin_job_creation_binding<R>(
     access: &R,
     request: &AgentRequestRow,
 ) -> Result<Option<(String, SessionScope)>>
@@ -1158,7 +1199,7 @@ where
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1173,10 +1214,11 @@ where
     else {
         return Ok(None);
     };
-    if request.requester_did.as_deref() != Some(node)
-        || request.admission_signer_did.as_deref() != Some(node)
+    if request.requester_did.as_deref() != parent.agent_did.as_deref()
+        || request.admission_signer_did.as_deref() != parent.agent_did.as_deref()
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&parent)
+            .is_err()
     {
         return Ok(None);
     }
@@ -1225,7 +1267,7 @@ where
     )))
 }
 
-async fn agent_new_binding_in_txn(
+pub(super) async fn agent_new_binding_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
     opening: &str,
@@ -1242,7 +1284,7 @@ async fn agent_new_binding_in_txn(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request::admission::SIGNED_REQUEST_FIELDS,
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1257,10 +1299,11 @@ async fn agent_new_binding_in_txn(
     else {
         return Ok(None);
     };
-    if request.requester_did.as_deref() != Some(node)
-        || request.admission_signer_did.as_deref() != Some(node)
+    if request.requester_did.as_deref() != parent.agent_did.as_deref()
+        || request.admission_signer_did.as_deref() != parent.agent_did.as_deref()
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&parent)
+            .is_err()
     {
         return Ok(None);
     }
@@ -1294,8 +1337,8 @@ where
         return Ok(None);
     };
     if request.admission_kind.as_deref() != Some("runtime-internal")
-        || request.admission_signer_did.as_deref() != Some(node)
-        || request.runtime_issuer_did.as_deref() != Some(node)
+        || request.admission_signer_did.as_deref() != request.agent_did.as_deref()
+        || request.runtime_issuer_did.as_deref() != request.agent_did.as_deref()
         || request.runtime_source_kind.as_deref() != Some("automated-trigger")
         || request.runtime_source_request_id.as_deref() != Some(trigger)
         || !matches!(
@@ -1321,4 +1364,79 @@ where
     )
     .map(|(key, task)| serde_json::to_string(&(key, task)))
     .transpose()?)
+}
+
+/// An agent's cross-session signature is bound to its immutable source
+/// request, source session and physical tool call. This is provenance evidence;
+/// native document ACP decides whether the resulting writes are permitted.
+pub(crate) async fn verified_agent_source<R>(
+    access: &R,
+    request: &AgentRequestRow,
+) -> Result<Option<SessionScope>>
+where
+    R: ConfigRead + ?Sized,
+{
+    let (Some(parent_doc), Some(parent_id), Some(call_doc), Some(call_id), Some(signer)) = (
+        request.caused_by_parent_request_doc_id.as_deref(),
+        request.caused_by_parent_request_id.as_deref(),
+        request.caused_by_parent_tool_call_doc_id.as_deref(),
+        request.caused_by_parent_tool_call_id.as_deref(),
+        request.admission_signer_did.as_deref(),
+    ) else {
+        return Ok(None);
+    };
+    let parents = collection(
+        access,
+        &format!(
+            "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
+            escape_graphql_string(parent_doc),
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+        ),
+        "AgentRequest",
+    )
+    .await?;
+    let [parent] = parents.as_slice() else {
+        return Ok(None);
+    };
+    let parent: AgentRequestRow = serde_json::from_value(parent.clone())?;
+    if parent.request_id != parent_id
+        || parent.agent_did.as_deref() != Some(signer)
+        || request.requester_did.as_deref() != Some(signer)
+        || crate::store::identity::request_receipt::verify_request_receipt_signature(&parent)
+            .is_err()
+    {
+        return Ok(None);
+    }
+    let (Some(node), Some(session)) = (parent.node_did.as_deref(), parent.session_id.as_deref())
+    else {
+        return Ok(None);
+    };
+    let sources = session_rows(
+        access,
+        &session_scope_filter(node, session, parent.requester_did.as_deref()),
+    )
+    .await?;
+    let [source] = sources.as_slice() else {
+        return Ok(None);
+    };
+    if source.session.agent_did != signer {
+        return Ok(None);
+    }
+    let calls = collection(access, &format!(
+        "{{AgentToolCall(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{request_doc_id node_did session_id requester_did tool_call_id}}}}",
+        escape_graphql_string(call_doc)
+    ), "AgentToolCall").await?;
+    let [call] = calls.as_slice() else {
+        return Ok(None);
+    };
+    let exact = call["request_doc_id"].as_str() == Some(parent_doc)
+        && call["node_did"].as_str() == Some(node)
+        && call["session_id"].as_str() == Some(session)
+        && call["requester_did"].as_str() == parent.requester_did.as_deref()
+        && call["tool_call_id"].as_str() == Some(call_id);
+    Ok(exact.then(|| SessionScope {
+        node_did: node.to_owned(),
+        session_id: session.to_owned(),
+        requester_did: parent.requester_did,
+    }))
 }

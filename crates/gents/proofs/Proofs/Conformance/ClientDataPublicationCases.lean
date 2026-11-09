@@ -140,7 +140,8 @@ private def scopedPublicationCaseJson (name : String) (owners : Option (List Nat
   let (current, currentRows) := actions.foldl applyPublicationAction (initial, initialRows)
   let scope := owners.map Scope.nodes |>.getD Scope.all
   let incoming := (owners.getD [1]).map fun owner => sessionRow owner "incoming"
-  let accepted := acceptsFor current (beginRead initial) scope
+  let accepted := if merge then acceptsFor current (beginRead initial) scope
+    else acceptsReloadFor current (beginRead initial) scope
   let expected := if accepted then
       if merge then upsertConfigRows currentRows incoming
       else match owners with
@@ -160,9 +161,12 @@ private def scopedPublicationCasesJson : String :=
     scopedPublicationCaseJson "unrelated_node_publication_rebases_scoped_reload" (some [1]) false [.merge [2]],
     scopedPublicationCaseJson "continuous_unrelated_publications_allow_recovery" (some [1]) false (List.replicate 64 (.merge [2])),
     scopedPublicationCaseJson "same_node_publication_rejects_reload" (some [1]) false [.merge [1]],
-    scopedPublicationCaseJson "same_node_request_event_rejects_reload" (some [1]) false [.request (some 1)],
+    scopedPublicationCaseJson "same_node_request_event_preserves_reload" (some [1]) false [.request (some 1)],
+    scopedPublicationCaseJson "sustained_request_events_preserve_reload" (some [1]) false (List.replicate 64 (.request (some 1))),
     scopedPublicationCaseJson "unrelated_request_event_allows_reload" (some [1]) false [.request (some 2)],
-    scopedPublicationCaseJson "unknown_request_event_rejects_reload" (some [1]) false [.request none],
+    scopedPublicationCaseJson "unknown_request_event_preserves_reload" (some [1]) false [.request none],
+    scopedPublicationCaseJson "same_node_request_event_rejects_patch" (some [1]) true [.request (some 1)],
+    scopedPublicationCaseJson "unknown_request_event_rejects_patch" (some [1]) true [.request none],
     scopedPublicationCaseJson "unknown_observation_rejects_reload" (some [1]) false [.unknownObservation],
     scopedPublicationCaseJson "full_replacement_rejects_reload" (some [1]) false [.replaceAll],
     scopedPublicationCaseJson "transcript_notice_preserves_reload" (some [1]) false [.transcript],

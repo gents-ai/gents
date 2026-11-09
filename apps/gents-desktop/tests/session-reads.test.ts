@@ -21,7 +21,7 @@ function session(
     liveCursor: "cursor",
     sessionId: "session-1",
     nodeDid: "did:key:test",
-    agentId: "agent-1",
+    agentDid: "agent-1",
     title: "Test",
     previewText: null,
     status: "active",
@@ -94,6 +94,67 @@ function readsFor(
 }
 
 describe("createSessionReads", () => {
+  it("clears an already displayed session when a snapshot read is denied", async () => {
+    const tip = session(["k1"], {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    const denied = new BridgeInvokeError({
+      code: "permissionDenied",
+      message: "Access denied",
+      retryable: false,
+      endpoint: null,
+    });
+    const fetchSessionSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(tip)
+      .mockRejectedValueOnce(denied);
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)).not.toBeNull();
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)).toBeNull();
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      error: "BridgeInvokeError: Access denied",
+    });
+  });
+
+  it("clears the selected session on an explicit history permission denial", async () => {
+    const tip = session(["k1"], {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    const denied = new BridgeInvokeError({
+      code: "permissionDenied",
+      message: "Access denied",
+      retryable: false,
+      endpoint: null,
+    });
+    const reads = readsFor({
+      fetchSessionSnapshot: vi.fn().mockResolvedValue(tip),
+      fetchSessionRows: vi.fn().mockRejectedValue(denied),
+    } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    await expect(reads.loadSessionRows({ kind: "before", sequence: 1 })).rejects.toBe(
+      denied,
+    );
+    expect(readSession(reads.sessionStore)).toBeNull();
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      sessionId: "session-1",
+      error: "Access denied",
+    });
+  });
+
   it("keeps the transcript while a selected request is pending and recovers on arrival", async () => {
     const tip = session(["k1"], {
       totalItems: 1,
@@ -166,6 +227,8 @@ describe("createSessionReads", () => {
       .mockRejectedValueOnce(delivery("sessionAccepted"))
       .mockResolvedValueOnce(tip);
     const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    /* an observer follows the reads, so each waiting phase has its re-read */
+    reads.followSessionReads(vi.fn());
     const status = () =>
       projectSessionLoadingStatus({
         selectedSessionId: "session-1",
@@ -238,7 +301,7 @@ describe("createSessionReads", () => {
     const reads = readsFor(
       {
         fetchSessionSnapshot: vi.fn().mockResolvedValue(tip),
-        retrySessionHydration: () =>
+        reloadSession: () =>
           new Promise<void>((_, reject) => {
             failHydration = reject;
           }),
@@ -247,7 +310,7 @@ describe("createSessionReads", () => {
       setError,
     );
     await reads.refreshSession("session-1");
-    const hydration = reads.retrySessionHydration("session-1");
+    const hydration = reads.reloadSession("session-1");
     await reads.refreshSession("session-1");
     failHydration(new Error("hydration failed"));
     expect(await hydration).toBeNull();
@@ -272,7 +335,7 @@ describe("createSessionReads", () => {
         new Promise<SessionRowsView>((resolve) => {
           finishRows = resolve;
         }),
-      retrySessionHydration: () =>
+      reloadSession: () =>
         new Promise<void>((resolve) => {
           finishHydration = resolve;
         }),
@@ -282,7 +345,7 @@ describe("createSessionReads", () => {
     reads.invalidateSessionReads();
     finishRows(rowsRead("session-1"));
     expect(await rows).toBeNull();
-    const hydration = reads.retrySessionHydration("session-1");
+    const hydration = reads.reloadSession("session-1");
     reads.invalidateSessionReads();
     finishHydration();
     expect(await hydration).toBeNull();
@@ -645,5 +708,162 @@ describe("createSessionReads", () => {
     expect(
       readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
     ).toEqual(["other"]);
+  });
+  it("fails visibly when the runtime answers for another session and nothing else will read", async () => {
+    const page = {
+      totalItems: 1,
+      totalItemsExact: true,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    };
+    const wrong = session(["k1"], page);
+    wrong.sessionId = "session-9";
+    const fetchSessionSnapshot = vi.fn().mockResolvedValue(wrong);
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)).toBeNull();
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      sessionId: "session-1",
+      reread: false,
+    });
+    expect(
+      projectSessionLoadingStatus({
+        selectedSessionId: "session-1",
+        selectedNodeDid: "did:key:test",
+        session: null,
+        sessionLoad: reads.sessionStore.getState().load,
+        operationalState: null,
+      }),
+    ).toMatchObject({ phase: "failed", action: "retryLocal" });
+  });
+
+  it("leaves a read whose selection moved to the read the move requested", async () => {
+    let release!: (value: DesktopSessionSnapshot) => void;
+    const fetchSessionSnapshot = vi.fn().mockReturnValue(
+      new Promise<DesktopSessionSnapshot>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const store = createSelectionStore({
+      nodeDid: "did:key:test",
+      sessionId: "session-1",
+    });
+    const reads = readsFor(
+      { fetchSessionSnapshot } as unknown as DesktopApiAdapter,
+      store,
+    );
+    const first = reads.refreshSession("session-1");
+    store.setState({ sessionId: "session-2" });
+    release(
+      session(["k1"], {
+        totalItems: 1,
+        totalItemsExact: true,
+        pageItems: 1,
+        hasOlder: false,
+        hasNewer: false,
+        oldestItemKey: "k1",
+        newestItemKey: "k1",
+      }),
+    );
+    await first;
+    /* not failed: the load names the old target, so the shell shows the new
+       selection opening while its own read runs */
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "loading",
+      sessionId: "session-1",
+    });
+  });
+
+  it("reloads a shown session for a selection that names no node, and shows its answer", async () => {
+    const page = {
+      totalItems: 1,
+      totalItemsExact: true,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    };
+    const shown = session(["k1"], page);
+    const fetchSessionSnapshot = vi.fn().mockResolvedValue(shown);
+    const reload = vi.fn(async () => {});
+    const store = createSelectionStore({ nodeDid: null, sessionId: "session-1" });
+    const reads = readsFor(
+      { fetchSessionSnapshot, reloadSession: reload } as unknown as DesktopApiAdapter,
+      store,
+    );
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)?.nodeDid).toBe("did:key:test");
+    /* the reload narrows the node to the shown session's; that is the same
+       selection, not a mismatched answer */
+    await reads.reloadSession("session-1");
+    expect(reload).toHaveBeenCalledWith("session-1", "did:key:test");
+    expect(fetchSessionSnapshot).toHaveBeenLastCalledWith(
+      "session-1",
+      "did:key:test",
+      "request-1",
+      expect.anything(),
+    );
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "loaded",
+      nodeDid: "did:key:test",
+      error: null,
+    });
+  });
+
+  it("leaves the held load an action when the observer stops", async () => {
+    const pending = new BridgeInvokeError({
+      code: "projectionPending",
+      message: "not at its owner yet",
+      retryable: true,
+      endpoint: null,
+    });
+    const fetchSessionSnapshot = vi.fn().mockRejectedValueOnce(pending);
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    const status = () =>
+      projectSessionLoadingStatus({
+        selectedSessionId: "session-1",
+        selectedNodeDid: "did:key:test",
+        session: readSession(reads.sessionStore),
+        sessionLoad: reads.sessionStore.getState().load,
+        operationalState: null,
+      });
+    const unfollow = reads.followSessionReads(vi.fn());
+    await reads.refreshSession("session-1");
+    expect(status()).toMatchObject({
+      title: "Waiting for session update",
+      action: null,
+    });
+    unfollow();
+    reads.invalidateSessionReads();
+    expect(status()).toMatchObject({
+      title: "Waiting for session update",
+      action: "retryLocal",
+    });
+
+    /* a read the stopped observer drops cannot settle its load */
+    const loading = readsFor({
+      fetchSessionSnapshot: vi.fn().mockReturnValue(new Promise(() => {})),
+    } as unknown as DesktopApiAdapter);
+    void loading.refreshSession("session-1");
+    expect(loading.sessionStore.getState().load.phase).toBe("loading");
+    loading.invalidateSessionReads();
+    expect(loading.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      reread: false,
+    });
+    expect(
+      projectSessionLoadingStatus({
+        selectedSessionId: "session-1",
+        selectedNodeDid: "did:key:test",
+        session: null,
+        sessionLoad: loading.sessionStore.getState().load,
+        operationalState: null,
+      }),
+    ).toMatchObject({ phase: "failed", action: "retryLocal" });
   });
 });

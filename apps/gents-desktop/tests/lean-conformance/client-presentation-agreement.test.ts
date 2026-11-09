@@ -25,11 +25,10 @@ type GeneratedPresentationCase = {
 
 type GeneratedRecoveryCase = {
   name: string;
-  surface:
-    "transport" | "route" | "offline" | "failed" | "incompatible" | "deploymentError";
+  surface: "transport" | "route" | "sync" | "deploymentError";
   connected: boolean;
-  routeReady: boolean;
-  pairingPending: boolean;
+  refusal: { cause: string; nextAction: string } | null;
+  sync?: { state: string; cause: string | null; nextAction: string | null };
   expected_kind: "ready" | "waiting" | "blocked";
   expected_action: null;
 };
@@ -72,26 +71,38 @@ describe("ClientShell presentation agreement", () => {
   it("matches Lean-generated draft and automatic recovery cases", async () => {
     const { presentationCases: cases, recoveryCases } =
       await generatedPresentationCases();
-    expect(cases).toHaveLength(20);
-    expect(recoveryCases).toHaveLength(10);
+    expect(cases).toHaveLength(22);
+    expect(recoveryCases).toHaveLength(16);
     for (const contractCase of recoveryCases) {
       const actual =
         contractCase.surface === "transport"
           ? projectDeploymentTransportStatus(contractCase.connected)
           : contractCase.surface === "route"
             ? projectRouteOperationalStatus(
-                contractCase.routeReady,
-                contractCase.pairingPending,
+                contractCase.refusal && {
+                  ...contractCase.refusal,
+                  detail: contractCase.refusal.cause,
+                },
               )
             : contractCase.surface === "deploymentError"
               ? projectDeploymentOperationalState({
                   ...deployment,
                   dialSucceeded: false,
-                  lastError: "Denied",
+                  runtime: {
+                    reconcilePhase: null,
+                    lastReconcileResult: null,
+                    lastReconcileError: "Denied",
+                    updatedAt: null,
+                    agentExecutorCapacity: null,
+                    agentExecutorQueueDepth: null,
+                  },
                 }).summary
               : projectSyncOperationalStatus({
-                  state: contractCase.surface,
-                } as Parameters<typeof projectSyncOperationalStatus>[0]);
+                  ...contractCase.sync!,
+                  lastError: null,
+                  connectedPeerCount: 0,
+                  activationErrorCount: 0,
+                });
       expect(actual.kind, contractCase.name).toBe(contractCase.expected_kind);
       expect(actual.action, contractCase.name).toBe(contractCase.expected_action);
     }

@@ -6,12 +6,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::control::control;
 use gents::tools::background::job::dispatch::split_address;
 use gents::tools::background::job::view::{
     list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
 };
 use gents::tools::background::status::ProcessControlScope;
+use gents::tools::call::control::client::send::ControlSendError;
 use gents_protocol::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
     JobReadError, JobState, JobView,
@@ -254,11 +254,11 @@ async fn job_show(args: JobShowArgs) -> Result<()> {
     let format = args
         .output
         .ensure_supported("job show", &[OutputFormat::Text, OutputFormat::Json])?;
-    let actor = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
+    let node_did = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
         .context("resolving job owner node_did")?;
     let (access, _home_dir) =
         resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
-    let view = resolve_job(&access, &actor, &args.selector, args.session.as_deref()).await?;
+    let view = resolve_job(&access, &node_did, &args.selector, args.session.as_deref()).await?;
     match format {
         OutputFormat::Json => print_json(&view),
         _ => {
@@ -294,7 +294,9 @@ pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
     )
     .await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     let report = result.map_err(|error| {
         let code = promote::refusal_code(&error);
@@ -321,6 +323,12 @@ async fn job_control(args: JobControlArgs, kind: JobControlKind) -> Result<()> {
         .context("resolving job owner node_did")?;
     let (access, _home_dir) =
         resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
+    // Job control is delivered to the hosting runtime; a Local access holds
+    // the home store with no runtime to receive the signed control.
+    anyhow::ensure!(
+        matches!(access, ConfigAccess::Graphql(_)),
+        "start the hosting runtime to control a job, or pass --graphql"
+    );
     let view = resolve_job(&access, &actor, &args.selector, args.session.as_deref()).await?;
     for line in control_job(&access, &view, kind).await? {
         println!("{line}");
@@ -328,7 +336,6 @@ async fn job_control(args: JobControlArgs, kind: JobControlKind) -> Result<()> {
     Ok(())
 }
 
-/// The operator acts as the job's own scope; the owner refuses a GraphQL access.
 pub(crate) fn operator_scope(view: &JobView) -> ProcessControlScope {
     ProcessControlScope {
         request_id: String::new(),
@@ -343,8 +350,37 @@ async fn control_job(
     view: &JobView,
     kind: JobControlKind,
 ) -> Result<Vec<String>> {
-    let result = control(access, &operator_scope(view), &view.tool_call_id, kind).await;
-    control_lines(kind, view, result)
+    match control_job_remote(access, view, kind).await {
+        Ok(outcome) => control_lines(kind, view, Ok(outcome)),
+        Err(ControlSendError::NotFound) => {
+            control_lines(kind, view, Err(JobReadError::NotYetObservable))
+        }
+        Err(ControlSendError::NotAuthorized) => {
+            control_lines(kind, view, Err(JobReadError::NotAuthorized))
+        }
+        Err(ControlSendError::PermissionDenied) => {
+            control_lines(kind, view, Err(JobReadError::PermissionDenied))
+        }
+        Err(error) => Err(anyhow::Error::new(error)),
+    }
+}
+
+async fn control_job_remote(
+    access: &ConfigAccess,
+    view: &JobView,
+    kind: JobControlKind,
+) -> std::result::Result<JobControlOutcome, ControlSendError> {
+    let actor = access.actor_did().ok_or(ControlSendError::NotAuthorized)?;
+    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor, None)
+        .map_err(|error| ControlSendError::Unavailable(error.into()))?;
+    gents::tools::call::control::client::send::control_job(
+        access,
+        &signer,
+        &view.scope.node_did,
+        &view.row_doc_id,
+        kind,
+    )
+    .await
 }
 
 /// Answer first. A job that is not ours or not a job is an error carrying the
@@ -359,6 +395,11 @@ pub(crate) fn control_lines(
         JobControlKind::Pause => "pause",
     };
     match result {
+        Ok(JobControlOutcome::Queued { intent_doc_id }) => Ok(vec![
+            format!("{verb} requested"),
+            format!("control: {intent_doc_id}"),
+            format!("next: gents job show {}", view.address),
+        ]),
         Ok(JobControlOutcome::Applied {
             state,
             killed_children,
@@ -1234,7 +1275,7 @@ mod tests {
 
     #[tokio::test]
     async fn watch_refuses_local_access() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
         let error = require_served(&ConfigAccess::local(node))
             .unwrap_err()
             .to_string();
@@ -1304,23 +1345,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graphql_access_prints_the_owner_refusal() {
+    async fn anonymous_job_control_is_rejected() {
         let row = view("s1", "call-1", "alpha", JobState::Running, 1);
-        let access = ConfigAccess::graphql("http://127.0.0.1:9/graphql");
-        let owner = control(
-            &access,
-            &operator_scope(&row),
-            "call-1",
-            JobControlKind::Stop,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(owner, JobReadError::Unavailable { .. }));
-        let printed = control_job(&access, &row, JobControlKind::Stop)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert_eq!(printed, owner.to_string());
+        let access = ConfigAccess::graphql("http://127.0.0.1:9/api/v0/graphql");
+        assert!(matches!(
+            control_job_remote(&access, &row, JobControlKind::Stop).await,
+            Err(ControlSendError::NotAuthorized)
+        ));
     }
 
     #[test]

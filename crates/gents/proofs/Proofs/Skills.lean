@@ -67,14 +67,4 @@ theorem source_directory_preserves_tool_authority (b : Context) (s : Skill)
     (directory : Option String) :
     skillTools b { s with sourceDirectory := directory } = skillTools b s := rfl
 
-def activate (skills : Finset Skill) (b : Context) : Finset Skill × Finset ToolId :=
-  (select skills b, b.ceiling)
-
-theorem activation_preserves_tool_authority (skills : Finset Skill) (b : Context) :
-    (activate skills b).2 = b.ceiling := rfl
-
-theorem activation_skills_whitelisted (skills : Finset Skill) (b : Context) :
-    (activate skills b).1.image Skill.id ⊆ b.skillIds :=
-  select_ids_subset_whitelist skills b
-
 end Skills

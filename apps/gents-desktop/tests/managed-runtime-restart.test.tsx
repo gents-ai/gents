@@ -7,6 +7,7 @@ import type {
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
 import { LocalServer } from "../src/ui/screens/agent/LocalServer";
+import { deployment } from "./config-panel-wiring/fixtures";
 
 // Match the existing switch-control harness: jsdom has no PointerEvent.
 const originalPointerEvent = window.PointerEvent;
@@ -112,6 +113,106 @@ describe("managed runtime restart settings", () => {
     expect(api.restartManagedServer).toHaveBeenCalledWith("Workshop Node", {
       toolCeiling: "meta-only",
       toolRoot: null,
+    });
+  });
+  describe("a changed tool root", () => {
+    const nodeDid = deployment.nodeDid;
+    const at = (root: string | null, ceiling = "readwrite" as const) => ({
+      ...running(ceiling, root, true),
+      nodeDid,
+    });
+    const harness = (deployments: unknown[] | undefined) => {
+      const api = {
+        managedServerStatus: vi.fn(async () => at("/Users/test")),
+        validateManagedServerRoot: vi.fn(async (path: string) => path),
+        selectAgentWorkspaceRoot: vi.fn(async () => ({})),
+        restartManagedServer: vi.fn(
+          async (_name: string, authority: { toolRoot: string | null }) =>
+            at(authority.toolRoot),
+        ),
+      };
+      renderIn(
+        testApp({ api: api as unknown as DesktopApiAdapter, deployments }),
+        <LocalServer />,
+      );
+      return api;
+    };
+    const reviewRoot = async (root: string) => {
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole("button", { name: "Change access…" }));
+      const input = screen.getByLabelText("Tool root");
+      await user.clear(input);
+      await user.type(input, root);
+      await user.tab();
+      await user.click(
+        screen.getByRole("button", { name: "Review complete — restart" }),
+      );
+      return user;
+    };
+
+    it("publishes the folder for the node's agent before the restart", async () => {
+      const api = harness([deployment]);
+      await reviewRoot("/Users/test/work");
+      expect(await screen.findByText("/Users/test/work")).toBeInTheDocument();
+      expect(api.selectAgentWorkspaceRoot).toHaveBeenCalledWith(
+        nodeDid,
+        "default",
+        "/Users/test/work",
+      );
+      expect(api.restartManagedServer).toHaveBeenCalledWith("Workshop Node", {
+        toolCeiling: "readwrite",
+        toolRoot: "/Users/test/work",
+      });
+      expect(api.selectAgentWorkspaceRoot.mock.invocationCallOrder[0]).toBeLessThan(
+        api.restartManagedServer.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("refuses before any write while the node's agents are unobserved, and keeping the current folder restarts", async () => {
+      const api = harness(undefined);
+      const user = await reviewRoot("/Users/test/work");
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("this node's agents have not loaded yet");
+      expect(alert).toHaveTextContent("keep the current folder");
+      expect(alert).toHaveTextContent("wait for the node's agents to appear");
+      expect(api.selectAgentWorkspaceRoot).not.toHaveBeenCalled();
+      expect(api.restartManagedServer).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: "Keep current folder" }));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      await user.click(
+        screen.getByRole("button", { name: "Review complete — restart" }),
+      );
+      await vi.waitFor(() =>
+        expect(api.restartManagedServer).toHaveBeenCalledWith("Workshop Node", {
+          toolCeiling: "readwrite",
+          toolRoot: "/Users/test",
+        }),
+      );
+      expect(api.selectAgentWorkspaceRoot).not.toHaveBeenCalled();
+    });
+
+    it("refuses before any write when the node has no agent and names the next action", async () => {
+      const api = harness([{ ...deployment, agents: [] }]);
+      await reviewRoot("/Users/test/work");
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("this node has no agent");
+      expect(alert).toHaveTextContent("add an agent to this node");
+      expect(screen.getByRole("button", { name: "Keep current folder" })).toBeEnabled();
+      expect(api.selectAgentWorkspaceRoot).not.toHaveBeenCalled();
+      expect(api.restartManagedServer).not.toHaveBeenCalled();
+    });
+
+    it("does not publish when the restart keeps the current root", async () => {
+      const api = harness([deployment]);
+      await reviewRoot("/Users/test");
+      await vi.waitFor(() =>
+        expect(api.restartManagedServer).toHaveBeenCalledWith("Workshop Node", {
+          toolCeiling: "readwrite",
+          toolRoot: "/Users/test",
+        }),
+      );
+      expect(api.selectAgentWorkspaceRoot).not.toHaveBeenCalled();
     });
   });
 });

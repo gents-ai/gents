@@ -53,14 +53,14 @@ export function shellStores({
 }
 
 export function admittingProjection(
-  agentId = "coding",
+  agentDid = "coding",
   blocked?: string,
 ): ShellProjection {
   const status = blocked
     ? { kind: "disabled", reason: "agentUnavailable", hint: blocked }
     : { kind: "ready" };
   return {
-    agentReadiness: { kind: "ready", agentId },
+    agentReadiness: { kind: "ready", agentDid },
     shellProjection: { nonEmptyContentSendStatus: status },
     retryShellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
   } as unknown as ShellProjection;

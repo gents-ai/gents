@@ -1,14 +1,12 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
 use gents::request::lifecycle::{ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
-use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use gents::{build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink};
+use gents::store::config_client::ConfigAccess;
+use gents::{RequestIdentity, RequestSigner, RequestSpec, RetryLink};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
@@ -21,7 +19,7 @@ use super::prepare::{canonical_request_created_at_after, normalize_authored_cont
 use super::SubmittedRequest;
 
 pub async fn retry_request(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
@@ -29,7 +27,7 @@ pub async fn retry_request(
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     retry_request_with_request_id(
-        node,
+        access,
         store,
         parent,
         requester_did,
@@ -40,8 +38,12 @@ pub async fn retry_request(
     .await
 }
 
+/// Retry a failed turn as one signed create, idempotent on the parent: its
+/// `retry:doc:<parent>` key admits one successor, so a repeat of the retry
+/// (another click, another window, a resend after a lost reply) returns the
+/// successor the runtime holds instead of a second one.
 pub(super) async fn retry_request_with_request_id(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
@@ -60,52 +62,15 @@ pub(super) async fn retry_request_with_request_id(
     )?;
     let requester_did = normalize_required("requester_did", requester_did)?;
 
-    let request_id_ref = &request_id;
-    ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        IdempotentTransactionRetry::FiveAttempts,
-        "desktop.request.retry",
-        move |txn| {
-            let admission = admission.clone();
-            Box::pin(async move {
-                retry_request_in_txn(
-                    txn,
-                    store,
-                    parent_request_id,
-                    node_did,
-                    requester_did,
-                    signer,
-                    admission,
-                    request_id_ref,
-                )
-                .await
-            })
-        },
-    )
-    .await
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "admission inputs from separate owners (store, identity, admission record)"
-)]
-async fn retry_request_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    store: &ClientStore,
-    parent_request_id: &str,
-    node_did: &str,
-    requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
-    admission: AgentRequestAdmissionRecord,
-    candidate_request_id: &str,
-) -> Result<SubmittedRequest> {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(signer.did())
+            && admission.signer_did == signer.did()
+            && admission.kind
+                == gents_protocol::request_admission::AgentRequestAdmissionKind::Client,
+        "retry requires the authenticated client signer"
+    );
     let (parent_doc_id, parent) =
-        load_retry_parent_in_txn(txn, parent_request_id, node_did, requester_did).await?;
-    let retry_key = retry_successor_key(&parent_doc_id);
-    if let Some(existing) = load_retry_successor_in_txn(txn, &retry_key).await? {
-        return Ok(existing);
-    }
+        load_retry_parent(access, parent_request_id, node_did, requester_did).await?;
     let parent_session_id = normalize_required(
         "session_id",
         parent
@@ -113,6 +78,25 @@ async fn retry_request_in_txn(
             .as_deref()
             .context("retry parent request must have a session_id")?,
     )?;
+    let agent_did = normalize_optional_string(parent.agent_did.as_deref());
+    let binding = resolve_agent_binding(store, node_did, agent_did, Some(parent_session_id))?;
+    let submitted = |request_id: String| SubmittedRequest {
+        request_id,
+        session_id: parent_session_id.to_string(),
+        node_did: node_did.to_string(),
+        agent_did: binding.agent_did.clone(),
+    };
+    if let Some(existing) = gents::request::lifecycle::reconcile_client_retry(
+        access,
+        node_did,
+        parent_session_id,
+        requester_did,
+        &parent_doc_id,
+    )
+    .await?
+    {
+        return Ok(submitted(existing));
+    }
     let input = parent
         .input
         .clone()
@@ -139,37 +123,36 @@ async fn retry_request_in_txn(
     ensure_retry_parent_eligible(&parent, retry_count - 1, max_retries, execution_origin)?;
 
     let effective_latest_request_id =
-        latest_interactive_request_in_txn(txn, parent_session_id, node_did, requester_did).await?;
+        latest_interactive_request(access, parent_session_id, node_did, requester_did).await?;
     if effective_latest_request_id != parent_request_id {
         bail!(
             "retry parent request must be latest for session {parent_session_id}, got latest_request_id={effective_latest_request_id}"
         );
     }
-    ensure_retry_candidate_is_fresh_in_txn(txn, parent_session_id, candidate_request_id).await?;
+    ensure_retry_candidate_is_fresh(access, node_did, &request_id).await?;
 
-    let agent_id = normalize_optional_string(parent.agent_id.as_deref());
     let retry_root_request = normalize_optional_string(parent.retry_root_request.as_deref())
         .unwrap_or(parent_request_id);
     let created_at = canonical_request_created_at_after(parent.created_at.as_deref())?;
-    let binding = resolve_agent_binding(store, node_did, agent_id, Some(parent_session_id))?;
-    let create = build_signed_request(
+    let create = gents::request::lifecycle::build_signed_client_request(
+        access,
         RequestSpec {
             retry: Some(RetryLink {
                 parent_request_id: Some(parent_request_id.to_string()),
-                parent_request_doc_id: Some(parent_doc_id),
+                parent_request_doc_id: Some(parent_doc_id.clone()),
                 root_request_id: retry_root_request.to_string(),
                 retry_count,
                 max_retries,
             }),
-            retry_key: Some(retry_key),
+            retry_key: Some(retry_successor_key(&parent_doc_id)),
             input,
             ..RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {
-                    request_id: candidate_request_id.to_string(),
+                    request_id: request_id.clone(),
                     node_did: node_did.to_string(),
                     requester_did: Some(requester_did.to_string()),
-                    agent_id: binding.agent_id.clone().unwrap_or_default(),
+                    agent_did: binding.agent_did.clone().unwrap_or_default(),
                     session_id: parent_session_id.to_string(),
                     content: content.to_string(),
                     execution_origin: ExecutionOrigin::from_persisted(Some(execution_origin))?,
@@ -181,74 +164,16 @@ async fn retry_request_in_txn(
         RequestSigner::Identity(signer),
     )
     .await?;
-    txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await?;
-
-    Ok(SubmittedRequest {
-        request_id: candidate_request_id.to_string(),
-        session_id: parent_session_id.to_string(),
-        node_did: node_did.to_string(),
-        agent_id: binding.agent_id,
-    })
+    let held = gents::request::lifecycle::send_client_retry(access, &create).await?;
+    Ok(submitted(held))
 }
 
 fn retry_successor_key(parent_request_doc_id: &str) -> String {
     format!("retry:doc:{parent_request_doc_id}")
 }
 
-async fn load_retry_successor_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    retry_key: &str,
-) -> Result<Option<SubmittedRequest>> {
-    let retry_key = escape_graphql_string(retry_key);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ retry_key: {{ _eq: "{retry_key}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                session_id
-                node_did
-                agent_id
-            }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
-    let Some(row) = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-    else {
-        return Ok(None);
-    };
-    Ok(Some(SubmittedRequest {
-        request_id: row
-            .get("request_id")
-            .and_then(Value::as_str)
-            .context("retry successor has no request_id")?
-            .to_string(),
-        session_id: row
-            .get("session_id")
-            .and_then(Value::as_str)
-            .context("retry successor has no session_id")?
-            .to_string(),
-        node_did: row
-            .get("node_did")
-            .and_then(Value::as_str)
-            .context("retry successor has no node_did")?
-            .to_string(),
-        agent_id: row
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .and_then(|value| normalize_optional_string(Some(value)))
-            .map(str::to_string),
-    }))
-}
-
-async fn load_retry_parent_in_txn(
-    txn: &ConfigApplyTxn<'_>,
+async fn load_retry_parent(
+    access: &ConfigAccess,
     parent_request_id: &str,
     node_did: &str,
     requester_did: &str,
@@ -270,7 +195,7 @@ async fn load_retry_parent_in_txn(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 retry_parent_request
                 retry_root_request
@@ -297,7 +222,7 @@ async fn load_retry_parent_in_txn(
             }}
         }}"#
     );
-    let response = txn.execute(&query).await?;
+    let response = access.execute(&query).await?;
     let rows = response
         .get("data")
         .and_then(|data| data.get("AgentRequest"))
@@ -322,8 +247,8 @@ async fn load_retry_parent_in_txn(
     Ok((doc_id, request))
 }
 
-async fn latest_interactive_request_in_txn(
-    txn: &ConfigApplyTxn<'_>,
+async fn latest_interactive_request(
+    access: &ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: &str,
@@ -343,7 +268,7 @@ async fn latest_interactive_request_in_txn(
             ) {{ request_id }}
         }}"#
     );
-    let response = txn.execute(&query).await?;
+    let response = access.execute(&query).await?;
     response
         .get("data")
         .and_then(|data| data.get("AgentRequest"))
@@ -357,25 +282,27 @@ async fn latest_interactive_request_in_txn(
         .context("retry parent session has no request")
 }
 
-async fn ensure_retry_candidate_is_fresh_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    session_id: &str,
+/// A retry's new identity must not name a request the node already holds, in
+/// any session.
+async fn ensure_retry_candidate_is_fresh(
+    access: &ConfigAccess,
+    node_did: &str,
     candidate_request_id: &str,
 ) -> Result<()> {
-    let session_id = escape_graphql_string(session_id);
+    let node_did = escape_graphql_string(node_did);
     let candidate_request_id = escape_graphql_string(candidate_request_id);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     request_id: {{ _eq: "{candidate_request_id}" }}
                 }},
                 limit: 1
             ) {{ _docID }}
         }}"#
     );
-    let response = txn.execute(&query).await?;
+    let response = access.execute(&query).await?;
     let exists = response
         .get("data")
         .and_then(|data| data.get("AgentRequest"))

@@ -2,10 +2,10 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "canary",
       "display_name": "Eval canary",
       "context_id": "canary-context",
-      "inference_profile_id": "gents:inference-slot:primary"
+      "inference_profile_id": "gents:inference-slot:primary",
+      "agent_slot": "canary"
     }
   ],
   "contexts": [

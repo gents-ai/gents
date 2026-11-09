@@ -9,7 +9,8 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) background_execution_registry: gents::BackgroundExecutionRegistry,
     pub(crate) graphql: String,
     pub(crate) node_did: String,
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
+    pub(crate) runtime_identity: Arc<dyn gents::NodeIdentity>,
     pub(crate) auth_token: Option<String>,
     pub(crate) bind_addr: std::net::IpAddr,
     pub(crate) port: u16,
@@ -24,7 +25,7 @@ pub(crate) struct BoundCodexShim {
     listener: TcpListener,
     app: Router,
     node_did: String,
-    agent_id: String,
+    agent_did: String,
     auth_required: bool,
 }
 
@@ -45,8 +46,8 @@ impl BoundCodexShim {
         &self.node_did
     }
 
-    pub(crate) fn agent_id(&self) -> &str {
-        &self.agent_id
+    pub(crate) fn agent_did(&self) -> &str {
+        &self.agent_did
     }
 
     pub(crate) fn auth_required(&self) -> bool {
@@ -64,12 +65,12 @@ impl BoundCodexShim {
     }
 }
 
-pub(crate) async fn resolve_codex_shim_agent_id(
+pub(crate) async fn resolve_codex_shim_agent_did(
     node: &EmbeddedNode,
-    override_agent_id: Option<&str>,
+    override_agent_did: Option<&str>,
     node_did: &str,
 ) -> Result<String> {
-    bound_behavior::resolve_bound_agent_id(node, override_agent_id, node_did).await
+    bound_behavior::resolve_bound_agent_did(node, override_agent_did, node_did).await
 }
 
 pub(crate) enum CodexShimBindError {
@@ -104,18 +105,54 @@ pub(crate) async fn bind_codex_shim(
     let node_did = args.node_did.clone();
     let auth_required = args.auth_token.is_some();
 
-    let bound_agent_id = bound_behavior::resolve_bound_agent_id(
+    let bound_agent_did = bound_behavior::resolve_bound_agent_did(
         args.node.as_ref(),
-        args.agent_id.as_deref(),
+        args.agent_did.as_deref(),
         &args.node_did,
     )
     .await
     .map_err(CodexShimBindError::DependencyMissing)?;
-    bound_behavior::load_bound_inference_profile_id(&args.node, &args.node_did, &bound_agent_id)
+    bound_behavior::load_bound_inference_profile_id(&args.node, &args.node_did, &bound_agent_did)
         .await
-        .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))
+        .with_context(|| format!("validating Codex shim bound agent {bound_agent_did:?}"))
         .map_err(CodexShimBindError::DependencyMissing)?;
+    let agent_signer = match bound_behavior::load_bound_agent_signer(
+        args.runtime_identity.as_ref(),
+        &args.node,
+        &args.node_did,
+        &bound_agent_did,
+    )
+    .await
+    {
+        Ok(signer) => Some(signer),
+        Err(error) => {
+            tracing::warn!(
+                agent_did = %bound_agent_did,
+                error = %error,
+                "Codex shim has no managed Agent signer; steering is refused"
+            );
+            None
+        }
+    };
 
+    // The shim acts for the operator with the CLI's User client key; it holds
+    // no identity of its own.
+    let graphql =
+        crate::home_state::resolve_graphql_endpoint(Some(&args.graphql), Some(args.home.as_path()))
+            .context("resolving the Codex shim's client-signed GraphQL endpoint")
+            .map_err(CodexShimBindError::DependencyMissing)?;
+    let client_did = graphql
+        .held_client_signing_capability()
+        .context("the Codex shim's endpoint holds no User client key")
+        .map_err(CodexShimBindError::DependencyMissing)?
+        .did()
+        .to_owned();
+    let reader = gents::store::config_client::ConfigAccess::local_as(
+        args.node.clone(),
+        identity::Did::new(&client_did)
+            .context("the Codex shim's User client DID")
+            .map_err(CodexShimBindError::DependencyMissing)?,
+    );
     let state = ShimState {
         usage_cache: args.usage_cache,
         codex_home: codex_home.clone(),
@@ -126,12 +163,12 @@ pub(crate) async fn bind_codex_shim(
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
-        graphql: gents::store::config_client::GraphqlEndpoint::as_principal(
-            args.graphql.clone(),
-            args.node_did.clone(),
-        ),
+        graphql,
+        client_did: Arc::from(client_did),
+        reader,
         node_did: Arc::from(args.node_did.clone()),
-        agent_id: Arc::from(bound_agent_id.clone()),
+        agent_did: Arc::from(bound_agent_did.clone()),
+        agent_signer,
         id_counter: Arc::new(AtomicU64::new(1)),
         timeout: Duration::from_secs(args.timeout_secs),
         poll_interval: Duration::from_millis(args.poll_ms.max(1)),
@@ -155,7 +192,7 @@ pub(crate) async fn bind_codex_shim(
         listener,
         app,
         node_did,
-        agent_id: bound_agent_id,
+        agent_did: bound_agent_did,
         auth_required,
     })
 }

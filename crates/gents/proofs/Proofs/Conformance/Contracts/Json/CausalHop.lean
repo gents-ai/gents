@@ -1,5 +1,6 @@
 import Proofs.Request.CausalHop
 import Proofs.DurableLineage
+import Proofs.AgentSession
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.CausalHopContracts
@@ -163,6 +164,18 @@ def creationCaseJson (c : CreationCase) : String :=
     ++ ",\"expected\":" ++ toString (DurableLineage.verifiedCreation
       c.signatureValid (c.scopeMatches && c.physicalMatches) true c.causeMatches) ++ "}"
 
+def creationSignerCases : List (Bool × Bool × String) :=
+  [(true, true, "creator"), (true, true, "worker"), (true, true, "other"),
+   (true, false, "creator"), (false, true, "creator"), (false, true, "worker")]
+
+def creationSignerCaseJson (c : Bool × Bool × String) : String :=
+  let (agentNew, hasRequester, signer) := c
+  let requester := if hasRequester then some 1 else none
+  let signerDid := if signer == "creator" then 1 else if signer == "worker" then 2 else 3
+  "{\"agent_new\":" ++ toString agentNew ++ ",\"has_requester\":" ++ toString hasRequester
+    ++ ",\"signer\":" ++ jsonString signer ++ ",\"expected\":"
+    ++ toString (AgentSession.creationReceiptSigner agentNew requester 2 == some signerDid) ++ "}"
+
 def jobCreationCases : List (Bool × Bool × Bool × Bool) :=
   [(true, true, true, true), (false, true, true, true),
    (true, false, true, true), (true, true, false, true),
@@ -263,13 +276,40 @@ def sessionTargetCaseJson (c : SessionTargetCase) : String :=
     ++ ",\"expected_allowed\":" ++ toString (DurableLineage.sessionTargetAllowed
       c.sameRequester c.sameNode c.caused c.allowedTarget) ++ "}"
 
+structure CapObservationCase where
+  name : String
+  observation : Option (Option Nat)
+  hop : Nat
+
+def capObservationCases : List CapObservationCase :=
+  [ ⟨"hidden", none, 1⟩
+  , ⟨"missing", none, 1⟩
+  , ⟨"unset", some none, 7⟩
+  , ⟨"at_bound", some (some 1), 1⟩
+  , ⟨"over_bound", some (some 1), 2⟩ ]
+
+def capObservationCaseJson (c : CapObservationCase) : String :=
+  let visible := c.observation.isSome
+  let cap := c.observation.getD none
+  let expected := CausalHop.admitObservedHop c.observation c.hop
+  "{\"name\":" ++ jsonString c.name
+    ++ ",\"visible\":" ++ toString visible
+    ++ ",\"cap\":" ++ optionalNatJson cap
+    ++ ",\"hop\":" ++ toString c.hop
+    ++ ",\"expected_bound\":" ++ optionalNatJson (CausalHop.observedHopBound c.observation)
+    ++ ",\"expected\":" ++ (match expected with
+      | none => "null"
+      | some value => toString value) ++ "}"
+
 def contractJson : String :=
   "{\"default_max_request_hop\":" ++ optionalNatJson CausalHop.defaultMaxRequestHop
+    ++ ",\"cap_observation_cases\":" ++ jsonArray (capObservationCases.map capObservationCaseJson)
     ++ ",\"step_cases\":" ++ jsonArray (stepCases.map stepCaseJson)
     ++ ",\"chain_cases\":" ++ jsonArray (chainCases.map chainCaseJson)
     ++ ",\"call_cases\":" ++ jsonArray (callCases.map callCaseJson)
     ++ ",\"interrupt_cases\":" ++ jsonArray (interruptCases.map interruptCaseJson)
     ++ ",\"creation_cases\":" ++ jsonArray (creationCases.map creationCaseJson)
+    ++ ",\"creation_signer_cases\":" ++ jsonArray (creationSignerCases.map creationSignerCaseJson)
     ++ ",\"job_creation_cases\":" ++ jsonArray (jobCreationCases.map jobCreationCaseJson)
     ++ ",\"deferred_creation_cases\":" ++ jsonArray (jobCreationCases.map deferredCreationCaseJson)
     ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson)

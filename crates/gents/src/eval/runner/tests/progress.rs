@@ -181,7 +181,7 @@ async fn a_slots_live_snapshot_is_in_progress_and_its_last_is_kept_with_its_evid
         "derived from the case's row-count check"
     );
 
-    let trials = load_trials(&launching.access, OWNER, "run-live")
+    let trials = load_trials(&launching.access, launching.owner(), "run-live")
         .await
         .unwrap();
     let trial_id = &trials[0].identity.trial_id;
@@ -204,7 +204,7 @@ async fn a_slots_live_snapshot_is_in_progress_and_its_last_is_kept_with_its_evid
         view.report,
         crate::eval::report::load_report(
             &launching.access,
-            OWNER,
+            launching.owner(),
             &launching.runs_dir(),
             "run-live"
         )

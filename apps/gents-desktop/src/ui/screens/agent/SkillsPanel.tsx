@@ -121,14 +121,14 @@ function SkillEditor({
               Used by{" "}
               {users.length ? (
                 users.map((agent, i) => (
-                  <Fragment key={agent.agentId}>
+                  <Fragment key={agent.agentDid}>
                     {i > 0 && ", "}
                     <a
                       href={href({
                         name: "agent",
                         nodeDid: deployment.nodeDid,
                         section: "agents",
-                        item: agent.agentId,
+                        item: agent.agentDid,
                       })}
                       className="text-foreground underline-offset-2 hover:underline"
                     >

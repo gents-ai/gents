@@ -10,8 +10,13 @@ pub(super) struct ShimState {
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) background_execution_registry: gents::BackgroundExecutionRegistry,
     pub(super) graphql: gents::store::config_client::GraphqlEndpoint,
+    /// The operator's User DID: the CLI client key that signs `graphql`.
+    pub(super) client_did: Arc<str>,
+    /// Embedded reads as `client_did`; document ACP scopes them to the User.
+    pub(super) reader: gents::store::config_client::ConfigAccess,
     pub(super) node_did: Arc<str>,
-    pub(super) agent_id: Arc<str>,
+    pub(super) agent_did: Arc<str>,
+    pub(super) agent_signer: Option<gents::store::identity::ManagedAgentSigner>,
     pub(super) id_counter: Arc<AtomicU64>,
     pub(super) timeout: Duration,
     pub(super) poll_interval: Duration,
@@ -75,7 +80,12 @@ pub(super) struct RootContinuationStreamControl {
 
 impl ShimState {
     pub(super) fn local_requester_did(&self) -> &str {
-        self.node_did.as_ref()
+        self.client_did.as_ref()
+    }
+
+    /// Writes signed by the User's client key through its endpoint.
+    pub(super) fn writer(&self) -> gents::store::config_client::ConfigAccess {
+        gents::store::config_client::ConfigAccess::Graphql(self.graphql.clone())
     }
 
     pub(super) fn next_thread_id(&self) -> String {

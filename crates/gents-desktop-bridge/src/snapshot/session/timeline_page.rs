@@ -59,15 +59,13 @@ pub(super) fn insert_timeline_item_by_sequence(
 
 pub fn apply_session_timeline_page(
     snapshot: &mut DesktopSessionSnapshot,
-    before_item_key: Option<&str>,
     requested_limit: Option<usize>,
 ) -> Result<(), String> {
-    apply_session_timeline_page_with_query(snapshot, before_item_key, requested_limit, None)
+    apply_session_timeline_page_with_query(snapshot, requested_limit, None)
 }
 
 pub fn apply_session_timeline_page_with_query(
     snapshot: &mut DesktopSessionSnapshot,
-    before_item_key: Option<&str>,
     requested_limit: Option<usize>,
     query_page: Option<&SessionTranscriptQueryPage>,
 ) -> Result<(), String> {
@@ -75,30 +73,7 @@ pub fn apply_session_timeline_page_with_query(
     let limit = requested_limit
         .unwrap_or(DEFAULT_SESSION_TIMELINE_PAGE_SIZE)
         .clamp(1, MAX_SESSION_TIMELINE_PAGE_SIZE);
-
-    let mut end = if query_page.is_some() {
-        total_items
-    } else {
-        match before_item_key {
-            Some(cursor) => snapshot
-                .timeline_items
-                .iter()
-                .position(|item| rendered_timeline_item_key(item) == cursor)
-                .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
-            None => total_items,
-        }
-    };
-    if query_page.is_none() && before_item_key.is_some() {
-        while end > 0
-            && matches!(
-                snapshot.timeline_items[end - 1],
-                crate::types::RenderedTimelineItem::PendingUserTurn { .. }
-            )
-        {
-            end -= 1;
-        }
-    }
-    let candidates = &snapshot.timeline_items[..end];
+    let candidates = &snapshot.timeline_items[..];
     let (page, has_older, has_newer, oldest_item_key) = {
         let mut pending_anchors = RapidHashMap::new();
         let mut next_sequence = None;
@@ -223,7 +198,7 @@ pub fn apply_session_timeline_page_with_query(
         (
             page,
             has_unselected_sequences || query_page.is_some_and(|page| !page.source_exhausted),
-            query_page.map_or(end < total_items, |page| page.has_newer),
+            query_page.is_some_and(|page| page.has_newer),
             oldest_item_key,
         )
     };

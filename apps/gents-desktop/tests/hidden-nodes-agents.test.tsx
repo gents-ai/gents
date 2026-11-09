@@ -241,7 +241,7 @@ describe("a hidden agent", () => {
     const app = testApp({ deployments: [node()] });
     const { rerender } = renderIn(
       app,
-      <AgentPicker deployment={deployment} agentId="default" onChange={vi.fn()} />,
+      <AgentPicker deployment={deployment} agentDid="default" onChange={vi.fn()} />,
     );
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Agent" }));
@@ -251,7 +251,7 @@ describe("a hidden agent", () => {
         .map((o) => o.textContent);
     expect(names()).toEqual([expect.stringContaining("Default")]);
     await user.keyboard("{Escape}");
-    rerender(<AgentPicker deployment={deployment} agentId="ops" onChange={vi.fn()} />);
+    rerender(<AgentPicker deployment={deployment} agentDid="ops" onChange={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Agent" }));
     expect(names()).toEqual(expect.arrayContaining([expect.stringContaining("Ops")]));
   });

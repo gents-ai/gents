@@ -8,7 +8,6 @@ use ts_rs::TS;
 use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
-use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
     ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
     CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
@@ -71,6 +70,9 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
                     && (trimmed.contains(" from \"./") || trimmed.contains(" from \"../"))
                     && trimmed.ends_with("\";")
                     && !trimmed.ends_with(".js\";")
+                    && trimmed.rsplit_once(" from \"").is_some_and(|(_, module)| {
+                        module.starts_with("./") || module.starts_with("../")
+                    })
                 {
                     format!("{}.js\";", trimmed.trim_end_matches("\";"))
                 } else {
@@ -185,12 +187,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
 
     export_types!(
         crate::accounts::BackendAuthenticationView,
-        crate::accounts::BackendRotationView,
-        crate::accounts::PoolAccountView,
-        crate::accounts::BackendRotationSaveRequest,
         ConfiguredActionView,
-        crate::host::settings::ConfigEditorEntry,
-        gents_desktop_core::client::ConfigEditorDocument,
         RequestOutputView,
         gents_protocol::file_changes::ToolFileChanges,
         gents_protocol::file_inventory::FileInventoryObservation,
@@ -206,14 +203,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         gents_protocol::client_media::MediaPcmClip,
         gents_protocol::client_media::MediaMessage,
         gents_protocol::client_media::MediaDevices,
-        crate::host::speech::SpeechServiceView,
-        crate::host::speech::SpeechToolReference,
-        crate::host::speech::SpeechRecognizeRequest,
-        crate::host::speech::SpeechSynthesizeRequest,
-        crate::host::permissions::WorkspacePermissionsRequest,
-        crate::host::permissions::WorkspacePermissionsSaveRequest,
-        crate::host::permissions::WorkspacePermissionsForgetCommandsRequest,
-        crate::host::permissions::WorkspacePermissionsState,
         crate::host::protocol::ClientMessage,
         crate::host::protocol::ClientCommand,
         crate::host::protocol::HostMessage,
@@ -222,6 +211,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerRestartRequest,
         ManagedServerResetRequest,
         ManagedServerRootValidationRequest,
+        AgentWorkspaceRootSelectRequest,
+        gents_desktop_core::workspace_root::AgentWorkspaceRoot,
         PeerStatusFetchRequest,
         EnrollmentStatusRequest,
         ChatSendRequest,
@@ -231,6 +222,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PendingMessageSteerRequest,
         PendingQueueEditResult,
         SessionGoalView,
+        SessionGoalState,
+        SessionGoalNextAction,
         GoalControlView,
         GoalControlAction,
         GoalControlRequest,
@@ -259,6 +252,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ConfigComponentsPatchRequest,
         ConfigComponentPatch,
         AgentSaveRequest,
+        gents_protocol::agent_identity::AgentIdentityBinding,
         SkillDeleteRequest,
         TaskDeleteRequest,
         ScheduleDeleteRequest,
@@ -317,17 +311,11 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerResetResult,
         PeerRemoveResponse,
         EnrollmentRequestView,
-        NetworkStatusView,
         ToolServiceTestResult,
         TaskRunResult,
         ChatSendResult,
-        ChatSubmissionReceipt,
-        ChatSubmissionRecovery,
-        ChatSubmissionQuery,
         ClientUpdateEvent,
-        SessionHydrationView,
         SyncHealthView,
-        PairingCollectionStatusView,
         DesktopOperationsSnapshot,
         SessionProvenanceView,
         InterruptRequestResult,
@@ -342,7 +330,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         MessageView,
         QuestionReplyView,
         ToolCallView,
-        RequestResendResultView,
         SessionContextDetailsRequest,
         gents::tools::native::SessionContextDetails,
         WorkspaceListingView,
@@ -372,6 +359,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::tauri_commands::packs::PackInstallRequest,
         crate::tauri_commands::ux_plugins::PluginCallRequest,
         crate::tauri_commands::ux_plugins::UxDataCallRequest,
+        crate::tauri_commands::ux_plugins::UxDataCallKind,
+        crate::tauri_commands::ux_plugins::UxDataCallResult,
+        crate::tauri_commands::ux_plugins::UxDataWatchEvent,
         crate::tauri_commands::ux_plugins::UxDataSurfacesRequest,
         crate::tauri_commands::packs::PluginBindRequest,
         crate::tauri_commands::packs::PackWireRequest,
@@ -383,7 +373,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         WorkflowPromoteView,
         gents_server::packs::EditedDocuments,
         RequestTimelineView,
-        ToolSurfaceExplanationView,
         BackendDisplayState,
         InstalledPacksView,
         PackSearchView,
@@ -490,6 +479,23 @@ fn list_ts_files(dir: &Path) -> Result<Vec<String>, String> {
 fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     export_all(tmp.path()).expect("export");
+    let commands =
+        std::fs::read_to_string(tmp.path().join("DesktopCommands.ts")).expect("DesktopCommands.ts");
+    assert!(
+        commands.contains("import type { Channel } from \"@tauri-apps/api/core\";")
+            && !commands.contains("@tauri-apps/api/core.js")
+            && commands.contains("channel: Channel<UxDataWatchEvent>"),
+        "the watch command must carry its typed Tauri event channel: {commands}"
+    );
+    let watch_event = std::fs::read_to_string(tmp.path().join("UxDataWatchEvent.ts"))
+        .expect("UxDataWatchEvent.ts");
+    assert!(
+        watch_event.contains("\"snapshot\"")
+            && watch_event.contains("UxDataCallResult")
+            && watch_event.contains("\"reconnecting\", delay_ms: number")
+            && watch_event.contains("\"error\""),
+        "the watch channel must expose its snapshot, reconnecting and error events: {watch_event}"
+    );
     let goal = std::fs::read_to_string(tmp.path().join("GoalControlAction.ts"))
         .expect("GoalControlAction.ts");
     assert!(
@@ -621,6 +627,22 @@ fn bigint_normalization_only_rewrites_typescript_identifier_tokens() {
     assert_eq!(
         replace_typescript_identifier(source, "bigint", "number"),
         "type Wire = number | Array<number>; type bigintCounter = string;\n"
+    );
+}
+
+#[test]
+fn generated_imports_keep_package_specifiers_and_suffix_relative_modules() {
+    let dir = tempfile::tempdir().expect("generated directory");
+    let path = dir.path().join("Example.ts");
+    std::fs::write(
+        &path,
+        "import type { Channel } from \"@tauri-apps/api/core\";\nimport type { A } from \"./A\";\nimport type { B } from \"../B\";\nimport type { C } from \"./C.js\";\n",
+    )
+    .unwrap();
+    normalize_generated_types(dir.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "import type { Channel } from \"@tauri-apps/api/core\";\nimport type { A } from \"./A.js\";\nimport type { B } from \"../B.js\";\nimport type { C } from \"./C.js\";\n"
     );
 }
 

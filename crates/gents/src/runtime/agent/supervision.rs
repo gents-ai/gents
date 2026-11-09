@@ -39,7 +39,7 @@ where
             _ = shutdown.changed() => return Ok(()),
             Some(joined) = join_set.join_next() => {
                 let (behavior, outcome) = joined?;
-                running.remove(&behavior.agent_id);
+                running.remove(&behavior.agent_did);
 
                 if shutdown.has_changed().unwrap_or(false) {
                     return Ok(());
@@ -52,11 +52,11 @@ where
                         }
                     }
                     Ok(Err(error)) => {
-                        let attempt = failure_counts.entry(behavior.agent_id.clone()).or_default();
+                        let attempt = failure_counts.entry(behavior.agent_did.clone()).or_default();
                         let delay = retry_policy.delay_for_attempt(*attempt);
                         *attempt += 1;
                         tracing::error!(
-                            agent_id = %behavior.agent_id,
+                            agent_did = %behavior.agent_did,
                             error = %error,
                             delay_ms = delay.as_millis() as u64,
                             "behavior task failed, scheduling restart"
@@ -68,11 +68,11 @@ where
                         spawn_behavior(&mut join_set, &mut running, behavior, shutdown.clone(), runner.clone());
                     }
                     Err(_) => {
-                        let attempt = failure_counts.entry(behavior.agent_id.clone()).or_default();
+                        let attempt = failure_counts.entry(behavior.agent_did.clone()).or_default();
                         let delay = retry_policy.delay_for_attempt(*attempt);
                         *attempt += 1;
                         tracing::error!(
-                            agent_id = %behavior.agent_id,
+                            agent_did = %behavior.agent_did,
                             delay_ms = delay.as_millis() as u64,
                             "behavior task panicked, scheduling restart"
                         );
@@ -99,7 +99,7 @@ fn spawn_behavior<F, Fut>(
     F: Fn(Arc<ResolvedAgent>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    let name = behavior.agent_id.clone();
+    let name = behavior.agent_did.clone();
     running.insert(name);
     join_set.spawn(async move {
         let outcome = AssertUnwindSafe(runner(behavior.clone(), shutdown))

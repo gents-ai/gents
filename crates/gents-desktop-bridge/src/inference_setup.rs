@@ -12,22 +12,6 @@ const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 
 pub use gents_desktop_core::inference::InferenceSetupState;
 
-impl From<crate::types::DeploymentView> for InferenceSetupState {
-    fn from(node: crate::types::DeploymentView) -> Self {
-        let fast_mode_backend_ids =
-            gents_desktop_core::inference::fast_mode_backend_ids(&node.inference_backends);
-        Self {
-            fast_mode_backend_ids,
-            node_did: node.node_did,
-            node: node.node,
-            agents: node.agents,
-            agent_configs: node.agent_configs,
-            inference_backends: node.inference_backends,
-            inference_profiles: node.inference_profiles,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceDiscoveryFailure {

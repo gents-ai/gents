@@ -1,7 +1,6 @@
 //! `gents job promote`: a finished dynamic run becomes an installed, wired tool.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use gents::documents::Tools;
@@ -142,7 +141,9 @@ fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
 
 fn javy_version() -> Result<String, JavyMissing> {
     let javy = std::env::var("JAVY").unwrap_or_else(|_| "javy".into());
-    match Command::new(&javy).arg("--version").output() {
+    match gents::tools::exec::native_spawn::output_std(
+        std::process::Command::new(&javy).arg("--version"),
+    ) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
         }
@@ -181,14 +182,14 @@ pub async fn promote(
         })?,
     };
     validate_name(home, &name)?;
-    let agent = agent.map_or_else(|| run.caller_agent_id.clone(), str::to_owned);
+    let agent = agent.map_or_else(|| run.caller_agent_did.clone(), str::to_owned);
     let tools = {
-        let (owner, agent_id) = (run.view.scope.node_did.clone(), agent.clone());
+        let (owner, agent_did) = (run.view.scope.node_did.clone(), agent.clone());
         access
             .transact_readonly("job.promote.agent_tools", move |txn| {
-                let (owner, agent_id) = (owner.clone(), agent_id.clone());
+                let (owner, agent_did) = (owner.clone(), agent_did.clone());
                 Box::pin(async move {
-                    gents::documents::load_agent_tools_in_txn(txn, &owner, &agent_id).await
+                    gents::documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await
                 })
             })
             .await

@@ -1,0 +1,4 @@
+---- MODULE MCDesktopUpdateListenerNoRegistration ----
+EXTENDS DesktopUpdateListener
+
+====

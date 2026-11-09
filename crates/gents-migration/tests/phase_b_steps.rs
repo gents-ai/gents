@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_migration::{
     ensure_migrations_dynamic, fixture_lens_wasm, predict_transform_id, BaselineCollectionOwned,
     CollectionExpectation, DynamicRegistry, LensSpec, LensSpecOwned, MigrationStepOwned,
@@ -33,10 +33,7 @@ async fn discover_inactive_patch_pin(node: &EmbeddedNode) -> (String, String) {
         .expect("get")
         .expect("exists")
         .version_id;
-    let patched = node
-        .patch_collection("FixtureDoc", ADD_LABEL_PATCH)
-        .await
-        .expect("patch inactive");
+    let patched = common::patch_collection(node, "FixtureDoc", ADD_LABEL_PATCH).await;
     assert!(
         !patched.is_active,
         "IsActive:false must leave the new version inactive"
@@ -59,7 +56,7 @@ async fn inactive_field_add_keeps_old_version_active() {
     let (v0, v1) = discover_inactive_patch_pin(node.as_ref()).await;
     assert_ne!(v0, v1);
 
-    node.set_active_collection_version(&v1)
+    node.set_active_collection_version_as(&common::node_context(&node), &v1)
         .await
         .expect("activate");
     let active = node
@@ -73,14 +70,14 @@ async fn inactive_field_add_keeps_old_version_active() {
         "label field present after activation"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
     let discover = fresh_node().await;
     let (v0, v1) = discover_inactive_patch_pin(discover.as_ref()).await;
-    discover.shutdown().await;
+    discover.shutdown().await.expect("shut down test node");
 
     let node = fresh_node().await;
     let registry = DynamicRegistry {
@@ -127,7 +124,7 @@ async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
     assert_eq!(report2.steps_applied, 0, "idempotent: {report2:?}");
     assert!(report2.steps_already_current >= 1);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -143,7 +140,7 @@ async fn materialization_rescans_versioned_collections_only() {
         .expect("get unrelated collection")
         .expect("unrelated collection exists")
         .version_id;
-    discover.shutdown().await;
+    discover.shutdown().await.expect("shut down test node");
 
     let node = fresh_node().await;
     let registry = DynamicRegistry {
@@ -183,7 +180,7 @@ async fn materialization_rescans_versioned_collections_only() {
         .expect("repeat migration and materialization");
     assert_eq!(later.steps_applied, 0);
     assert_eq!(later.materialization.collections_attempted, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -198,7 +195,7 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
 
     let discover = fresh_node().await;
     let (v0, v1) = discover_inactive_patch_pin(discover.as_ref()).await;
-    discover.shutdown().await;
+    discover.shutdown().await.expect("shut down test node");
 
     let lens = LensSpec {
         wasm,
@@ -285,21 +282,18 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
         .expect("idempotent lens step");
     assert_eq!(report2.steps_applied, 0);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn crash_resume_after_inactive_patch_before_activate() {
     let discover = fresh_node().await;
     let (v0, v1) = discover_inactive_patch_pin(discover.as_ref()).await;
-    discover.shutdown().await;
+    discover.shutdown().await.expect("shut down test node");
 
     let node = fresh_node().await;
     node.add_collection(FIXTURE_SDL).await.expect("schema");
-    let patched = node
-        .patch_collection("FixtureDoc", ADD_LABEL_PATCH)
-        .await
-        .expect("patch");
+    let patched = common::patch_collection(&node, "FixtureDoc", ADD_LABEL_PATCH).await;
     assert_eq!(patched.version_id, v1);
     assert!(!patched.is_active);
 
@@ -335,7 +329,7 @@ async fn crash_resume_after_inactive_patch_before_activate() {
     assert_eq!(active.version_id, v1);
     assert!(active.is_active);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -389,7 +383,7 @@ async fn canonical_catalog_pins_for_authoring() {
             ));
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     assert!(
         mismatches.is_empty(),
         "baseline root pins are stale or missing:\n{}",

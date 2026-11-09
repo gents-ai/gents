@@ -63,7 +63,6 @@ pub(super) fn enrollment_base_row(
     // materialization witness.
     row.peer_id = Some(entry.endpoint.desired_id.clone());
     row.node_did = Some(self_did.to_string());
-    row.collections = None;
     row.replicator_addresses = Some(vec![entry.endpoint.address.clone()]);
     row.template = Some(super::super::templates::CLIENT_TEMPLATE.to_string());
     Some(row)

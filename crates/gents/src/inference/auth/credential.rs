@@ -6,8 +6,11 @@ mod document;
 mod labels;
 mod resolve;
 mod rows;
+mod runtime_account;
 mod serving;
+mod serving_accounts;
 mod sign_in;
+mod static_backend;
 pub(crate) mod token_endpoint;
 
 use chrono::{DateTime, Duration, Utc};
@@ -28,14 +31,12 @@ pub use bearer::{
     apply_refreshed_tokens, shared_bearer, token_is_fresh, BearerSource, DbCredentialBearer,
 };
 use document::{
-    enabled_oauth_credentials_query, oauth_credential_input_fields,
-    oauth_credentials_of_provider_query, pick_row_from_value, refresh_update_mutation,
-    render_oauth_input, OAUTH_CREDENTIAL_FIELDS, OAUTH_PICK_FIELDS, SET_ONCE_FIELDS,
+    enabled_oauth_credentials_query, oauth_credentials_of_provider_query, pick_row_from_value,
+    refresh_update_mutation, OAUTH_CREDENTIAL_FIELDS, OAUTH_PICK_FIELDS, SET_ONCE_FIELDS,
 };
 pub use document::{
     oauth_credential_by_doc_id_query, oauth_credential_by_id_query,
-    oauth_credential_upsert_mutation, oauth_credentials_for_node_query,
-    oauth_credentials_from_response,
+    oauth_credentials_for_node_query, oauth_credentials_from_response,
 };
 pub use labels::{
     account_display_label, effective_account_label, provider_name, validate_account_label,
@@ -46,14 +47,22 @@ pub use resolve::{
     pick_oauth_credential, pick_oauth_pool, resolve_oauth_credential, resolve_oauth_pool,
     AccountPick,
 };
-pub(crate) use resolve::{provider_default_account_ref, resolve_oauth_credential_in_txn};
-use rows::provider_rows_in_txn;
+pub(crate) use resolve::{
+    provider_default_account_ref, resolve_oauth_credential_in_txn, runtime_account_from_response,
+    runtime_account_query, RuntimeAccountSelection,
+};
+pub(crate) use rows::runtime_credential_access;
 pub use rows::{
     list_oauth_credentials, list_oauth_credentials_on, lookup_oauth_credential_by_doc_id,
-    lookup_oauth_credential_by_id, upsert_oauth_credential, upsert_oauth_credential_on,
+    upsert_oauth_credential, upsert_oauth_credential_on,
 };
+use rows::{lookup_oauth_credential_by_id_on, provider_rows_in_txn};
+use runtime_account::runtime_default_oauth_account_ref;
+pub(crate) use runtime_account::runtime_oauth_account_served_before;
 pub use serving::{backend_account, serving_account, AccountState, ServingAccount};
+pub use serving_accounts::{agent_accounts, serving_accounts};
 pub use sign_in::{store_sign_in, SignIn, SignInResult};
+pub(crate) use static_backend::resolve_runtime_backend_auth;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OAuthProduct {

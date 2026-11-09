@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundAdmissionContention ----
+EXTENDS BackgroundAdmissionContention
+
+====

@@ -643,6 +643,14 @@ impl ClientStore {
         ClientStore::from_rows(rows)
     }
 
+    /// `ClientDataPublication.publishedRows`: the rows of a snapshot that a
+    /// reload of `node_did` publishes. Rows the runtime returns for other
+    /// owners are dropped before the reload's footprint is computed.
+    pub(crate) fn node_rows(mut self, node_did: &str) -> Self {
+        retain_node_scope!(&mut self, node_did, true);
+        Self::from_rows(self.to_rows())
+    }
+
     pub fn replace_node_scope(&self, node_did: &str, snapshot: ClientStore) -> Self {
         let mut snapshot = snapshot;
         retain_node_scope!(&mut snapshot, node_did, true);
@@ -783,7 +791,7 @@ mod overlay_tests {
         serde_json::from_value(serde_json::json!({
             "session_id": "shared-session",
             "node_did": node_did,
-            "agent_id": "agent",
+            "agent_did": "agent",
             "created_at": "2026-10-14T00:00:00Z",
             "title": {"text": title, "source": "user"}
         }))
@@ -1201,7 +1209,7 @@ mod overlay_tests {
             node_did: node_did.to_string(),
             display_name: Some(display_name.to_string()),
             avatar: None,
-            default_agent_id: None,
+            default_agent_did: None,
             enabled: true,
             created_at: None,
             created_by: None,
@@ -1213,7 +1221,8 @@ mod overlay_tests {
     fn agent_config(node_did: &str, display_name: &str) -> Agent {
         serde_json::from_value(serde_json::json!({
             "node_did": node_did,
-            "agent_id": format!("{node_did}:default"),
+            "agent_did": format!("{node_did}:default"),
+            "creation_nonce": "a".repeat(64),
             "display_name": display_name,
             "enabled": true,
             "inference_profile_id": format!("{node_did}:profile"),
@@ -1225,7 +1234,7 @@ mod overlay_tests {
         serde_json::from_value(serde_json::json!({
             "node_did": node_did,
             "task_id": task_id,
-            "agent_id": "agent",
+            "agent_did": "agent",
             "prompt_template": "Do the thing",
             "enabled": enabled,
         }))
@@ -1270,6 +1279,7 @@ mod overlay_tests {
 
     fn backend_observation(probe_status: &str) -> InferenceBackendObservation {
         InferenceBackendObservation {
+            metadata_doc_id: None,
             backend_id: "backend".to_string(),
             catalogs: Vec::new(),
             probe_status: Some(probe_status.to_string()),

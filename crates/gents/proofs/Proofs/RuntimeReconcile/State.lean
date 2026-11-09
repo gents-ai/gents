@@ -38,13 +38,13 @@ end ReconcilePhase
 
 structure ResolvedSnapshot where
   /-- Upstream chooser metadata; request admission always requires its own explicit selection. -/
-  defaultAgent : AgentId
-  runnable : Finset AgentId
-  unavailable : Finset AgentId
+  defaultAgent : AgentDid
+  runnable : Finset AgentDid
+  unavailable : Finset AgentDid
   /-- Agents whose declared runtime dependencies were present while the
   snapshot was resolved; dependency-ready but unavailable for another reason
   is allowed, the converse is not. -/
-  dependenciesSatisfied : Finset AgentId
+  dependenciesSatisfied : Finset AgentDid
   deriving DecidableEq
 
 instance : Repr ResolvedSnapshot where
@@ -66,24 +66,27 @@ instance (s : ResolvedSnapshot) : Decidable s.wellFormed := by
   infer_instance
 
 /-- A tool surface that cannot be built makes its agent unavailable before
-publication. Other runnable agents and the default selection remain intact. -/
-def demote (s : ResolvedSnapshot) (agent : AgentId) : ResolvedSnapshot :=
+publication. Other runnable agents and the default selection remain intact.
+Native ACP determines whether the selected agent can read the WorkspaceRoot
+that admits its configured host tools; the model receives the resulting
+surface-build failure without inferring authority from another actor. -/
+def demote (s : ResolvedSnapshot) (agent : AgentDid) : ResolvedSnapshot :=
   { s with runnable := s.runnable.erase agent, unavailable := insert agent s.unavailable }
 
-theorem demote_preserves_other_agents (s : ResolvedSnapshot) (agent other : AgentId)
+theorem demote_preserves_other_agents (s : ResolvedSnapshot) (agent other : AgentDid)
     (h : other ≠ agent) :
     other ∈ (s.demote agent).runnable ↔ other ∈ s.runnable := by
   simp [demote, h]
 
-theorem demote_is_unavailable (s : ResolvedSnapshot) (agent : AgentId) :
+theorem demote_is_unavailable (s : ResolvedSnapshot) (agent : AgentDid) :
     agent ∈ (s.demote agent).unavailable ∧ agent ∉ (s.demote agent).runnable := by
   simp [demote]
 
-theorem demote_idempotent (s : ResolvedSnapshot) (agent : AgentId) :
+theorem demote_idempotent (s : ResolvedSnapshot) (agent : AgentDid) :
     (s.demote agent).demote agent = s.demote agent := by
   simp [demote]
 
-theorem demote_wellFormed (s : ResolvedSnapshot) (agent : AgentId)
+theorem demote_wellFormed (s : ResolvedSnapshot) (agent : AgentDid)
     (h : s.wellFormed) : (s.demote agent).wellFormed := by
   rcases h with ⟨hDisjoint, hDependencies, hDefault⟩
   refine ⟨?_, ?_, ?_⟩
@@ -106,11 +109,11 @@ end ResolvedSnapshot
 
 structure ActiveRuntimeSnapshot where
   generation : Generation
-  defaultAgent : AgentId
-  runnable : Finset AgentId
-  unavailable : Finset AgentId
-  dependenciesSatisfied : Finset AgentId
-  dispatchers : Finset AgentId
+  defaultAgent : AgentDid
+  runnable : Finset AgentDid
+  unavailable : Finset AgentDid
+  dependenciesSatisfied : Finset AgentDid
+  dispatchers : Finset AgentDid
   deriving DecidableEq
 
 instance : Repr ActiveRuntimeSnapshot where
@@ -169,7 +172,7 @@ structure RuntimeState where
   /-- Agents removed from effective dispatch after exhausting the startup
   build budget; both runtime admission and client readiness must treat them
   as unavailable. -/
-  startupDemoted : Finset AgentId
+  startupDemoted : Finset AgentDid
   readyGenerations : Finset Generation
   liveGenerations : Finset Generation
   /-- Requests whose claim and request-owned session projection committed atomically. -/
@@ -177,28 +180,48 @@ structure RuntimeState where
   inFlight : Finset RequestId
   requestGeneration : RequestId → Generation
   requestSession : RequestId → SessionId
-  requestAgent : RequestId → AgentId
-  sessionAgent : SessionId → Option AgentId
+  requestAgent : RequestId → AgentDid
+  sessionAgent : SessionId → Option AgentDid
 
 namespace RuntimeState
 
-def effectiveDispatchers (s : RuntimeState) : Finset AgentId :=
+/-- Router observations are actor-scoped. No visible session may mean absent,
+unavailable or unauthorized; the router waits rather than inferring a new binding. -/
+inductive SessionSelection where
+  | unavailable | matched | mismatched
+  deriving DecidableEq, Repr
+
+def sessionSelection (requested : AgentDid) (visible : Option AgentDid) : SessionSelection :=
+  match visible with
+  | none => .unavailable
+  | some bound => if bound = requested then .matched else .mismatched
+
+theorem missing_session_selection_waits (requested : AgentDid) :
+    sessionSelection requested none = .unavailable := rfl
+
+theorem visible_foreign_session_is_rejected (requested bound : AgentDid)
+    (different : bound ≠ requested) :
+    sessionSelection requested (some bound) = .mismatched := by
+  simp [sessionSelection, different]
+
+
+def effectiveDispatchers (s : RuntimeState) : Finset AgentDid :=
   s.active.dispatchers \ s.startupDemoted
 
-def effectiveUnavailable (s : RuntimeState) : Finset AgentId :=
+def effectiveUnavailable (s : RuntimeState) : Finset AgentDid :=
   s.active.unavailable ∪ s.startupDemoted
 
 def bindSessionIfNeeded
     (s : RuntimeState)
     (sessionId : SessionId)
-    (agentId : AgentId) :
-    SessionId → Option AgentId :=
+    (agentDid : AgentDid) :
+    SessionId → Option AgentDid :=
   match s.sessionAgent sessionId with
   | some _ => s.sessionAgent
-  | none => Function.update s.sessionAgent sessionId (some agentId)
+  | none => Function.update s.sessionAgent sessionId (some agentDid)
 
 theorem bindSessionIfNeeded_requested
-    (s : RuntimeState) (sessionId : SessionId) (requested : AgentId)
+    (s : RuntimeState) (sessionId : SessionId) (requested : AgentDid)
     (h : (s.sessionAgent sessionId).all (· == requested) = true) :
     s.bindSessionIfNeeded sessionId requested sessionId = some requested := by
   unfold bindSessionIfNeeded
@@ -207,16 +230,16 @@ theorem bindSessionIfNeeded_requested
 theorem bindSessionIfNeeded_other
     {s : RuntimeState}
     {sessionId other : SessionId}
-    {agentId : AgentId}
+    {agentDid : AgentDid}
     (h_other : other ≠ sessionId) :
-    s.bindSessionIfNeeded sessionId agentId other = s.sessionAgent other := by
+    s.bindSessionIfNeeded sessionId agentDid other = s.sessionAgent other := by
   unfold bindSessionIfNeeded
   cases h : s.sessionAgent sessionId <;> simp [h, Function.update, h_other]
 
 theorem bindSessionIfNeeded_eq_self_of_bound
     {s : RuntimeState}
     {sessionId : SessionId}
-    {bound requested : AgentId}
+    {bound requested : AgentDid}
     (h_bound : s.sessionAgent sessionId = some bound) :
     s.bindSessionIfNeeded sessionId requested = s.sessionAgent := by
   funext sid
@@ -226,18 +249,18 @@ theorem bindSessionIfNeeded_eq_self_of_bound
 def AgentAdmissible
     (process : ProcessState)
     (s : RuntimeState)
-    (agentId : AgentId) : Prop :=
+    (agentDid : AgentDid) : Prop :=
   process.acceptsWork ∧
     0 < s.active.generation ∧
     s.routerObservedGeneration = s.active.generation ∧
-    agentId ∈ s.effectiveDispatchers ∧
-    agentId ∉ s.effectiveUnavailable
+    agentDid ∈ s.effectiveDispatchers ∧
+    agentDid ∉ s.effectiveUnavailable
 
 instance
     (process : ProcessState)
     (s : RuntimeState)
-    (agentId : AgentId) :
-    Decidable (AgentAdmissible process s agentId) := by
+    (agentDid : AgentDid) :
+    Decidable (AgentAdmissible process s agentDid) := by
   unfold AgentAdmissible
   infer_instance
 
@@ -245,7 +268,7 @@ def CanAdmitRequest
     (process : ProcessState)
     (s : RuntimeState)
     (sessionId : SessionId)
-    (requestId : RequestId) (requested : AgentId) : Prop :=
+    (requestId : RequestId) (requested : AgentDid) : Prop :=
   requestId ∉ s.accepted ∧
     requestId ∉ s.inFlight ∧
     AgentAdmissible process s requested ∧
@@ -255,7 +278,7 @@ instance
     (process : ProcessState)
     (s : RuntimeState)
     (sessionId : SessionId)
-    (requestId : RequestId) (requested : AgentId) :
+    (requestId : RequestId) (requested : AgentDid) :
     Decidable (CanAdmitRequest process s sessionId requestId requested) := by
   unfold CanAdmitRequest
   infer_instance
@@ -332,7 +355,7 @@ inductive ClientNodeObservation where
 
 def project
     (observation : ClientNodeObservation)
-    (agentId : AgentId)
+    (agentDid : AgentDid)
     (runtimeUnavailableReason : AgentUnavailableReason) : ClientAgentReadiness :=
   match observation with
   | .missing => .unknownMissing
@@ -344,11 +367,11 @@ def project
       else if s.active.generation = 0 ∨
         s.routerObservedGeneration ≠ s.active.generation then
         .unknownStale
-      else if agentId ∈ s.startupDemoted then
+      else if agentDid ∈ s.startupDemoted then
         .unavailableStartup
-      else if agentId ∈ s.active.unavailable then
+      else if agentDid ∈ s.active.unavailable then
         .unavailableRuntime runtimeUnavailableReason
-      else if agentId ∈ s.effectiveDispatchers then
+      else if agentDid ∈ s.effectiveDispatchers then
         .ready
       else
         .unknownAbsent
@@ -356,9 +379,9 @@ def project
 theorem ready_sound
     {process : ProcessState}
     {s : RuntimeState}
-    {agentId : AgentId}
-    (hReady : project (.observed process s) agentId .backendTemporarilyUnavailable = .ready) :
-    AgentAdmissible process s agentId := by
+    {agentDid : AgentDid}
+    (hReady : project (.observed process s) agentDid .backendTemporarilyUnavailable = .ready) :
+    AgentAdmissible process s agentDid := by
   have hProcess : process.acceptsWork := by
     by_contra h
     simp [project, h] at hReady
@@ -368,14 +391,14 @@ theorem ready_sound
   have hGeneration : s.routerObservedGeneration = s.active.generation := by
     by_contra h
     simp [project, hProcess, hZero, h] at hReady
-  have hDemoted : agentId ∉ s.startupDemoted := by
+  have hDemoted : agentDid ∉ s.startupDemoted := by
     intro h
     simp [project, hProcess, hZero, hGeneration, h] at hReady
-  have hActiveUnavailable : agentId ∉ s.active.unavailable := by
+  have hActiveUnavailable : agentDid ∉ s.active.unavailable := by
     intro h
     simp [project, hProcess, hZero, hGeneration, hDemoted, h] at hReady
-  have hDispatcher : agentId ∈ s.effectiveDispatchers := by
-    by_cases h : agentId ∈ s.effectiveDispatchers
+  have hDispatcher : agentDid ∈ s.effectiveDispatchers := by
+    by_cases h : agentDid ∈ s.effectiveDispatchers
     · exact h
     · simp [project, hProcess, hZero, hGeneration, hDemoted, hActiveUnavailable, h] at hReady
   refine ⟨hProcess, Nat.pos_of_ne_zero hZero, hGeneration, hDispatcher, ?_⟩
@@ -383,12 +406,12 @@ theorem ready_sound
 
 theorem missing_or_stale_never_ready
     {observation : ClientNodeObservation}
-    {agentId : AgentId}
+    {agentDid : AgentDid}
     (hClosed : observation = .missing ∨ observation = .malformed ∨
       observation = .unsupportedVersion ∨
       ∃ process s, observation = .observed process s ∧
         (s.active.generation = 0 ∨ s.routerObservedGeneration ≠ s.active.generation)) :
-    project observation agentId .backendTemporarilyUnavailable ≠ .ready := by
+    project observation agentDid .backendTemporarilyUnavailable ≠ .ready := by
   rcases hClosed with hMissing | hMalformed | hVersion |
     ⟨process, s, hObservation, hStale⟩
   · simp [project, hMissing]
@@ -402,9 +425,9 @@ theorem missing_or_stale_never_ready
 theorem unavailable_wins_overlap
     {process : ProcessState}
     {s : RuntimeState}
-    {agentId : AgentId}
-    (hUnavailable : agentId ∈ s.effectiveUnavailable) :
-    project (.observed process s) agentId .backendTemporarilyUnavailable ≠ .ready := by
+    {agentDid : AgentDid}
+    (hUnavailable : agentDid ∈ s.effectiveUnavailable) :
+    project (.observed process s) agentDid .backendTemporarilyUnavailable ≠ .ready := by
   intro hReady
   rcases ready_sound hReady with ⟨_, _, _, _, hNotUnavailable⟩
   exact hNotUnavailable hUnavailable
@@ -412,19 +435,19 @@ theorem unavailable_wins_overlap
 theorem observed_ready_iff_admissible
     {process : ProcessState}
     {s : RuntimeState}
-    {agentId : AgentId} :
-    project (.observed process s) agentId .backendTemporarilyUnavailable = .ready ↔
-      AgentAdmissible process s agentId := by
+    {agentDid : AgentDid} :
+    project (.observed process s) agentDid .backendTemporarilyUnavailable = .ready ↔
+      AgentAdmissible process s agentDid := by
   constructor
   · exact ready_sound
   · intro hAdmissible
     rcases hAdmissible with
       ⟨hProcess, hPositive, hGeneration, hDispatcher, hUnavailable⟩
     have hZero : s.active.generation ≠ 0 := Nat.ne_of_gt hPositive
-    have hDemoted : agentId ∉ s.startupDemoted := by
+    have hDemoted : agentDid ∉ s.startupDemoted := by
       intro h
       exact hUnavailable (by simp [effectiveUnavailable, h])
-    have hActiveUnavailable : agentId ∉ s.active.unavailable := by
+    have hActiveUnavailable : agentDid ∉ s.active.unavailable := by
       intro h
       exact hUnavailable (by simp [effectiveUnavailable, h])
     simp [project, hProcess, hZero, hGeneration, hDemoted, hActiveUnavailable, hDispatcher]
@@ -434,7 +457,7 @@ theorem ready_implies_runtime_admission_when_fresh
     {s : RuntimeState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : AgentId}
+    {requested : AgentDid}
     (hBinding : (s.sessionAgent sessionId).all (· == requested) = true)
     (hReady : project (.observed process s) requested .backendTemporarilyUnavailable = .ready)
     (hUnaccepted : requestId ∉ s.accepted)

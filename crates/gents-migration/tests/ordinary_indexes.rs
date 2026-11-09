@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_migration::{
     ensure_migrations_with_registry, OrdinaryIndex, Registry, DEFAULT_BASELINE,
     DEFAULT_ORDINARY_INDEXES,
@@ -457,8 +457,8 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
         "fresh and upgraded collections have the same complete index inventory"
     );
 
-    existing.shutdown().await;
-    fresh.shutdown().await;
+    existing.shutdown().await.expect("shut down test node");
+    fresh.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -503,7 +503,7 @@ async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
     ensure_migrations_with_registry(node.as_ref(), &registry)
         .await
         .expect("reconcile MailboxItem cursor index idempotently");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -580,7 +580,7 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
         assert_eq!(payloads, ["conflict-1", "conflict-2", "turn-17"]);
         assert_indexed_query(node.as_ref(), query, index.name, 3).await;
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -662,7 +662,7 @@ async fn background_completion_recovery_seeks_pending_status_range() {
             .unwrap()
             .version_id
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -709,7 +709,7 @@ async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
             .unwrap()
             .version_id
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -780,7 +780,7 @@ async fn transcript_tool_page_streams_sequence_and_key_order() {
                 .version_id
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -852,7 +852,7 @@ async fn inference_metrics_window_seeks_recent_terminal_calls() {
         .collect::<Vec<_>>();
     assert_eq!(ids, ["recent-failed", "recent"]);
     assert_indexed_query(node.as_ref(), query, index.name, 4).await;
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -913,5 +913,5 @@ async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
             1
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

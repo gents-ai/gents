@@ -139,12 +139,6 @@ pub struct PairedEvidence {
     pub dropped_candidate: usize,
 }
 
-impl PairedEvidence {
-    pub fn dropped_keys(&self) -> usize {
-        self.keys.saturating_sub(self.pairs.len())
-    }
-}
-
 pub fn pair_trials(baseline: &[TrialScore], candidate: &[TrialScore]) -> PairedEvidence {
     let index = |trials: &[TrialScore]| -> BTreeMap<(String, u32), CaseTrialScore> {
         let mut scores: BTreeMap<(String, u32), CaseTrialScore> = BTreeMap::new();

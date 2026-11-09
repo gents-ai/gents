@@ -11,7 +11,13 @@ import {
   ManagedRuntimeAuthorityPicker,
   ManagedRuntimeAuthorityReview,
 } from "@/components/ManagedRuntimeAuthority";
-import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
+import {
+  authoritiesEqual,
+  authorityForSelection,
+  authorityRefusalText,
+  authorityRestartPlan,
+  type AuthorityRestartPlan,
+} from "@/lib/managedRuntimeAuthority";
 import {
   LOGIN_ITEMS_PATH,
   describeManagedServerWait,
@@ -19,6 +25,9 @@ import {
 } from "../../../lib/managedServerStartup";
 import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
+import { useFleet } from "@/hooks/useFleet";
+import { nodeOf } from "../../../hooks/fleetStore";
+import { engineerAgentOf } from "@/lib/engineer";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
 import { errorText } from "../../../lib/errorText";
@@ -90,6 +99,7 @@ export function LocalServer() {
   const status = stores.localServer.use.status();
   const readFailure = stores.localServer.use.readFailure();
   const wait = stores.localServer.use.wait();
+  const localNode = useFleet((fleet) => nodeOf(fleet, status?.nodeDid));
   const operating = stores.localServer.use.operation() !== null;
   const statusError = readFailure
     ? `Could not check the background node: ${readFailure}`
@@ -101,6 +111,10 @@ export function LocalServer() {
     useState<ManagedServerAuthorityInput["toolCeiling"]>("readwrite");
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<Extract<
+    AuthorityRestartPlan,
+    { kind: "refused" }
+  > | null>(null);
   useEffect(() => actions.watchLocalServer(), [actions]);
   if (!actions.localServerOffers.status) return null;
   const act = async (label: string, run: () => Promise<unknown>) => {
@@ -131,13 +145,41 @@ export function LocalServer() {
     setToolCeiling(status.effectiveToolCeiling ?? "readwrite");
     setSelectedDirectory(status.effectiveToolRoot ?? home);
     setAuthorityError(null);
+    setRefusal(null);
     setEditingAuthority(true);
+  };
+  const keepCurrentFolder = () => {
+    const current = status?.effectiveToolRoot ?? null;
+    if (current) setSelectedDirectory(current);
+    else setToolCeiling("meta-only");
+    setAuthorityError(null);
+    setRefusal(null);
   };
   const restartWithAuthority = async () => {
     if (!authority || !actions.localServerOffers.restart) return;
+    const engineer = localNode ? engineerAgentOf(localNode) : undefined;
+    const plan = authorityRestartPlan({
+      rootChanged:
+        !!authority.toolRoot && authority.toolRoot !== status?.effectiveToolRoot,
+      nodeObserved: !!status?.nodeDid && !!localNode,
+      agentPresent: !!engineer,
+    });
+    if (plan.kind === "refused") {
+      setRefusal(plan);
+      setAuthorityError(authorityRefusalText(plan));
+      return;
+    }
     setBusy(true);
     setAuthorityError(null);
+    setRefusal(null);
     try {
+      if (plan.kind === "publishThenRestart") {
+        await actions.selectAgentWorkspaceRoot(
+          status!.nodeDid!,
+          engineer!.agentDid,
+          authority.toolRoot!,
+        );
+      }
       let next = await actions.restartLocalServer(name, authority);
       if (!next.pairingReady) {
         const paired = await actions
@@ -213,6 +255,22 @@ export function LocalServer() {
           </Badge>
         </span>
       </Row>
+      {running && !status?.pairingReady && (
+        <Row
+          label="Desktop connection"
+          description="Connect this desktop to the local node with the node owner's approval."
+        >
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() =>
+              void act("Desktop connected", () => actions.enrollLocalServer())
+            }
+          >
+            Connect this desktop
+          </Button>
+        </Row>
+      )}
       <Row
         label="Desktop app"
         description="Closing the window keeps controls in the menu bar. Quitting stops the local node unless background running is enabled."
@@ -267,8 +325,14 @@ export function LocalServer() {
             home={home}
             toolCeiling={toolCeiling}
             toolRoot={selectedDirectory}
-            onCeilingChange={setToolCeiling}
-            onRootChange={setSelectedDirectory}
+            onCeilingChange={(ceiling) => {
+              setRefusal(null);
+              setToolCeiling(ceiling);
+            }}
+            onRootChange={(root) => {
+              setRefusal(null);
+              setSelectedDirectory(root);
+            }}
             validateRoot={actions.validateLocalServerRoot}
             error={authorityError}
             onError={setAuthorityError}
@@ -282,6 +346,11 @@ export function LocalServer() {
             >
               Cancel
             </Button>
+            {refusal?.nextActions.includes("keepCurrentFolder") ? (
+              <Button variant="outline" disabled={busy} onClick={keepCurrentFolder}>
+                Keep current folder
+              </Button>
+            ) : null}
             <Button
               variant="brand"
               disabled={busy || !authority}
