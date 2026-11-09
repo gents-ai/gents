@@ -1228,57 +1228,63 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
 
 #[tokio::test]
 async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
-    const NODE: &str = "did:test:fork-shared-reads";
+    use crate::NodeIdentity as _;
     const SOURCE: &str = "fork-shared-source";
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, NODE, "fork-reader").await;
-    create_session_with_agent_id(&node, SOURCE, NODE, "fork-reader")
-        .await
-        .unwrap();
+    const CHILD: &str = "fork-shared-child";
+    let (db, user, client, binding) = fork_reader_node("fork-shared-reads").await;
+    let node_did = db.node_identity.did().to_owned();
+    let mut lifecycle =
+        signed_claimed_authored_request(&db, &user, &client, &binding, "shared-request", SOURCE)
+            .await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        db.node.clone(),
+        &lifecycle,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let mut keys = Vec::new();
     for sequence in 1..=21 {
-        let key = format!("message-{sequence}");
-        import_history_observation(
-            &node,
-            "shared-request",
-            SOURCE,
-            NODE,
-            None,
-            &key,
-            &key,
-            sequence,
+        let name = format!("message-{sequence}");
+        keys.push(gents_protocol::output::rows::authored_message_key(
+            &lifecycle.request().doc_id,
+            &name,
+        ));
+        writer
+            .publish_authored_message(&lifecycle, &name, &Message::user(&name))
+            .await
+            .unwrap();
+    }
+    lifecycle
+        .terminalize_owned(
+            crate::request::lifecycle::RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
             None,
         )
-        .await;
-    }
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+        .await
+        .unwrap();
     let params = ForkParams {
         source_session_id: SOURCE,
-        boundary: ForkBoundary::BeforeMessageKey("message-21"),
-        caller_node_did: NODE,
-        caller_requester_did: None,
-        target_agent_id: None,
+        boundary: ForkBoundary::BeforeMessageKey(&keys[20]),
+        caller_node_did: &node_did,
+        caller_requester_did: Some(user.did()),
+        target_agent_did: None,
     };
-    let (result, scans) = count_request_output_scans(fork_edit_on(
-        &access,
-        params,
-        "fork-shared-child",
-        "test-client",
-    ))
-    .await;
-    assert_eq!(result.unwrap(), "fork-shared-child");
+    let (result, scans) =
+        count_request_output_scans(fork_edit_on(&client, params, CHILD, user.did())).await;
+    assert_eq!(result.unwrap(), CHILD);
     assert_eq!(
         scans, 1,
         "retained messages from one request share one output scan"
     );
     assert_eq!(
-        load_history(&node, "fork-shared-child", NODE, None)
+        history_on(&client, CHILD, &node_did, Some(user.did()), None)
             .await
             .unwrap()
             .len(),
         20
     );
-    node.shutdown().await;
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
