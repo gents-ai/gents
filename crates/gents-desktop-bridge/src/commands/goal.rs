@@ -4,58 +4,97 @@ use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{
-    GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, SessionGoalView,
+    GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView,
+    SessionGoalNextAction, SessionGoalState, SessionGoalView,
 };
+use gents::goal::SessionGoalObservationState;
+use gents_protocol::goal_control::SessionGoalObservation;
 
 pub async fn session_goal(
     core: &ClientCore,
     node_did: &str,
     session_id: &str,
-) -> Result<Option<SessionGoalView>> {
-    let observation = core.session_goal_observation(node_did, session_id).await?;
-    Ok(observation.map(|observation| {
-        let snapshot = core.store().snapshot();
-        let mut sessions = snapshot.sessions.iter().filter(|session| {
-            session.node_did == node_did
-                && session.session_id == session_id
-                && session.requester_did == observation.requester_did
-        });
-        let source = sessions.next().filter(|_| sessions.next().is_none());
-        let waiting_question_ids = source.and_then(|session| {
-            let latest = session.observation.as_ref()?.latest_request.as_ref()?;
-            let ids = gents::goal::awaiting_goal_question_ids(
-                &observation,
-                latest,
-                &snapshot.requests,
-                &snapshot.mailbox_items,
-                chrono::Utc::now(),
-            );
-            (!ids.is_empty()).then_some(ids)
-        });
-        SessionGoalView {
-            waiting_question_ids,
-            node_did: observation.node_did,
-            session_id: observation.session_id,
-            session_doc_id: observation.session_doc_id,
-            observed_at: observation.observed_at,
-            goal: observation.goal.map(|goal| {
-                let snapshot = goal.snapshot;
-                GoalControlView {
-                    goal_id: snapshot.goal_id,
-                    revision: goal.revision,
-                    objective: snapshot.objective,
-                    status: snapshot.status,
-                    token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
-                    tokens_used: snapshot.tokens_used.to_string(),
-                    active_time_seconds: snapshot.active_time_seconds.to_string(),
-                    continuation_sequence: snapshot.continuation_sequence.to_string(),
-                    last_blocked_reason: snapshot.last_blocked_reason,
-                    last_failure: snapshot.last_failure,
-                    completion_evidence: snapshot.completion_evidence,
-                }
-            }),
-        }
+) -> Result<SessionGoalState> {
+    let state = core.session_goal_observation(node_did, session_id).await?;
+    Ok(session_goal_state(state, |observation| {
+        observation_view(core, node_did, session_id, observation)
     }))
+}
+
+/// Lean `SessionObservation.view` and `next` over the native state.
+fn session_goal_state(
+    state: SessionGoalObservationState,
+    view: impl FnOnce(SessionGoalObservation) -> SessionGoalView,
+) -> SessionGoalState {
+    match state {
+        SessionGoalObservationState::NoReadableSession => SessionGoalState::NoReadableSession {
+            next: SessionGoalNextAction::Send,
+        },
+        SessionGoalObservationState::Unknown(cause) => SessionGoalState::Unknown {
+            cause,
+            next: SessionGoalNextAction::Refresh,
+        },
+        SessionGoalObservationState::Observed(observation) => {
+            let next = if observation.goal.is_some() {
+                SessionGoalNextAction::ControlGoal
+            } else {
+                SessionGoalNextAction::StartGoal
+            };
+            SessionGoalState::Observed {
+                observation: view(*observation),
+                next,
+            }
+        }
+    }
+}
+
+fn observation_view(
+    core: &ClientCore,
+    node_did: &str,
+    session_id: &str,
+    observation: SessionGoalObservation,
+) -> SessionGoalView {
+    let snapshot = core.store().snapshot();
+    let mut sessions = snapshot.sessions.iter().filter(|session| {
+        session.node_did == node_did
+            && session.session_id == session_id
+            && session.requester_did == observation.requester_did
+    });
+    let source = sessions.next().filter(|_| sessions.next().is_none());
+    let waiting_question_ids = source.and_then(|session| {
+        let latest = session.observation.as_ref()?.latest_request.as_ref()?;
+        let ids = gents::goal::awaiting_goal_question_ids(
+            &observation,
+            latest,
+            &snapshot.requests,
+            &snapshot.mailbox_items,
+            chrono::Utc::now(),
+        );
+        (!ids.is_empty()).then_some(ids)
+    });
+    SessionGoalView {
+        waiting_question_ids,
+        node_did: observation.node_did,
+        session_id: observation.session_id,
+        session_doc_id: observation.session_doc_id,
+        observed_at: observation.observed_at,
+        goal: observation.goal.map(|goal| {
+            let snapshot = goal.snapshot;
+            GoalControlView {
+                goal_id: snapshot.goal_id,
+                revision: goal.revision,
+                objective: snapshot.objective,
+                status: snapshot.status,
+                token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
+                tokens_used: snapshot.tokens_used.to_string(),
+                active_time_seconds: snapshot.active_time_seconds.to_string(),
+                continuation_sequence: snapshot.continuation_sequence.to_string(),
+                last_blocked_reason: snapshot.last_blocked_reason,
+                last_failure: snapshot.last_failure,
+                completion_evidence: snapshot.completion_evidence,
+            }
+        }),
+    }
 }
 
 fn budget(raw: Option<String>) -> Result<Option<i64>> {
@@ -243,6 +282,122 @@ pub(super) fn goal_control_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::store::config_client::agent_session::AgentSessionRowRead;
+    use gents_protocol::goal_control::{GoalRevision, ObservedGoal};
+    use serde_json::{json, Value};
+
+    fn modeled_observation(goal: &Value) -> SessionGoalObservation {
+        SessionGoalObservation {
+            version: gents_protocol::goal_control::SESSION_GOAL_CONTROL_VERSION,
+            node_did: "did:key:node".into(),
+            agent_did: "did:key:agent".into(),
+            session_id: "chat".into(),
+            session_doc_id: "session-document".into(),
+            requester_did: Some("did:key:user".into()),
+            observed_at: "2026-11-08T00:00:00Z".into(),
+            goal: (!goal.is_null()).then(|| {
+                let document: gents::goal::GoalDocument = serde_json::from_value(json!({
+                    "_docID": "goal-document", "node_did": "did:key:node", "session_id": "chat",
+                    "goal_id": format!("goal:{}", goal["goal"]), "objective": "Modeled",
+                    "status": "active"
+                }))
+                .unwrap();
+                ObservedGoal {
+                    assignment_root_request_doc_id: goal["root"]
+                        .as_u64()
+                        .map(|root| format!("request-document:{root}")),
+                    revision: GoalRevision {
+                        document: document.doc_id.clone(),
+                        composite: "composite".into(),
+                    },
+                    snapshot: gents::goal::snapshot(&document, chrono::Utc::now()),
+                }
+            }),
+            signature: Vec::new(),
+        }
+    }
+
+    /// Replays Lean `SessionObservation.view` and `next` through the native
+    /// classifier and the DTO the desktop receives.
+    #[test]
+    fn generated_session_goal_views_name_their_cause() {
+        #[derive(serde::Deserialize)]
+        struct Contracts {
+            goal_session_observation_cases: Vec<Value>,
+        }
+        let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
+        assert_eq!(contracts.goal_session_observation_cases.len(), 30);
+        let row = gents_protocol::session::decode_session_row(&json!({
+            "_docID": "session-document", "session_id": "chat", "node_did": "did:key:node",
+            "requester_did": "did:key:user", "agent_did": "did:key:agent",
+            "created_at": "2026-11-08T00:00:00Z",
+        }))
+        .unwrap();
+        for case in &contracts.goal_session_observation_cases {
+            let session = match case["session"].as_str().unwrap() {
+                "absent" => AgentSessionRowRead::Absent,
+                "present" => AgentSessionRowRead::Present(Box::new(row.clone())),
+                "omitted" => AgentSessionRowRead::Omitted,
+                other => panic!("unmodeled session read {other}"),
+            };
+            let projection = match case["projection"]["kind"].as_str().unwrap() {
+                "missing" => gents::goal::SessionGoalProjectionRead::Missing,
+                "unverified" => gents::goal::SessionGoalProjectionRead::Unverified,
+                "verified" => gents::goal::SessionGoalProjectionRead::Verified(Box::new(
+                    modeled_observation(&case["projection"]["goal"]),
+                )),
+                other => panic!("unmodeled projection read {other}"),
+            };
+            let state = gents::goal::observe_session_goal(&session, projection);
+            let dto = serde_json::to_value(session_goal_state(state, |observation| {
+                SessionGoalView {
+                    node_did: observation.node_did,
+                    session_id: observation.session_id,
+                    session_doc_id: observation.session_doc_id,
+                    observed_at: observation.observed_at,
+                    goal: observation.goal.map(|goal| GoalControlView {
+                        goal_id: goal.snapshot.goal_id,
+                        revision: goal.revision,
+                        objective: goal.snapshot.objective,
+                        status: goal.snapshot.status,
+                        token_budget: None,
+                        tokens_used: "0".into(),
+                        active_time_seconds: "0".into(),
+                        continuation_sequence: "0".into(),
+                        last_blocked_reason: None,
+                        last_failure: None,
+                        completion_evidence: None,
+                    }),
+                    waiting_question_ids: None,
+                }
+            }))
+            .unwrap();
+            let view = &case["expected_view"];
+            match view["kind"].as_str().unwrap() {
+                "goal" => {
+                    assert_eq!(dto["kind"], "observed", "{case}");
+                    assert_eq!(
+                        dto["observation"]["goal"]["goalId"],
+                        format!("goal:{}", view["goal"]["goal"]),
+                        "{case}"
+                    );
+                }
+                "no_goal" => {
+                    assert_eq!(dto["kind"], "observed", "{case}");
+                    assert!(dto["observation"]["goal"].is_null(), "{case}");
+                }
+                "unavailable" if view["cause"] == "session_not_readable" => {
+                    assert_eq!(dto["kind"], "no_readable_session", "{case}");
+                }
+                "unavailable" => {
+                    assert_eq!(dto["kind"], "unknown", "{case}");
+                    assert_eq!(dto["cause"], view["cause"], "{case}");
+                }
+                other => panic!("unmodeled view {other}"),
+            }
+            assert_eq!(dto["next"], case["expected_next"], "{case}");
+        }
+    }
 
     #[test]
     fn budget_preserves_the_full_signed_integer_range() {

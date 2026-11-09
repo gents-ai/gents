@@ -14,6 +14,8 @@ import {
   type DesktopSessionSnapshot,
   type GoalControlAction,
   type GoalControlResult,
+  type SessionGoalState,
+  type SessionGoalView,
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
@@ -91,6 +93,34 @@ function queueEditFailure(
   if (requestIds.every((id) => waiting.has(id)))
     return "The queue changed before it was saved";
   return actionFailure(doing, error);
+}
+
+const GOAL_UNKNOWN_CAUSE = {
+  read_incomplete: "its runtime returned an incomplete read",
+  projection_missing: "its Agent has not published it yet",
+  projection_unverified: "its published state did not verify",
+} as const;
+
+/** Only an observed state establishes a Goal or its absence; every other
+ * state names its cause and the next step (Lean `SessionObservation`). */
+function observedGoal(
+  state: SessionGoalState | null,
+  nodeDid: string,
+  sessionId: string,
+): SessionGoalView {
+  if (!state) throw new Error("Connect this client before changing a Goal.");
+  if (state.kind === "no_readable_session")
+    throw new Error(
+      "This chat is not readable on its runtime yet. Send a message to open it, then change its Goal.",
+    );
+  if (state.kind === "unknown")
+    throw new Error(
+      `The Goal state for this chat is unknown because ${GOAL_UNKNOWN_CAUSE[state.cause]}. Refresh this chat before changing the Goal.`,
+    );
+  const observation = state.observation;
+  if (observation.nodeDid !== nodeDid || observation.sessionId !== sessionId)
+    throw new Error("The Goal observation belongs to another chat.");
+  return observation;
 }
 
 const GOAL_CONTROL_DOING = {
@@ -434,17 +464,12 @@ export function createChatActions({
       if (!goalClientDid)
         throw new Error("Connect this client before changing a Goal.");
       const current = selectedSessionId
-        ? await api.fetchSessionGoal(node.nodeDid, selectedSessionId)
+        ? observedGoal(
+            await api.fetchSessionGoal(node.nodeDid, selectedSessionId),
+            node.nodeDid,
+            selectedSessionId,
+          )
         : null;
-      if (
-        selectedSessionId &&
-        (!current ||
-          current.nodeDid !== node.nodeDid ||
-          current.sessionId !== selectedSessionId)
-      )
-        throw new Error(
-          "The Goal state is unavailable for this chat. Refresh it before changing the Goal.",
-        );
       const result = await goalDelivery.submit(
         {
           clientDid: goalClientDid,
@@ -488,10 +513,12 @@ export function createChatActions({
       if (!nodeDid) throw new Error("no node holds this session");
       if (!goalClientDid)
         throw new Error("Connect this client before changing a Goal.");
-      const current = await api.fetchSessionGoal(nodeDid, sessionId);
-      if (current && (current.nodeDid !== nodeDid || current.sessionId !== sessionId))
-        throw new Error("The Goal observation belongs to another chat.");
-      if (!current?.goal) throw new Error("this session has no goal");
+      const current = observedGoal(
+        await api.fetchSessionGoal(nodeDid, sessionId),
+        nodeDid,
+        sessionId,
+      );
+      if (!current.goal) throw new Error("this session has no goal");
       await goalDelivery.submit(
         {
           clientDid: goalClientDid,
