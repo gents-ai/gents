@@ -197,9 +197,8 @@ fn assert_refused_with_policy_get(failure: &Value, verb: &str, permission: &str)
 async fn engineer_grants_held_permission_to_sibling_and_policy_get_shows_it() {
     let fixture = PolicyFixture::new("policy-grant-held").await;
     let sibling = fixture.install_sibling("Reviewer").await;
-    fixture
-        .grant_engineer_sets(&[NodePermission::CollectionGet])
-        .await;
+    // The policy delegate set holds get-collection.
+    fixture.grant_engineer_sets(&[]).await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
 
@@ -280,9 +279,8 @@ async fn engineer_grant_of_admin_class_permission_is_refused_even_when_held() {
 async fn engineer_revokes_held_permission_and_receipt_states_access_honestly() {
     let fixture = PolicyFixture::new("policy-revoke-held").await;
     let sibling = fixture.install_sibling("Reviewer").await;
-    fixture
-        .grant_engineer_sets(&[NodePermission::CollectionGet])
-        .await;
+    // The policy delegate set holds get-collection.
+    fixture.grant_engineer_sets(&[]).await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
     run(tool, grant_node(&sibling, "get-collection"))
@@ -325,20 +323,20 @@ async fn policy_explain_names_the_real_denial_and_the_grant_that_would_allow_it(
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
 
-    // Self: the Engineer does not hold get-collection, so the denial is real.
+    // Self: the Engineer does not hold delete-document, so the denial is real.
     let denial = run(
         tool,
-        json!({"argv": ["policy", "explain", "--permission", "get-collection"]}),
+        json!({"argv": ["policy", "explain", "--permission", "delete-document"]}),
     )
     .await
     .unwrap();
     assert_eq!(
         denial["answer"].as_str().unwrap(),
-        "no: you do not hold node permission get-collection."
+        "no: you do not hold node permission delete-document."
     );
     let how = denial["how_to_proceed"].as_str().unwrap();
     assert!(
-        how.contains("You do not hold get-collection, so you cannot delegate it."),
+        how.contains("You do not hold delete-document, so you cannot delegate it."),
         "{how}"
     );
 
@@ -354,18 +352,18 @@ async fn policy_explain_names_the_real_denial_and_the_grant_that_would_allow_it(
 
     // A held permission with add-nac-relation names the grant that allows it.
     fixture
-        .grant_engineer(&[NodePermission::CollectionGet])
+        .grant_engineer(&[NodePermission::DocumentDelete])
         .await;
     let allowed_path = run(
         tool,
-        json!({"argv": ["policy", "explain", "--subject", sibling, "--permission", "get-collection"]}),
+        json!({"argv": ["policy", "explain", "--subject", sibling, "--permission", "delete-document"]}),
     )
     .await
     .unwrap();
     let how = allowed_path["how_to_proceed"].as_str().unwrap();
     assert!(
         how.contains(&format!(
-            "policy grant --subject {sibling} --permission get-collection"
+            "policy grant --subject {sibling} --permission delete-document"
         )),
         "{how}"
     );
@@ -451,7 +449,6 @@ async fn policy_get_on_another_subject_is_refused_without_nac_status() {
 }
 
 #[tokio::test]
-#[ignore = "pending decision: policyDelegate get-collection"]
 async fn engineer_grants_document_relation_through_manager_relation() {
     let fixture = PolicyFixture::new("policy-document-relation").await;
     let reviewer = fixture.install_sibling("Reviewer").await;
@@ -514,7 +511,7 @@ async fn engineer_grants_document_relation_through_manager_relation() {
 async fn policy_revoke_of_own_lockout_permissions_is_refused_under_no_lockout() {
     let fixture = PolicyFixture::new("policy-self-lockout").await;
     fixture
-        .grant_engineer_sets(&[NodePermission::CollectionGet])
+        .grant_engineer_sets(&[NodePermission::DocumentDelete])
         .await;
     let tools = fixture.tools(&["policy"], true);
     let tool = config(&tools);
@@ -545,12 +542,25 @@ async fn policy_revoke_of_own_lockout_permissions_is_refused_under_no_lockout() 
         "{delegation}"
     );
 
+    // The delegate's get-collection is kept too: native relationship changes
+    // outside a transaction require it.
+    let read = run(tool, self_revoke("get-collection"))
+        .await
+        .expect_err("self_config_no_lockout keeps the delegate's get-collection");
+    assert!(
+        read["error"]
+            .as_str()
+            .unwrap()
+            .contains("self_config_no_lockout keeps node permission get-collection"),
+        "{read}"
+    );
+
     // A permission outside the protected sets may still be revoked from self.
-    let receipt = run(tool, self_revoke("get-collection"))
+    let receipt = run(tool, self_revoke("delete-document"))
         .await
         .expect("an unprotected permission may be revoked from self");
     assert_eq!(
         receipt["answer"].as_str().unwrap(),
-        "Revoked node permission get-collection from you."
+        "Revoked node permission delete-document from you."
     );
 }
