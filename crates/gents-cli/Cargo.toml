@@ -51,7 +51,7 @@ gents-desktop-core.workspace = true
 gents = { path = "../gents" }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
-defra-node.workspace = true
+defra-node = { workspace = true, features = ["http"] }
 defra-http.workspace = true
 defra-p2p-adapter.workspace = true
 events.workspace = true
@@ -85,6 +85,7 @@ serde_yaml.workspace = true
 subtle.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
@@ -108,7 +109,7 @@ jsonschema = { version = "0.46.5", default-features = false }
 # behind the `bin` feature. Pinned to the same rev as the afterburner-*
 # crates in crates/gents/Cargo.toml so all of them agree on the
 # `.afb`/`Manifold` wire shapes.
-afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2", default-features = false, features = [
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
     "bin",
 ] }
 # The package loader `dispatch_compile` expects (`pkg::LocalPackage`):
@@ -118,7 +119,7 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 # Pinned to the same rev as `afterburner` above: `dispatch_compile` takes a
 # `pkg::LocalPackage` from this crate, and two instances of it at different
 # revs are different types to the compiler.
-afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2" }
+afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
@@ -140,11 +141,13 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
+gents = { path = "../gents", features = ["test-home-guard"] }
 acp.workspace = true
 crypto.workspace = true
+db.workspace = true
+defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
-tokio-tungstenite = "0.26.2"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

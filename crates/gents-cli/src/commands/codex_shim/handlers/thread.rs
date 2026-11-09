@@ -42,7 +42,7 @@ pub(super) async fn handle_thread_request(
             let bound_model_id = load_bound_model_selection_id_for_state(
                 &state.node,
                 &state.node_did,
-                &state.agent_id,
+                &state.agent_did,
             )
             .await
             .context("resolving bound model selection for ThreadStart")?;
@@ -93,7 +93,7 @@ pub(super) async fn handle_thread_request(
                     })
                     .cloned()
             });
-            let response_agent_id = record.projection_agent_id(state.agent_id.as_ref());
+            let response_agent_did = record.projection_agent_did(state.agent_did.as_ref());
             let response_node_did = record
                 .caused
                 .as_ref()
@@ -102,7 +102,7 @@ pub(super) async fn handle_thread_request(
             let bound_model_id = load_bound_model_selection_id_for_state(
                 &state.node,
                 response_node_did,
-                response_agent_id,
+                response_agent_did,
             )
             .await
             .context("resolving scoped bound model for ThreadResume")?;
@@ -117,7 +117,7 @@ pub(super) async fn handle_thread_request(
             .await?;
             let (total_usage, last_usage) = thread_record_token_usage(state, &record).await?;
             let model_context_window =
-                load_bound_context_window(&state.node, response_node_did, response_agent_id)
+                load_bound_context_window(&state.node, response_node_did, response_agent_did)
                     .await
                     .context("resolving scoped context window for ThreadResume")?;
             if let Some(token_usage) =
@@ -155,35 +155,14 @@ pub(super) async fn handle_thread_request(
             }
             Err(err) => send_error(outbound, request_id, err.code, err.message).await,
         },
-        codex::ClientRequest::ThreadFork {
-            request_id, params, ..
-        } => match thread_routes::fork_thread_response(state, params).await {
-            Ok((record, response)) => {
-                let thread_for_notification: codex::Thread = serde_json::from_value(
-                    response
-                        .get("thread")
-                        .cloned()
-                        .unwrap_or_else(|| codex_thread_json(&record, false)),
-                )
-                .context("validating forked thread notification")?;
-                state
-                    .set_thread_cwd(&record.session_id, record.cwd.clone())
-                    .await;
-                send_typed_json_result::<codex::ThreadForkResponse>(outbound, request_id, response)
-                    .await?;
-                send_notification(
-                    outbound,
-                    state,
-                    codex::ServerNotification::ThreadStarted(codex::ThreadStartedNotification {
-                        thread: thread_for_notification,
-                    }),
-                )
-                .await?;
-                ensure_loaded_root_continuation_stream(connection, state, &record, None).await;
-                Ok(())
-            }
-            Err(err) => send_error(outbound, request_id, err.code, err.message).await,
-        },
+        codex::ClientRequest::ThreadFork { request_id, .. } => {
+            send_error(
+                outbound,
+                request_id,
+                super::super::JSONRPC_INTERNAL_ERROR,
+                "This operation requires an authenticated client DID; the Codex shim transport does not provide one".to_owned(),
+            ).await
+        }
         codex::ClientRequest::ThreadSearch {
             request_id, params, ..
         } => match thread_routes::search_threads_response(state, params).await {

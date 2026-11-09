@@ -67,9 +67,9 @@ fn receipt(fire: &Fire, index: usize) -> TriggerFire {
         task_id: "contract-task".into(),
         request_id: fire.identity.request_id(),
         session_id: fire.session.clone(),
-        goal_id: fire
-            .goal_backed
-            .then(|| crate::goal::deterministic_goal_id(&fire.identity.owner_did, &fire.session)),
+        goal_id: fire.goal_backed.then(|| {
+            gents_protocol::goal::deterministic_goal_id(&fire.identity.owner_did, &fire.session)
+        }),
         goal_objective: fire.goal_backed.then(|| "contract objective".into()),
         goal_token_budget: None,
         goal_assignment_applied: false,
@@ -84,15 +84,20 @@ fn receipt(fire: &Fire, index: usize) -> TriggerFire {
 }
 
 fn request_mutation(receipt: &TriggerFire) -> String {
+    request_mutation_as(receipt, &spy_test_agent().agent_did)
+}
+
+fn request_mutation_as(receipt: &TriggerFire, agent_did: &str) -> String {
     format!(
         r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{}", node_did: "{}", session_id: "{}",
-        agent_id: "general", content: "contract task", purpose: "normal", lifecycle_state: "pending",
+        agent_did: "{}", content: "contract task", purpose: "normal", lifecycle_state: "pending",
         created_at: "{}"
     }}) {{ _docID }} }}"#,
         escape_graphql_string(&receipt.request_id),
         escape_graphql_string(&receipt.identity.owner_did),
         escape_graphql_string(&receipt.session_id),
+        escape_graphql_string(agent_did),
         escape_graphql_string(&receipt.created_at)
     )
 }
@@ -214,29 +219,50 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
 
 #[tokio::test]
 async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_work() {
-    for case in contract()["latest_admissions"].as_array().unwrap() {
+    for (case_index, case) in contract()["latest_admissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
         for pending_state in [
             gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
             gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
         ] {
-            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-            ensure_runtime_schemas(&node).await.unwrap();
-            let behavior = integration_test_agent("general");
+            let (db, _user, _client, behavior) = signed_materializer_agent(&format!(
+                "latest-delivery-{case_index}-{}",
+                pending_state.as_str()
+            ))
+            .await;
+            let node = db.node.clone();
+            let access = agent_access(&node, &behavior);
             let owner = behavior.node_did().to_owned();
+            let agent_did = behavior.agent_did.clone();
             let pre: State = decode(&case["pre"]);
             let next: Fire = decode(&case["fire"]);
             let allowed = case["destination_allowed"].as_bool().unwrap();
-            let task = resolved_task("replace work");
+            let mut task = resolved_task("replace work");
+            task.agent_did = agent_did.clone();
             if allowed {
-                crate::session::ensure_session_with_agent_id_and_requester_did(
-                    &node,
-                    &next.session,
-                    &owner,
-                    "general",
-                    Some(&owner),
-                )
-                .await
-                .unwrap();
+                access
+                    .transact_write("test.latest_delivery_session", |txn| {
+                        let (session, owner, agent_did) = (&next.session, &owner, &agent_did);
+                        Box::pin(async move {
+                            crate::session::ensure_session_in_txn(
+                                txn,
+                                session,
+                                owner,
+                                agent_did,
+                                Some(owner.as_str()),
+                                None,
+                                None,
+                                &chrono::Utc::now().to_rfc3339(),
+                            )
+                            .await
+                        })
+                    })
+                    .await
+                    .unwrap();
             }
             for (index, request) in pre.requests.iter().enumerate() {
                 let mut fire = receipt(&request.fire, index);
@@ -244,10 +270,11 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                 fire.fire_key = fire.identity.fire_key();
                 fire.request_id = fire.identity.request_id();
                 fire.task_id = task.task_id.clone();
-                crate::store::config_client::ConfigAccess::transact_local_write(
-                &node, None, "test.seed_latest_delivery", |txn| {
+                access.transact_write(
+                "test.seed_latest_delivery", |txn| {
                     let fire = &fire;
                     let owner = &owner;
+                    let agent_did = &agent_did;
                     Box::pin(async move {
                         durable::stage_fire_receipt(txn, fire).await?;
                         txn.execute_with_variables(
@@ -255,7 +282,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                             &serde_json::json!({"input": {
                                 "request_id": fire.request_id, "node_did": owner,
                                 "requester_did": owner, "session_id": fire.session_id,
-                                "agent_id": "general", "purpose": "normal", "content": "prior work",
+                                "agent_did": agent_did, "purpose": "normal", "content": "prior work",
                                 "lifecycle_state": pending_state.as_str(), "caused_by_trigger_id": fire.identity.trigger_id,
                                 "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
                             }}),
@@ -289,6 +316,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                     args_vars: None,
                     durable_fire_key: next.identity.source_doc_id.clone(),
                     pre_materialized_request_id: None,
+                    event_source_generation: None,
                     on_result: Box::new(|_| {}),
                 })
                 .await;
@@ -300,15 +328,12 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                 allowed,
                 "{case}: {result:?}"
             );
-            let response = crate::store::graphql::graphql_with_transaction_retry(
-                &node,
-                "{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }",
-                "test.latest_delivery_state",
-            )
-            .await
-            .unwrap();
+            let response = access
+                .execute("{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }")
+                .await
+                .unwrap();
             let post: State = decode(&case["post"]);
-            let data = response.data.unwrap();
+            let data = &response["data"];
             assert_eq!(
                 data["TriggerFire"].as_array().unwrap().len(),
                 post.receipts.len(),
@@ -433,7 +458,7 @@ async fn persisted_outcome_requests(
     let response = access
         .execute(&format!(
             "{{AgentRequest {{{} lifecycle_state}}}}",
-            crate::request::watcher::AGENT_REQUEST_FIELDS
+            gents_protocol::row::AGENT_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -442,11 +467,22 @@ async fn persisted_outcome_requests(
 
 #[tokio::test]
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
-    use crate::store::config_client::ConfigAccess;
     for trace in contract()["outcome_traces"].as_array().unwrap() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        // The Task's Agent admits, claims, terminalizes and recovers its fires.
+        let node = std::sync::Arc::new(
+            crate::triggers::callback::test_node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        crate::triggers::callback::seed_test_agent(
+            &node,
+            crate::request::lifecycle::test_support::PIN_FIXED_DID,
+        )
+        .await;
+        let agent = crate::triggers::callback::test_agent_identity();
+        let access = crate::triggers::callback::test_agent_access(&node);
         let mut published = std::collections::BTreeMap::new();
         let mut terminal_states = std::collections::BTreeMap::new();
         for (index, step) in trace["steps"].as_array().unwrap().iter().enumerate() {
@@ -455,12 +491,24 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
             match action {
                 OutcomeAction::Admit { fire } => {
                     let receipt = receipt(&fire, index);
-                    let mutation = request_mutation(&receipt);
+                    let mutation = request_mutation_as(&receipt, agent.did());
                     let result = access
                         .transact_write("test.outcome_trace_admit", |txn| {
                             let receipt = &receipt;
                             let mutation = &mutation;
+                            let agent = agent.did();
                             Box::pin(async move {
+                                crate::session::ensure_session_in_txn(
+                                    txn,
+                                    &receipt.session_id,
+                                    &receipt.identity.owner_did,
+                                    agent,
+                                    None,
+                                    None,
+                                    None,
+                                    &receipt.created_at,
+                                )
+                                .await?;
                                 durable::stage_fire_request(txn, receipt, mutation).await
                             })
                         })
@@ -478,17 +526,15 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         .iter()
                         .find(|row| row.request_id == identity.request_id())
                         .unwrap();
-                    let request =
-                        crate::request::watcher::AgentRequest::try_from(row.clone()).unwrap();
+                    let request = gents_protocol::row::AgentRequest::try_from(row.clone()).unwrap();
                     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                         node.clone(),
-                        "general",
-                        &identity.owner_did,
                         request,
                         60,
                         crate::request::lifecycle::ExecutionOrigin::Interactive,
                         "test-backend",
                     );
+                    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
                     let now = chrono::Utc::now();
                     assert!(
                         lifecycle
@@ -532,7 +578,9 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                 }
                 OutcomeAction::Recover { commit } => {
                     if commit {
-                        durable::recover_outcomes(&node, "owner-a").await.unwrap();
+                        durable::recover_outcomes(&node, "owner-a", agent.as_ref())
+                            .await
+                            .unwrap();
                     } else {
                         let result: anyhow::Result<()> = access
                             .transact_write("test.outcome_publication_rollback", |txn| {
@@ -676,19 +724,18 @@ fn handoff_consumer() -> gents_protocol::event_delivery::EventConsumer {
     }
 }
 
-async fn saved_arrival_cursor(access: &crate::store::config_client::ConfigAccess) -> String {
+async fn saved_arrival_cursor(
+    access: &crate::store::config_client::ConfigAccess,
+    owner: &str,
+) -> String {
     access
         .transact_write("test.read_arrival_cursor", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    crate::store::config_client::event_source_cursor::load_or_seed(
-                        txn,
-                        "owner-a",
-                        &handoff_consumer(),
-                    )
-                    .await?
-                    .cursor
-                    .after,
+                    crate::documents::event_consumer::load_or_seed(txn, owner, &handoff_consumer())
+                        .await?
+                        .cursor
+                        .after,
                 )
             })
         })
@@ -698,11 +745,50 @@ async fn saved_arrival_cursor(access: &crate::store::config_client::ConfigAccess
 
 #[tokio::test]
 async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashes() {
-    use crate::store::config_client::{event_source_cursor, ConfigAccess};
+    use crate::documents::apply_desired_state_plan;
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+    };
+    use crate::store::identity::NodeIdentity as _;
     for case in contract()["cursors"].as_array().unwrap() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let home = tempfile::tempdir().unwrap();
+        let root =
+            crate::store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+                .unwrap();
+        let owner = root.did();
+        let node = std::sync::Arc::new(
+            crate::test_support::node_builder()
+                .with_node_identity_did(owner)
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+        crate::test_support::install_test_agent_binding(&node, owner, "trigger", &binding).await;
+        let selected = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+        let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            access
+                .grant_node_permission(
+                    &::identity::Did::new(&binding.agent_did).unwrap(),
+                    permission,
+                )
+                .await
+                .unwrap();
+        }
+        let agent = ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(&binding.agent_did).unwrap(),
+            selected.as_ref(),
+        )
+        .unwrap();
         access
             .add_collection("type Work { label: String eligible: Boolean }")
             .await
@@ -727,22 +813,24 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 .await,
             );
         }
-        access.transact_write("test.arrival_config", |txn| Box::pin(async move {
-            txn.execute_with_variables(
-                "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
-                &serde_json::json!({"input":{"node_did":"owner-a","event_source_id":"source",
-                    "source_collection":"Work","event_kind":"created", "filter":"{eligible: {_eq: true}}"}}),
-            ).await?;
-            txn.execute_with_variables(
-                "mutation($input:TriggerMutationInputArg!){create_Trigger(input:$input){_docID}}",
-                &serde_json::json!({"input":{"node_did":"owner-a","trigger_id":"handoff",
-                    "task_id":"contract-task","source":{"kind":"event","event_source_id":"source"},
-                    "enabled":case["enabled"], "concurrency":case["mode"]}}),
-            ).await?;
-            Ok::<_, anyhow::Error>(())
-        })).await.unwrap();
+        let plan = DesiredStateApplyPlan::new([
+            (crate::Collection::Task, serde_json::json!({"node_did":owner,"task_id":"contract-task",
+                "agent_did":binding.agent_did,"prompt_template":"contract task"})),
+            (crate::Collection::EventSource, serde_json::json!({"node_did":owner,"event_source_id":"source",
+                "source_collection":"Work","event_kind":"created","filter":"{eligible: {_eq: true}}"})),
+            (crate::Collection::Trigger, serde_json::json!({"node_did":owner,"trigger_id":"handoff",
+                "task_id":"contract-task","source":{"kind":"event","event_source_id":"source"},
+                "enabled":case["enabled"],"concurrency":case["mode"]})),
+        ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {collection, add: value.clone(), update: value}).collect()).unwrap();
+        access
+            .transact_write("test.arrival_config", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
         assert_eq!(
-            saved_arrival_cursor(&access).await,
+            saved_arrival_cursor(&agent, owner).await,
             seed_head.to_string(),
             "{}",
             case["name"]
@@ -761,12 +849,12 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             );
         }
         let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
-        access
+        agent
             .transact_write("test.prior_checkpoint", |txn| {
                 Box::pin(async move {
-                    event_source_cursor::advance(
+                    crate::documents::event_consumer::advance(
                         txn,
-                        "owner-a",
+                        owner,
                         &handoff_consumer(),
                         "Work",
                         pre_after,
@@ -778,21 +866,22 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             .unwrap();
         if case["restart"].as_bool().unwrap() {
             assert_eq!(
-                saved_arrival_cursor(&access).await,
+                saved_arrival_cursor(&agent, owner).await,
                 pre_after,
                 "{}",
                 case["name"]
             );
         }
         let adapt_fire = |mut fire: Fire| {
+            fire.identity.owner_did = owner.to_owned();
             fire.identity.source_doc_id = documents[&fire.identity.source_doc_id].clone();
             fire
         };
         let pre: State = decode(&case["pre"]);
         for (index, request) in pre.requests.iter().enumerate() {
             let receipt = receipt(&adapt_fire(request.fire.clone()), index);
-            let mutation = request_mutation(&receipt);
-            access
+            let mutation = request_mutation_as(&receipt, &binding.agent_did);
+            agent
                 .transact_write("test.prior_arrival_admission", |txn| {
                     let receipt = &receipt;
                     let mutation = &mutation;
@@ -806,8 +895,8 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         }
         if let Some(commit) = case["admission_commit"].as_bool() {
             let receipt = receipt(&adapt_fire(decode(&case["fire"])), pre.requests.len());
-            let mutation = request_mutation(&receipt);
-            let admitted: anyhow::Result<()> = access
+            let mutation = request_mutation_as(&receipt, &binding.agent_did);
+            let admitted: anyhow::Result<()> = agent
                 .transact_write("test.arrival_admission_crash", |txn| {
                     let receipt = &receipt;
                     let mutation = &mutation;
@@ -823,13 +912,13 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         if let Some(commit) = case["checkpoint_commit"].as_bool() {
             let entry: Arrival = decode(&case["entry"]);
             let busy = case["busy"].as_bool().unwrap();
-            let checkpointed: anyhow::Result<bool> = access
+            let checkpointed: anyhow::Result<bool> = agent
                 .transact_write("test.arrival_checkpoint_crash", |txn| {
                     let entry = &entry;
                     Box::pin(async move {
-                        let accepted = event_source_cursor::checkpoint_prefix(
+                        let accepted = crate::documents::event_consumer::checkpoint_prefix(
                             txn,
-                            "owner-a",
+                            owner,
                             &handoff_consumer(),
                             "Work",
                             &entry.position,
@@ -861,7 +950,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 case["name"]
             );
         }
-        let after = saved_arrival_cursor(&access).await;
+        let after = saved_arrival_cursor(&agent, owner).await;
         assert_eq!(
             after,
             case["post_cursor"]["after"].as_str().unwrap(),
@@ -893,7 +982,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             })
             .collect::<Vec<_>>();
         assert_eq!(actual, expected, "{}", case["name"]);
-        let rows = access
+        let rows = agent
             .execute("{ TriggerFire { source_doc_id } AgentRequest { request_id } }")
             .await
             .unwrap();
@@ -910,6 +999,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             "{}",
             case["name"]
         );
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -920,24 +1010,33 @@ fn handoff_binding() -> gents_protocol::event_delivery::EventConsumer {
 }
 
 async fn admit_callback_arrival(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
+    access: &crate::ConfigAccess,
+    owner: &str,
+    agent_did: &str,
     doc_id: &str,
     version: &str,
 ) {
-    crate::triggers::callback::create_pending_invocation(
+    let mut invocation = crate::triggers::callback::create_pending_invocation(
         node,
+        access,
         &crate::triggers::callback::CallbackInvocationDoc {
             input: serde_json::json!({}),
             invocation_id: uuid::Uuid::new_v4().to_string(),
-            owner_node_did: "owner-a".into(),
+            agent_did: agent_did.to_owned(),
+            owner_node_did: owner.into(),
             callback_id: "callback".into(),
+            configuration_generation: None,
+            claimed_callback: None,
             origin: crate::documents::CallbackInvocationOrigin::Event {
                 binding_id: "handoff".into(),
                 source_collection: "Work".into(),
                 source_doc_id: doc_id.into(),
                 source_version: Some(version.into()),
             },
-            idempotency_key: crate::triggers::callback::idempotency_key("handoff", "Work", doc_id),
+            idempotency_key: gents_protocol::trigger_delivery::idempotency_key(
+                "handoff", "Work", doc_id,
+            ),
             caused_by_correlation: None,
             lifecycle_state: crate::triggers::callback::LIFECYCLE_PENDING.into(),
             attempts: Some(0),
@@ -950,16 +1049,73 @@ async fn admit_callback_arrival(
     )
     .await
     .unwrap();
+    if invocation.claimed_at.is_none() {
+        invocation.lifecycle_state = crate::triggers::callback::LIFECYCLE_CLAIMED.into();
+        invocation.claimed_at = Some("2030-01-01T00:00:00Z".into());
+        invocation.claimed_callback = Some(
+            serde_json::json!({
+                "node_did": owner, "callback_id": "callback", "enabled": true,
+                "handler": {"kind": "built_in", "emitter": "create_workspace"}
+            })
+            .to_string(),
+        );
+        assert!(crate::triggers::callback::update_invocation(
+            access,
+            &invocation,
+            Some(crate::triggers::callback::LIFECYCLE_PENDING),
+        )
+        .await
+        .unwrap());
+    }
 }
 
 #[tokio::test]
 async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
-    use crate::store::config_client::{event_source_cursor, ConfigAccess};
+    use crate::documents::apply_desired_state_plan;
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+    };
     for case in contract()["callback_cursors"].as_array().unwrap() {
         let name = &case["name"];
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        use crate::store::identity::NodeIdentity as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root =
+            crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
+                .unwrap();
+        let node = std::sync::Arc::new(
+            crate::test_support::node_builder()
+                .with_node_identity_did(root.did())
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+        let owner = root.did();
+        crate::test_support::install_test_agent_binding(&node, owner, "callback", &binding).await;
+        let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(&binding.agent_did).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            access
+                .grant_node_permission(
+                    &::identity::Did::new(&binding.agent_did).unwrap(),
+                    permission,
+                )
+                .await
+                .unwrap();
+        }
         access
             .add_collection("type Work { label: String eligible: Boolean }")
             .await
@@ -977,36 +1133,36 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         }
         let binding_enabled = case["binding_enabled"].as_bool().unwrap();
         let callback_enabled = case["callback_enabled"].as_bool().unwrap();
-        access.transact_write("test.callback_arrival_config", |txn| Box::pin(async move {
-            txn.execute_with_variables(
-                "mutation($input:CallbackMutationInputArg!){create_Callback(input:$input){_docID}}",
-                &serde_json::json!({"input":{"node_did":"owner-a","callback_id":"callback",
-                    "enabled":callback_enabled,
-                    "handler":{"kind":"built_in","emitter":"create_workspace"}}}),
-            ).await?;
-            txn.execute_with_variables(
-                "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
-                &serde_json::json!({"input":{"node_did":"owner-a","event_source_id":"source",
-                    "source_collection":"Work","event_kind":"created", "filter":"{eligible: {_eq: true}}"}}),
-            ).await?;
-            txn.execute_with_variables(
-                "mutation($input:CallbackBindingMutationInputArg!){create_CallbackBinding(input:$input){_docID}}",
-                &serde_json::json!({"input":{"node_did":"owner-a","binding_id":"handoff",
-                    "event_source_id":"source","callback_id":"callback","enabled":binding_enabled}}),
-            ).await?;
-            event_source_cursor::load_or_seed(txn, "owner-a", &handoff_binding()).await?;
-            Ok::<_, anyhow::Error>(())
-        })).await.unwrap();
+        let plan = DesiredStateApplyPlan::new([
+            (crate::Collection::Callback, serde_json::json!({"node_did":owner,"callback_id":"callback",
+                "enabled":callback_enabled,"handler":{"kind":"built_in","emitter":"create_workspace"}})),
+            (crate::Collection::EventSource, serde_json::json!({"node_did":owner,"event_source_id":"source",
+                "source_collection":"Work","event_kind":"created","filter":"{eligible: {_eq: true}}"})),
+            (crate::Collection::CallbackBinding, serde_json::json!({"node_did":owner,"binding_id":"handoff",
+                "agent_did":binding.agent_did,"event_source_id":"source","callback_id":"callback","enabled":binding_enabled})),
+        ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {collection, add: value.clone(), update: value}).collect()).unwrap();
+        access
+            .transact_write("test.callback_arrival_config", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    crate::documents::event_consumer::load_or_seed(txn, owner, &handoff_binding())
+                        .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
         let saved = || {
-            let access = access.clone();
+            let access = agent_access.clone();
             async move {
                 access
                     .transact_write("test.read_callback_cursor", |txn| {
                         Box::pin(async move {
                             Ok::<_, anyhow::Error>(
-                                event_source_cursor::load_or_seed(
+                                crate::documents::event_consumer::load_or_seed(
                                     txn,
-                                    "owner-a",
+                                    owner,
                                     &handoff_binding(),
                                 )
                                 .await?
@@ -1028,12 +1184,12 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             );
         }
         let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
-        access
+        agent_access
             .transact_write("test.prior_callback_checkpoint", |txn| {
                 Box::pin(async move {
-                    event_source_cursor::advance(
+                    crate::documents::event_consumer::advance(
                         txn,
-                        "owner-a",
+                        owner,
                         &handoff_binding(),
                         "Work",
                         pre_after,
@@ -1047,12 +1203,28 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             assert_eq!(saved().await, pre_after, "{name}");
         }
         for receipt in decode::<Vec<FireIdentity>>(&case["pre_receipts"]) {
-            admit_callback_arrival(&node, &documents[&receipt.source_doc_id], "v1").await;
+            admit_callback_arrival(
+                &node,
+                &agent_access,
+                owner,
+                &binding.agent_did,
+                &documents[&receipt.source_doc_id],
+                "v1",
+            )
+            .await;
         }
         let entry: Arrival = decode(&case["entry"]);
         let doc_id = documents[&entry.identity.source_doc_id].clone();
         if case["admission_commit"].as_bool() == Some(true) {
-            admit_callback_arrival(&node, &doc_id, "v1").await;
+            admit_callback_arrival(
+                &node,
+                &agent_access,
+                owner,
+                &binding.agent_did,
+                &doc_id,
+                "v1",
+            )
+            .await;
             if case["edit_after_admission"].as_bool().unwrap() {
                 access
                     .write(
@@ -1064,17 +1236,25 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     )
                     .await
                     .unwrap();
-                admit_callback_arrival(&node, &doc_id, "v2").await;
+                admit_callback_arrival(
+                    &node,
+                    &agent_access,
+                    owner,
+                    &binding.agent_did,
+                    &doc_id,
+                    "v2",
+                )
+                .await;
             }
         }
         if let Some(commit) = case["checkpoint_commit"].as_bool() {
-            let checkpointed: anyhow::Result<bool> = access
+            let checkpointed: anyhow::Result<bool> = agent_access
                 .transact_write("test.callback_checkpoint_crash", |txn| {
                     let entry = &entry;
                     Box::pin(async move {
-                        let accepted = event_source_cursor::checkpoint_prefix(
+                        let accepted = crate::documents::event_consumer::checkpoint_prefix(
                             txn,
-                            "owner-a",
+                            owner,
                             &handoff_binding(),
                             "Work",
                             &entry.position,
@@ -1122,7 +1302,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             .map(|entry| documents[&entry.identity.source_doc_id].clone())
             .collect::<Vec<_>>();
         assert_eq!(actual, expected, "{name}");
-        let invocations = access
+        let invocations = agent_access
             .execute("{ CallbackInvocation { origin } }")
             .await
             .unwrap();
@@ -1134,7 +1314,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             case["post_receipts"].as_array().unwrap().len(),
             "{name}"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 

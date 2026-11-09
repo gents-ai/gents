@@ -23,7 +23,7 @@ pub(super) struct RequestShowSnapshot {
 pub(super) struct RequestShowHeader {
     pub(super) request_id: String,
     pub(super) node_did: String,
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) session_id: String,
     pub(super) lifecycle_state: String,
     pub(super) backend_id: Option<String>,
@@ -119,7 +119,7 @@ pub(super) struct ChildRequestView {
     pub(super) node_did: String,
     pub(super) session_id: String,
     pub(super) state: String,
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) created_at: Option<String>,
     pub(super) caused_by_parent_tool_call_id: Option<String>,
 }
@@ -132,7 +132,7 @@ pub(super) fn request_header_view(
     Ok(RequestShowHeader {
         request_id: string_field_or_unknown(row, "request_id"),
         node_did: string_field_or_unknown(row, "node_did"),
-        agent_id: string_field_or_unknown(row, "agent_id"),
+        agent_did: string_field_or_unknown(row, "agent_did"),
         session_id: string_field_or_unknown(row, "session_id"),
         lifecycle_state: string_field_or_unknown(row, "lifecycle_state"),
         backend_id: string_field(row, "backend_id"),

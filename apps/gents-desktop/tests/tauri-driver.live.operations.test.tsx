@@ -15,7 +15,7 @@ describeLive("Tauri app live operations snapshot", () => {
   it("projects a live native background process through the bridge", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
       const defaultAgent = deployment.agents.find(
-        (agent) => agent.agentId === deployment.node.defaultAgentId,
+        (agent) => agent.agentDid === deployment.node.defaultAgentDid,
       );
       const context = deployment.contexts.find(
         (candidate) => candidate.context_id === defaultAgent?.contextId,

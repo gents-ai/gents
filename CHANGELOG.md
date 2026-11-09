@@ -4,6 +4,32 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- Breaking: P2P carries only discovery and enrollment, so the agent-facing
+  application-collection pairing and sync surface is removed. The `p2p` tool
+  drops `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`,
+  `pairings_revoke` and `sync_documents`; enrollment approval now suggests
+  `enrollment_history`. `Tools.built_ins.p2p_collections` is removed and now
+  rejected, and `gents pack wire` no longer writes it: delete it from stored
+  Tools documents before upgrading. `gents p2p admin collections` and
+  `gents p2p admin documents` are removed, `--profile` accepts only
+  `discovery`, and `gents p2p templates list` no longer reports `replicate`
+  delivery or peer-DID and unscoped scopes. Pairing reconciliation installs
+  replicators only; it no longer installs or tears down DefraDB collection
+  subscriptions, and `PeerPairingApplied.collections` is no longer written.
+- Breaking: P2P no longer hydrates sessions or delivers file images between
+  nodes. The `SessionHydrationRequest` collection leaves the schema baseline;
+  existing homes keep any stored rows untouched. The operator file-inventory
+  request (`DirectFileInventoryRequest`) drops `peer_id`, and a direct read's
+  admission carries an empty `peer_id`. The generated `HydrationRequest`
+  TypeScript type is now `FileInventoryRequest`.
+- Breaking: the dormant peer inventory path is removed. The
+  `FileImageHydrationRequest`, `FileImageHydrationReceipt`,
+  `FileInventoryImageRequest` and `FileInventoryPage` collections leave the
+  schema baseline; existing homes keep any stored rows untouched. A file
+  inventory admission's request no longer carries `peer_id`.
+
 ## 1.0.0-rc1 - 2026-11-03
 
 - P2P DAG fetches rank providers by measured health, rotate past a provider
@@ -305,7 +331,7 @@ source consistency checks, not a separate runtime compatibility version.
 - A plugin job's spawns, its `job.agent_targets` and its
   `policy.dynamic_targets` now name AgentTargets by their `target_id`, as the
   protocol and `gents pack wire --targets-from` already did; a workflow whose
-  targets have a `target_id` different from their `agent_id` (such as
+  targets have a `target_id` different from their `agent_did` (such as
   code_review's) was refused `plugin_job_policy_denied` before any child
   started.
 - The plugin job recovery sweep no longer fails a healthy workflow run as
@@ -368,7 +394,7 @@ source consistency checks, not a separate runtime compatibility version.
   refuses.
 - Breaking: installations are Nodes and their configured behaviors are Agents.
   Collections, document fields, CLI commands and flags, and desktop preferences
-  use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_id`).
+  use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_did`).
   Persona requests are removed; Agent changes use authenticated configuration
   writes. Start with fresh stores and upgrade the desktop and all paired runtimes
   together; existing stores are not converted.

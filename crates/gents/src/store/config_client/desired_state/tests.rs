@@ -8,16 +8,219 @@ use super::validate::{
     validate_desired_state_plan, validate_event_trigger_document_fields, OutcomeSourceSchemaError,
 };
 use super::*;
+use crate::documents::apply_desired_state_plan;
+use crate::store::config_client::schema_introspection::SchemaField;
 use crate::store::config_client::ConfigAccess;
-use crate::tools::builtin::defra_query::SchemaField;
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
+
+/// Fixture identities. Node and Agent documents are keyed by DIDs, which the
+/// identity crate validates on creation, so fixtures use real `did:key` values.
+const CODING_AGENT_DID: &str = "did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU";
+const REVIEW_AGENT_DID: &str = "did:key:z6Mksr2NdS5Pt3RRf6azhx52KG5XCbijRezUGhoc9TVd9PQU";
+const DEFAULT_REPLACEMENT_OWNER_DIDS: [&str; 6] = [
+    "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+    "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+    "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+    "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
+    "did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76",
+    "did:key:z6MknPW5yoqtbf72nEAqce5Rb6ubgcZVwFweMvPdQbYjNLv6",
+];
+
+#[test]
+fn modeled_removal_requires_the_exact_returned_document() {
+    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration contract")
+        .configuration_removal_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        let target = case["target"].as_str().unwrap();
+        let rows: Vec<_> = case["returned"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| json!({"_docID": id}))
+            .collect();
+        let response = json!({"data": {"delete_Skill": rows}});
+        assert_eq!(
+            confirm_removal(&response, "Skill", target).is_ok(),
+            case["expected"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+    }
+    assert!(confirm_removal(&json!({"data": {"delete_Skill": null}}), "Skill", "doc").is_err());
+}
+
+#[tokio::test]
+async fn modeled_callback_configuration_publication_and_revocation() -> Result<()> {
+    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentitySubject};
+    use crate::NodeIdentity as _;
+    let case = lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap();
+    let modeled_user = &case
+        .objects
+        .iter()
+        .find(|object| object.id == "home")
+        .unwrap()
+        .owner;
+    let modeled_agent = &case
+        .objects
+        .iter()
+        .find(|object| object.id == "agent-created")
+        .unwrap()
+        .owner;
+    let modeled_runtime = case
+        .relations
+        .iter()
+        .find_map(|relation| match &relation.subject {
+            LeanIdentitySubject::Actor { actor }
+                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
+            {
+                Some(actor)
+            }
+            _ => None,
+        })
+        .unwrap();
+    // Modeled DIDs carry no keys. Each modeled actor is played by a held
+    // identity so every write is signed by its real actor.
+    let keys = tempfile::tempdir()?;
+    let held = |name: &str| crate::KeyIdentity::load_or_create(keys.path().join(name), None);
+    let (user_key, runtime_key, agent_key) = (held("user")?, held("runtime")?, held("agent")?);
+    let mut actors = BTreeMap::new();
+    for observation in &case.callback_configuration_cases {
+        let modeled = observation["actor"].as_str().unwrap().to_owned();
+        if !actors.contains_key(&modeled) {
+            let real = if modeled == *modeled_runtime {
+                runtime_key.did().to_owned()
+            } else if modeled == *modeled_agent {
+                agent_key.did().to_owned()
+            } else {
+                held(&format!("actor-{}", actors.len()))?.did().to_owned()
+            };
+            actors.insert(modeled, real);
+        }
+    }
+    let (user, agent, runtime) = (user_key.did(), agent_key.did(), runtime_key.did());
+    assert_ne!(modeled_user, modeled_agent);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    // The Node is the runtime's identity; the user is the configuration actor.
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(runtime)
+            .with_node_acp_owner(user.to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let owner = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            user,
+        )
+        .with_client_signing_capability(user_key.client_signing_capability()?)?,
+    );
+    let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
+    node.add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
+        .await?;
+    register_config_schemas(&node).await?;
+    for actor in actors.values() {
+        for permission in [
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::CollectionGet,
+        ] {
+            node.add_nac_actor_relationship_as(&context, permission.as_str(), actor)
+                .await?;
+        }
+    }
+    node.add_collection_as(&context, gents_protocol::schemas::EVENT_SOURCE_CURSOR)
+        .await?;
+    node.add_collection_as(&context, "type CallbackTestEvent { label: String }")
+        .await?;
+    let created = owner
+        .write(
+            "test.callback.node",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\", enabled: true}}) {{_docID}} }}",
+                escape_graphql_string(runtime)
+            ),
+        )
+        .await?;
+    let node_doc = crate::store::graphql::created_doc_id(&created, "Node")?;
+    owner
+        .add_actor_relationship(
+            "Node",
+            &node_doc,
+            "runtime_reader",
+            &identity::Did::new(runtime)?,
+        )
+        .await?;
+    owner.write("test.callback.dependencies", &format!(
+        "mutation {{ create_Agent(input: {{node_did: \"{runtime}\", agent_did: \"{agent}\", creation_nonce: \"nonce\", inference_profile_id: \"profile\"}}) {{_docID}} create_EventSource(input: {{node_did: \"{runtime}\", event_source_id: \"source\", source_collection: \"CallbackTestEvent\", event_kind: \"created\"}}) {{_docID}} }}",
+        runtime = escape_graphql_string(runtime), agent = escape_graphql_string(agent),
+    )).await?;
+    let docs = [
+        (Collection::Callback, json!({"node_did":runtime,"callback_id":"callback","handler":{"kind":"built_in","emitter":"create_workspace"}})),
+        (Collection::CallbackModule, json!({"node_did":runtime,"module_id":"module"})),
+        (Collection::CallbackBinding, json!({"node_did":runtime,"binding_id":"binding","agent_did":agent,"callback_id":"callback","event_source_id":"source"})),
+    ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
+        collection, add: value.clone(), update: value,
+    }).collect::<Vec<_>>();
+    apply(&owner, docs.clone()).await?;
+    let binding = owner.execute("{ CallbackBinding { _docID } }").await?;
+    let binding_doc = binding["data"]["CallbackBinding"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    let mut revoked = false;
+    for observation in &case.callback_configuration_cases {
+        if observation["revoked"] == true && !revoked {
+            owner
+                .delete_actor_relationship(
+                    "CallbackBinding",
+                    binding_doc,
+                    "reader",
+                    &identity::Did::new(agent)?,
+                )
+                .await?;
+            apply(&owner, docs.clone()).await?;
+            revoked = true;
+        }
+        let actor = &actors[observation["actor"].as_str().unwrap()];
+        let id = observation["id"].as_str().unwrap();
+        let (collection, field) = match id {
+            "binding" => ("CallbackBinding", "binding_id"),
+            "callback" => ("Callback", "callback_id"),
+            "module" => ("CallbackModule", "module_id"),
+            _ => unreachable!(),
+        };
+        let reader = ConfigAccess::local_as(node.clone(), identity::Did::new(actor)?);
+        let response = reader
+            .execute(&format!(
+                "{{ {collection}(filter: {{{field}: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+                escape_graphql_string(id)
+            ))
+            .await?;
+        assert_eq!(
+            !response["data"][collection].as_array().unwrap().is_empty(),
+            observation["expected"].as_bool().unwrap(),
+            "{} {id}",
+            observation["actor"]
+        );
+    }
+    node.shutdown().await?;
+    Ok(())
+}
 
 #[derive(Clone, Default)]
 struct IgnoredWireWarningCapture(Arc<Mutex<Vec<tracing::Level>>>);
@@ -47,6 +250,18 @@ fn document(value: Value) -> DesiredStateApplyDocument {
     }
 }
 
+/// An out-of-band row for an InferenceBackend identity. Backends are stored as
+/// `InferenceBackendMetadata` (their credential lives apart), so an injected
+/// duplicate or drift targets that physical collection.
+fn backend_metadata_mutation(owner: &str, id: &str, name: &str) -> String {
+    format!(
+        r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did: "{}", backend_id: "{}", name: "{}", provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:8000/v1", auth_kind: "unauthenticated", enabled: true}}) {{ _docID }} }}"#,
+        escape_graphql_string(owner),
+        escape_graphql_string(id),
+        escape_graphql_string(name),
+    )
+}
+
 async fn register_config_schemas(node: &EmbeddedNode) -> Result<()> {
     register_config_schemas_dropping_unique_indexes(node, &[]).await
 }
@@ -55,6 +270,7 @@ async fn register_config_schemas_dropping_unique_indexes(
     node: &EmbeddedNode,
     duplicate_collections: &[Collection],
 ) -> Result<()> {
+    crate::test_support::acp_policies::install_identity_acp_policies(node).await?;
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .zip(gents_protocol::schemas::RUNTIME_ALL)
@@ -64,9 +280,12 @@ async fn register_config_schemas_dropping_unique_indexes(
                 .zip(gents_protocol::schemas::ALL),
         )
     {
-        if Collection::ALL
-            .iter()
-            .any(|collection| collection.graphql_type() == *name)
+        // Runtime-only schemas (the backend observation has no Collection variant)
+        // are installed alongside the configuration collections, as in production.
+        if gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.contains(name)
+            || Collection::ALL
+                .iter()
+                .any(|collection| collection.graphql_type() == *name)
         {
             let mut schema = (*schema).to_owned();
             for collection in duplicate_collections {
@@ -86,14 +305,56 @@ async fn register_config_schemas_dropping_unique_indexes(
     Ok(())
 }
 
+/// Configuration writes are signed by the fixture node's own identity. Anonymous
+/// access cannot complete the relationship grants that Node and configuration
+/// publication queue, so it fails with `RelationshipActorRequired`.
+fn runtime_access(node: &Arc<EmbeddedNode>) -> Result<ConfigAccess> {
+    let runtime = node
+        .node_identity_did()
+        .context("fixture node has no node identity")?;
+    Ok(ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(runtime)?,
+    ))
+}
+
 async fn apply(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> Result<()> {
     apply_with_counts(access, docs).await.map(|_| ())
+}
+
+/// Configuration writes require the owner's Node document. Publishes it for
+/// each owner the plan writes to that has none yet.
+async fn ensure_owner_nodes(
+    access: &ConfigAccess,
+    docs: &[DesiredStateApplyDocument],
+) -> Result<()> {
+    let owners: std::collections::BTreeSet<&str> = docs
+        .iter()
+        .filter(|document| !matches!(document.collection, Collection::Node))
+        .filter_map(|document| document.add["node_did"].as_str())
+        .collect();
+    for owner in owners {
+        let response = access
+            .execute(&format!(
+                "{{ Node(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+                crate::store::graphql::escape_graphql_string(owner)
+            ))
+            .await?;
+        if response["data"]["Node"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+        {
+            crate::test_support::bootstrap_signed_test_node(access, owner).await;
+        }
+    }
+    Ok(())
 }
 
 async fn apply_with_counts(
     access: &ConfigAccess,
     docs: Vec<DesiredStateApplyDocument>,
 ) -> Result<DesiredStateApplyCounts> {
+    ensure_owner_nodes(access, &docs).await?;
     let plan = DesiredStateApplyPlan::new(docs)?;
     access
         .transact_write("test.desired.apply", |txn| {
@@ -106,15 +367,18 @@ async fn apply_with_counts(
 #[tokio::test]
 async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_owner() -> Result<()>
 {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let capture = IgnoredWireWarningCapture::default();
     let warnings = Arc::clone(&capture.0);
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
-    let mut backend = backend("did:key:owner", "ignored-wire");
+    let mut backend = backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "ignored-wire",
+    );
     backend["provider_kind"] = json!("OpenRouter");
     backend["openai_wire_api"] = json!("responses");
     apply(&access, vec![document(backend.clone())]).await?;
@@ -129,38 +393,30 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
         vec![tracing::Level::WARN, tracing::Level::WARN],
         "the generic desired-state owner warns for create/change, never an unchanged replay"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 #[tokio::test]
 async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let owner = "did:key:desired-state-replay";
+    let access = runtime_access(&node)?;
+    let owner = "did:key:z6MknPW5yoqtbf72nEAqce5Rb6ubgcZVwFweMvPdQbYjNLv6";
     let backend_id = "unchanged-backend";
     let document = document(backend(owner, backend_id));
 
     let created = apply_with_counts(&access, vec![document.clone()]).await?;
     assert_eq!(created.get(Collection::InferenceBackend), 1);
     let query = format!(
-        r#"{{ InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+        r#"{{ InferenceBackendMetadata(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
         crate::store::graphql::escape_graphql_string(owner),
         crate::store::graphql::escape_graphql_string(backend_id),
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node.as_ref(),
-        &query,
-        "test.desired_state_replay.read_backend",
-    )
-    .await?;
-    let doc_id = crate::store::graphql::first_row::<Value>(&response, "InferenceBackend")?
-        .and_then(|row| {
-            row.get("_docID")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+    let response = access.execute(&query).await?;
+    let doc_id = response["data"]["InferenceBackendMetadata"][0]["_docID"]
+        .as_str()
+        .map(ToOwned::to_owned)
         .context("created backend is missing _docID")?;
     let before = crate::store::graphql::composite_commits(
         node.as_ref(),
@@ -187,7 +443,7 @@ async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result
         "an identical desired-state replay must not add a whole-document commit"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -201,33 +457,57 @@ fn commitments_do_not_reinterpret_authored_strings_as_json() {
 
 #[test]
 fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
-    let mut value = backend("did:key:owner", "local");
+    let mut value = backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "local",
+    );
     value["probe_status"] = "healthy".into();
     assert!(DesiredStateApplyPlan::new(vec![document(value)]).is_err());
-    let mut doc = document(backend("did:key:owner", "local"));
+    let mut doc = document(backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "local",
+    ));
     doc.update = json!({"enabled":false});
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
-    let mut doc = document(backend("did:key:owner", "local"));
-    doc.update["node_did"] = "did:key:other".into();
+    let mut doc = document(backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "local",
+    ));
+    doc.update["node_did"] = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into();
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
     assert!(DesiredStateApplyPlan::new(vec![
-        document(backend("did:key:a", "same")),
-        document(backend("did:key:b", "same"))
+        document(backend(
+            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
+            "same"
+        )),
+        document(backend(
+            "did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76",
+            "same"
+        ))
     ])
     .is_ok());
     assert!(DesiredStateApplyPlan::new(vec![
-        document(backend("did:key:a", "same")),
-        document(backend("did:key:a", "same"))
+        document(backend(
+            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
+            "same"
+        )),
+        document(backend(
+            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
+            "same"
+        ))
     ])
     .is_err());
 }
 
 #[tokio::test]
 async fn replacement_resets_defaults_and_preserves_backend_observations() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let mut initial = backend("did:key:owner", "local");
+    let access = runtime_access(&node)?;
+    let mut initial = backend(
+        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        "local",
+    );
     initial["max_concurrent"] = 7.into();
     initial["enabled"] = false.into();
     initial["tags"] = json!(["old"]);
@@ -235,17 +515,27 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
         &access,
         vec![
             document(initial),
-            document(backend("did:key:other", "local")),
+            document(backend(
+                "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+                "local",
+            )),
         ],
     )
     .await?;
-    access.write("test.desired.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"local"}},input:{probe_status:"healthy",catalogs:{entries:[{node_did:null,observed_at:"2026-01-01T00:00:00Z",models:null}]}}){_docID} }"#).await?;
+    access.write("test.desired.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"},backend_id:{_eq:"local"}},input:{probe_status:"healthy",catalogs:{entries:[{node_did:null,observed_at:"2026-01-01T00:00:00Z",models:null}]}}){_docID} }"#).await?;
     let before = node
         .execute("{InferenceBackend{_docID node_did catalogs probe_status}}")
         .await;
     assert!(!before.has_errors());
     let before = before.data.unwrap();
-    apply(&access, vec![document(backend("did:key:owner", "local"))]).await?;
+    apply(
+        &access,
+        vec![document(backend(
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            "local",
+        ))],
+    )
+    .await?;
     let after = node
         .execute(
             "{InferenceBackend{_docID node_did max_concurrent enabled tags catalogs probe_status}}",
@@ -272,38 +562,46 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
 
 #[tokio::test]
 async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     apply(
         &access,
-        vec![document(backend("did:key:owner", "z_duplicate"))],
+        vec![document(backend(
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            "z_duplicate",
+        ))],
     )
     .await?;
-    let mut duplicate = backend("did:key:owner", "z_duplicate");
-    duplicate["name"] = "Distinct document".into();
     access
         .write(
             "test.desired.duplicate",
-            &format!(
-                "mutation {{ create_InferenceBackend(input:{}){{_docID}} }}",
-                gents_protocol::graphql::graphql_input_literal(&duplicate)?
+            &backend_metadata_mutation(
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                "z_duplicate",
+                "Distinct document",
             ),
         )
         .await?;
     assert!(apply(
         &access,
         vec![
-            document(backend("did:key:owner", "a_staged")),
-            document(backend("did:key:owner", "z_duplicate"))
+            document(backend(
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                "a_staged"
+            )),
+            document(backend(
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                "z_duplicate"
+            ))
         ]
     )
     .await
     .is_err());
-    let response = node.execute("{InferenceBackend{backend_id name}}").await;
-    assert!(!response.has_errors());
-    let rows = response.data.unwrap();
-    let rows = rows["InferenceBackend"].as_array().unwrap();
+    let rows = access
+        .execute("{InferenceBackendMetadata{backend_id name}}")
+        .await?;
+    let rows = rows["data"]["InferenceBackendMetadata"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| row["backend_id"] == "z_duplicate"));
     assert!(rows.iter().any(|row| row["name"] == "Distinct document"));
@@ -312,10 +610,10 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
 
 #[tokio::test]
 async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let owner = "did:key:owner";
+    let access = runtime_access(&node)?;
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let ids = ["a", "b", "c", "d", "e"];
     for id in ids {
         apply(&access, vec![document(backend(owner, id))]).await?;
@@ -346,10 +644,10 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
 
 #[tokio::test]
 async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let owner = "did:key:owner";
+    let access = runtime_access(&node)?;
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let docs = ["backend-a", "backend-b", "backend-c"]
         .into_iter()
         .map(|id| document(backend(owner, id)))
@@ -390,26 +688,21 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         read_queries, 2,
         "one page reads all expectations and one reads all planned documents"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 #[tokio::test]
 async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
-    let access = ConfigAccess::local(node.clone());
-    let owner = "did:key:owner";
+    let access = runtime_access(&node)?;
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     apply(&access, vec![document(backend(owner, "dup"))]).await?;
-    let mut duplicate = backend(owner, "dup");
-    duplicate["name"] = "Second".into();
     access
         .write(
             "test.read_records.duplicate",
-            &format!(
-                "mutation {{ create_InferenceBackend(input:{}){{_docID}} }}",
-                gents_protocol::graphql::graphql_input_literal(&duplicate)?
-            ),
+            &backend_metadata_mutation(owner, "dup", "Second"),
         )
         .await?;
     let error = access
@@ -422,7 +715,7 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
         .unwrap_err();
     let message = format!("{error:#}");
     assert!(
-        message.contains("multiple live InferenceBackend documents"),
+        message.contains("multiple live InferenceBackendMetadata documents"),
         "{message}"
     );
     assert!(message.contains("dup"), "{message}");
@@ -437,7 +730,9 @@ fn config(collection: Collection, value: Value) -> DesiredStateApplyDocument {
     }
 }
 
-fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
+/// Agent DIDs are globally unique (`Agent.agent_did` is a unique index), so each
+/// owner's cycle names its own Agent.
+fn cyclic_configuration(owner: &str, agent_did: &str) -> Vec<DesiredStateApplyDocument> {
     vec![
         document(backend(owner, "backend")),
         config(
@@ -446,7 +741,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::Agent,
-            json!({"node_did":owner,"agent_id":"behavior","inference_profile_id":"profile","context_id":"context"}),
+            json!({"node_did":owner,"agent_did":agent_did,"creation_nonce":"nonce","inference_profile_id":"profile","context_id":"context"}),
         ),
         config(
             Collection::AgentContext,
@@ -458,7 +753,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::AgentTarget,
-            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_id":"behavior","name":"worker"}),
+            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_did":agent_did,"name":"worker"}),
         ),
     ]
 }
@@ -470,29 +765,39 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         .as_array()
         .expect("Lean default replacement cases");
     assert_eq!(cases.len(), 6);
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
+    // The Lean cases name agents by label; Agent and Node identities are DIDs.
+    let agent_did = |label: &Value| -> Value {
+        match label.as_str() {
+            None => Value::Null,
+            Some("coding") => json!(CODING_AGENT_DID),
+            Some("review") => json!(REVIEW_AGENT_DID),
+            Some(other) => panic!("unmodeled agent label {other}"),
+        }
+    };
     for (index, case) in cases.iter().enumerate() {
-        let owner = format!("did:key:default-replacement-{index}");
+        // Agent DIDs are globally unique, so each case gets its own store.
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        register_config_schemas(&node).await?;
+        let access = runtime_access(&node)?;
+        let owner = DEFAULT_REPLACEMENT_OWNER_DIDS[index];
         let principal = |default: &Value, name: &str| {
             config(
                 Collection::Node,
-                json!({"node_did":owner,"default_agent_id":default,"display_name":name}),
+                json!({"node_did":owner,"default_agent_did":agent_did(default),"display_name":name}),
             )
         };
         let mut documents = vec![
-            document(backend(&owner, "backend")),
+            document(backend(owner, "backend")),
             config(
                 Collection::InferenceProfile,
                 json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
             ),
             principal(&case["current"], "Original"),
         ];
-        for behavior in ["coding", "review"] {
+        for agent in [CODING_AGENT_DID, REVIEW_AGENT_DID] {
             documents.push(config(
                 Collection::Agent,
-                json!({"node_did":owner,"agent_id":behavior,"inference_profile_id":"profile"}),
+                json!({"node_did":owner,"agent_did":agent,"creation_nonce":"nonce","inference_profile_id":"profile"}),
             ));
         }
         apply(&access, documents).await?;
@@ -500,7 +805,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             "node_did":owner,"display_name":"Changed"
         }});
         if !case["candidate"].is_null() {
-            requested["node"]["default_agent_id"] = case["candidate"].clone();
+            requested["node"]["default_agent_did"] = agent_did(&case["candidate"]);
         }
         let pack: crate::documents::PackConfig = serde_json::from_value(requested)?;
         let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
@@ -508,7 +813,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .first()
             .expect("pack principal")
             .clone();
-        replacement.add["default_agent_id"] = json!("coding");
+        replacement.add["default_agent_did"] = json!(CODING_AGENT_DID);
         let plan = DesiredStateApplyPlan::new(vec![replacement])?;
         let before = access
             .transact_write("test.default.before", |txn| {
@@ -539,35 +844,41 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .await?;
         if allowed {
             let (_, after) = after.expect("published principal");
-            assert_eq!(after["default_agent_id"], case["candidate"]);
+            assert_eq!(after["default_agent_did"], agent_did(&case["candidate"]));
             assert_eq!(after["display_name"], "Changed");
         } else {
             assert_eq!(after, before, "refused replacement changed the principal");
             let message = format!("{:#}", published.unwrap_err());
-            assert!(message.contains("default_agent_id"), "{message}");
-            assert!(message.contains("coding"), "{message}");
+            assert!(message.contains("default_agent_did"), "{message}");
+            assert!(message.contains(CODING_AGENT_DID), "{message}");
         }
+        node.shutdown().await.expect("node shutdown");
     }
-    node.shutdown().await;
     Ok(())
 }
 
 #[tokio::test]
 async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let owner = "did:key:owner";
-    let mut documents = cyclic_configuration(owner);
-    documents.extend(cyclic_configuration("did:key:foreign"));
+    let access = runtime_access(&node)?;
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
+    let mut documents = cyclic_configuration(owner, CODING_AGENT_DID);
+    documents.extend(cyclic_configuration(
+        "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+        REVIEW_AGENT_DID,
+    ));
     let seeded = apply_with_counts(&access, documents).await?;
-    for collection in cyclic_configuration(owner).iter().map(|doc| doc.collection) {
+    for collection in cyclic_configuration(owner, CODING_AGENT_DID)
+        .iter()
+        .map(|doc| doc.collection)
+    {
         assert_eq!(seeded.get(collection), 2, "{collection:?}");
     }
-    access.write("test.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"}},input:{probe_status:"healthy"}){_docID} }"#).await?;
+    access.write("test.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"}},input:{probe_status:"healthy"}){_docID} }"#).await?;
     let before = node.execute("{InferenceBackend{_docID node_did name probe_status} AgentContext{_docID node_did context_id}}").await.data;
 
-    let mut drifted_replacement = cyclic_configuration(owner)
+    let mut drifted_replacement = cyclic_configuration(owner, CODING_AGENT_DID)
         .into_iter()
         .find(|doc| doc.collection == Collection::Agent)
         .unwrap();
@@ -632,7 +943,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         "failed publication preserves desired fields and observations"
     );
 
-    let removals = cyclic_configuration(owner)
+    let removals = cyclic_configuration(owner, CODING_AGENT_DID)
         .iter()
         .map(|doc| {
             (
@@ -652,28 +963,28 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await?;
-    let remaining = node
-        .execute("{Agent{node_did} InferenceBackend{node_did}}")
-        .await;
-    assert!(!remaining.has_errors());
-    for collection in ["Agent", "InferenceBackend"] {
-        let rows = remaining.data.as_ref().unwrap()[collection]
-            .as_array()
-            .unwrap();
+    let remaining = access
+        .execute("{Agent{node_did} InferenceBackendMetadata{node_did}}")
+        .await?;
+    for collection in ["Agent", "InferenceBackendMetadata"] {
+        let rows = remaining["data"][collection].as_array().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["node_did"], "did:key:foreign");
+        assert_eq!(
+            rows[0]["node_did"],
+            "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"
+        );
     }
     Ok(())
 }
 
 #[tokio::test]
 async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
-    let access = ConfigAccess::local(node.clone());
-    let owner = "did:key:owner";
-    apply(&access, cyclic_configuration(owner)).await?;
-    let mut replacement = cyclic_configuration(owner)
+    let access = runtime_access(&node)?;
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
+    apply(&access, cyclic_configuration(owner, CODING_AGENT_DID)).await?;
+    let mut replacement = cyclic_configuration(owner, CODING_AGENT_DID)
         .into_iter()
         .find(|doc| doc.collection == Collection::Agent)
         .unwrap();
@@ -682,7 +993,7 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     let row = node.execute("{Agent{context_id}}").await;
     assert_eq!(row.data.unwrap()["Agent"][0]["context_id"], "context");
 
-    access.write("test.duplicate.context", r#"mutation { create_AgentContext(input:{node_did:"did:key:owner",context_id:"context",description:"duplicate"}){_docID} }"#).await?;
+    access.write("test.duplicate.context", r#"mutation { create_AgentContext(input:{node_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",context_id:"context",description:"duplicate"}){_docID} }"#).await?;
     let error = apply(
         &access,
         vec![document(backend(owner, "unrelated-new-backend"))],
@@ -690,21 +1001,25 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     .await
     .unwrap_err();
     assert!(format!("{error:#}").contains("multiple live AgentContext"));
-    let rows = node
-        .execute("{InferenceBackend{backend_id}}")
-        .await
-        .data
-        .unwrap();
-    assert_eq!(rows["InferenceBackend"].as_array().unwrap().len(), 1);
+    let rows = access
+        .execute("{InferenceBackendMetadata{backend_id}}")
+        .await?;
+    assert_eq!(
+        rows["data"]["InferenceBackendMetadata"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     Ok(())
 }
 
 #[tokio::test]
 async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let owner = "did:key:owner";
+    let access = runtime_access(&node)?;
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let packaged = ["packaged", "packaged-two", "packaged-three"]
         .into_iter()
         .map(|id| document(backend(owner, id)))
@@ -725,7 +1040,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
         "capture and validation each read all three identities in one page"
     );
 
-    access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
+    access.write("test.drift", r#"mutation { update_InferenceBackendMetadata(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
     let error = access
         .transact_write("test.verify.drifted", |txn| {
             let plan = &matching;
@@ -749,10 +1064,19 @@ fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExp
     }
 }
 
+const CAS_OWNER_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
+
 async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    Ok((ConfigAccess::local(node), "did:key:owner"))
+    Ok((runtime_access(&node)?, CAS_OWNER_DID))
+}
+
+/// The Lean publish-if scenarios name their owner `did:owner`, which is not a DID.
+/// Map it to the fixture node so the Gents owner validates real identities.
+fn modeled_owner(lean_owner: &str) -> &'static str {
+    assert_eq!(lean_owner, "did:owner", "unmodeled Lean owner");
+    CAS_OWNER_DID
 }
 
 async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
@@ -897,7 +1221,13 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         let prior = case
             .pre_desired
             .iter()
-            .map(|row| document(doc_for(&row.target.node_did, &row.target.id, &row.content)))
+            .map(|row| {
+                document(doc_for(
+                    modeled_owner(&row.target.node_did),
+                    &row.target.id,
+                    &row.content,
+                ))
+            })
             .collect::<Vec<_>>();
         apply(&access, prior).await?;
 
@@ -908,15 +1238,31 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                 let digest = row
                     .content
                     .as_deref()
-                    .map(|content| authored_digest(&row.target.node_did, &row.target.id, content))
+                    .map(|content| {
+                        authored_digest(
+                            modeled_owner(&row.target.node_did),
+                            &row.target.id,
+                            content,
+                        )
+                    })
                     .transpose()?;
-                Ok(expectation(&row.target.node_did, &row.target.id, digest))
+                Ok(expectation(
+                    modeled_owner(&row.target.node_did),
+                    &row.target.id,
+                    digest,
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
         let plan = DesiredStateApplyPlan::new(
             case.candidate
                 .iter()
-                .map(|row| document(doc_for(&row.target.node_did, &row.target.id, &row.content)))
+                .map(|row| {
+                    document(doc_for(
+                        modeled_owner(&row.target.node_did),
+                        &row.target.id,
+                        &row.content,
+                    ))
+                })
                 .collect(),
         )?
         .with_expected(expected)?;
@@ -938,8 +1284,13 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
 
         let mut after_first = Vec::new();
         for row in &case.expected_after_desired {
-            let live = live_digest(&access, &row.target.node_did, &row.target.id).await?;
-            let want = authored_digest(&row.target.node_did, &row.target.id, &row.content)?;
+            let live =
+                live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id).await?;
+            let want = authored_digest(
+                modeled_owner(&row.target.node_did),
+                &row.target.id,
+                &row.content,
+            )?;
             assert_eq!(
                 live,
                 Some(want),
@@ -979,7 +1330,8 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             }
             for (row, first) in case.expected_after_desired.iter().zip(&after_first) {
                 assert_eq!(
-                    live_digest(&access, &row.target.node_did, &row.target.id).await?,
+                    live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id)
+                        .await?,
                     *first,
                     "case {} document {} changed on replay",
                     case.name,
@@ -1025,7 +1377,7 @@ fn rule_documents(
         source["correlation_field"] = json!("message");
     }
     let mut task = json!({
-        "node_did": owner, "task_id": "work", "agent_id": "behavior",
+        "node_did": owner, "task_id": "work", "agent_did": "did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU",
         "prompt_template": prompt_template, "emit_outcome": emit_outcome,
     });
     if let Some(goal_objective_template) = goal_objective_template {
@@ -1043,10 +1395,10 @@ fn rule_documents(
 
 #[tokio::test]
 async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let owner = "did:key:owner";
+    let access = runtime_access(&node)?;
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let profile = |window: Value| {
         config(
             Collection::InferenceProfile,
@@ -1132,8 +1484,8 @@ fn obligation_surface(
 }
 
 async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    register_config_schemas(&node).await?;
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
     node.add_collection(
         "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
     )
@@ -1144,7 +1496,7 @@ async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
 #[tokio::test]
 async fn output_obligation_count_field_must_hold_a_count_on_the_target_collection() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:obligation-owner";
 
     for (count_field, reported_type) in [
@@ -1153,6 +1505,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         ("required_tags", "LIST"),
         ("observed_at", "DateTime"),
         ("required_observed_at", "DateTime!"),
+        ("marker", "ID"),
     ] {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
         let case = cases
@@ -1221,14 +1574,14 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
             .is_empty(),
         "a refused obligation publishes no surface"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 #[tokio::test]
 async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:obligation-owner";
 
     let mut refused = Vec::new();
@@ -1239,7 +1592,6 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
         ("float64-count", "amount"),
         ("json-count", "payload"),
         ("blob-count", "attachment"),
-        ("id-count", "marker"),
         ("non-null-int-count", "required_total"),
         ("non-null-string-count", "required_label"),
     ];
@@ -1273,14 +1625,14 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), count_fields.len() + 1, "{surfaces:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 #[tokio::test]
 async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:obligation-owner";
 
     apply(
@@ -1297,7 +1649,7 @@ async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Res
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), 1, "{surfaces:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1340,7 +1692,7 @@ async fn published_count_field(
 #[tokio::test]
 async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:obligation-owner";
 
     let refused = apply(
@@ -1386,14 +1738,14 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         published_count_field(&access, owner, "created").await?,
         "total"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 #[tokio::test]
 async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:obligation-owner";
     apply(
         &access,
@@ -1448,12 +1800,12 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         published_count_field(&access, owner, "replaced").await?,
         "amount"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_collection(
         "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
@@ -1519,7 +1871,7 @@ async fn published_event_sources(node: &EmbeddedNode) -> Result<Vec<Value>> {
 #[tokio::test]
 async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:event-source-owner";
 
     for (count_field, reported_type) in [
@@ -1527,6 +1879,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         ("tags", "LIST"),
         ("observed_at", "DateTime"),
         ("required_observed_at", "DateTime!"),
+        ("marker", "ID"),
     ] {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
         let case = cases
@@ -1593,14 +1946,14 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         published_event_sources(&node).await?.is_empty(),
         "a refused count field publishes no event source"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 #[tokio::test]
 async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:event-source-owner";
 
     let mut refused = Vec::new();
@@ -1613,7 +1966,6 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         ("float64-count", "amount"),
         ("json-count", "payload"),
         ("blob-count", "attachment"),
-        ("id-count", "marker"),
     ];
     for (id, count_field) in count_fields {
         if let Err(error) = apply(
@@ -1665,14 +2017,14 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         published_event_sources(&node).await?.len(),
         count_fields.len() + correlation_fields.len() + 1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 #[tokio::test]
 async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:event-source-owner";
 
     let mistyped = apply(
@@ -1713,7 +2065,7 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
         published_event_sources(&node).await?.is_empty(),
         "a refused correlation field publishes no event source"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1746,7 +2098,7 @@ async fn published_count_field_of(node: &EmbeddedNode, event_source_id: &str) ->
 #[tokio::test]
 async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:event-source-owner";
 
     let refused = apply(
@@ -1797,14 +2149,14 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
     )
     .await?;
     assert_eq!(published_count_field_of(&node, "created").await?, "total");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
 #[tokio::test]
 async fn replacement_judges_the_count_field_of_the_event_source_update_payload() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:event-source-owner";
     apply(
         &access,
@@ -1869,7 +2221,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
     )
     .await?;
     assert_eq!(published_count_field_of(&node, "replaced").await?, "amount");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1881,9 +2233,9 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
     )
     .await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:outcome-owner";
-    apply(&access, cyclic_configuration(owner)).await?;
+    apply(&access, cyclic_configuration(owner, CODING_AGENT_DID)).await?;
     let source = |collection: &str| {
         config(
             Collection::EventSource,
@@ -1893,7 +2245,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     let task = |emit_outcome: bool| {
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"handle","agent_id":"behavior","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
+            json!({"node_did":owner,"task_id":"handle","agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
         )
     };
     let trigger = config(
@@ -1958,7 +2310,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     );
     apply(&access, vec![source("LaterPing")]).await?;
     assert_eq!(triggers().await, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -2063,9 +2415,9 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
 {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
+    let access = runtime_access(&node)?;
     let owner = "did:key:native-route-owner";
-    apply(&access, cyclic_configuration(owner)).await?;
+    apply(&access, cyclic_configuration(owner, CODING_AGENT_DID)).await?;
     let documents = vec![
         config(
             Collection::EventSource,
@@ -2073,7 +2425,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         ),
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"review","agent_id":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
+            json!({"node_did":owner,"task_id":"review","agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
         ),
         config(
             Collection::Trigger,
@@ -2095,6 +2447,371 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         1,
         "an admitted trigger publishes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
+    Ok(())
+}
+
+#[tokio::test]
+async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_actor() -> Result<()> {
+    use crate::lean_vocab_test::{
+        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
+    };
+    let case = lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration contract");
+    let modeled_agent = &case
+        .objects
+        .iter()
+        .find(|object| object.id == "agent-created")
+        .unwrap()
+        .owner;
+    let _modeled_runtime = case
+        .relations
+        .iter()
+        .find_map(|relation| match &relation.subject {
+            LeanIdentitySubject::Actor { actor }
+                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
+            {
+                Some(actor)
+            }
+            _ => None,
+        })
+        .expect("modeled runtime");
+    assert!(case.actions.iter().any(
+        |action| matches!(action, LeanIdentityAction::Check { actor, .. } if actor == modeled_agent)
+    ));
+    // Modeled DIDs carry no keys; held identities play the modeled User,
+    // runtime and Agent so the User's configuration writes are signed.
+    use crate::NodeIdentity as _;
+    let keys = tempfile::tempdir()?;
+    let held = |name: &str| crate::KeyIdentity::load_or_create(keys.path().join(name), None);
+    let (user_key, runtime_key, agent_key) = (held("user")?, held("runtime")?, held("agent")?);
+    let (user, runtime, agent) = (
+        user_key.did().to_owned(),
+        runtime_key.did(),
+        agent_key.did(),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .enable_signing()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let user_access = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            &user,
+        )
+        .with_client_signing_capability(user_key.client_signing_capability()?)?,
+    );
+    let runtime_did = identity::Did::new(runtime)?;
+    let agent_access = ConfigAccess::local_as(node.clone(), identity::Did::new(agent)?);
+    let ctx = defra_core::RequestContext::default().with_identity(Some(user.clone()));
+    node.add_dac_policy_with_counter_as(&ctx, &case.policy_yaml, 0)
+        .await?;
+    node.add_collection_as(&ctx, gents_protocol::schemas::NODE)
+        .await?;
+    let response = user_access
+        .write(
+            "test.configuration.node_binding",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\"}}) {{_docID}} }}",
+                escape_graphql_string(runtime),
+            ),
+        )
+        .await?;
+    let doc_id = crate::store::graphql::created_doc_id(&response, "Node")?;
+    for observation in &case.configuration_node_binding_cases {
+        let visible = observation["visible"].as_bool().unwrap();
+        if visible {
+            user_access
+                .add_actor_relationship("Node", &doc_id, "runtime_reader", &runtime_did)
+                .await?;
+        } else {
+            user_access
+                .delete_actor_relationship("Node", &doc_id, "runtime_reader", &runtime_did)
+                .await?;
+        }
+        let binding = ConfigurationNodeBinding {
+            enabled: true,
+            default_agent_did: None,
+            node_did: if observation["same_node"] == true {
+                runtime_did.clone()
+            } else {
+                identity::Did::new(agent)?
+            },
+            doc_id: if observation["has_doc"] == true {
+                doc_id.clone()
+            } else {
+                String::new()
+            },
+        };
+        let result = agent_access
+            .transact_readonly("test.configuration.node_binding_observe", |txn| {
+                let binding = &binding;
+                Box::pin(async move {
+                    let hidden = txn.execute("{Node {_docID}}").await?;
+                    anyhow::ensure!(
+                        hidden["data"]["Node"].as_array().unwrap().is_empty(),
+                        "agent unexpectedly reads Node"
+                    );
+                    anyhow::ensure!(txn.actor_did() == Some(agent), "transaction actor changed");
+                    configuration_node_doc(txn, runtime, Some(binding)).await
+                })
+            })
+            .await;
+        assert_eq!(
+            result.is_ok(),
+            observation["expected"].as_bool().unwrap(),
+            "modeled binding: {result:?}"
+        );
+    }
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn projection_binding_publication_follows_modeled_native_ownership() -> Result<()> {
+    use crate::lean_vocab_test::lean_identity_household_cases;
+    use crate::store::config_client::{GraphqlEndpoint, NodePermission};
+    use crate::NodeIdentity;
+
+    let model = lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .context("missing configuration model")?;
+    let dir = tempfile::tempdir()?;
+    let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+    let user = crate::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+    let creator = crate::KeyIdentity::load_or_create(dir.path().join("creator"), None)?;
+    let agent = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+    let sibling = crate::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
+    let outsider = crate::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
+            .data_path(dir.path().join("database"))
+            .build()
+            .await?,
+    );
+    node.add_dac_policy_with_counter_as(
+        &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await?;
+    register_config_schemas(&node).await?;
+    let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    for actor in [&user, &creator, &agent, &sibling, &outsider] {
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+            NodePermission::CollectionGet,
+        ] {
+            runtime_access
+                .grant_node_permission(&identity::Did::new(actor.did())?, permission)
+                .await?;
+        }
+    }
+    let access = |actor: &crate::KeyIdentity, signed: bool| -> Result<ConfigAccess> {
+        let endpoint =
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
+                .with_client_signing_capability(actor.client_signing_capability()?)?;
+        Ok(ConfigAccess::Graphql(if signed {
+            endpoint.with_client_signed_agent_creates()
+        } else {
+            endpoint
+        }))
+    };
+    let user_access = access(&user, false)?;
+    let parent = user_access
+        .write(
+            "test.projection.node",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\"}}) {{_docID}} }}",
+                escape_graphql_string(runtime.did())
+            ),
+        )
+        .await?;
+    let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node")?;
+    for actor in [&runtime, &creator] {
+        user_access
+            .add_actor_relationship(
+                "Node",
+                &parent,
+                "runtime_reader",
+                &identity::Did::new(actor.did())?,
+            )
+            .await?;
+    }
+    let creator_access = access(&creator, true)?;
+    let input = json!({"node_did":runtime.did(), "binding_id":"projection", "policy_id":"policy"});
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::ProjectionAcpBinding,
+        add: input.clone(),
+        update: input,
+    }])?;
+    creator_access
+        .transact_write("test.projection.create", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+        })
+        .await?;
+    let query = "{ ProjectionAcpBinding { _docID policy_id } }";
+    let result = creator_access.execute(query).await?;
+    let doc = result["data"]["ProjectionAcpBinding"][0]["_docID"]
+        .as_str()
+        .context("projection ID")?
+        .to_owned();
+    for revoked in [false, true] {
+        if revoked {
+            creator_access
+                .delete_resource_relationship(
+                    "ProjectionAcpBinding",
+                    &doc,
+                    "parent",
+                    "nodes",
+                    &parent,
+                )
+                .await?;
+        }
+        for case in model
+            .projection_binding_cases
+            .iter()
+            .filter(|case| case["revoked"] == revoked)
+        {
+            let actor = match case["actor"].as_str().context("modeled actor")? {
+                "user" => &user,
+                "creator" => &creator,
+                "runtime" => &runtime,
+                "agent" => &agent,
+                "sibling" => &sibling,
+                "outsider" => &outsider,
+                _ => unreachable!(),
+            };
+            let access = access(actor, true)?;
+            let expected = case["expected"].as_bool().context("modeled expectation")?;
+            let actual = match case["permission"].as_str().context("modeled permission")? {
+                "read" => !gents_protocol::graphql::graphql_rows_from_response(
+                    &access.execute(query).await?,
+                    "ProjectionAcpBinding",
+                )
+                .is_empty(),
+                "update" => {
+                    let mutation = "mutation($id: ID!, $input: ProjectionAcpBindingMutationInputArg!) { update_ProjectionAcpBinding(docID: $id, input: $input) { _docID _version { cid } } }";
+                    let value = format!("updated-{}-{revoked}", case["actor"].as_str().unwrap());
+                    if !expected {
+                        let before = creator_access.execute(query).await?;
+                        let raw_access = ConfigAccess::Graphql(
+                            GraphqlEndpoint::as_principal(
+                                format!("http://{address}/api/v0/graphql"),
+                                actor.did(),
+                            )
+                            .with_client_signing_capability(actor.client_signing_capability()?)?,
+                        );
+                        let response = raw_access.write("test.projection.denied", &format!(
+                            "mutation {{ update_ProjectionAcpBinding(docID: \"{}\", input: {{policy_id: \"{}\"}}) {{_docID}} }}",
+                            escape_graphql_string(&doc), escape_graphql_string(&value),
+                        )).await;
+                        let updated = match response {
+                            Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
+                                &value,
+                                "update_ProjectionAcpBinding",
+                            )
+                            .is_empty(),
+                            Err(error)
+                                if error.is_permission_denied() || error.is_graphql_rejection() =>
+                            {
+                                false
+                            }
+                            Err(error) => return Err(error.into()),
+                        };
+                        assert_eq!(
+                            creator_access.execute(query).await?,
+                            before,
+                            "denied mutation changed the document"
+                        );
+                        updated
+                    } else {
+                        let response = access
+                            .transact_write("test.projection.update", |txn| {
+                                let doc = &doc;
+                                let value = &value;
+                                Box::pin(async move {
+                                    txn.execute_desired_state_mutation(
+                                        mutation,
+                                        &json!({"id": doc, "input": {"policy_id": value}}),
+                                        Collection::ProjectionAcpBinding,
+                                        false,
+                                    )
+                                    .await
+                                })
+                            })
+                            .await;
+                        !gents_protocol::graphql::graphql_rows_from_response(
+                            &response?,
+                            "update_ProjectionAcpBinding",
+                        )
+                        .is_empty()
+                    }
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, expected, "{case}");
+        }
+    }
+    drop(creator_access);
+    drop(user_access);
+    drop(runtime_access);
+    node.shutdown().await?;
+    drop(node);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let restarted = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
+            .data_path(dir.path().join("database"))
+            .build()
+            .await?,
+    );
+    for (actor, role) in [
+        (&creator, "creator"),
+        (&user, "user"),
+        (&sibling, "sibling"),
+    ] {
+        let expected = model
+            .projection_binding_cases
+            .iter()
+            .find(|case| {
+                case["revoked"] == true && case["actor"] == role && case["permission"] == "read"
+            })
+            .and_then(|case| case["expected"].as_bool())
+            .context("modeled restart expectation")?;
+        let access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+        );
+        let response = access.execute(query).await?;
+        assert_eq!(
+            !gents_protocol::graphql::graphql_rows_from_response(&response, "ProjectionAcpBinding")
+                .is_empty(),
+            expected
+        );
+    }
+    restarted.shutdown().await?;
     Ok(())
 }

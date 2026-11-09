@@ -14,7 +14,6 @@ use super::models::{
     apply_config_writes, available_model_backends, load_bound_agent, model_list_entries,
 };
 use super::skills::load_skill_metadata;
-use crate::config_writes::ConfigAccess;
 
 pub(super) async fn handle_basic_request(
     outbound: &Outbound,
@@ -88,7 +87,7 @@ pub(super) async fn handle_basic_request(
             let model_id = load_bound_model_selection_id_for_state(
                 &state.node,
                 &state.node_did,
-                &state.agent_id,
+                &state.agent_did,
             )
             .await
             .context("resolving current model selection for ConfigRead")?;
@@ -249,20 +248,19 @@ async fn session_usage(state: &ShimState) -> Option<UsageObservation> {
         let profile = load_bound_agent(state).await?.inference_profile;
         let node_did = state.node_did.as_ref();
         let backend_id = profile.backend_id.as_str();
-        let backend = ConfigAccess::transact_local_write(&state.node, None, "codex.usage", |txn| {
-            Box::pin(async move { load_inference_backend_in_txn(txn, node_did, backend_id).await })
-        })
-        .await?;
+        let backend = state
+            .reader
+            .transact_readonly("codex.usage", |txn| {
+                Box::pin(
+                    async move { load_inference_backend_in_txn(txn, node_did, backend_id).await },
+                )
+            })
+            .await?;
         let Some(backend) = backend else {
             return Ok(None);
         };
-        let mut stored = usage_for_backend(
-            &state.usage_cache,
-            &ConfigAccess::local(state.node.clone()),
-            node_did,
-            &backend,
-        )
-        .await?;
+        let mut stored =
+            usage_for_backend(&state.usage_cache, &state.reader, node_did, &backend).await?;
         if backend.provider_kind != gents::BackendProviderKind::ChatGptCodex {
             if let Some(stored) = stored.as_mut() {
                 stored.report.plan = None;
@@ -284,7 +282,8 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
-    use gents::defra_node::EmbeddedNode;
+    use gents::defra_node::Node as EmbeddedNode;
+    use gents::documents::{write_inference_backend_document, write_inference_profile_document};
     use gents::documents::{AdvertisedModel, BackendAuth, BackendModelCatalog};
     use gents::inference::auth::credential::{
         oauth_credential_id, upsert_oauth_credential, OAuthCredential,
@@ -293,9 +292,6 @@ mod tests {
         UsageReport, UsageSource, UsageWindow,
     };
     use gents::inference::usage_observation::{load_usage, record_usage, UsageAccount};
-    use gents::store::config_client::{
-        write_inference_backend_document, write_inference_profile_document,
-    };
     use gents::{
         record_model_catalog_in_txn, BackendProviderKind, InferenceBackend, InferenceProfile,
     };
@@ -306,7 +302,7 @@ mod tests {
     use super::*;
     use crate::config_writes::{write_agent_document, ConfigAccess};
 
-    const DID: &str = "did:test:codex-shim-usage";
+    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
 
     fn state(node: Arc<EmbeddedNode>, tempdir: &tempfile::TempDir) -> ShimState {
         ShimState {
@@ -317,13 +313,18 @@ mod tests {
                 .join("codex-home/log/codex-shim-events.jsonl"),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             fs_root: None,
-            node,
+            node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1/graphql",
             ),
+            client_did: Arc::from(DID),
+            reader: gents::store::config_client::ConfigAccess::local(node.clone()),
             node_did: Arc::from(DID),
-            agent_id: Arc::from("default"),
+            agent_did: Arc::from(
+                crate::shared::test_support::fixture_agent_named("default").agent_did,
+            ),
+            agent_signer: None,
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),
@@ -333,7 +334,7 @@ mod tests {
     }
 
     async fn bind(node: &Arc<EmbeddedNode>, backend: InferenceBackend) {
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(DID).unwrap());
         write_inference_backend_document(&access, &backend)
             .await
             .expect("backend");
@@ -384,7 +385,9 @@ mod tests {
         write_agent_document(
             &access,
             &gents::AgentDocument {
-                agent_id: "default".into(),
+                creation_nonce: crate::shared::test_support::fixture_agent_named("default")
+                    .creation_nonce,
+                agent_did: crate::shared::test_support::fixture_agent_named("default").agent_did,
                 node_did: DID.into(),
                 display_name: None,
                 description: None,
@@ -401,6 +404,7 @@ mod tests {
 
     fn backend(provider_kind: BackendProviderKind, auth: BackendAuth) -> InferenceBackend {
         InferenceBackend {
+            physical_doc_id: None,
             node_did: DID.into(),
             backend_id: "backend-usage-a".into(),
             name: "backend-usage-a".into(),
@@ -435,12 +439,13 @@ mod tests {
     async fn shim_usage_rate_limits_come_from_the_session_account() {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
+        crate::shared::test_support::publish_test_node_as(&node, DID).await;
         let provider = "chatgpt-codex";
         upsert_oauth_credential(
             &node,
@@ -542,12 +547,13 @@ mod tests {
     async fn shim_usage_non_codex_account_sends_no_plan() {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
+        crate::shared::test_support::publish_test_node_as(&node, DID).await;
         upsert_oauth_credential(&node, &credential("xai-oauth", None))
             .await
             .unwrap();
@@ -603,12 +609,13 @@ mod tests {
     async fn shim_usage_failed_load_answers_empty() {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
+        crate::shared::test_support::publish_test_node_as(&node, DID).await;
         let state = state(node, &tempdir);
         let (outbound, mut received) = mpsc::unbounded_channel();
         let request: codex::ClientRequest =
@@ -630,12 +637,13 @@ mod tests {
     async fn account_read_comes_from_the_session_account() {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
+        crate::shared::test_support::publish_test_node_as(&node, DID).await;
         upsert_oauth_credential(&node, &credential("chatgpt-codex", Some("plus")))
             .await
             .unwrap();
@@ -673,12 +681,13 @@ mod tests {
     async fn shim_usage_non_codex_backend_answers_as_before() {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            crate::shared::test_support::node_builder()
+            crate::shared::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
+        crate::shared::test_support::publish_test_node_as(&node, DID).await;
         bind(
             &node,
             backend(

@@ -48,6 +48,22 @@ pub async fn installed(home: PathBuf, registry: Option<String>) -> Result<Value>
     Ok(serde_json::json!({ "packs": packs }))
 }
 
+/// Lists a home's installations using the calling operator's authenticated access.
+pub async fn installed_with_access(
+    home: PathBuf,
+    registry: Option<String>,
+    access: ConfigAccess,
+    node_did: String,
+) -> Result<Value> {
+    let packs = command::update::outdated_packs_on(
+        Some(&home),
+        Some((&access, &node_did)),
+        registry.as_deref(),
+    )
+    .await?;
+    Ok(serde_json::json!({ "packs": packs }))
+}
+
 pub async fn search(registry: Option<String>, query: String, page: u32) -> Result<Value> {
     capture_report(command::registry::search(PackSearchArgs {
         query: Some(query),
@@ -160,19 +176,19 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
             .iter()
             .max_by_key(|view| view.created_at)
             .expect("a group has a run");
-        let agent_id = gents::session::origin::load_session(
+        let agent_did = gents::session::origin::load_session(
             &access,
             &latest.session_id,
             latest.scope.requester_did.as_deref(),
         )
         .await?
-        .map(|session| session.agent_id);
+        .map(|session| session.agent_did);
         workflows.push(serde_json::json!({
             "script_id": script_id,
             "handle": latest.handle,
             "runs": runs.len(),
             "last_run_at": latest.created_at,
-            "agent_id": agent_id,
+            "agent_did": agent_did,
             "latest_address": latest.address,
             "promoted_as": promoted_as(&promotions, script_id),
         }));

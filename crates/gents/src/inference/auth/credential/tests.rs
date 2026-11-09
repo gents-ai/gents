@@ -1,12 +1,9 @@
 use serde_json::json;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use super::bearer::get_or_insert_arc;
 use super::document::oauth_credential_from_value;
+use super::test_support::lookup_oauth_credential_by_id;
 use super::*;
-
-use std::sync::atomic::AtomicUsize;
 
 fn sample_credential() -> OAuthCredential {
     OAuthCredential {
@@ -79,34 +76,48 @@ fn account_label_is_display_only_and_prefers_email() {
     assert_eq!(account_display_label(&credential), None);
 }
 
-#[test]
-fn shared_registry_returns_one_arc_per_key_and_constructs_once() {
-    use rapidhash::{HashMapExt, RapidHashMap};
-    use std::sync::Mutex as StdMutex;
+#[tokio::test]
+async fn a_shared_bearer_neither_retains_its_node_nor_crosses_nodes() {
+    use super::test_support::test_node;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+    let did = "did:test:shared-bearer";
+    let bearer_on = |node: Arc<defra_node::Node>| {
+        DbCredentialBearer::new(
+            node,
+            did,
+            provider,
+            oauth_credential_id(did, provider),
+            true,
+            OAuthRefreshKind::Xai,
+            XAI_OAUTH_PRODUCT,
+        )
+    };
 
-    let registry: StdMutex<RapidHashMap<String, Arc<u32>>> = StdMutex::new(RapidHashMap::new());
-    let calls = AtomicUsize::new(0);
+    let node = test_node().await;
+    let weak = Arc::downgrade(&node);
+    let first = shared_bearer(&node, "cred-shared-bearer", || bearer_on(node.clone()));
+    let again = shared_bearer(&node, "cred-shared-bearer", || -> DbCredentialBearer {
+        panic!("a live bearer for this node is reused")
+    });
+    assert!(Arc::ptr_eq(&first, &again), "one live bearer per node");
 
-    let a = get_or_insert_arc(&registry, "k1", || {
-        calls.fetch_add(1, Ordering::SeqCst);
-        7u32
-    });
-    let b = get_or_insert_arc(&registry, "k1", || {
-        calls.fetch_add(1, Ordering::SeqCst);
-        99u32
-    });
-    let c = get_or_insert_arc(&registry, "k2", || {
-        calls.fetch_add(1, Ordering::SeqCst);
-        7u32
-    });
+    let other = test_node().await;
+    let rebound = shared_bearer(&other, "cred-shared-bearer", || bearer_on(other.clone()));
+    assert!(
+        !Arc::ptr_eq(&first, &rebound),
+        "a credential id on another node must not reuse the first node's bearer"
+    );
 
-    assert!(Arc::ptr_eq(&a, &b), "same key must share one Arc");
-    assert!(!Arc::ptr_eq(&a, &c), "different keys must be distinct Arcs");
-    assert_eq!(*a, 7, "first construction wins for a key");
+    drop((first, again, rebound));
     assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "construct exactly once per distinct key"
+        Arc::strong_count(&node),
+        1,
+        "the registry must not retain a released bearer's node"
+    );
+    drop(node);
+    assert!(
+        weak.upgrade().is_none(),
+        "the node is released once its holders drop"
     );
 }
 
@@ -220,56 +231,40 @@ fn oauth_credential_from_value_rejects_a_blank_refresh_token() {
 }
 
 #[test]
-fn upsert_update_block_omits_immutable_node_did() {
-    let mutation = oauth_credential_upsert_mutation(&sample_credential());
-
-    let update_idx = mutation
-        .find("update:")
-        .expect("mutation has an update block");
-    let (add_block, update_block) = mutation.split_at(update_idx);
-
-    assert!(
-        !update_block.contains("node_did:"),
-        "update block must omit immutable node_did: {update_block}"
-    );
-    assert!(
-        update_block.contains("access_token:") && update_block.contains("refresh_token:"),
-        "update block must still rotate token fields: {update_block}"
-    );
-    assert!(
-        add_block.contains("node_did:") && add_block.contains("credential_id:"),
-        "add block must set node_did and credential_id: {add_block}"
-    );
-}
-
-#[test]
-fn account_fields_are_only_in_the_add_block() {
+fn credential_update_omits_set_once_fields_and_retains_tokens() {
     let mut credential = sample_credential();
-    credential.account_ref = Some("acct-b".to_string());
+    credential.account_ref = Some("acct-b".to_owned());
     credential.connected_at = Some(DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap());
-    let mutation = oauth_credential_upsert_mutation(&credential);
-    let (add_block, update_block) = mutation.split_at(mutation.find("update:").unwrap());
-
-    assert!(
-        add_block.contains(r#"account_ref: "acct-b""#)
-            && add_block.contains(r#"connected_at: "2023-11-14T22:13:20Z""#),
-        "add block must set the account fields: {add_block}"
-    );
-    assert!(
-        !update_block.contains("account_ref") && !update_block.contains("connected_at"),
-        "update block must never rewrite the account fields: {update_block}"
-    );
+    let created = super::rows::credential_input(&credential, &[]).unwrap();
+    let mut omitted = SET_ONCE_FIELDS.to_vec();
+    omitted.push("credential_id");
+    let updated = super::rows::credential_input(&credential, &omitted).unwrap();
+    assert_eq!(created["node_did"], credential.node_did);
+    assert_eq!(created["account_ref"], "acct-b");
+    assert!(created.get("connected_at").is_some());
+    for field in omitted {
+        assert!(updated.get(field).is_none(), "{field}");
+    }
+    assert_eq!(updated["access_token"], credential.access_token);
+    assert_eq!(updated["refresh_token"], credential.refresh_token);
 }
 
 #[tokio::test]
 async fn account_fields_are_kept_when_a_row_is_stored_again() {
-    let node = super::test_support::test_node().await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-fields").await;
+    let node = db.node.clone();
+    let access = super::rows::runtime_credential_access(&node, db.node_identity.did()).unwrap();
     let connected_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
     let mut credential = sample_credential();
     credential.doc_id = None;
+    credential.node_did = db.node_identity.did().to_owned();
+    credential.credential_id = oauth_credential_id(&credential.node_did, &credential.provider);
     credential.account_ref = Some("acct-b".to_string());
     credential.connected_at = Some(connected_at);
-    upsert_oauth_credential(&node, &credential).await.unwrap();
+    upsert_oauth_credential_on(&access, &credential)
+        .await
+        .unwrap();
 
     let stored = lookup_oauth_credential_by_id(&node, &credential.credential_id)
         .await
@@ -281,7 +276,9 @@ async fn account_fields_are_kept_when_a_row_is_stored_again() {
     credential.account_ref = None;
     credential.connected_at = None;
     credential.access_token = "access-rotated".to_string();
-    upsert_oauth_credential(&node, &credential).await.unwrap();
+    upsert_oauth_credential_on(&access, &credential)
+        .await
+        .unwrap();
 
     let stored = lookup_oauth_credential_by_id(&node, &credential.credential_id)
         .await

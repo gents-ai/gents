@@ -1,7 +1,6 @@
-use super::{editor_review, fake_llm, Attachment, ChatAction};
+use super::{fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
 use gents::{store::graphql::escape_graphql_string, ConfigAccess};
-use gents_protocol::file_image_hydration::FileImageDemand;
 use gents_protocol::file_inventory::{FileInventoryObservation, FileInventoryReadAction};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -198,7 +197,6 @@ pub async fn verify(
     node: &str,
     session: &str,
     author: &str,
-    verifier: &dyn gents::NodeIdentity,
 ) -> Result<Value> {
     let ui: Value =
         serde_json::from_slice(&tokio::fs::read(root.join("editor-inventory-ui.json")).await?)?;
@@ -481,46 +479,6 @@ pub async fn verify(
         (0..3).all(|position| repeated_positions.contains(&position)),
         "all sequential capture positions must survive paging and reload"
     );
-    let receipts = access.execute(&format!(r#"{{ FileImageHydrationRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}}}) {{
-        request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail
-        observation_doc_id processed_at outcome_signer_did outcome_signature
-    }} }}"#, escape_graphql_string(node), escape_graphql_string(session), escape_graphql_string(author))).await?;
-    let receipts = receipts["data"]["FileImageHydrationRequest"]
-        .as_array()
-        .context("image demands")?;
-    ensure!(
-        receipts.len() == 5,
-        "metadata browsing or reload created extra image demands: {}",
-        receipts.len()
-    );
-    let mut opened = RapidHashSet::new();
-    for receipt in receipts {
-        let physical = field(receipt, "tool_call_doc_id")?;
-        let index = *tools
-            .get(physical)
-            .context("image demand named another tool")?;
-        ensure!(
-            [selected, COUNT, COUNT + 1].contains(&index) && opened.insert(physical.to_owned()),
-            "an unseen image was requested"
-        );
-        let demand = FileImageDemand {
-            inventory_reference: None,
-            admission: gents_protocol::session_hydration::HydrationRequest {
-                request_key: field(receipt, "request_key")?.into(),
-                peer_id: field(receipt, "peer_id")?.into(),
-                requester_did: author.into(),
-                node_did: node.into(),
-                session_id: session.into(),
-            },
-            request_doc_id: field(receipt, "request_doc_id")?.into(),
-            tool_call_doc_id: physical.into(),
-        };
-        editor_review::verify_model_receipt(verifier, receipt, &demand).await?;
-        ensure!(
-            receipt["status"] == "served" && receipt["observation_doc_id"].is_string(),
-            "the selected image was not delivered"
-        );
-    }
     for index in 0..=COUNT + 2 {
         let expected = if index == selected || index == COUNT + 1 {
             later(index)
@@ -544,8 +502,7 @@ pub async fn verify(
         json!({"sessionId":session, "initialCaptures":COUNT, "newCaptures":5, "receivedEntries":received.len(),
         "requestId":selected_request.request_id, "physicalTool":selected_tool,
         "workingCopyPath":root.join(file(selected)),
-        "nativePages":pages, "imageDemands":receipts.len(), "selectedIndex":selected,
-        "onlySelectedImagesRequested":true, "signedImageReceiptsVerified":true, "workingCopiesPreserved":true,
+        "nativePages":pages, "selectedIndex":selected, "workingCopiesPreserved":true,
         "canonicalRepeatedPositions":repeated_positions.len(), "exactlyOnceInputs":5, "verifiedUnchangedRead":verified_read,
         "verifiedIdenticalWrite":unchanged_tool.is_some(), "unobservedActions":unobserved.len(), "selectedRequestCoverageVerified":true}),
     )

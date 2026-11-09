@@ -143,7 +143,7 @@ async fn run_contract_with_streaming_cadence(
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let agent = default_agent_id_for_node(&node_did);
+    let agent = agent_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let debug_filter = std::env::var("RUST_LOG").ok();
@@ -213,6 +213,7 @@ async fn run_contract_with_streaming_cadence(
                 anyhow::ensure!(signed_request[field].as_str().is_some_and(|value| !value.is_empty()), "signed request lacks {field}");
                 anyhow::ensure!(displayed[field] == signed_request[field], "pending queue did not preserve signed {field}");
             }
+            run_cli_json(&runtime_home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
             run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
             reached("operator_approved");
             wait_for_chat_ready_enrollment(&core, &node_did).await?;
@@ -224,7 +225,7 @@ async fn run_contract_with_streaming_cadence(
                 reached("client_readiness_revision");
             }
             let nodes = query_collection_dids(core.node(), "Node").await?;
-            anyhow::ensure!(nodes.iter().all(|did| did == &node_did), "app holds a Node other than the runtime's replica: {nodes:?}");
+            anyhow::ensure!(nodes.is_empty(), "client unexpectedly replicated runtime Node documents: {nodes:?}");
             Ok::<_, anyhow::Error>(())
         }).await;
         sampler.abort();
@@ -282,7 +283,7 @@ async fn run_contract_with_streaming_cadence(
             let route_ready = reconnect_started.elapsed();
             wait_for_client_node_readiness(&core, &node_did).await?;
             let agent_ready = reconnect_started.elapsed();
-            wait_for_replicated_reply(&core, &session, &node_did, &request, OFFLINE_REPLY).await?;
+            wait_for_runtime_reply(&core, &session, &node_did, &request, OFFLINE_REPLY).await?;
             Ok::<_, anyhow::Error>((route_ready, agent_ready, reconnect_started.elapsed()))
         }).await;
         let (route_ready, agent_ready, reply_ready) = match recovered {
@@ -318,7 +319,7 @@ async fn run_contract_with_streaming_cadence(
         assert_local_pagination(&core, &graphql, &session, &node_did).await?;
         assert_observer_did_not_overflow(&core).await?;
         let nodes = query_collection_dids(core.node(), "Node").await?;
-        anyhow::ensure!(nodes.iter().all(|did| did == &node_did), "reopened app holds a Node other than the runtime's replica: {nodes:?}");
+        anyhow::ensure!(nodes.is_empty(), "reopened client unexpectedly replicated runtime Node documents: {nodes:?}");
         core.shutdown().await?;
         anyhow::ensure!(model.captured_chat_requests().iter().any(|request| {
             request_contains_role_text(request, "user", FOLLOWUP_PROMPT)
@@ -346,7 +347,7 @@ async fn visible_turn(
     core: &Arc<ClientCore>,
     graphql: &str,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session: &str,
     prompt: &str,
     stream_gate: Option<&tokio::sync::Semaphore>,
@@ -355,7 +356,7 @@ async fn visible_turn(
 ) -> Result<()> {
     let started = Instant::now();
     let result = timeout(TURN_BUDGET, async {
-        core.submit_request(session, node_did, prompt, Some(agent_id))
+        core.submit_request(session, node_did, prompt, Some(agent_did))
             .await?;
         let local_submit_completed = started.elapsed();
         let (request, _, _) =
@@ -375,6 +376,7 @@ async fn visible_turn(
                 if let Some(gate) = stream_gate {
                     let visibility = streaming::wait_for_visible_content(
                         core,
+                        graphql,
                         &request,
                         expected,
                         stream_emission.clone(),
@@ -401,7 +403,7 @@ async fn visible_turn(
                     gate.add_permits(1);
                     visibility?;
                 }
-                wait_for_replicated_reply(core, session, node_did, &request, expected).await?;
+                wait_for_runtime_reply(core, session, node_did, &request, expected).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
         )?;
@@ -462,20 +464,20 @@ async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
     Ok(())
 }
 
-async fn select_session(core: &ClientCore, session: &str, agent: &str) -> Result<()> {
-    use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
-    loop {
-        core.ensure_session_hydration_started(session, agent)
-            .await?;
-        match core.session_hydration_progress(session, agent).await?.phase {
-            ClientHydrationPhase::Idle => sleep(Duration::from_millis(100)).await,
-            ClientHydrationPhase::Failed => bail!("session selection was rejected"),
-            _ => return Ok(()),
-        }
-    }
+async fn select_session(core: &ClientCore, session: &str, node_did: &str) -> Result<()> {
+    let access = core.operator_access(node_did)?;
+    let query = format!("{{ AgentSession(filter: {{ session_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}", escape_graphql_string(session), escape_graphql_string(node_did));
+    let response = access.execute(&query).await?;
+    anyhow::ensure!(
+        response["data"]["AgentSession"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1),
+        "selected runtime session unavailable"
+    );
+    Ok(())
 }
 
-async fn wait_for_replicated_reply(
+async fn wait_for_runtime_reply(
     core: &ClientCore,
     session: &str,
     agent: &str,
@@ -504,13 +506,9 @@ async fn wait_for_replicated_reply(
         let mut stages_seen = [false; 3];
         let mut terminal_ready_at = None;
         loop {
-            let result = core.node().execute(&query).await;
-            anyhow::ensure!(
-                !result.has_errors(),
-                "replica query failed: {:?}",
-                result.errors
-            );
-            let data = result.data.context("replica query missing data")?;
+            let access = core.operator_access(agent)?;
+            let result = access.execute(&query).await?;
+            let data = result.get("data").context("runtime query missing data")?;
             let rows = |collection: &str| {
                 data.get(collection)
                     .and_then(Value::as_array)
@@ -534,7 +532,7 @@ async fn wait_for_replicated_reply(
                     typed.session_id.as_deref() == Some(session)
                         && typed.node_did.as_deref() == Some(agent)
                         && typed.requester_did.as_deref() == Some(core.node_identity().did()),
-                    "replica AgentRequest row lost tenancy lineage for {request}: {row}"
+                    "runtime AgentRequest row lost tenancy lineage for {request}: {row}"
                 );
                 if typed.is_terminal()
                     && typed.terminal_output.is_some()
@@ -546,7 +544,7 @@ async fn wait_for_replicated_reply(
             let mut body = String::new();
             if let Some(row) = terminal_request_row {
                 match gents::session::observe_request_output(
-                    &gents::ConfigAccess::local(core.node_arc()),
+                    &access,
                     &row,
                 )
                 .await
@@ -568,7 +566,7 @@ async fn wait_for_replicated_reply(
                     }
                     Ok(_) => {}
                     Err(error) => bail!(
-                        "canonical terminal reconstruction failed on the replica for {request}: {error:#}"
+                        "canonical terminal reconstruction failed on the runtime for {request}: {error:#}"
                     ),
                 }
             }
@@ -582,12 +580,12 @@ async fn wait_for_replicated_reply(
             {
                 if ready && !stages_seen[index] {
                     stages_seen[index] = true;
-                    tracing::debug!(request, stage, documents = ?requests.iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "replica stage document identities");
+                    tracing::debug!(request, stage, documents = ?requests.iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "runtime stage document identities");
                     tracing::info!(
                         request,
                         stage,
                         elapsed_ms = visibility_started.elapsed().as_millis(),
-                        "client replica delivery stage"
+                        "runtime observation stage"
                     );
                 }
             }
@@ -595,7 +593,7 @@ async fn wait_for_replicated_reply(
                 !requests
                     .iter()
                     .any(|row| row["lifecycle_state"] == "failed"),
-                "replicated failed request: {requests:?}"
+                "runtime request failed: {requests:?}"
             );
             if request_completed && terminal_selection && body.contains(expected_reply) {
                 return Ok::<_, anyhow::Error>((
@@ -659,7 +657,7 @@ async fn wait_for_replicated_reply(
 
 #[derive(Clone)]
 struct ReadinessProbe {
-    node: Arc<gents::defra_node::EmbeddedNode>,
+    node: Arc<gents::defra_node::Node>,
     p2p: Arc<dyn defra_p2p_adapter::P2POperations>,
     store: Arc<gents_desktop_core::client::ObservedStore>,
     graphql: String,
@@ -767,7 +765,7 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
     let runtime = graphql_query(graphql, query).await;
     let sync = core.sync_state();
     let database_now = timeout(Duration::from_secs(3), core.p2p().sync_status()).await;
-    let runtime_database = crate::support::graphql::served_endpoint(graphql)
+    let runtime_database = crate::support::graphql::node_principal_endpoint(graphql)
         .authorize(reqwest::Client::new().get(graphql.replace("/graphql", "/p2p/sync/status")))
         .expect("runtime diagnostics request")
         .timeout(Duration::from_secs(3))
@@ -777,7 +775,7 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
         Ok(response) => response.json::<serde_json::Value>().await.ok(),
         Err(_) => None,
     };
-    let runtime_replicators = crate::support::graphql::served_endpoint(graphql)
+    let runtime_replicators = crate::support::graphql::node_principal_endpoint(graphql)
         .authorize(reqwest::Client::new().get(graphql.replace("/graphql", "/p2p/replicators")))
         .expect("runtime diagnostics request")
         .timeout(Duration::from_secs(3))
@@ -788,8 +786,8 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
         Err(_) => None,
     };
     format!(
-        "observer={:?}; database_now={database_now:?}; runtime_database={runtime_database:?}; runtime_replicators={runtime_replicators:?}; database={:?}; peers={:?}; client={client:?}; runtime={runtime:?}",
-        core.observer_metrics().await, sync.database_sync, sync.peers
+        "observer={:?}; database_now={database_now:?}; runtime_database={runtime_database:?}; runtime_replicators={runtime_replicators:?}; transport={:?}; peers={:?}; client={client:?}; runtime={runtime:?}",
+        core.observer_metrics().await, sync.transport, sync.peers
     )
 }
 
@@ -832,8 +830,8 @@ async fn local_transcript_keys(
     let mut keys = std::collections::BTreeSet::new();
     let mut cursor = None;
     loop {
-        let page = gents_desktop_core::client::load_session_transcript_page(
-            core.node(),
+        let page = gents_desktop_core::client::load_session_transcript_page_on(
+            &core.operator_access(agent)?,
             session,
             Some(agent),
             Some(core.node_identity().did()),
@@ -861,42 +859,22 @@ async fn assert_local_pagination(
     session: &str,
     agent: &str,
 ) -> Result<()> {
-    timeout(TURN_BUDGET, async {
-        use gents::runtime::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
-        loop {
-            match core.session_hydration_progress(session, agent).await?.phase {
-                ClientHydrationPhase::Complete => return Ok::<_, anyhow::Error>(()),
-                ClientHydrationPhase::Failed => bail!("session hydration failed before pagination"),
-                _ => sleep(Duration::from_millis(100)).await,
-            }
-        }
-    })
-    .await
-    .context("session hydration did not settle before pagination")??;
     let expected =
         runtime_transcript_keys(graphql, session, agent, core.node_identity().did()).await?;
-    timeout(TURN_BUDGET, async {
-        loop {
-            let local = local_transcript_keys(core, session, agent).await?;
-            if local == expected {
-                return Ok::<_, anyhow::Error>(());
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .with_context(|| {
-        format!("client transcript did not replicate the runtime transcript before pagination: expected={expected:?}")
-    })??;
-    let intent_query = "{ SessionHydrationRequest { _docID request_key status status_detail served_doc_count served_manifest_json processed_at outcome_signer_did outcome_signature } PeerPairingDesired { _docID peer_id collections profiles template source enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at updated_at } }";
+    let actual = local_transcript_keys(core, session, agent).await?;
+    anyhow::ensure!(
+        actual == expected,
+        "runtime transcript page differs from canonical rows"
+    );
+    let intent_query = "{ PeerPairingDesired { _docID peer_id collections profiles template source enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at updated_at } }";
     let before = core.node().execute(intent_query).await;
     anyhow::ensure!(!before.has_errors(), "local intent query failed");
     let mut cursor = None;
     let mut seen = std::collections::BTreeSet::new();
     let mut last_sequence = i64::MAX;
     loop {
-        let page = gents_desktop_core::client::load_session_transcript_page(
-            core.node(),
+        let page = gents_desktop_core::client::load_session_transcript_page_on(
+            &core.operator_access(agent)?,
             session,
             Some(agent),
             Some(core.node_identity().did()),
@@ -928,7 +906,7 @@ async fn assert_local_pagination(
     }
     anyhow::ensure!(
         seen == expected,
-        "local paging must cover the replicated transcript exactly: seen={seen:?}, expected={expected:?}"
+        "runtime paging must cover the transcript exactly: seen={seen:?}, expected={expected:?}"
     );
     anyhow::ensure!(
         seen.len() >= 6,
@@ -937,7 +915,7 @@ async fn assert_local_pagination(
     let after = core.node().execute(intent_query).await;
     anyhow::ensure!(
         !after.has_errors() && before.data == after.data,
-        "scrolling changed pairing or hydration intent"
+        "scrolling changed pairing intent"
     );
     Ok(())
 }
@@ -977,11 +955,12 @@ async fn seed_readiness_history(
                 escape_graphql_string(&timestamp),
             ));
         }
-        graphql_query(graphql, &format!("mutation {{ {fields} }}")).await?;
+        // NodeReadiness heartbeats are the runtime's own writes.
+        support::graphql::node_graphql_query(graphql, &format!("mutation {{ {fields} }}")).await?;
     }
     let final_timestamp = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
     if revisions > 0 {
-        graphql_query(graphql, &format!(
+        support::graphql::node_graphql_query(graphql, &format!(
             r#"mutation {{ update_NodeReadiness(filter: {{node_did: {{_eq: "{agent}"}}}}, input: {{updated_at: "{}"}}) {{_docID}} }}"#,
             escape_graphql_string(&final_timestamp),
         )).await?;
@@ -994,30 +973,24 @@ async fn seed_readiness_history(
     Ok(Some(final_timestamp))
 }
 
+/// The app observes runtime readiness through its authenticated snapshot
+/// owner; P2P carries only discovery and enrollment, so the app's own
+/// database never holds the runtime's NodeReadiness history.
 async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &str) -> Result<()> {
-    let query = format!(
-        r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
-        escape_graphql_string(agent)
-    );
+    let expected = chrono::DateTime::parse_from_rfc3339(expected)?;
+    let mut updates = core.store_change_updates();
     loop {
-        let result = core.node().execute(&query).await;
-        anyhow::ensure!(
-            !result.has_errors(),
-            "readiness convergence query failed: {:?}",
-            result.errors
-        );
-        if let Some(row) = result
-            .data
-            .as_ref()
-            .and_then(|data| data["NodeReadiness"].as_array())
-            .and_then(|rows| rows.first())
+        let snapshot = core.store().snapshot();
+        if let Some(row) = snapshot
+            .node_readiness
+            .iter()
+            .find(|row| row.node_did == agent)
         {
-            let row: gents_protocol::row::NodeReadinessRow = serde_json::from_value(row.clone())?;
             let actual = chrono::DateTime::parse_from_rfc3339(&row.updated_at)?;
-            if actual >= chrono::DateTime::parse_from_rfc3339(expected)? {
+            if actual >= expected {
                 anyhow::ensure!(
                     matches!(
-                        gents_protocol::row::project_node_readiness_summary(Some(&row), agent),
+                        gents_protocol::row::project_node_readiness_summary(Some(row), agent),
                         gents_protocol::row::ProjectedNodeReadinessSummary::Observed(_)
                     ),
                     "latest readiness revision is not a usable semantic snapshot"
@@ -1025,7 +998,10 @@ async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &
                 return Ok(());
             }
         }
-        sleep(Duration::from_millis(100)).await;
+        updates
+            .changed()
+            .await
+            .context("app projection channel closed")?;
     }
 }
 
@@ -1068,7 +1044,7 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let agent = default_agent_id_for_node(&node_did);
+    let agent = agent_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let (mut server, _) =
@@ -1076,7 +1052,10 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
     wait_for_port(port, &mut server)?;
     server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, ENROLL_BUDGET).await.context("activity runtime readiness")?;
-        let enroll = |path: std::path::PathBuf| {
+        // Only the owner is granted Node administration; the second observer
+        // is an approved member without it, so it must not read the owner's
+        // private request activity.
+        let enroll = |path: std::path::PathBuf, administered: bool| {
             let graphql = graphql.clone();
             let node_did = node_did.clone();
             let runtime_home = runtime_home.clone();
@@ -1089,14 +1068,19 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 let pending = core.request_status_enrollment_with_label(&status, Some("activity test")).await?;
                 wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await.context("publishing activity enrollment request")?;
                 let home = runtime_home.to_str().context("runtime home UTF-8")?;
+                if administered {
+                    run_cli_json(&runtime_home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
+                }
                 run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
                 wait_for_chat_ready_enrollment(&core, &node_did).await.context("activity enrollment approval projection")?;
-                wait_for_client_node_readiness(&core, &node_did).await.context("activity client readiness")?;
+                if administered {
+                    wait_for_client_node_readiness(&core, &node_did).await.context("activity client readiness")?;
+                }
                 Ok::<_, anyhow::Error>((core, pending.request_id))
             }
         };
-        let (owner, enrollment) = enroll(temp.path().join("owner")).await.context("enrolling activity owner")?;
-        let (other, _) = enroll(temp.path().join("other")).await.context("enrolling second activity observer")?;
+        let (owner, enrollment) = enroll(temp.path().join("owner"), true).await.context("enrolling activity owner")?;
+        let (other, _) = enroll(temp.path().join("other"), false).await.context("enrolling second activity observer")?;
         let members = gents_server::server_host::managed_enrollment_members(&runtime_home, &graphql).await?;
         let member = members.iter().find(|member| member.request_id == enrollment).context("approved member missing")?;
         anyhow::ensure!(member.candidate_did == owner.node_identity().did() && !member.authorization_expires_at.is_empty(), "incorrect approved member");
@@ -1125,14 +1109,17 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         };
         let url = format!("http://127.0.0.1:{port}{}", gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH);
         let http = reqwest::Client::new();
-        let call = |did: String, key: gents::observe::inference_observation::InferenceKey| {
-            let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, &did);
+        let call = |actor: &dyn gents::NodeIdentity, key: gents::observe::inference_observation::InferenceKey| {
+            let capability = actor.client_signing_capability().expect("held client signing key");
+            let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, capability.did())
+                .with_client_signing_capability(capability)
+                .expect("endpoint signs as its own principal");
             let request = endpoint.authorize(http.post(&url)).unwrap().json(&key);
             async move { request.send().await }
         };
         let allowed = timeout(TURN_BUDGET, async {
             loop {
-                let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;
+                let response = call(owner.node_identity(), key.clone()).await?;
                 if response.status().is_success() { return Ok::<_, anyhow::Error>(response); }
                 anyhow::ensure!(response.status() == reqwest::StatusCode::NOT_FOUND, "authorized activity failed: {}", response.status());
                 sleep(Duration::from_millis(50)).await;
@@ -1140,30 +1127,37 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         }).await.context("waiting for authorized activity observation")??;
         let observed: Value = allowed.json().await?;
         anyhow::ensure!(observed["request"] == request && observed["generation"] == key.generation, "activity target changed");
-        let operator = support::identity_from_init(&init)?;
-        let operator_response = call(gents::NodeIdentity::did(&operator).to_owned(), key.clone()).await?;
+        // The operator is the init User the runtime home's CLI holds, the
+        // Node's native administrator; the Node principal itself does not read
+        // an enrolled User's request activity.
+        let operator = gents_desktop_core::client::PrincipalIdentity::load_existing(
+            &support::graphql::cli_client_paths(&runtime_home, &[]),
+        )?;
+        let operator_response = call(&operator, key.clone()).await?;
         anyhow::ensure!(operator_response.status().is_success(),
             "runtime operator could not observe enrolled request activity: {}", operator_response.status());
         let contract: Value = gents_lean_contract::load_contract_snapshot()?;
         let expected_waiting = &contract["inference_observation_cases"][1]["expected"][0];
         timeout(Duration::from_secs(7), async {
             loop {
-                let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;
+                let response = call(owner.node_identity(), key.clone()).await?;
                 anyhow::ensure!(response.status().is_success(), "silent activity became unavailable");
                 let observation: Value = response.json().await?;
                 if &observation["activity"] == expected_waiting { return Ok::<_, anyhow::Error>(()); }
                 sleep(Duration::from_millis(100)).await;
             }
         }).await.context("waiting for silent provider observation")??;
-        let denied = call(other.node_identity().did().to_owned(), key.clone()).await?;
-        anyhow::ensure!(denied.status() == reqwest::StatusCode::NOT_FOUND, "another enrolled identity read private activity: {}", denied.status());
+        // The second member holds no node read: enrollment alone grants no
+        // document access, so the route's native node gate refuses it.
+        let denied = call(other.node_identity(), key.clone()).await?;
+        anyhow::ensure!(denied.status() == reqwest::StatusCode::FORBIDDEN, "an enrolled identity without node read was not refused: {}", denied.status());
         let mut cross_session = key.clone();
         cross_session.session = Uuid::new_v4().to_string();
-        let denied = call(owner.node_identity().did().to_owned(), cross_session).await?;
+        let denied = call(owner.node_identity(), cross_session).await?;
         anyhow::ensure!(denied.status() == reqwest::StatusCode::NOT_FOUND, "cross-session activity was visible");
         gate.add_permits(1);
         wait_for_complete_agent_response(&graphql, &request, &session, TURN_BUDGET).await?;
-        let terminal = call(owner.node_identity().did().to_owned(), key.clone()).await?;
+        let terminal = call(owner.node_identity(), key.clone()).await?;
         anyhow::ensure!(terminal.status() == reqwest::StatusCode::NOT_FOUND, "terminal activity remained visible");
         let revocation = gents_server::server_host::decide_managed_enrollment(
             &runtime_home,
@@ -1179,7 +1173,7 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
 
         let revoked = timeout(ENROLL_BUDGET, async {
             loop {
-                let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;
+                let response = call(owner.node_identity(), key.clone()).await?;
                 if response.status() == reqwest::StatusCode::FORBIDDEN { return Ok::<_, anyhow::Error>(()); }
                 anyhow::ensure!(response.status() == reqwest::StatusCode::NOT_FOUND, "unexpected revoke response: {}", response.status());
                 sleep(Duration::from_millis(100)).await;

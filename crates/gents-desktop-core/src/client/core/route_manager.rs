@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::runtime::agent::p2p_reconcile::{
     client_route_id, desired_route_is_applied, reconcile_peer_tick,
@@ -487,9 +487,13 @@ impl ClientRouteManager {
             record.is_enrollment(),
             "manual pairing desired authority is disabled"
         );
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.actor.did()),
+            "desktop enrollment requires its configured local identity"
+        );
         gents::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
-            None,
+            Some(identity::Did::new(self.actor.did())?),
             "desktop.pairing_desired.upsert",
             |txn| {
                 Box::pin(async move {
@@ -555,10 +559,35 @@ impl ClientRouteManager {
         graphql: &str,
     ) -> gents::runtime::agent::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
         let admin = HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor))?;
-        Ok(match self.identity_interaction.endpoint(record) {
-            Some(endpoint) => admin.with_node_identity(endpoint),
-            None => admin,
-        })
+        let endpoint = match self
+            .identity_interaction
+            .runtime_endpoint(record)
+            .filter(|endpoint| !endpoint.is_anonymous())
+        {
+            Some(endpoint) => endpoint,
+            None => {
+                let capability =
+                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                        self.actor.private_key_bytes(),
+                    )
+                    .map_err(|error| {
+                        gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::LocalError(
+                            error.to_string(),
+                        )
+                    })?;
+                gents::store::config_client::GraphqlEndpoint::as_principal(
+                    graphql,
+                    self.actor.did(),
+                )
+                .with_client_signing_capability(capability)
+                .map_err(|error| {
+                    gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::LocalError(
+                        error.to_string(),
+                    )
+                })?
+            }
+        };
+        Ok(admin.with_node_identity(endpoint))
     }
 
     async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
@@ -592,6 +621,11 @@ impl ClientRouteManager {
     }
 
     async fn delete_local_state(&self, directory_id: &str) -> Result<bool> {
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.actor.did()),
+            "desktop pairing cleanup requires its local identity"
+        );
+        let local = escape_graphql_string(self.actor.did());
         let ids = [
             client_route_id(directory_id, PairingDirection::ClientToRuntime),
             client_route_id(directory_id, PairingDirection::RuntimeToClient),
@@ -600,16 +634,17 @@ impl ClientRouteManager {
         .join(", ");
         let mutation = format!(
             r#"mutation {{
-                    desired: delete_PeerPairingDesired(filter: {{ peer_id: {{ _in: [{ids}] }} }}) {{ _docID }}
-                    applied: delete_PeerPairingApplied(filter: {{ peer_id: {{ _in: [{ids}] }} }}) {{ _docID }}
+                    desired: delete_PeerPairingDesired(filter: {{ peer_id: {{ _in: [{ids}] }}, actor_did: {{_eq: "{local}"}} }}) {{ _docID }}
+                    applied: delete_PeerPairingApplied(filter: {{ peer_id: {{ _in: [{ids}] }}, node_did: {{_eq: "{local}"}} }}) {{ _docID }}
                 }}"#
         );
-        let response = gents::store::config_client::ConfigAccess::write_local(
-            &self.node,
-            "desktop.pairing_state.delete",
-            &mutation,
-        )
-        .await?;
+        let access = gents::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(self.actor.did())?,
+        );
+        let response = access
+            .write("desktop.pairing_state.delete", &mutation)
+            .await?;
         Ok(response
             .pointer("/data/desired")
             .and_then(|rows| rows.as_array())
@@ -960,7 +995,7 @@ fn route_status(
         || "no route filter".to_string(),
         |desired| {
             let collections = desired
-                .effective_replicator_collections()
+                .replicator_collections
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
@@ -1043,7 +1078,7 @@ fn record_failure(
 ) {
     let class = classify_remote_admin_error(error);
     sync_state.update_peer(record, |status| {
-        for collection in desired.effective_replicator_collections() {
+        for collection in &desired.replicator_collections {
             let status = ensure_pairing_status(status, collection);
             status.record_retry(class);
             status.update_stuck_indicator(SystemTime::now());

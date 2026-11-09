@@ -3,9 +3,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures_util::future::BoxFuture;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use serde_json::{json, Value};
 
 use super::projection::caused_sessions::{
@@ -110,7 +110,9 @@ impl BoundModel {
 pub(crate) struct AcpServiceConfig {
     pub(crate) node: Arc<EmbeddedNode>,
     pub(crate) node_did: Arc<str>,
-    pub(crate) agent_id: Arc<str>,
+    pub(crate) agent_did: Arc<str>,
+    /// The bound Agent's managed signer; its tool calls are writable only with it.
+    pub(crate) agent_signer: Option<gents::store::identity::ManagedAgentSigner>,
     pub(crate) current_model: BoundModel,
     pub(crate) grok_home: Option<std::path::PathBuf>,
     /// Gents home the plugin catalogs of `x.ai/workflows/list` are read under.
@@ -193,6 +195,12 @@ impl AcpService {
     async fn dispatch_notification(&self, request: AcpRequest) -> AcpDispatch {
         match request.method.as_str() {
             SESSION_CANCEL_METHOD => {
+                if self.client_id.is_some() {
+                    tracing::warn!(
+                        "grok shim cannot cancel a session without an authenticated client DID"
+                    );
+                    return AcpDispatch::default();
+                }
                 let cancel = match parse_cancel_notification(&request.params) {
                     Ok(cancel) => cancel,
                     Err(error) => {
@@ -272,12 +280,18 @@ impl AcpService {
                 let session = required_session_id(&request.params)?;
                 let result = super::usage::session_info(
                     &self.config.node,
+                    &gents::ConfigAccess::local_as(
+                        self.config.node.clone(),
+                        self.turns.actor().clone(),
+                    ),
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                     &session,
-                    &self.config.current_model.model_id,
-                    &self.config.current_model.name,
-                    self.config.current_model.effective_context_window(),
+                    super::usage::SessionModel {
+                        id: &self.config.current_model.model_id,
+                        display_name: &self.config.current_model.name,
+                        context_window: self.config.current_model.effective_context_window(),
+                    },
                 )
                 .await?;
                 Ok(RequestOutcome {
@@ -293,8 +307,12 @@ impl AcpService {
                 let session = required_session_id(&request.params)?;
                 let result = super::usage::session_usage(
                     &self.config.node,
+                    &gents::ConfigAccess::local_as(
+                        self.config.node.clone(),
+                        self.turns.actor().clone(),
+                    ),
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                     &session,
                 )
                 .await?;
@@ -308,7 +326,7 @@ impl AcpService {
                 result: super::workflow_catalog::list(
                     &self.config.node,
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                     &self.config.plugin_home,
                 )
                 .await?,
@@ -318,7 +336,7 @@ impl AcpService {
                 result: super::sessions::roster(
                     &self.config.node,
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                 )
                 .await?,
             }),
@@ -333,7 +351,7 @@ impl AcpService {
                 let result = super::sessions::list(
                     &self.config.node,
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                     params,
                 )
                 .await?;
@@ -382,8 +400,16 @@ impl AcpService {
                     .keys()
                     .cloned()
                     .collect::<Vec<_>>();
-                let result = super::task_control::kill(
+                let signer = self.config.agent_signer.as_ref().context(
+                    "task kill requires the bound Agent's managed signer, which this shim does not hold",
+                )?;
+                let agent = gents::ConfigAccess::local_managed_agent(
                     self.config.node.clone(),
+                    ::identity::Did::new(self.config.agent_did.as_ref())?,
+                    signer,
+                )?;
+                let result = super::task_control::kill(
+                    &agent,
                     &self.projections.background_executions,
                     &self.config.node_did,
                     &sessions,

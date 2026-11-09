@@ -7,8 +7,8 @@ namespace ApplyReconcile
 registry decoder and readiness projection run. -/
 theorem publication_resolved_snapshot
     (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
-    (decode : RegistryDecoder) (owner : String) (encode : String → AgentId)
-    (hencode : Function.Injective encode) (defaultAgent : AgentId) (runtimeAvailable : Finset AgentId) :
+    (decode : RegistryDecoder) (owner : String) (encode : String → AgentDid)
+    (hencode : Function.Injective encode) (defaultAgent : AgentDid) (runtimeAvailable : Finset AgentDid) :
     (publish L M).toResolvedSnapshot decode owner (M.agentNames owner) encode hencode
       defaultAgent runtimeAvailable =
     snapshotFromDesired M.docs decode owner (M.agentNames owner) encode hencode
@@ -18,8 +18,8 @@ theorem publication_resolved_snapshot
 
 theorem publication_coverage
     (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
-    (decode : RegistryDecoder) (owner : String) (encode : String → AgentId)
-    (hencode : Function.Injective encode) (defaultAgent : AgentId) (runtimeAvailable : Finset AgentId) :
+    (decode : RegistryDecoder) (owner : String) (encode : String → AgentDid)
+    (hencode : Function.Injective encode) (defaultAgent : AgentDid) (runtimeAvailable : Finset AgentDid) :
     let snapshot := (publish L M).toResolvedSnapshot decode owner (M.agentNames owner)
       encode hencode defaultAgent runtimeAvailable
     snapshot.runnable ∪ snapshot.unavailable = (M.agentNames owner).image encode := by
@@ -29,9 +29,9 @@ theorem publication_coverage
 
 theorem publication_rejected_configuration_unavailable
     (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
-    (decode : RegistryDecoder) (owner name : String) (encode : String → AgentId)
+    (decode : RegistryDecoder) (owner name : String) (encode : String → AgentDid)
     (hencode : Function.Injective encode) (hname : name ∈ M.agentNames owner)
-    (defaultAgent : AgentId) (runtimeAvailable : Finset AgentId)
+    (defaultAgent : AgentDid) (runtimeAvailable : Finset AgentDid)
     (err : Configuration.ResolveError)
     (h : Configuration.resolveAgent (decode M.docs) owner name = .error err) :
     encode name ∈ ((publish L M).toResolvedSnapshot decode owner (M.agentNames owner)

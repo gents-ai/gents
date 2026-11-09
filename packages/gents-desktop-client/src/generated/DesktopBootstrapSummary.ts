@@ -2,4 +2,4 @@
 import type { InitConfigStatus } from "./InitConfigStatus.js";
 import type { SavedPeerView } from "./SavedPeerView.js";
 
-export type DesktopBootstrapSummary = { defaultNodeHome: string, initNodeName: string | null, initNodeDid: string | null, initConfigStatus?: InitConfigStatus | null, initToolCeiling: string | null, initToolRoot: string | null, desktopHome: string, peerDirectoryPath: string, nodeDataDir: string, diagnosticsHint: string, nodeHomeExists: boolean, desktopHomeExists: boolean, peerDirectoryExists: boolean, clientStateExists: boolean, savedPeers: Array<SavedPeerView>, };
+export type DesktopBootstrapSummary = { defaultNodeHome: string, initNodeName: string | null, initNodeDid: string | null, initConfigStatus?: InitConfigStatus | null, initToolCeiling: string | null, initToolRoot: string | null, desktopHome: string, diagnosticsHint: string, nodeHomeExists: boolean, clientStateExists: boolean, savedPeers: Array<SavedPeerView>, };

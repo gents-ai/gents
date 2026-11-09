@@ -1,0 +1,4 @@
+---- MODULE MCRuntimeConnectionOmittedRoot ----
+EXTENDS RuntimeConnectionTransport
+
+====

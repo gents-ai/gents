@@ -94,7 +94,7 @@ async fn lean_storage_gate_scenarios_drive_stream_finalization() {
 }
 
 struct NativeFinalizer {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     entered: Arc<tokio::sync::Notify>,
     storage_return: Arc<tokio::sync::Notify>,
 }
@@ -141,7 +141,7 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
     assert!(scenario.independently_scheduled && scenario.storage_returns);
     assert!(!scenario.expected_gate_held);
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type StreamGateFact { value: String }")
         .await
         .unwrap();
@@ -191,5 +191,5 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
     values.sort_unstable();
     assert_eq!(values, ["finalizer", "sibling"]);
     drop(guarded);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -8,9 +8,9 @@
         "collection": "AgentSession",
         "document": {
           "node_did": "$trial",
-          "requester_did": "$trial",
+          "requester_did": "$evaluator",
           "session_id": "vault-rotation",
-          "agent_id": "engineer",
+          "agent_did": "gents:agent-slot:engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": null,
           "title": {

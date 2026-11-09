@@ -40,7 +40,7 @@ fn removed_authority_collections_are_absent_from_schema_and_replication_inventor
 }
 
 #[test]
-fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
+fn pairing_inventory_and_cli_sources_cannot_reference_removed_authorities() {
     let production = [
         include_str!("../../src/runtime/agent/p2p_reconcile/engine.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/desired.rs"),
@@ -50,7 +50,8 @@ fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/store.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/engine/sweep.rs"),
         include_str!("../../src/runtime/agent/p2p_reconcile/enrollment_reconcile.rs"),
-        include_str!("../../src/runtime/agent/p2p_reconcile/session_hydration_reconcile.rs"),
+        include_str!("../../src/file_inventory.rs"),
+        include_str!("../../src/file_inventory/selection.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/mod.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/network.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/pairings.rs"),
@@ -61,7 +62,7 @@ fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
     for removed in REMOVED_COLLECTIONS {
         assert!(
             !production.contains(removed),
-            "removed authority {removed} returned to hydration, repair, or CLI production code"
+            "removed authority {removed} returned to pairing, inventory, or CLI production code"
         );
     }
 }
@@ -99,19 +100,24 @@ fn client_sync_cannot_regrow_a_synthetic_owner_or_runtime_readiness_join() {
 
     assert!(owner.contains("struct ClientSyncStateOwner"));
     assert_eq!(owner.matches("struct ClientSyncStateOwner").count(), 1);
-    assert!(projection.contains("pub fn project_sync_health("));
-    assert_eq!(projection.matches("pub fn project_sync_health(").count(), 1);
-    assert!(bridge.contains("project_sync_health(sync)"));
-    assert!(wire.contains("pub sync_health: Option<SyncHealthView>"));
+    assert_eq!(
+        projection
+            .matches("pub fn project_sync_health<I>(sync: &ClientSyncStateSnapshot, runtimes: I)")
+            .count(),
+        1
+    );
+    assert_eq!(projection.matches("fn project_sync_health").count(), 1);
+    assert!(wire.contains("pub sync_health: SyncHealthView"));
 
-    let bridge_sync_projection = bridge
-        .split("pub(crate) fn to_sync_health_view")
-        .nth(1)
-        .and_then(|tail| {
-            tail.split("pub(crate) fn to_pairing_collection_view")
-                .next()
-        })
-        .expect("bridge sync projection source boundary");
+    let (_, bridge_sync_projection) = bridge
+        .split_once("pub(crate) fn to_sync_health_view")
+        .expect("bridge sync projection start boundary");
+    let (bridge_sync_projection, _) = bridge_sync_projection
+        .split_once("pub(crate) fn system_time_rfc3339")
+        .expect("bridge sync projection end boundary");
+    assert!(bridge_sync_projection.contains("let sync = core.sync_state();"));
+    assert!(bridge_sync_projection.contains("project_sync_health(\n        &sync,"));
+    assert!(!bridge_sync_projection.contains("SyncHealthState::"));
 
     for source in [owner, projection, bridge] {
         assert!(!source.contains("NodeReadiness"));
@@ -182,7 +188,14 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert!(!signed_direct_materializer.contains("add_AgentRequest(input:"));
     assert!(!signed_direct_materializer.contains("status: \"processing\""));
     assert!(signed_direct_materializer.contains("Arc<dyn crate::store::identity::NodeIdentity>"));
-    assert!(signed_direct_materializer.contains("build_signed_request"));
+    assert!(signed_direct_materializer.contains("build_signed_client_request"));
+    assert!(signed_direct_materializer.contains("submit_client_request"));
+    assert!(
+        signed_direct_materializer.contains("AgentRequestAdmissionRecord::local_self(&agent_did)")
+    );
+    assert!(signed_direct_materializer.contains("RequestSigner::Identity(identity.as_ref())"));
+    assert!(signed_direct_materializer.contains("ConfigAccess::local_managed_agent"));
+    assert!(signed_direct_materializer.contains("identity::Did::new(agent_did.clone())"));
     assert!(signed_direct_materializer.contains("verify_fresh_local_self_request"));
     assert!(signed_direct_materializer.contains("claim_with_identity"));
     assert!(!oneshot.contains("add_AgentRequest(input:"));
@@ -222,8 +235,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             );
         }
         assert!(
-            production.contains("build_signed_request("),
-            "{name} lost the shared builder"
+            production.contains("gents::request::lifecycle::build_signed_client_request"),
+            "{name} lost the shared client request builder"
         );
     }
     assert_eq!(
@@ -297,7 +310,8 @@ fn session_message_admission_has_no_child_or_bridge_authority() {
                 .next()
         })
         .expect("peer admission branch");
-    assert!(peer_verifier.contains("fresh_member_authorized_for_agent"));
+    assert!(peer_verifier.contains("observation.signer_matches_requester"));
+    assert!(peer_verifier.contains("observation.requester_matches_target"));
     assert!(verifier.contains("request_hop_admitted"));
     assert!(request_schema.contains("runtime_source_kind: String @index @immutable"));
     assert!(!request_schema.contains("runtime_bridge_author_did"));

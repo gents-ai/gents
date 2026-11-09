@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::anyhow;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::json;
 
 /// Bounds an individual field value included in model-facing query results.
@@ -69,10 +69,7 @@ pub use query::{
     MAX_LIMIT,
 };
 pub use render::render_filter;
-pub use schema::{
-    diagnose_failed_query, discovery_payload, introspection_query, parse_collection_schema,
-    unknown_collection_message, CollectionSchema, SchemaField,
-};
+pub use schema::{diagnose_failed_query, discovery_payload, unknown_collection_message};
 
 pub const DEFRA_QUERY_TOOL_NAME: &str = "query";
 

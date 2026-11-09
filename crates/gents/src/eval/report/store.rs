@@ -136,16 +136,17 @@ mod tests {
     use crate::documents::EvalSplit;
     use crate::eval::checks::CheckRegistry;
     use crate::eval::report::{report_refused, SlotClass};
-    use crate::eval::runner::freeze::tests::{Launching, OWNER};
+    use crate::eval::runner::freeze::tests::Launching;
     use crate::eval::runner::{
         run, CellRequest, CellSource, RunOptions, RunRequest, ScriptedExecutor,
     };
     use crate::eval::{create_run, invalidate_run};
+    use crate::NodeIdentity;
 
     fn request(launching: &Launching, pack: &Path, run_id: &str) -> RunRequest {
         RunRequest {
             run_id: run_id.into(),
-            owner: OWNER.into(),
+            owner: launching.owner().into(),
             evaluator_did: launching.evaluator_did(),
             definition_id: "monitor-findings".into(),
             split: EvalSplit::Validation,
@@ -154,7 +155,7 @@ mod tests {
                 cell_id: "baseline".into(),
                 label: "baseline".into(),
                 source: CellSource::Directory(pack.to_path_buf()),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
                 inference_profile_id: "local".into(),
             }],
             trials_per_case: 2,
@@ -200,9 +201,14 @@ mod tests {
         let pack = launching.pack("pack", "Off");
         scripted(&launching, &request(&launching, &pack, "run-1")).await;
 
-        let report = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
-            .await
-            .unwrap();
+        let report = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-1",
+        )
+        .await
+        .unwrap();
         let cell = &report.cells[0];
         assert_eq!(
             cell.slots.iter().map(|slot| slot.class).collect::<Vec<_>>(),
@@ -221,28 +227,40 @@ mod tests {
         scripted(&launching, &request(&launching, &pack, "run-2")).await;
         invalidate_run(
             &launching.access,
-            OWNER,
+            launching.owner(),
             "run-1",
-            OWNER,
+            &launching.evaluator_did(),
             "fixture was broken",
         )
         .await
         .unwrap();
-        let first = load_run(&launching.access, OWNER, "run-1")
+        let first = load_run(&launching.access, launching.owner(), "run-1")
             .await
             .unwrap()
             .unwrap();
+        let foreign_keys = tempfile::tempdir().unwrap();
+        let foreign_runtime =
+            crate::KeyIdentity::load_or_create(foreign_keys.path().join("runtime.key"), None)
+                .unwrap();
+        launching
+            .install(vec![(
+                crate::Collection::Node,
+                json!({"node_did": foreign_runtime.did()}),
+            )])
+            .await;
         create_run(
             &launching.access,
             "foreign",
-            "did:key:someone-else",
-            "did:key:someone-else",
+            foreign_runtime.did(),
+            &launching.evaluator_did(),
             &first.origin,
         )
         .await
         .unwrap();
 
-        let runs = load_runs(&launching.access, OWNER).await.unwrap();
+        let runs = load_runs(&launching.access, launching.owner())
+            .await
+            .unwrap();
         assert_eq!(
             runs.iter()
                 .map(|run| run.run_id.as_str())
@@ -250,9 +268,14 @@ mod tests {
             vec!["run-1", "run-2"]
         );
         assert!(run_header(&runs[0]).invalidated);
-        let report = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-2")
-            .await
-            .unwrap();
+        let report = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-2",
+        )
+        .await
+        .unwrap();
         assert_eq!(report.exposure, 1);
     }
 
@@ -261,7 +284,7 @@ mod tests {
         let launching = Launching::new().await;
         let pack = launching.pack("pack", "Off");
         scripted(&launching, &request(&launching, &pack, "run-1")).await;
-        let installed = load_definition(&launching.access, OWNER, "monitor-findings")
+        let installed = load_definition(&launching.access, launching.owner(), "monitor-findings")
             .await
             .unwrap();
         let mut edited = serde_json::to_value(&installed).unwrap();
@@ -270,9 +293,14 @@ mod tests {
             .install(vec![(crate::Collection::EvalDefinition, edited)])
             .await;
 
-        let report = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
-            .await
-            .unwrap();
+        let report = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-1",
+        )
+        .await
+        .unwrap();
         assert!(report.definition_changed);
         assert_eq!(report.run.definition.comparability_version, 1);
         assert_eq!(report.cells[0].slots.len(), 2);
@@ -284,9 +312,14 @@ mod tests {
                 .join(crate::eval::runner::DEFINITION_FILE),
         )
         .unwrap();
-        let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
-            .await
-            .unwrap_err();
+        let error = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-1",
+        )
+        .await
+        .unwrap_err();
         assert!(
             report_refused(&error).is_some_and(|refusal| refusal.0.contains("no longer digests"))
         );
@@ -304,9 +337,14 @@ mod tests {
                 .join(crate::eval::runner::DEFINITION_FILE),
         )
         .unwrap();
-        let report = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-old")
-            .await
-            .unwrap();
+        let report = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-old",
+        )
+        .await
+        .unwrap();
         assert!(!report.definition_changed);
         assert_eq!(report.cells[0].slots.len(), 2);
     }
@@ -329,17 +367,27 @@ mod tests {
         tampered["comparability_version"] = json!(7);
         std::fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();
 
-        let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
-            .await
-            .unwrap_err();
+        let error = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-1",
+        )
+        .await
+        .unwrap_err();
         assert!(
             report_refused(&error).is_some_and(|refusal| refusal.0.contains("no longer digests"))
         );
 
         std::fs::write(&path, b"{\"definition_id\": ").unwrap();
-        let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
-            .await
-            .unwrap_err();
+        let error = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-1",
+        )
+        .await
+        .unwrap_err();
         assert!(report_refused(&error).is_some_and(|refusal| refusal.0.contains("parsing")));
     }
 
@@ -353,9 +401,14 @@ mod tests {
             .delete(crate::Collection::EvalDefinition, "monitor-findings")
             .await;
 
-        let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-old")
-            .await
-            .unwrap_err();
+        let error = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-old",
+        )
+        .await
+        .unwrap_err();
         assert!(
             report_refused(&error).is_some_and(|refusal| refusal.0.contains("no eval definition"))
         );
@@ -370,9 +423,14 @@ mod tests {
             .delete(crate::Collection::EvalDefinition, "monitor-findings")
             .await;
 
-        let report = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
-            .await
-            .unwrap();
+        let report = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "run-1",
+        )
+        .await
+        .unwrap();
         assert!(report.definition_changed);
         assert_eq!(report.cells[0].slots.len(), 2);
     }
@@ -380,10 +438,18 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_run_is_refused() {
         let launching = Launching::new().await;
-        let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "absent")
-            .await
-            .unwrap_err();
+        let error = load_report(
+            &launching.access,
+            launching.owner(),
+            &launching.runs_dir(),
+            "absent",
+        )
+        .await
+        .unwrap_err();
         let reason = &report_refused(&error).expect("a ReportRefused").0;
-        assert_eq!(reason, &format!("no eval run \"absent\" for {OWNER}"));
+        assert_eq!(
+            reason,
+            &format!("no eval run \"absent\" for {}", launching.owner())
+        );
     }
 }

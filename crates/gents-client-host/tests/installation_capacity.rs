@@ -14,6 +14,9 @@ use tokio::process::Command;
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
+#[path = "support/homes.rs"]
+mod homes;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_full_listener_reports_a_retryable_initialization_failure_without_retiring_its_clients() {
     let directory = tempfile::tempdir().unwrap();
@@ -23,7 +26,7 @@ async fn a_full_listener_reports_a_retryable_initialization_failure_without_reti
             .await
             .unwrap(),
     );
-    let peer = core.local_peer_id().to_owned();
+    let client_did = core.node_identity().did().to_owned();
     let listener = local::LocalListener::bind(&paths).await.unwrap();
     let host = Arc::new(ClientHost::for_installation(
         core.clone(),
@@ -48,6 +51,7 @@ async fn a_full_listener_reports_a_retryable_initialization_failure_without_reti
         clients.push(client);
     }
     let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+        .envs(homes::ProcessHomes::under(paths.root().parent().unwrap()).env())
         .args(["--stdio", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::piped())
@@ -91,7 +95,7 @@ async fn a_full_listener_reports_a_retryable_initialization_failure_without_reti
     .await
     .unwrap();
     assert!(response["error"].is_null());
-    assert_eq!(response["result"]["client"]["localPeerId"], peer);
+    assert_eq!(response["result"]["client"]["clientDid"], client_did);
     drop(clients);
     stop.cancel();
     serving.await.unwrap().unwrap();

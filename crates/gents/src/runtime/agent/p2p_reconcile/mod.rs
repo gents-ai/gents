@@ -10,18 +10,13 @@ pub mod enrollment_reconcile;
 mod enrollment_renewal;
 pub mod enrollment_store;
 pub mod error_class;
-pub mod file_image_hydration;
 mod graphql_helpers;
 pub mod intervals;
 pub mod policy;
 pub mod profiles;
 pub mod registry;
-mod session_command_authority;
 pub mod session_commands;
 pub mod session_goal_control;
-pub mod session_hydration;
-mod session_hydration_closure;
-pub mod session_hydration_reconcile;
 pub mod session_input_edit;
 pub mod templates;
 pub mod trait_def;
@@ -32,7 +27,7 @@ pub use diff::{
     PairingActual, PairingApplied, PairingDesired,
 };
 pub use embedded_impl::EmbeddedRemoteP2pAdmin;
-pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
+pub use endpoint::{peer_registry_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
     materialize_enrollment_desired_in_txn, merge_layered_desired,
     observe_owned_pairing_live_matches, reconcile_peer_tick, run_pairing_reconciler,
@@ -61,14 +56,11 @@ pub use registry::{
     RegistryEntry, UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
     REGISTRY_STALE_AFTER,
 };
-pub use session_hydration_reconcile::run_session_hydration_reconciler;
 pub use templates::{
-    builtin_templates, combine_filters, compare_client_replicated_schema, decode_pairing_filters,
-    equality_filter, filter_conditions, read_client_replicated_schema, read_replicated_schema,
-    resolve_template, scope_filter, single_string_eq, to_replication_filters, Delivery, DidSource,
-    FilterPredicate, PairingFilters, Scope, ScopeTemplate, CLIENT_COLLECTIONS, CLIENT_TEMPLATE,
-    CLIENT_TO_RUNTIME_COLLECTIONS, NODE_DIRECTORY_COLLECTION,
+    builtin_templates, combine_filters, decode_pairing_filters, equality_filter, filter_conditions,
+    read_client_replicated_schema, read_replicated_schema, resolve_template, scope_filter,
+    single_string_eq, to_replication_filters, Delivery, DidSource, FilterPredicate, PairingFilters,
+    Scope, ScopeTemplate, CLIENT_COLLECTIONS, CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
+    NODE_DIRECTORY_COLLECTION,
 };
-pub use trait_def::{
-    RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,
-};
+pub use trait_def::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};

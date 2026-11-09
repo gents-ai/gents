@@ -45,12 +45,12 @@ function chatActions(
 
 const readyNodeReadiness = {
   kind: "ready",
-  agentId: "default",
+  agentDid: "default",
   agentLabel: "Default",
 } as const;
 const unavailableNodeReadiness = {
   kind: "unavailable",
-  agentId: "ops",
+  agentDid: "ops",
   agentLabel: "Ops",
   reason: "backend_temporarily_unavailable",
 } as const;
@@ -59,15 +59,15 @@ function operationalStateFor(
   decision: NodeReadinessDecision = readyNodeReadiness,
   routeReady = deployment.chatSafe,
 ) {
-  const agentId = decision.agentId ?? "default";
+  const agentDid = decision.agentDid ?? "default";
   return projectDeploymentOperationalState({
     ...deployment,
     chatSafe: routeReady,
     agents: [
       {
         ...deployment.agents[0]!,
-        agentId,
-        displayName: decision.kind === "unknown" ? agentId : decision.agentLabel,
+        agentDid,
+        displayName: decision.kind === "unknown" ? agentDid : decision.agentLabel,
         enabled: true,
         isDefault: true,
       },
@@ -82,10 +82,10 @@ function operationalStateFor(
         decision.kind === "unavailable"
           ? {
               state: "unavailable",
-              agentId,
+              agentDid,
               reason: decision.reason,
             }
-          : { state: "ready", agentId },
+          : { state: "ready", agentDid },
       ],
     },
   });

@@ -88,20 +88,21 @@ mod tests {
     use super::*;
     use crate::eval::optimization::driver::matrix::accepting_harness;
     use crate::eval::optimization::job::{load_job, JobState};
-    use crate::eval::runner::freeze::tests::OWNER;
 
     #[tokio::test]
     async fn every_run_of_an_owners_jobs_is_referenced() {
         let (harness, request) = accepting_harness("refs").await;
-        let referenced = referenced_run_ids(harness.access(), OWNER).await.unwrap();
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let referenced = referenced_run_ids(harness.access(), harness.owner())
+            .await
+            .unwrap();
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
         assert!(!referenced.is_empty());
         assert_eq!(referenced, journal_run_ids(&job.journal));
         assert_eq!(
-            job_ids(harness.access(), OWNER).await.unwrap(),
+            job_ids(harness.access(), harness.owner()).await.unwrap(),
             vec!["refs".to_owned()]
         );
         assert!(referenced_run_ids(harness.access(), "did:key:someone-else")
@@ -113,10 +114,11 @@ mod tests {
     #[tokio::test]
     async fn owner_jobs_are_folded_in_deterministic_order() {
         let (harness, request) = accepting_harness("bulk-refs").await;
-        let jobs = crate::eval::optimization::references::job_ids(harness.access(), OWNER)
-            .await
-            .unwrap();
-        let source = load_job(harness.access(), OWNER, &request.job_id)
+        let jobs =
+            crate::eval::optimization::references::job_ids(harness.access(), harness.owner())
+                .await
+                .unwrap();
+        let source = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
@@ -124,7 +126,7 @@ mod tests {
             crate::eval::optimization::job::create_job(
                 harness.access(),
                 &format!("bulk-{index:03}"),
-                OWNER,
+                harness.owner(),
                 &source.origin,
             )
             .await
@@ -137,19 +139,25 @@ mod tests {
             .collect::<Vec<_>>();
         let mut expected = BTreeSet::new();
         for job_id in &all_job_ids {
-            if let Some(job) = load_job(harness.access(), OWNER, job_id).await.unwrap() {
+            if let Some(job) = load_job(harness.access(), harness.owner(), job_id)
+                .await
+                .unwrap()
+            {
                 expected.extend(journal_run_ids(&job.journal));
             }
         }
         let (referenced, batches) = crate::eval::optimization::job::count_owner_job_batches(
-            referenced_run_ids(harness.access(), OWNER),
+            referenced_run_ids(harness.access(), harness.owner()),
         )
         .await;
         assert_eq!(referenced.unwrap(), expected);
         assert_eq!(all_job_ids.len(), 129);
         assert_eq!(batches, 3);
         assert_eq!(
-            held_runs(harness.access(), OWNER).await.unwrap().len(),
+            held_runs(harness.access(), harness.owner())
+                .await
+                .unwrap()
+                .len(),
             expected.len()
         );
     }
@@ -157,8 +165,8 @@ mod tests {
     #[tokio::test]
     async fn a_ready_jobs_runs_are_held_and_a_foreign_owner_holds_none() {
         let (harness, request) = accepting_harness("held").await;
-        let held = held_runs(harness.access(), OWNER).await.unwrap();
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let held = held_runs(harness.access(), harness.owner()).await.unwrap();
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
