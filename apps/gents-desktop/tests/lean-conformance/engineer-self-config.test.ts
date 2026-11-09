@@ -41,11 +41,12 @@ it("grants the Engineer exactly the executed Lean engineerGroup categories", asy
   const tools = engineerPatches({
     ...deployment,
     contexts: [context],
-    tools: [{ tools_id: "tools-a", node_did: deployment.nodeDid, display_name: "Standard" }],
+    tools: [
+      { tools_id: "tools-a", node_did: deployment.nodeDid, display_name: "Standard" },
+    ],
   }).find((patch) => patch.collection === "Tools");
   const selfConfig = tools?.changes.self_config as
-    | { enable_self_config?: boolean; self_config_categories?: string[] }
-    | undefined;
+    { enable_self_config?: boolean; self_config_categories?: string[] } | undefined;
   expect(selfConfig?.enable_self_config).toBe(modeled!.enabled);
   expect([...(selfConfig?.self_config_categories ?? [])].sort()).toEqual(
     [...modeled!.effective].sort(),

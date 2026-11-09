@@ -9,7 +9,8 @@ type Observation = NonNullable<Parameters<typeof mayRetireMailboxAnswer>[1]>;
 type Case = {
   name: string;
   binding: Parameters<typeof mayRetireMailboxAnswer>[0];
-  observation: (Observation & { item: Observation["item"] & { status: string } }) | null;
+  observation:
+    (Observation & { item: Observation["item"] & { status: string } }) | null;
   currentClient: string;
   acknowledged: boolean;
   retire: boolean;
@@ -38,7 +39,9 @@ it("derives answer-cache retirement from the executed Mailbox owner", async () =
   expect(statuses.length).toBeGreaterThan(0);
   for (const { status, terminal } of statuses)
     expect(
-      cases.some((row) => row.observation?.item.status === status && row.retire === terminal),
+      cases.some(
+        (row) => row.observation?.item.status === status && row.retire === terminal,
+      ),
       status,
     ).toBe(true);
   for (const row of cases)
