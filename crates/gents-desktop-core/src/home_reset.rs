@@ -1308,6 +1308,7 @@ pub fn lock_browser_store(isolated_store: Option<&str>) -> anyhow::Result<Browse
             .context("unable to resolve a local application data directory")?
             .join("gents"),
     };
+    gents::store::local::home::refuse_real_gents_home(&directory, "HOME");
     lock_browser_store_in(&directory, isolated_store)
 }
 

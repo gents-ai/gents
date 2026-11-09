@@ -121,6 +121,7 @@ async fn installed_editor(paths: &DesktopPaths, node: &str) -> Result<()> {
         .parent()
         .context("disposable settings fixture root")?;
     let output = tokio::process::Command::new("node")
+        .envs(super::support::homes::ProcessHomes::under(root).env())
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/support/editor_passive_settings.mjs"

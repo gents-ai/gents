@@ -443,8 +443,12 @@ mod keychain {
     use super::{Result, StoreKeyError};
     use k256::elliptic_curve::zeroize::Zeroizing;
 
-    #[cfg(target_os = "macos")]
+    /// Test builds address their own service so no test can read or delete
+    /// an operator's store key; see the identity service.
+    #[cfg(all(target_os = "macos", not(any(test, feature = "test-home-guard"))))]
     const SERVICE: &str = "com.source-inc.gents.store-key";
+    #[cfg(all(target_os = "macos", any(test, feature = "test-home-guard")))]
+    const SERVICE: &str = "com.source-inc.gents.test.store-key";
 
     #[cfg(target_os = "macos")]
     pub(super) fn store(label: &str, bytes: &[u8]) -> Result<()> {

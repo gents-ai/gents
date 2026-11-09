@@ -247,8 +247,23 @@ fn home_graphql_endpoint_with_paths(
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.
 pub(crate) fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
-    Ok(cli_identity_paths_under(
-        &gents_desktop_core::client::DesktopPaths::discover()?,
+    Ok(cli_identity_paths_under(&desktop_paths()?))
+}
+
+#[cfg(not(test))]
+fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+    gents_desktop_core::client::DesktopPaths::discover()
+}
+
+/// Unit tests share the operator's process environment, so they cannot
+/// select a desktop home through it; they share one throwaway CLI client home.
+#[cfg(test)]
+fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+    static ROOT: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
+        tempfile::tempdir().expect("creating the unit tests' desktop home")
+    });
+    Ok(gents_desktop_core::client::DesktopPaths::from_root(
+        ROOT.path(),
     ))
 }
 

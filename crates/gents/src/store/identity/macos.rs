@@ -192,8 +192,13 @@ pub(crate) fn macos_keychain_delete(service: &str, label: &str) -> Result<()> {
     }
 }
 
-#[cfg(target_os = "macos")]
+/// Test builds (see `store::local::home::refuse_real_gents_home`) address
+/// their own Keychain service, so no test can read or replace an operator's
+/// identity item, whatever label it names.
+#[cfg(all(target_os = "macos", not(any(test, feature = "test-home-guard"))))]
 const MACOS_KEYCHAIN_SERVICE: &str = "com.source-inc.gents.identity";
+#[cfg(all(target_os = "macos", any(test, feature = "test-home-guard")))]
+const MACOS_KEYCHAIN_SERVICE: &str = "com.source-inc.gents.test.identity";
 
 #[cfg(target_os = "macos")]
 #[derive(Debug)]

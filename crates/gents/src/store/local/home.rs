@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 mod init_config;
 mod lock;
 mod retire;
+mod test_guard;
 
 pub use init_config::{
     default_key_path, ensure_home_identity_can_serve, init_config_path, keys_dir, read_init_config,
@@ -15,6 +16,7 @@ pub use lock::{
 pub use retire::{
     archive_preflight, home_entries, retire_entries, HomeEntries, RetireDisposition, RetireGroup,
 };
+pub use test_guard::refuse_real_gents_home;
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 
 #[derive(Debug, thiserror::Error)]
@@ -217,13 +219,17 @@ pub fn store_lock_held<'a>(
 type Result<T, E = HomeError> = std::result::Result<T, E>;
 
 pub fn default_home_dir() -> Result<PathBuf> {
-    if let Some(home) = std::env::var_os("GENTS_HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home));
-    }
-    Ok(dirs::home_dir()
-        .ok_or(HomeError::HomeDirUnresolved)?
-        .join(".gents"))
+    let home = match std::env::var_os(GENTS_HOME_ENV).filter(|value| !value.is_empty()) {
+        Some(home) => PathBuf::from(home),
+        None => dirs::home_dir()
+            .ok_or(HomeError::HomeDirUnresolved)?
+            .join(".gents"),
+    };
+    refuse_real_gents_home(&home, GENTS_HOME_ENV);
+    Ok(home)
 }
+
+pub const GENTS_HOME_ENV: &str = "GENTS_HOME";
 
 const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
@@ -290,10 +296,8 @@ pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
 /// before retirement, so retained receipts confer no authority on a fresh node.
 /// The node bootstrap marker stays across retirement, so a retired home cannot
 /// become a fresh bootstrap attempt; the CLI writes it outside this owner.
-pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] = &[
-    SERVICE_UPDATES_DIR_NAME,
-    ".node-bootstrap-consumed",
-];
+pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] =
+    &[SERVICE_UPDATES_DIR_NAME, ".node-bootstrap-consumed"];
 
 pub fn default_data_dir(home_dir: &Path) -> PathBuf {
     home_dir.join(DATA_DIR_NAME)

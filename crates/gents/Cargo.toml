@@ -17,6 +17,9 @@ default = [
 typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript"]
 # Gates the optional live-inference collection out of default builds.
 live-e2e = []
+# Test builds refuse to resolve the operator's real Gents homes; enabled only
+# through dev-dependencies, never by production builds.
+test-home-guard = []
 
 # All other test binaries are auto-discovered; this explicit target overrides
 # autodiscovery for e2e_live so the link only happens on live runs
