@@ -1147,21 +1147,28 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
     ];
     for (collection, mutation, expected) in references {
         let id = write(mutation).await;
-        for verb in ["empty", "remove"] {
-            let refused = refusal(
-                &tool,
-                json!({"argv":["collection","preview",verb,"Scratch"]}),
-            )
-            .await;
-            assert!(refused["error"].as_str().unwrap().contains("still in use"));
-            let users = users(&refused);
-            assert_eq!(users.len(), 1, "{refused}");
-            assert!(users[0].contains(expected), "{refused}");
-            assert_eq!(
-                refused["recovery"]["then"]["args"]["argv"],
-                json!(["collection", "preview", verb])
-            );
-        }
+        let refused = refusal(
+            &tool,
+            json!({"argv":["collection","preview","remove","Scratch"]}),
+        )
+        .await;
+        assert!(refused["error"].as_str().unwrap().contains("still in use"));
+        let users = users(&refused);
+        assert_eq!(users.len(), 1, "{refused}");
+        assert!(users[0].contains(expected), "{refused}");
+        assert_eq!(
+            refused["recovery"]["then"]["args"]["argv"],
+            json!(["collection", "preview", "remove"])
+        );
+        let preview = call(
+            &tool,
+            json!({"argv":["collection","preview","empty","Scratch"]}),
+        )
+        .await;
+        assert_eq!(preview["loss"]["documents"], 1);
+        let listed = preview["loss"]["still_used_by"].as_array().unwrap();
+        assert_eq!(listed.len(), 1, "{preview}");
+        assert!(listed[0]["user"].as_str().unwrap().contains(expected));
         delete(collection, id).await;
     }
 
@@ -1242,6 +1249,27 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
         "{refused}"
     );
     assert!(found[2].contains("datastore surface"), "{refused}");
+
+    let preview = call(
+        &tool,
+        json!({"argv":["collection","preview","empty","Scratch"]}),
+    )
+    .await;
+    assert_eq!(
+        preview["loss"]["still_used_by"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(scratch_rows(&node).await, 1);
+    let emptied = call(&tool, preview["next_call"]["args"].clone()).await;
+    assert_eq!(emptied["result"]["documents_removed"], 1);
+    assert_eq!(scratch_rows(&node).await, 0);
+    let refused = refusal(
+        &tool,
+        json!({"argv":["collection","preview","remove","Scratch"]}),
+    )
+    .await;
+    assert_eq!(users(&refused).len(), 3, "{refused}");
+    seed_scratch(&node, "again").await;
 
     let kept = crate::collection_use::remove_unused_collections(
         &access,

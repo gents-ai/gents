@@ -170,7 +170,8 @@ impl SchemaTool {
     }
 
     /// The application collection `name` and what emptying or removing it
-    /// loses, once nothing on the node still names it.
+    /// loses. Emptying leaves every reference intact, so its users are listed
+    /// in the loss; removal is refused while any remain.
     async fn cleanup_target(
         &self,
         name: &str,
@@ -189,7 +190,7 @@ impl SchemaTool {
             name,
         )
         .await?;
-        if !users.is_empty() {
+        if remove && !users.is_empty() {
             return Ok(Err(CleanupRefusal::InUse {
                 collection: name.to_owned(),
                 users,
@@ -229,6 +230,9 @@ impl SchemaTool {
                 .filter_map(|v| v["Name"].as_str())
                 .collect::<BTreeSet<_>>(),
         });
+        if !users.is_empty() {
+            loss["still_used_by"] = json!(users);
+        }
         if !current["Policy"].is_null() {
             loss["documents_note"] = json!("This collection has a document policy: the count covers only documents you can read, while cleanup removes every document.");
         }
