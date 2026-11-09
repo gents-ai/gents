@@ -103,8 +103,8 @@ async fn runtime_identity_names_node_and_home() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = init
-        .get("default_agent_id")
+    let default_agent_did = init
+        .get("default_agent_did")
         .and_then(Value::as_str)
         .context("init reports a default agent")?;
     let server_port = allocate_port()?;
@@ -116,8 +116,8 @@ async fn runtime_identity_names_node_and_home() -> Result<()> {
         &[
             "--codex-shim-port",
             &shim_port_string,
-            "--codex-shim-agent-id",
-            default_agent_id,
+            "--codex-shim-agent-did",
+            default_agent_did,
         ],
         &[],
     )?;
@@ -138,7 +138,7 @@ async fn runtime_identity_names_node_and_home() -> Result<()> {
         json!({
             "node_did": node_did,
             "home": home_dir.join(".gents").to_string_lossy(),
-            "bound_agent": default_agent_id,
+            "bound_agent": default_agent_did,
             "runnable_agents": null,
             "tool_root": tool_root,
             "default_thread_cwd": tool_root,

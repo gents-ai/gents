@@ -58,7 +58,7 @@ source consistency checks, not a separate runtime compatibility version.
   definitions run `gents server`, and an updater of another version runs
   `gents service update-check`.
 - `gents -p MESSAGE` sends one message to the home's default agent, or to
-  `--agent ID`, prints only the reply and exits, as `claude -p` does. It brings
+  `--agent DID`, prints only the reply and exits, as `claude -p` does. It brings
   up the runtime as bare `gents` does, needs no terminal on a home that is set
   up, and denies any approval the turn asks for.
 - `gents PROMPT` opens the configured interface, Codex or Grok, with PROMPT as
@@ -86,7 +86,7 @@ source consistency checks, not a separate runtime compatibility version.
   value the desktop offers for the chosen model, showing its default. Without a terminal it prints help and exits 2, as a missing
   subcommand did. `gents` refuses a Codex endpoint that does not identify
   itself as this home's, and the shim answers that question at `GET /runtime`.
-- `gents --agent ID` and `gents codex --agent ID` open any runnable agent side by
+- `gents --agent DID` and `gents codex --agent DID` open any runnable agent side by
   side with no restart, with no saved agent setting. For Codex this needs a local
   runtime with no pinned agent, and `--agent` is refused for any other endpoint.
 - When `gents` opens Codex from a directory inside the tool root, the thread starts

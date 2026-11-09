@@ -30,6 +30,7 @@ fn init_uses_the_runtime_backend_defaults_and_preserves_overrides() {
 fn pairing_reader_commands_require_a_physical_document_and_reason() {
     let base = [
         "gents",
+        "runtime",
         "p2p",
         "pairings",
         "grant-reader",
@@ -43,12 +44,15 @@ fn pairing_reader_commands_require_a_physical_document_and_reason() {
         "did:key:agent",
     ];
     let cli = Cli::try_parse_from(base).expect("scoped reader command should parse");
-    let Command::P2p {
+    let Some(Command::Runtime {
         command:
-            P2pCommand::Pairings {
-                command: P2pPairingsCommand::GrantReader(args),
+            RuntimeCommand::P2p {
+                command:
+                    P2pCommand::Pairings {
+                        command: P2pPairingsCommand::GrantReader(args),
+                    },
             },
-    } = cli.command
+    }) = cli.command
     else {
         panic!("expected a pairing reader grant")
     };
@@ -57,6 +61,7 @@ fn pairing_reader_commands_require_a_physical_document_and_reason() {
     assert!(matches!(args.reason, PairingReadReasonArg::ToolView));
     assert!(Cli::try_parse_from([
         "gents",
+        "runtime",
         "p2p",
         "pairings",
         "revoke-reader",

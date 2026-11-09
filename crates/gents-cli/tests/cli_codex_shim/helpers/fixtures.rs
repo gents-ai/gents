@@ -347,7 +347,10 @@ impl AgentShim {
             ],
         )?;
         let node_did = node_did_from_init(&init)?;
-        let default_agent = format!("{node_did}:default");
+        let default_agent = init["default_agent_did"]
+            .as_str()
+            .context("init output missing default_agent_did")?
+            .to_string();
         let profile_id = init["inference_profile_id"]
             .as_str()
             .context("init output missing inference_profile_id")?
@@ -437,9 +440,9 @@ impl AgentShim {
                 &self.profile_id,
             ],
         )?;
-        let agent = cloned["agent_id"]
+        let agent = cloned["agent_did"]
             .as_str()
-            .context("clone output missing agent_id")?
+            .context("clone output missing agent_did")?
             .to_string();
         self.wait_until_runnable(&agent, None).await?;
         Ok(agent)

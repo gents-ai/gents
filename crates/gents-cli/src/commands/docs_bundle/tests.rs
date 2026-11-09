@@ -31,7 +31,8 @@ fn export(out: &Path, archive: &Path) {
         "--commit",
         COMMIT,
     ];
-    let crate::Command::DocsBundle(args) = Cli::try_parse_from(argv).expect("parse").command else {
+    let Some(crate::Command::DocsBundle(args)) = Cli::try_parse_from(argv).expect("parse").command
+    else {
         panic!("__docs-bundle parsed as another command");
     };
     docs_bundle(args).expect("export the docs bundle");
@@ -282,7 +283,8 @@ fn export_refuses_a_non_empty_output_directory() {
         "--commit",
         COMMIT,
     ];
-    let crate::Command::DocsBundle(args) = Cli::try_parse_from(argv).expect("parse").command else {
+    let Some(crate::Command::DocsBundle(args)) = Cli::try_parse_from(argv).expect("parse").command
+    else {
         panic!("__docs-bundle parsed as another command");
     };
     assert!(docs_bundle(args).is_err());

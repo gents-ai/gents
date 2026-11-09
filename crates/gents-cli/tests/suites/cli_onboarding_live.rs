@@ -97,7 +97,7 @@ mod no_model {
             terminal.transcript()
         );
 
-        let mut terminal = open(&project, &["--agent", &home.default_agent_id], "agent")?;
+        let mut terminal = open(&project, &["--agent", &home.default_agent_did], "agent")?;
         let code = terminal.wait_exit(RUNTIME_UP).await?;
         ensure!(code == 0, "{}", terminal.transcript());
         let args = fs::read_to_string(&recorded)?;
@@ -203,7 +203,7 @@ mod no_model {
         ])?;
 
         let mut command = live.bare_gents("/usr/bin/true", &home.home);
-        command.args(["--agent", &home.default_agent_id]);
+        command.args(["--agent", &home.default_agent_did]);
         let mut terminal = Terminal::spawn(&command, &live.log("first-open"))?;
 
         let code = terminal.wait_exit(RUNTIME_UP).await?;
@@ -1202,11 +1202,29 @@ mod with_model {
         let home = live.init_home("home", &endpoint, &model)?;
         live.bring_up(&home.home).await?;
         crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
-        let route = agent_route(&format!("{}:yolo", home.node_did));
 
         let mut command = live.bare_gents(&codex, &home.home);
         command.arg("--yolo");
         let window = Terminal::spawn(&command, &live.log("window-yolo"))?;
+        let graphql = graphql_url(HTTP_PORT);
+        let query = format!(
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, display_name: {{_eq: "Yolo"}}}}) {{ agent_did }} }}"#,
+            home.node_did
+        );
+        let deadline = tokio::time::Instant::now() + RUNTIME_UP;
+        let yolo = loop {
+            let rows = graphql_query(&graphql, &query).await?;
+            if let Some(did) = rows["data"]["Agent"][0]["agent_did"].as_str() {
+                break did.to_owned();
+            }
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "`gents --yolo` made no yolo agent within {RUNTIME_UP:?}; the window:\n{}",
+                window.transcript()
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        };
+        let route = agent_route(&yolo);
         wait_for_loaded_thread(&window, &route, &[])
             .await
             .with_context(|| format!("the yolo window:\n{}", window.transcript()))?;
@@ -1226,7 +1244,7 @@ mod with_model {
         live.bring_up(&home.home).await?;
         crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
         let pid = live.service_pid().context("the service runs")?;
-        let a = home.default_agent_id.clone();
+        let a = home.default_agent_did.clone();
         let b = live.clone_agent(&home, "other").await?;
         let (route_a, route_b) = (agent_route(&a), agent_route(&b));
         let (prompt_a, prompt_b) = (unique_prompt(), unique_prompt());
@@ -1372,7 +1390,7 @@ mod with_model {
             "grok-default",
         )
         .await?;
-        assert_eq!(agent, home.default_agent_id);
+        assert_eq!(agent, home.default_agent_did);
 
         let mut by_agent = live.bare_gents_grok(&grok, &home.home);
         by_agent.args(["--agent", &b]);

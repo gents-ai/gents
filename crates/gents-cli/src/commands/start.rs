@@ -199,11 +199,10 @@ pub(crate) async fn run(mut args: StartArgs) -> Result<()> {
         let opened = endpoint
             .open(agent.clone(), args.prompt, args.continue_session)
             .await;
-        let agent = agent.unwrap_or_else(|| gents::default_agent_id_for_node(&config.node_did));
         print_continue_hint(
             &home,
             &config.node_did,
-            &agent,
+            agent.as_deref(),
             opened_at,
             client,
             home_given.as_deref(),
@@ -248,7 +247,7 @@ async fn chosen_agent(
 async fn print_continue_hint(
     home: &Path,
     node_did: &str,
-    agent: &str,
+    agent: Option<&str>,
     opened_at: chrono::DateTime<chrono::Utc>,
     client: InterfaceClient,
     home_flag: Option<&Path>,
@@ -256,13 +255,21 @@ async fn print_continue_hint(
     let Ok(Some(graphql)) = answering_graphql(home).await else {
         return;
     };
+    let access = crate::config_writes::ConfigAccess::Graphql(graphql);
+    let agent = match agent {
+        Some(agent) => agent.to_owned(),
+        None => match yolo::default_agent(&access, node_did).await {
+            Ok(agent) => agent,
+            Err(_) => return,
+        },
+    };
     let latest = crate::graphql_rows(
-        &crate::config_writes::ConfigAccess::Graphql(graphql),
+        &access,
         "AgentRequest",
         &format!(
-            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, agent_id: {{_eq: "{}"}}}}, order: {{created_at: DESC}}, limit: 1) {{ session_id created_at }} }}"#,
+            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, order: {{created_at: DESC}}, limit: 1) {{ session_id created_at }} }}"#,
             gents::store::graphql::escape_graphql_string(node_did),
-            gents::store::graphql::escape_graphql_string(agent)
+            gents::store::graphql::escape_graphql_string(&agent)
         ),
     )
     .await;
@@ -297,23 +304,25 @@ fn continue_hint(
 }
 
 async fn session_agent(graphql: &GraphqlEndpoint, node_did: &str, session: &str) -> Result<String> {
-    let rows = crate::graphql_rows(
-        &crate::config_writes::ConfigAccess::Graphql(graphql.clone()),
-        "AgentSession",
-        &format!(
-            r#"{{ AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}, limit: 1) {{ agent_id }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did),
-            gents::store::graphql::escape_graphql_string(session)
-        ),
-    )
-    .await?;
-    let row = rows.first().with_context(|| {
-        format!("no session {session} on this home; `gents sessions list` shows them")
-    })?;
-    row["agent_id"]
-        .as_str()
-        .map(str::to_owned)
-        .with_context(|| format!("session {session} records no agent to continue it with"))
+    let owner = gents::ConfigAccess::Graphql(graphql.clone())
+        .transact_readonly("cli.start.session_agent", |txn| {
+            Box::pin(async move {
+                gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn, node_did, session,
+                )
+                .await
+            })
+        })
+        .await?
+        .with_context(|| {
+            format!("no session {session} on this home; `gents sessions list` shows them")
+        })?;
+    let agent = owner.session.agent_did;
+    ensure!(
+        !agent.trim().is_empty(),
+        "session {session} records no agent to continue it with"
+    );
+    Ok(agent)
 }
 
 /// `-p` needs only GraphQL, so a runtime with its interface endpoints off still answers it.

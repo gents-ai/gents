@@ -109,34 +109,42 @@ async fn yolo_makes_one_agent_with_the_default_agents_tools_and_reuses_it() -> R
         &graphql,
         &format!(
             r#"{{
-                Agent(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ agent_id display_name context_id }}
+                Node(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ default_agent_did }}
+                Agent(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ agent_did display_name context_id }}
                 AgentContext(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ context_id tools_id system_prompt }}
-                AgentRequest(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ agent_id session_id }}
+                AgentRequest(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ agent_did session_id }}
             }}"#
         ),
     )
     .await?;
     let agents = rows["data"]["Agent"].as_array().context("Agent rows")?;
-    let yolo_id = format!("{node_did}:yolo");
+    let default_did = rows["data"]["Node"][0]["default_agent_did"]
+        .as_str()
+        .context("the node names its default agent")?
+        .to_owned();
     let yolo: Vec<&Value> = agents
         .iter()
         .filter(|agent| agent["display_name"] == "Yolo")
         .collect();
     assert_eq!(yolo.len(), 1, "one yolo agent across both runs: {agents:?}");
-    assert_eq!(yolo[0]["agent_id"], yolo_id.as_str());
+    let yolo_id = yolo[0]["agent_did"]
+        .as_str()
+        .context("the yolo agent has a DID")?
+        .to_owned();
+    assert_ne!(yolo_id, default_did);
 
-    let context_of = |agent_id: &str| -> Result<&Value> {
+    let context_of = |agent_did: &str| -> Result<&Value> {
         let context_id = agents
             .iter()
-            .find(|agent| agent["agent_id"] == agent_id)
+            .find(|agent| agent["agent_did"] == agent_did)
             .and_then(|agent| agent["context_id"].as_str())
-            .ok_or_else(|| anyhow!("{agent_id} has no context"))?;
+            .ok_or_else(|| anyhow!("{agent_did} has no context"))?;
         rows["data"]["AgentContext"]
             .as_array()
             .and_then(|contexts| contexts.iter().find(|c| c["context_id"] == context_id))
             .ok_or_else(|| anyhow!("context {context_id} is missing"))
     };
-    let default_context = context_of(&format!("{node_did}:default"))?;
+    let default_context = context_of(&default_did)?;
     let yolo_context = context_of(&yolo_id)?;
     let tools_of = |context: &Value| -> Result<Value> {
         let tools_id = context["tools_id"]
@@ -166,7 +174,7 @@ async fn yolo_makes_one_agent_with_the_default_agents_tools_and_reuses_it() -> R
         .as_array()
         .context("AgentRequest rows")?
         .iter()
-        .filter(|request| request["agent_id"] == yolo_id.as_str())
+        .filter(|request| request["agent_did"] == yolo_id.as_str())
         .filter_map(|request| request["session_id"].as_str())
         .collect();
     assert_eq!(sessions.len(), 2, "both runs went to the same yolo agent");
@@ -186,7 +194,7 @@ async fn continue_adds_a_turn_to_the_session_with_the_agent_it_had() -> Result<(
     let turn = |content: &str| {
         let graphql = graphql.clone();
         let query = format!(
-            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_did}"}}, content: {{_eq: "{content}"}}}}) {{ session_id agent_id }} }}"#
+            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_did}"}}, content: {{_eq: "{content}"}}}}) {{ session_id agent_did }} }}"#
         );
         async move {
             let rows = graphql_query(&graphql, &query).await?;
@@ -208,9 +216,25 @@ async fn continue_adds_a_turn_to_the_session_with_the_agent_it_had() -> Result<(
     assert_eq!(stdout.trim(), reply);
     let second = turn("Second turn.").await?;
     assert_eq!(second["session_id"], session.as_str(), "the same session");
+    let yolo = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{node_did}"}}, display_name: {{_eq: "Yolo"}}}}) {{ agent_did }} }}"#
+        ),
+    )
+    .await?;
+    let yolo = yolo["data"]["Agent"][0]["agent_did"]
+        .as_str()
+        .context("the yolo agent")?
+        .to_owned();
     assert_eq!(
-        second["agent_id"],
-        format!("{node_did}:yolo").as_str(),
+        first["agent_did"],
+        yolo.as_str(),
+        "the first turn went to the yolo agent"
+    );
+    assert_eq!(
+        second["agent_did"],
+        yolo.as_str(),
         "the agent the session had, with no --agent"
     );
 

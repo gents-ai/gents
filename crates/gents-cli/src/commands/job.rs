@@ -251,9 +251,10 @@ where
 }
 
 async fn job_show(args: JobShowArgs) -> Result<()> {
-    let format = args
-        .output
-        .ensure_supported("automation job show", &[OutputFormat::Text, OutputFormat::Json])?;
+    let format = args.output.ensure_supported(
+        "automation job show",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )?;
     let node_did = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
         .context("resolving job owner node_did")?;
     let (access, _home_dir) =

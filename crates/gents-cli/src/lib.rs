@@ -192,8 +192,8 @@ Examples:
   gents codex
   gents codex \"what is in this directory?\"
   gents codex --remote ws://127.0.0.1:9292/
-  gents codex --agent ID
-  gents --agent ID
+  gents codex --agent DID
+  gents --agent DID
 
 `--agent` opens that agent instead of the node's default, in as many terminals
 as you like, with no restart. `gents config agent list` shows the agents.
@@ -460,8 +460,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     // endpoint; runtime entry points never load this client key.
     if matches!(
         &command,
-        Command::Chat(_)
-            | Command::Status(_)
+        Command::Status(_)
             | Command::Sessions { .. }
             | Command::Automation { .. }
             | Command::Config { .. }

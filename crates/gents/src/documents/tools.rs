@@ -1212,8 +1212,9 @@ pub fn wire_plugin(
         context.skill_ids.extend(skills);
     }
 
-    let next_call = (plugin.declaration.job.0 && job.is_none())
-        .then(|| format!("gents config pack wire {coordinate} --agent <agent> --targets-from <pack>"));
+    let next_call = (plugin.declaration.job.0 && job.is_none()).then(|| {
+        format!("gents config pack wire {coordinate} --agent <agent> --targets-from <pack>")
+    });
     Ok((
         tools,
         context,
