@@ -20,6 +20,7 @@ pub enum SelfConfigTarget {
     EventSource,
     DatastoreToolSurface,
     Skill,
+    Page,
 }
 pub const SELF_CONFIG_CATEGORIES: [&str; 8] = [
     "agent",
@@ -32,7 +33,7 @@ pub const SELF_CONFIG_CATEGORIES: [&str; 8] = [
     "policy",
 ];
 pub const DEFAULT_SELF_CONFIG_CATEGORIES: [&str; 3] = ["agent", "tools", "profile"];
-pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 17] = [
+pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 18] = [
     SelfConfigTarget::Agent,
     SelfConfigTarget::AgentContext,
     SelfConfigTarget::Compaction,
@@ -50,6 +51,7 @@ pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 17] = [
     SelfConfigTarget::EventSource,
     SelfConfigTarget::DatastoreToolSurface,
     SelfConfigTarget::Skill,
+    SelfConfigTarget::Page,
 ];
 impl SelfConfigTarget {
     pub fn collection(self) -> crate::Collection {
@@ -71,6 +73,7 @@ impl SelfConfigTarget {
             Self::EventSource => crate::Collection::EventSource,
             Self::DatastoreToolSurface => crate::Collection::DatastoreToolSurface,
             Self::Skill => crate::Collection::Skill,
+            Self::Page => crate::Collection::Page,
         }
     }
     pub fn collection_name(self) -> &'static str {
@@ -87,7 +90,11 @@ impl SelfConfigTarget {
     pub fn category(self) -> &'static str {
         match self {
             Self::Agent | Self::AgentContext => "agent",
-            Self::Tools | Self::AgentTarget | Self::DatastoreToolSurface | Self::Skill => "tools",
+            Self::Tools
+            | Self::AgentTarget
+            | Self::DatastoreToolSurface
+            | Self::Skill
+            | Self::Page => "tools",
             Self::Compaction
             | Self::InferenceProfile
             | Self::InferenceSampling

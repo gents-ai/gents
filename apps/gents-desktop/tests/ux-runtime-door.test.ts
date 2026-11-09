@@ -413,3 +413,72 @@ describe("one owner per plugin id", () => {
     expect(uxPluginRecords()["zeta/second/widget:shadowed"]?.status).toBe("disabled");
   });
 });
+
+/* a page document on the selected node: the third door */
+const pageDoc = (name: string, digest: string, enabled = true): UxPluginListing => ({
+  id: `page/${name}`,
+  door: "document",
+  producer: "file",
+  file: `Page/${name}`,
+  description: `${name} on this node`,
+  contributes: { areas: [SESSION_HEADER_ACTIONS_AREA], directives: [] },
+  defaultEnabled: enabled,
+  digest,
+});
+
+describe("page documents", () => {
+  it("loads an enabled page and reloads it only when its digest changes", async () => {
+    const page = pageDoc("notes", "sha256:a");
+    listings = [page];
+    sources.set(page.id, chipPlugin("notes"));
+    await scanRuntimeUxPlugins();
+    expect(uxPluginRecords().notes).toMatchObject({
+      door: "document",
+      status: "loaded",
+    });
+    expect(chips()).toEqual(["notes:chip"]);
+
+    call.mockClear();
+    await scanRuntimeUxPlugins();
+    expect(reads()).toEqual([]);
+
+    listings = [pageDoc("notes", "sha256:b")];
+    await scanRuntimeUxPlugins();
+    expect(reads()).toEqual([["desktop_ux_plugin_source", { id: page.id }]]);
+    expect(isUxPluginLive("notes")).toBe(true);
+  });
+
+  it("unloads a page when its document is disabled and loads it again when enabled", async () => {
+    const page = pageDoc("notes", "sha256:a");
+    listings = [page];
+    sources.set(page.id, chipPlugin("notes"));
+    await scanRuntimeUxPlugins();
+    expect(isUxPluginLive("notes")).toBe(true);
+
+    listings = [pageDoc("notes", "sha256:a", false)];
+    await scanRuntimeUxPlugins();
+    expect(uxPluginRecords().notes).toMatchObject({ status: "disabled" });
+    expect(chips()).toEqual([]);
+
+    /* this window's own earlier choice never overrides a disabled document */
+    await setUxPluginEnabled("notes", true);
+    expect(isUxPluginLive("notes")).toBe(false);
+    await scanRuntimeUxPlugins();
+    expect(isUxPluginLive("notes")).toBe(false);
+
+    listings = [pageDoc("notes", "sha256:a")];
+    await scanRuntimeUxPlugins();
+    expect(isUxPluginLive("notes")).toBe(true);
+  });
+
+  it("retires a page whose document left the selected node", async () => {
+    const page = pageDoc("notes", "sha256:a");
+    listings = [page];
+    sources.set(page.id, chipPlugin("notes"));
+    await scanRuntimeUxPlugins();
+    listings = [];
+    await scanRuntimeUxPlugins();
+    expect(uxPluginRecords().notes).toBeUndefined();
+    expect(chips()).toEqual([]);
+  });
+});

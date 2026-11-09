@@ -10,7 +10,7 @@ def allTargets : List Target :=
   [.agent, .agentContext, .compaction, .tools, .agentTarget, .inferenceProfile,
    .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy,
    .inferenceBackend, .toolServiceRegistry, .task, .schedule, .trigger, .eventSource,
-   .datastoreToolSurface, .skill]
+   .datastoreToolSurface, .skill, .page]
 abbrev Target.collectionName (t : Target) := ConfigDocuments.Collection.collectionName t
 abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField t
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
@@ -97,6 +97,18 @@ theorem datastore_entries_editable :
     "entries" ∈ writableFields .datastoreToolSurface := by decide
 
 theorem skill_instructions_editable : "instructions" ∈ writableFields .skill := by decide
+
+/-- Maintainer direction (2026-11-09): an application is built live on its
+node, so a desktop page is a document the Engineer writes through
+self-configuration rather than a file in a pack directory. Its module,
+stylesheet, data grants and enablement are its desired fields; `enabled` is
+its only state. -/
+theorem page_module_and_grants_editable :
+    "module" ∈ writableFields .page ∧ "css" ∈ writableFields .page ∧
+    "data" ∈ writableFields .page ∧ "enabled" ∈ writableFields .page := by decide
+
+theorem page_identity_protected :
+    "page_id" ∉ writableFields .page ∧ "node_did" ∉ writableFields .page := by decide
 
 theorem datastore_owner_and_identity_protected :
     "node_did" ∉ writableFields .datastoreToolSurface ∧

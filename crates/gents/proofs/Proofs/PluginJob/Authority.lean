@@ -56,6 +56,45 @@ theorem document_ux_requires_home (hasHome : Bool)
     (h : documentUxAllowed true hasHome = true) : hasHome = true := by
   simpa [documentUxAllowed] using h
 
+/-- Where the desktop reads a page from. A pack's `ux[]` entry is read from
+the home record its install wrote; a `Page` document is read from the node's
+documents and has no home record.
+
+Maintainer direction (2026-11-09): the native way to build an application is
+live on the node, so a page must have a home outside a pack. The document is
+that home. `enabled` is its only state: no versions, drafts or publication. -/
+inductive PageDoor | packRecord | document
+  deriving DecidableEq, Repr
+
+/-- A pack page loads from its home record (`documentUxAllowed`); a page
+document loads from any node the reader may read it on, while it is enabled. -/
+def pageLoadable : PageDoor → (hasLocalHome enabled : Bool) → Bool
+  | .packRecord, hasLocalHome, _ => hasLocalHome
+  | .document, _, enabled => enabled
+
+/-- A page may run a datastore tool only when its own declaration names that
+(surface, tool) pair, whichever door it came through. A page document is also
+refused while disabled, so disabling it withdraws its data access at once. The
+node's surface checks and document ACP apply after this and are not widened by
+it. -/
+def pageDataCallAllowed (door : PageDoor) (declared enabled : Bool) : Bool :=
+  declared && (door != .document || enabled)
+
+theorem page_document_needs_no_home (enabled : Bool) :
+    pageLoadable .document false enabled = enabled := rfl
+
+theorem undeclared_page_tool_is_refused (door : PageDoor) (enabled : Bool) :
+    pageDataCallAllowed door false enabled = false := by
+  simp [pageDataCallAllowed]
+
+theorem disabled_page_document_has_no_data (declared : Bool) :
+    pageDataCallAllowed .document declared false = false := by
+  simp [pageDataCallAllowed]
+
+theorem pack_page_data_follows_its_declaration (declared enabled : Bool) :
+    pageDataCallAllowed .packRecord declared enabled = declared := by
+  simp [pageDataCallAllowed]
+
 /-- A written record reads as written. A legacy record reads as `operator` for
 assets and plugins, because the CLI was their only writer, and as `selfConfig`
 for documents, which never had such a record. A missing record reads as

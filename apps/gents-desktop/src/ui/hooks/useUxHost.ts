@@ -21,6 +21,7 @@ import { followOtherWindowsDecisions } from "@/contrib/plugins-store";
 import {
   configureUxDoors,
   followOtherWindowsPackChanges,
+  rescanRuntimeUxPluginsSoon,
   scanRuntimeUxPlugins,
 } from "@/contrib/runtime-door";
 import type { DesktopClientUpdatedEvent } from "@source-inc/gents-desktop-client";
@@ -149,13 +150,34 @@ let following: Array<() => void> = [];
 export function openUxDoors(app: DesktopApp): void {
   if (opened) return;
   opened = true;
+  /* page documents are read from the selected node, by the same rule the
+     plugin host's selectedDeployment applies */
+  const nodeDid = () => {
+    const fleet = app.stores.fleet.getState();
+    const selected =
+      nodeOf(fleet, app.stores.selection.getState().nodeDid) ?? fleetNodes(fleet)[0];
+    return selected?.nodeDid ?? null;
+  };
   configureUxDoors({
-    list: () => app.actions.listUxPlugins(),
-    source: (id) => app.actions.readUxPluginSource(id),
+    list: () => app.actions.listUxPlugins(nodeDid()),
+    source: (id) => app.actions.readUxPluginSource(id, nodeDid()),
   });
   discoverBundledUxPlugins();
   void scanRuntimeUxPlugins();
-  following = [followOtherWindowsDecisions(), followOtherWindowsPackChanges()];
+  /* another node's pages replace this one's when the selection moves */
+  let scanned = nodeDid();
+  const followNode = () => {
+    const current = nodeDid();
+    if (current === scanned) return;
+    scanned = current;
+    void scanRuntimeUxPlugins().catch(() => undefined);
+  };
+  following = [
+    followOtherWindowsDecisions(),
+    followOtherWindowsPackChanges(),
+    app.stores.selection.subscribe(followNode),
+    app.stores.fleet.subscribe(followNode),
+  ];
 }
 
 export function useUxHost(
@@ -176,7 +198,11 @@ export function useUxHost(
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     void Promise.resolve(
-      listenToUpdates((event: DesktopClientUpdatedEvent) => emitClientUpdated(event)),
+      listenToUpdates((event: DesktopClientUpdatedEvent) => {
+        emitClientUpdated(event);
+        /* an agent editing a page document is client activity */
+        rescanRuntimeUxPluginsSoon();
+      }),
     ).then((stop: () => void) => {
       if (cancelled) stop();
       else unlisten = stop;

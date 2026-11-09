@@ -54,6 +54,11 @@ impl ConfigCommandTool {
             {
                 return Ok((*text).to_owned());
             }
+            if requested == "ux" || command.first() == Some(&"lint") {
+                if let Some(text) = command_help(resource, &page, &command) {
+                    return Ok(text);
+                }
+            }
         }
         if let Some(target) = crud::resource_target(resource) {
             return crud_help(resource, target, &page, &command);
@@ -228,8 +233,8 @@ fn resource_has_fields(resource: &str) -> bool {
 
 /// Reference for page authors, one read away from `["help","page"]`.
 const PAGE_TOPICS: &[(&str, &str)] = &[
-    ("contributions", "A page module is plain ESM; its default export is {id, name, register(ctx)}, and register calls ctx.registerMany([...]). Each row is {id, area, order?, data?, render?}. Areas: nav (data: {id, label, icon, to, placement, order}), plugin.pages (render: a React element), agent.sections, session.header.actions, transcript.directives (data: {name, label, onClick}). Every area and directive must be declared in the manifest's ux[].contributes; the desktop refuses anything else. Only @gents/ux-sdk, react and react/jsx-runtime may be imported; ux lint reports any other import and dynamic code."),
-    ("data", "A page reads and writes node documents only through datastore tools its manifest grants: ux[].data = [{surface: SURFACE_ID, tools: [TOOL_NAME, ...]}]. Create the DatastoreToolSurface with config datastore create or ship it in the pack's pack_config.json. In the page: useQuery(ctx, SURFACE, TOOL, {args, live}) returns the rows and useWrite(ctx, SURFACE, TOOL) returns {write, pending, error}. ACP on the node still decides what the operator may read or write. A tool with a runtime-filled field cannot be called from a page."),
+    ("contributions", "A page module is plain ESM; its default export is {id, name, register(ctx)}, and register calls ctx.registerMany([...]). Each row is {id, area, order?, data?, render?}. Areas: nav (data: {id, label, icon, to, placement, order}), plugin.pages (render: a React element), agent.sections, session.header.actions, transcript.directives (data: {name, label, onClick}). A page document may register nav and plugin.pages; a pack page must declare every area and directive in the manifest's ux[].contributes. The desktop refuses anything else. Only @gents/ux-sdk, react and react/jsx-runtime may be imported; ux lint reports any other import and dynamic code."),
+    ("data", "A page reads and writes node documents only through the datastore tools it is granted: set.data on a page document, or ux[].data in a pack's manifest, as [{surface: SURFACE_ID, tools: [TOOL_NAME, ...]}]. Create the DatastoreToolSurface with config datastore create or ship it in the pack's pack_config.json. In the page: useQuery(ctx, SURFACE, TOOL, {args, live}) returns the rows and useWrite(ctx, SURFACE, TOOL) returns {write, pending, error}. ACP on the node still decides what the operator may read or write. A tool with a runtime-filled field cannot be called from a page."),
     ("sdk", super::ux::SDK_REFERENCE),
 ];
 
@@ -381,16 +386,16 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "policy get to see what you hold; policy check --permission NAME to test one permission.",
         },
         "page" => Page {
-            what: "a desktop UI a pack ships: one plain ESM module the desktop loads in its own frame (pack grant).",
+            what: "a desktop page held on this node as a document: one plain ES module, an optional stylesheet and the datastore tools it may run (tools grant). The desktop loads it from the selected node in its own frame and reloads it when the document changes.",
             commands: &[
-                "pack scaffold NAME  options.page true: writes ux/NAME/plugin.js and declares it in the manifest",
-                "pack add page NAME  options.dir: the pack; adds another page to an existing pack",
-                "ux lint FILE  the static lint on one plugin.js inside the tool root",
+                "ux lint FILE  the static lint on one plugin.js inside the tool root; page/ID lints a page document",
+                "page lint ID  the static lint on a stored page's module and stylesheet",
+                "ux preview PLUGIN  render page/ID, a listed id or a plugin.js in the real sandbox with this node's data; ux preview --help",
                 "ux list  options: limit, cursor; every page on this node with its door, areas and data grants",
                 "ux module ID  the module the desktop receives for a listed id, source capped at 64 KiB",
             ],
-            notes: "Edit ux/NAME/plugin.js with the file tools: no build step. A data-and-page pack is a documents pack: pack add schema turns an assets pack into one, so it needs no agent and no inference slot. pack check and pack build run the lint; build writes the .pack. Preview and install it like any pack. An installed page follows its manifest's default_enabled.",
-            next: "pack build, then pack preview install and pack install on the .pack; it then appears in ux list.",
+            notes: "Each set replaces the whole field. set.enabled false unloads the page and withdraws its data access. A page document registers nav and plugin.pages only. No file or pack is needed; to ship pages in a pack instead, see pack scaffold (options.page true) and pack add page in [\"help\",\"pack\"].",
+            next: "page lint ID, then ux preview page/ID; fix what the report names before saying the page works.",
         },
         "plugin" => Page {
             what: "inspect and try installed plugins; installation and model tool selection are separate steps.",
@@ -432,6 +437,24 @@ fn mailbox_values() -> Value {
 
 pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
     match resource {
+        "page" => vec![(
+            "a page that shows a collection's rows, built live on this node",
+            vec![
+                (
+                    json!({"argv":["datastore","create"],"target_id":"notes-tools","set":{"entries":[{"kind":"query","tool_name":"list_notes","collection":"Note","fields":["title"]}]}}),
+                    Some("the collection must already exist; create it with the schema tool"),
+                ),
+                (
+                    json!({"argv":["page","create"],"target_id":"notes","set":{"display_name":"Notes","module":"<ES MODULE; skeleton in [\"help\",\"page\",\"sdk\"], with id: 'notes'>","data":[{"surface":"notes-tools","tools":["list_notes"]}]}}),
+                    None,
+                ),
+                (json!({"argv":["page","lint"],"target_id":"notes"}), None),
+                (
+                    json!({"argv":["ux","preview","page/notes"]}),
+                    Some("read the report: the visible text, console errors and each data call's rows"),
+                ),
+            ],
+        )],
         "pack" => vec![(
             "install a pack and feed it from your own automation",
             vec![
@@ -607,6 +630,21 @@ fn crud_help(
         writeln!(
             out,
             "Also: task run ID fires it once now; see task run --help."
+        )?;
+    }
+    if resource == "page" {
+        writeln!(out, "Also:")?;
+        for line in page.commands {
+            writeln!(out, "  {line}")?;
+        }
+        writeln!(
+            out,
+            "Topics: [\"help\",\"page\",TOPIC]: {}.",
+            PAGE_TOPICS
+                .iter()
+                .map(|(topic, _)| *topic)
+                .collect::<Vec<_>>()
+                .join(", ")
         )?;
     }
     let writes = command.is_empty()

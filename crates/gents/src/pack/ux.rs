@@ -54,23 +54,9 @@ pub struct PackUxPlugin {
     pub data: Vec<UxDataSurface>,
 }
 
-/// One `DatastoreToolSurface` a UX plugin's pages may call into, by the
-/// surface's id on the agent's node, narrowed to the named tools.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct UxDataSurface {
-    pub surface: String,
-    pub tools: Vec<String>,
-}
-
-/// Longest surface id a manifest may name.
-pub const MAX_UX_DATA_SURFACE_ID_LEN: usize = 128;
-
-/// A tool name a manifest may name: `[a-z][a-z0-9_]{0,63}`, the shape a
-/// `DatastoreToolSurface` entry's `tool_name` takes.
-pub fn is_valid_ux_data_tool_name(name: &str) -> bool {
-    name.len() <= 64 && is_valid_pack_name(name)
-}
+pub use crate::documents::{
+    is_valid_ux_data_tool_name, UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN,
+};
 
 /// What a UX plugin declares it contributes: the gate the desktop's
 /// plugin context enforces on every `register` call.
@@ -184,44 +170,6 @@ impl PackUxPlugin {
             "ux plugin {:?} declares directives but not the transcript.directives area",
             self.name
         );
-        let mut surfaces = BTreeSet::new();
-        for declared in &self.data {
-            let surface = declared.surface.as_str();
-            anyhow::ensure!(
-                !surface.is_empty()
-                    && !surface.chars().any(char::is_whitespace)
-                    && surface.len() <= MAX_UX_DATA_SURFACE_ID_LEN,
-                "ux plugin {:?} declares the data surface {surface:?}; a surface id is non-empty, \
-                 has no whitespace and is at most {MAX_UX_DATA_SURFACE_ID_LEN} characters",
-                self.name
-            );
-            anyhow::ensure!(
-                surfaces.insert(surface),
-                "ux plugin {:?} declares the data surface {surface:?} twice",
-                self.name
-            );
-            anyhow::ensure!(
-                !declared.tools.is_empty(),
-                "ux plugin {:?} declares the data surface {surface:?} with no tools; name the \
-                 tools its pages may run",
-                self.name
-            );
-            let mut tools = BTreeSet::new();
-            for tool in &declared.tools {
-                anyhow::ensure!(
-                    is_valid_ux_data_tool_name(tool),
-                    "ux plugin {:?} declares the tool {tool:?} on data surface {surface:?}; a tool \
-                     name is lowercase letters, digits and underscores, starting with a letter, \
-                     at most 64 characters",
-                    self.name
-                );
-                anyhow::ensure!(
-                    tools.insert(tool.as_str()),
-                    "ux plugin {:?} declares the tool {tool:?} on data surface {surface:?} twice",
-                    self.name
-                );
-            }
-        }
-        Ok(())
+        crate::documents::validate_ux_data("ux plugin", &self.name, &self.data)
     }
 }

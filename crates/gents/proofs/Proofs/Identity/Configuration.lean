@@ -449,7 +449,7 @@ client-signed update can name only mutable fields; immutable replacement values
 are checked and omitted by the caller. Native graph validation remains the
 premise for unsupported CRDTs, schema changes and generated inputs. -/
 def clientSignedCreateCollection (collection : String) : Bool :=
-  ["Node", "Agent", "AgentContext", "CompactionConfig", "Skill", "DatastoreToolSurface", "Tools", "AgentTarget", "InferenceBackendMetadata", "InferenceProfile", "InferenceSampling", "InferenceExecution", "InferenceRetryPolicy", "ToolServiceRegistry", "ProjectionAcpBinding", "Task", "Schedule", "EventSource", "Trigger", "Callback", "CallbackBinding", "CallbackModule", "RepositoryPlacement", "EvalDefinition"].contains collection
+  ["Node", "Agent", "AgentContext", "CompactionConfig", "Skill", "DatastoreToolSurface", "Tools", "AgentTarget", "InferenceBackendMetadata", "InferenceProfile", "InferenceSampling", "InferenceExecution", "InferenceRetryPolicy", "ToolServiceRegistry", "ProjectionAcpBinding", "Task", "Schedule", "EventSource", "Trigger", "Callback", "CallbackBinding", "CallbackModule", "RepositoryPlacement", "EvalDefinition", "Page"].contains collection
 
 def clientSignedUpdateSupported (collection : String) : Bool :=
   clientSignedCreateCollection collection

@@ -63,7 +63,10 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "connect sources, tasks and triggers; wiring recipes",
     ),
     ("pack", "pack installation and authoring"),
-    ("page", "author a desktop page shipped in a pack"),
+    (
+        "page",
+        "a desktop page held on this node as a document, or shipped in a pack",
+    ),
     (
         "policy",
         "node permissions and document relationships, delegated as this agent",
@@ -147,7 +150,8 @@ impl ConfigCommandParams {
                 | ["profile", "create", ..]
                 | ["skill", "get", ..]
                 | ["pack", "get" | "install" | "update" | "remove", ..]
-                | ["plugin", "get" | "run", ..] => 2,
+                | ["plugin", "get" | "run", ..]
+                | ["page", "lint", ..] => 2,
                 ["task", "run", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
                 ["get", ..] => return Err(CommandGuidance {
@@ -480,6 +484,7 @@ impl ConfigCommandTool {
                     "skill" => verb == "import",
                     "task" => verb == "run",
                     "trigger" => verb == "explain",
+                    "page" => verb == "lint",
                     _ => false,
                 };
                 if !common.contains(&verb.as_str()) && !extra {
@@ -534,6 +539,7 @@ impl ConfigCommandTool {
                 self.plugin_run(&argv[2..]).await
             }
             "plugin" => self.plugin(&argv[1..]),
+            "page" => self.page(&argv[1..]).await,
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,
             "validate" => self.validate_saved(&argv[1..]).await,

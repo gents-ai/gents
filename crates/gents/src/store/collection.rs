@@ -28,15 +28,16 @@ pub enum Collection {
     CallbackModule,
     RepositoryPlacement,
     EvalDefinition,
+    Page,
 }
 
 /// This enumeration provides no reference-safety guarantee; publication must
 /// validate the complete manifest and atomically commit it, including legal
 /// reference cycles.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 24] = Collection::ALL;
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 25] = Collection::ALL;
 
 impl Collection {
-    pub const ALL: [Collection; 24] = [
+    pub const ALL: [Collection; 25] = [
         Self::Node,
         Self::Agent,
         Self::AgentContext,
@@ -61,6 +62,7 @@ impl Collection {
         Self::CallbackModule,
         Self::RepositoryPlacement,
         Self::EvalDefinition,
+        Self::Page,
     ];
 
     pub fn file_name(self) -> Option<&'static str> {
@@ -96,6 +98,7 @@ impl Collection {
             Self::CallbackModule => Some("callback_modules"),
             Self::RepositoryPlacement => Some("repository_placements"),
             Self::EvalDefinition => Some("eval_definitions"),
+            Self::Page => Some("pages"),
         }
     }
 
@@ -125,6 +128,7 @@ impl Collection {
             Self::CallbackModule => "CallbackModule",
             Self::RepositoryPlacement => "RepositoryPlacement",
             Self::EvalDefinition => "EvalDefinition",
+            Self::Page => "Page",
         }
     }
 
@@ -156,6 +160,7 @@ impl Collection {
             Self::CallbackModule => "module_id",
             Self::RepositoryPlacement => "repository_id",
             Self::EvalDefinition => "definition_id",
+            Self::Page => "page_id",
         }
     }
 }

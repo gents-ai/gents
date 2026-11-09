@@ -411,6 +411,26 @@ pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::plugin::ux::U
     .await
 }
 
+/// The page documents of `node_did` that `access` may read, as listings: the
+/// document door (`gents::plugin::ux::page`), beside what [`ux_list`] reads
+/// from a home.
+pub async fn ux_pages(
+    access: gents::ConfigAccess,
+    node_did: String,
+) -> Result<Vec<gents::plugin::ux::UxListing>> {
+    gents::plugin::ux::page::list(&access, &node_did).await
+}
+
+/// The module of the page document listed as `id` on `node_did`.
+pub async fn ux_page_module(
+    access: gents::ConfigAccess,
+    node_did: String,
+    id: String,
+) -> Result<gents::plugin::ux::UxModule> {
+    let page = gents::plugin::ux::page::find(&access, &node_did, &id).await?;
+    Ok(gents::plugin::ux::page::module(&page))
+}
+
 /// The pack behind the UX plugin listed as `ux`, once it ships an `.afb`
 /// plugin named `name`: the `namespace/name` coordinate `ctx.plugin` may
 /// run under. A UX plugin outside a pack has nothing to call. The webview

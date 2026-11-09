@@ -6,7 +6,7 @@
 use schemars::{schema_for, JsonSchema, Schema};
 use serde_json::{json, Map, Value};
 
-use crate::documents::{noted, widen_schema};
+use crate::documents::{noted, widen_schema, PageDocument};
 use crate::documents::{
     Agent, AgentContext, AgentTargetDocument, Callback, CallbackBinding, CallbackModule,
     CompactionConfig, DatastoreToolSurfaceDocument, EvalDefinition, EventSource, InferenceBackend,
@@ -84,6 +84,7 @@ pub fn authored_document_schema(collection: Collection) -> Schema {
         Collection::CallbackModule => schema_for!(CallbackModule),
         Collection::RepositoryPlacement => schema_for!(RepositoryPlacement),
         Collection::EvalDefinition => schema_for!(EvalDefinition),
+        Collection::Page => schema_for!(PageDocument),
     };
     let document = schema.ensure_object();
     omit_owner(document);

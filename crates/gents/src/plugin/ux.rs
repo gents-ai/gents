@@ -20,8 +20,9 @@
 //! by `PluginRunner`; the product passes the desktop's same gate either
 //! way.
 //!
-//! A UX plugin is an asset, never a document: nothing here touches the
-//! control plane.
+//! A third door is a `Page` document on the node ([`page`]): it is listed
+//! and produced from the node's documents through the reader's own access,
+//! so [`list`] and [`resolve_module`], which read a home, never see it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,7 @@ use crate::pack::{
 };
 
 pub mod lint;
+pub mod page;
 pub mod reference;
 
 /// The entry file a dev plugin folder must hold.
@@ -56,6 +58,8 @@ pub const PRODUCER_SURFACE: &str = "webview";
 pub enum UxDoor {
     Dev,
     Pack,
+    /// A `Page` document on the node (`page`).
+    Document,
 }
 
 /// How the module is produced.
@@ -90,6 +94,10 @@ pub struct UxListing {
     /// (`crate::observe::ux_data`); empty for a dev plugin, which declares nothing.
     #[serde(default)]
     pub data: Vec<UxDataSurface>,
+    /// `sha256:<hex>` of a page document's content, so a reader learns of an
+    /// edit from the listing alone; absent for the other doors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 /// A produced module, as `desktop_ux_plugin_source` answers it.
@@ -157,6 +165,7 @@ pub fn list(home: &Path) -> Result<Vec<UxListing>> {
                 contributes: None,
                 default_enabled: None,
                 data: Vec::new(),
+                digest: None,
             });
         }
     }
@@ -212,6 +221,7 @@ fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Res
         contributes: Some(ux.contributes.clone()),
         default_enabled: ux.default_enabled,
         data: ux.data.clone(),
+        digest: None,
     })
 }
 
@@ -236,7 +246,7 @@ fn read_bounded(path: &Path, what: &str) -> Result<String> {
     String::from_utf8(bytes).with_context(|| format!("{what} {} is not UTF-8", path.display()))
 }
 
-fn digest_of(source: &str) -> String {
+pub(crate) fn digest_of(source: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(source.as_bytes()))
 }
 
@@ -261,6 +271,9 @@ pub(crate) fn file_module(home: &Path, listing: &UxListing, css: Option<&str>) -
             .join(css),
         ),
         (UxDoor::Pack, None) => None,
+        (UxDoor::Document, _) => {
+            anyhow::bail!("page document {} is read from its node, not a file", listing.id)
+        }
     };
     let css = css_path
         .map(|path| read_bounded(&path, "ux plugin css"))

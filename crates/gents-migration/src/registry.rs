@@ -269,6 +269,10 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::DATASTORE_TOOL_SURFACE
     ),
     baseline_entry!(
+        gents_protocol::schemas::PAGE_NAME,
+        gents_protocol::schemas::PAGE
+    ),
+    baseline_entry!(
         gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
         gents_protocol::schemas::PENDING_CHAT_SUBMISSION
     ),

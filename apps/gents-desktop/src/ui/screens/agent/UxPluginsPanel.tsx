@@ -20,6 +20,7 @@ const DOOR_LABEL: Record<UxPluginRecord["door"], string> = {
   bundled: "Built in",
   dev: "Dev folder",
   pack: "Pack",
+  document: "Page on this node",
 };
 
 function describe(record: UxPluginRecord): string {

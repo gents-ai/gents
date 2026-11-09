@@ -76,6 +76,8 @@ pub const TOOLS_NAME: &str = "Tools";
 pub const TOOLS: &str = include_str!("../schemas/agent/tools.graphql");
 pub const SKILL_NAME: &str = "Skill";
 pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
+pub const PAGE_NAME: &str = "Page";
+pub const PAGE: &str = include_str!("../schemas/agent/page.graphql");
 pub const DATASTORE_TOOL_SURFACE_NAME: &str = "DatastoreToolSurface";
 pub const DATASTORE_TOOL_SURFACE: &str =
     include_str!("../schemas/agent/datastore_tool_surface.graphql");
@@ -203,6 +205,7 @@ pub const ALL: &[&str] = &[
     TOOLS,
     SKILL,
     DATASTORE_TOOL_SURFACE,
+    PAGE,
     PENDING_CHAT_SUBMISSION,
     WORKSPACE_ROOT,
     ISOLATED_WORKSPACE,
@@ -280,6 +283,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     TOOLS_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
+    PAGE_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
     WORKSPACE_ROOT_NAME,
     ISOLATED_WORKSPACE_NAME,

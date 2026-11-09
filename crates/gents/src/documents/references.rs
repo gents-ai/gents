@@ -494,6 +494,7 @@ impl ConfigReferences {
             Collection::ToolServiceRegistry => decode::<ToolServiceRegistry>(value)?.validate()?,
             Collection::RepositoryPlacement => decode::<RepositoryPlacement>(value)?.validate()?,
             Collection::EvalDefinition => decode::<EvalDefinition>(value)?.validate()?,
+            Collection::Page => decode::<PageDocument>(value)?.validate()?,
             Collection::Skill | Collection::CallbackModule => {}
         }
         Ok(())
@@ -689,6 +690,7 @@ pub(crate) fn references_of(
         | Collection::ToolServiceRegistry
         | Collection::EvalDefinition
         | Collection::Skill
+        | Collection::Page
         | Collection::CallbackModule => {}
     }
     Ok(references)

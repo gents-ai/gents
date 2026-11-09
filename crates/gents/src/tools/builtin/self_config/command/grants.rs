@@ -10,6 +10,7 @@ pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<
         ("tools", "tools"),
         ("tools", "datastore"),
         ("tools", "skill"),
+        ("tools", "page"),
         ("tools", "agent-target"),
         ("profile", "profile"),
         ("profile", "execution"),
@@ -30,7 +31,9 @@ pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<
     }
     if pack {
         resources.push("pack");
-        resources.push("page");
+        if !resources.contains(&"page") {
+            resources.push("page");
+        }
         resources.push("ux");
     }
     if categories.contains("policy") {

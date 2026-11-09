@@ -1,6 +1,8 @@
 use super::*;
 use crate::plugin::ux;
 
+mod page;
+
 /// The generated SDK reference `help page sdk` returns.
 pub(super) const SDK_REFERENCE: &str = ux::reference::SDK_REFERENCE;
 
@@ -11,18 +13,18 @@ const MODULE_SOURCE_LIMIT: usize = 64 * 1024;
 impl ConfigCommandTool {
     pub(super) async fn ux(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(
-            self.core.held_grants().pack_install,
-            "ux inspection requires the pack grant"
+            self.core.held_grants().pack_install || self.categories.contains("tools"),
+            "ux inspection requires the pack or tools grant"
         );
         match argv.first().map(String::as_str) {
-            Some("list") => self.ux_list(&argv[1..]),
+            Some("list") => self.ux_list(&argv[1..]).await,
             Some("module") => self.ux_module(&argv[1..]).await,
             Some("lint") => self.ux_lint(&argv[1..]).await,
-            _ => bail!("ux supports list, module and lint; see [\"help\",\"page\"]"),
+            _ => bail!("ux supports list, module, lint and preview; see [\"help\",\"page\"]"),
         }
     }
 
-    fn ux_list(&self, argv: &[String]) -> Result<String> {
+    async fn ux_list(&self, argv: &[String]) -> Result<String> {
         let home = self
             .plugins
             .home()
@@ -31,7 +33,11 @@ impl ConfigCommandTool {
         parsed.reject_mutation_flags()?;
         let limit = parse_limit(&parsed)?;
         let cursor = parsed.one("cursor")?;
-        let mut items = ux::list(home)?
+        let mut listed = ux::list(home)?;
+        if self.categories.contains("tools") {
+            listed.extend(self.page_listings().await?);
+        }
+        let mut items = listed
             .into_iter()
             .filter(|listing| cursor.is_none_or(|cursor| listing.id.as_str() > cursor))
             .take(limit + 1)
@@ -57,18 +63,22 @@ impl ConfigCommandTool {
         let [id] = argv else {
             bail!("ux module requires exactly one listed ID; see [\"ux\",\"list\"]");
         };
-        let listing = ux::find(home, id)?;
-        let plugins = self.plugins.clone();
-        let module = ux::resolve_module(home, &listing, |namespace, plugin| async move {
-            let coordinate = format!("{namespace}/{plugin}");
-            let record = plugins.resolve(&coordinate, None)?;
-            plugins
-                .call(&record, ux::producer_input())
-                .await?
-                .outcome
-                .into_output(&coordinate)
-        })
-        .await?;
+        let module = if ux::page::page_id(id).is_some() {
+            ux::page::module(&self.page_document(ux::page::page_id(id).unwrap_or(id)).await?)
+        } else {
+            let listing = ux::find(home, id)?;
+            let plugins = self.plugins.clone();
+            ux::resolve_module(home, &listing, |namespace, plugin| async move {
+                let coordinate = format!("{namespace}/{plugin}");
+                let record = plugins.resolve(&coordinate, None)?;
+                plugins
+                    .call(&record, ux::producer_input())
+                    .await?
+                    .outcome
+                    .into_output(&coordinate)
+            })
+            .await?
+        };
         let bytes = module.source.len();
         let source: String = module
             .source
@@ -90,8 +100,11 @@ impl ConfigCommandTool {
 
     async fn ux_lint(&self, argv: &[String]) -> Result<String> {
         let [file] = argv else {
-            bail!("ux lint requires exactly one FILE inside the tool root");
+            bail!("ux lint requires exactly one FILE inside the tool root, or page/ID for a page document");
         };
+        if ux::page::page_id(file).is_some() {
+            return self.page_lint(file).await;
+        }
         let context = self.authoring_paths("ux lint", false).await?;
         let path = context.resolve_existing_file(file)?;
         let display = context.display_path(&path);

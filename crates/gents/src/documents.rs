@@ -24,6 +24,7 @@ mod references;
 mod schedule;
 pub mod schedule_cron;
 mod serde_helpers;
+mod page;
 mod skill;
 pub mod skills;
 mod surface_tool;
@@ -119,6 +120,10 @@ pub(crate) use write_tool::{reject_protected_collection_name, undeclared_field_r
 pub use agent_target::AgentTargetDocument;
 
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
+pub use page::{
+    is_snake_case_name, is_valid_ux_data_tool_name, list_pages, validate_ux_data, PageDocument,
+    UxDataSurface, MAX_PAGE_SOURCE_BYTES, MAX_UX_DATA_SURFACE_ID_LEN, PAGE_AREAS,
+};
 pub use skill::SkillDocument;
 
 #[cfg(test)]

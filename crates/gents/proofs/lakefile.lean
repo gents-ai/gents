@@ -20,6 +20,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.RuntimeConnectionBackoff,
   `Proofs.Conformance.EnrollmentActivation,
   `Proofs.Conformance.DocumentPackUx,
+  `Proofs.Conformance.PageDocument,
   `Proofs.Conformance.PluginDelete,
   `Proofs.Conformance.ClientOptimisticSend,
   `Proofs.Conformance.GoalClientDelivery,

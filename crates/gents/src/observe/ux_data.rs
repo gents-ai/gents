@@ -1,9 +1,10 @@
 //! A UX plugin's data path: the datastore tools its pack's manifest
-//! declares (`ux[].data`), run for one of its pages through the operator's
-//! access to the agent's node.
+//! (`ux[].data`) or its `Page` document (`data`) declares, run for one of
+//! its pages through the operator's access to the agent's node.
 //!
-//! Three owners narrow one call. The manifest says which (surface, tool)
-//! pairs this plugin may name at all; the node's `DatastoreToolSurface`
+//! Three owners narrow one call. The declaration says which (surface, tool)
+//! pairs this plugin may name at all, and a page document must also be
+//! enabled (Lean `PluginJob.pageDataCallAllowed`); the node's `DatastoreToolSurface`
 //! says what the tool is, with the fail-closed checks
 //! [`crate::documents::merge_datastore_tool_surfaces`] applies for
 //! an agent (missing, disabled, foreign, malformed, duplicate); ACP at the
@@ -51,13 +52,53 @@ fn kind_of(entry: &SurfaceToolDecl) -> &'static str {
     }
 }
 
-fn listing_with_data(home: &Path, ux: &str) -> Result<UxListing> {
-    let listing = crate::plugin::ux::find(home, ux)?;
+/// Whether a page may run a tool: its declaration names the pair, and a page
+/// document is enabled (Lean `PluginJob.pageDataCallAllowed`).
+pub(crate) fn page_data_call_allowed(document: bool, declared: bool, enabled: bool) -> bool {
+    declared && (!document || enabled)
+}
+
+/// A listing and whether it is live: a page document read from `node_did`
+/// through `access`, or a home listing, which is always live.
+async fn listing_with_data(
+    home: &Path,
+    access: &ConfigAccess,
+    node_did: &str,
+    ux: &str,
+) -> Result<(UxListing, bool)> {
+    let (listing, enabled) = if crate::plugin::ux::page::page_id(ux).is_some() {
+        let page = crate::plugin::ux::page::find(access, node_did, ux).await?;
+        (crate::plugin::ux::page::listing(&page)?, page.enabled)
+    } else {
+        (crate::plugin::ux::find(home, ux)?, true)
+    };
     anyhow::ensure!(
         !listing.data.is_empty(),
         "ux plugin {ux:?} declares no data surfaces"
     );
-    Ok(listing)
+    Ok((listing, enabled))
+}
+
+fn refuse_undeclared(
+    listing: &UxListing,
+    enabled: bool,
+    surface: &str,
+    tool: &str,
+) -> Result<()> {
+    let document = listing.door == crate::plugin::ux::UxDoor::Document;
+    let declared = manifest_allows_tool(listing, surface, tool);
+    anyhow::ensure!(
+        !document || enabled || !declared,
+        "page {:?} is disabled; a disabled page has no data access",
+        listing.id
+    );
+    anyhow::ensure!(
+        page_data_call_allowed(document, declared, enabled),
+        "ux plugin {:?} may not call tool {tool:?} of surface {surface:?}: not declared in its \
+         manifest",
+        listing.id
+    );
+    Ok(())
 }
 
 /// The installed surface `surface` of `node_did`, enabled, with each entry
@@ -197,12 +238,8 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
         tool,
         args,
     } = request;
-    let listing = listing_with_data(home, &ux)?;
-    anyhow::ensure!(
-        manifest_allows_tool(&listing, &surface, &tool),
-        "ux plugin {ux:?} may not call tool {tool:?} of surface {surface:?}: not declared in its \
-         manifest"
-    );
+    let (listing, enabled) = listing_with_data(home, access, &node_did, &ux).await?;
+    refuse_undeclared(&listing, enabled, &surface, &tool)?;
     let document = installed_surface(access, &node_did, &surface).await?;
     let entry = document
         .entries
@@ -246,13 +283,14 @@ async fn watch_declaration(
     access: &ConfigAccess,
     request: &UxDataCall,
 ) -> Result<QueryToolDecl> {
-    let listing = listing_with_data(home, &request.ux)?;
+    let (listing, enabled) =
+        listing_with_data(home, access, &request.node_did, &request.ux).await?;
     anyhow::ensure!(
-        listing
-            .data
-            .iter()
-            .any(|declared| declared.surface == request.surface
-                && declared.tools.contains(&request.tool)),
+        page_data_call_allowed(
+            listing.door == crate::plugin::ux::UxDoor::Document,
+            manifest_allows_tool(&listing, &request.surface, &request.tool),
+            enabled,
+        ),
         "query is not declared in the plugin manifest"
     );
     let document = installed_surface(access, &request.node_did, &request.surface).await?;
@@ -339,7 +377,7 @@ pub async fn watch_local(
     let declaration = watch_declaration(home, &access, &request).await?;
     let changes = crate::subscribe_collections(
         &node,
-        [declaration.collection.as_str(), "DatastoreToolSurface"],
+        [declaration.collection.as_str(), "DatastoreToolSurface", "Page"],
     )?;
     let last = call(home, &access, request.clone()).await?;
     anyhow::ensure!(
@@ -367,7 +405,11 @@ pub async fn surfaces(
     ux: &str,
     node_did: &str,
 ) -> Result<Value> {
-    let listing = listing_with_data(home, ux)?;
+    let (listing, enabled) = listing_with_data(home, access, node_did, ux).await?;
+    anyhow::ensure!(
+        enabled,
+        "page {ux:?} is disabled; a disabled page has no data access"
+    );
     let installed = list_datastore_tool_surfaces(access, node_did).await?;
     let mut out = Vec::with_capacity(listing.data.len());
     for declared in &listing.data {

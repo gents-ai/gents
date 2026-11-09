@@ -44,8 +44,9 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     listPendingPluginApprovals: () => api.listPendingPluginApprovals(),
     decidePluginApproval: (id: string, decision: PluginApprovalDecision) =>
       api.decidePluginApproval(id, decision),
-    listUxPlugins: () => api.listUxPlugins(),
-    readUxPluginSource: (id: string) => api.readUxPluginSource(id),
+    listUxPlugins: (nodeDid?: string | null) => api.listUxPlugins(nodeDid),
+    readUxPluginSource: (id: string, nodeDid?: string | null) =>
+      api.readUxPluginSource(id, nodeDid),
     callPackPlugin: (request: PackPluginCallRequest) => api.callPackPlugin(request),
     callUxData: (request: UxDataCallRequest) => api.callUxData(request),
     watchUxData: (

@@ -7,7 +7,7 @@
    (the app has no nanostores dependency). */
 import { useSyncExternalStore } from "react";
 
-export type UxPluginDoor = "bundled" | "dev" | "pack";
+export type UxPluginDoor = "bundled" | "dev" | "pack" | "document";
 export type UxPluginProducer = "file" | "afb";
 export type UxPluginStatus = "disabled" | "error" | "loaded";
 

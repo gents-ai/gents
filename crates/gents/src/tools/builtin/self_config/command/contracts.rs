@@ -49,6 +49,18 @@ pub(in crate::tools::builtin::self_config) fn help_patch_contracts(
                 "tags":"array<string>; default []"
             }),
         )],
+        Some("page") => vec![patch_contract(
+            SelfConfigTarget::Page,
+            json!({
+                "display_name":"string|null; the label people see",
+                "description":"string|null; what the page is for",
+                "module":"string (required); one plain ES module, at most 1024 KiB. Its default export is {id, name, register(ctx)} and id equals the page ID. See [\"help\",\"page\",\"contributions\"]",
+                "css":"string|null; a stylesheet for the page's frame, at most 1024 KiB",
+                "data":"array<{surface: DatastoreToolSurface ID, tools: [tool_name]}>|null; the only datastore tools the page may run",
+                "enabled":"boolean; default true. false unloads the page and withdraws its data access",
+                "tags":"array<string>; default []"
+            }),
+        )],
         Some("datastore") => vec![patch_contract(
             SelfConfigTarget::DatastoreToolSurface,
             json!({
@@ -194,6 +206,7 @@ pub(in crate::tools::builtin::self_config) fn field_shape(
         "tools",
         "datastore",
         "skill",
+        "page",
         "profile",
         "backend",
         "mcp-service",

@@ -206,6 +206,7 @@ def examples : List (Target × FieldKey × FieldValue) :=
   , (.agentTarget, "agent_did", "gatekeeper")
   , (.skill, "instructions", "Read the checklist before reviewing.")
   , (.datastoreToolSurface, "entries", "[{tool_name: submit_job, collection: Job}]")
+  , (.page, "module", "export default { id: 'board', register() {} }")
   , (.inferenceProfile, "model_name", "model-1")
   , (.inferenceSampling, "temperature", "0.2")
   , (.inferenceExecution, "max_turns", "40")

@@ -79,6 +79,7 @@ impl ConfigCommandTool {
                 | "event-source"
                 | "execution"
                 | "agent-target"
+                | "page"
         );
         let handled = match verb {
             "list" | "update" => true,

@@ -282,8 +282,8 @@ export type DesktopCommands = {
   desktop_ux_data_surfaces: { args: { request: UxDataSurfacesRequest }; result: JsonValue };
   desktop_ux_data_unwatch: { args: { id: string }; result: void };
   desktop_ux_data_watch: { args: { request: UxDataCallRequest; channel: Channel<UxDataWatchEvent> }; result: string };
-  desktop_ux_plugin_source: { args: { id: string }; result: JsonValue };
-  desktop_ux_plugins_list: { args: Record<string, never>; result: JsonValue };
+  desktop_ux_plugin_source: { args: { id: string; nodeDid?: string | null }; result: JsonValue };
+  desktop_ux_plugins_list: { args: { nodeDid?: string | null }; result: JsonValue };
   desktop_workflow_dynamic: { args: { selector: string }; result: DynamicWorkflowView };
   desktop_workflow_promote: { args: { request: WorkflowPromoteRequest }; result: WorkflowPromoteView };
   desktop_workflows_dynamic: { args: Record<string, never>; result: DynamicWorkflowsView };

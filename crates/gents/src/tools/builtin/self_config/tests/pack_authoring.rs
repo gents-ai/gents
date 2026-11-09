@@ -492,7 +492,7 @@ async fn page_help_discloses_detail_per_command_and_topic() {
     };
 
     let index = help(vec!["help"]).await;
-    assert!(index.contains("page: author a desktop page"), "{index}");
+    assert!(index.contains("page: a desktop page held on this node"), "{index}");
 
     let page = help(vec!["help", "page"]).await;
     assert!(page.starts_with("page: "), "{page}");

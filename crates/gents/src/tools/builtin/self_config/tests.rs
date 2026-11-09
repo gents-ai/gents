@@ -770,6 +770,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         "automation",
         "datastore",
         "skill",
+        "page",
         "agent-target",
         "execution",
     ]
@@ -8615,4 +8616,5 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     assert!(node.get_collection("FixtureJob").unwrap().is_some());
 }
 
+mod live_documents;
 mod pack_authoring;

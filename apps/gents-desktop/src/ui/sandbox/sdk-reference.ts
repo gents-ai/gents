@@ -582,7 +582,7 @@ export function renderSdkReference(tokens: readonly string[]): string {
     "`@gents/ux-sdk`, `react` and `react/jsx-runtime`, and writes elements with",
     "`jsx(type, props)` and `jsxs(type, { children: [...] })`.",
     "Prefer these blocks to your own CSS: a plugin's Tailwind classes are not compiled.",
-    "Declare the surfaces and tools a page calls under `ux[].data` in the pack manifest.",
+    "Declare the surfaces and tools a page calls in `data` on its page document, or under `ux[].data` in a pack manifest.",
     "",
     "## Page skeleton",
     "",

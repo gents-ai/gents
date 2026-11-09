@@ -485,8 +485,11 @@ export type DesktopApiAdapter = {
     id: string,
     decision: PluginApprovalDecision,
   ) => Promise<void>;
-  listUxPlugins: () => Promise<{ plugins: UxPluginListing[] }>;
-  readUxPluginSource: (id: string) => Promise<UxPluginSource>;
+  /** the local home's plugins, then the page documents of `nodeDid` */
+  listUxPlugins: (
+    nodeDid?: string | null,
+  ) => Promise<{ plugins: UxPluginListing[]; pagesError?: string | null }>;
+  readUxPluginSource: (id: string, nodeDid?: string | null) => Promise<UxPluginSource>;
   callPackPlugin: (
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;

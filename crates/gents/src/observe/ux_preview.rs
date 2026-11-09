@@ -90,11 +90,30 @@ pub struct PreviewTarget {
     module: UxModule,
 }
 
+/// A pack page and a page document declare what they may register and call,
+/// so the frame is told its listing; a dev plugin declares nothing.
+fn carries_grants(listing: &UxListing) -> bool {
+    matches!(listing.door, UxDoor::Pack | UxDoor::Document)
+}
+
+impl PreviewTarget {
+    /// A page document, previewed under its own declared data grants.
+    pub fn page(page: &crate::documents::PageDocument) -> Result<Self> {
+        let listing = ux::page::listing(page)?;
+        Ok(Self {
+            label: listing.id.clone(),
+            file: listing.file.clone(),
+            module: ux::page::module(page),
+            listing: Some(listing),
+        })
+    }
+}
+
 fn declared_plugin_id(listing: &UxListing) -> &str {
     listing.id.rsplit('/').next().unwrap_or(&listing.id)
 }
 
-fn listing_named(home: &Path, id: &str) -> Result<Option<UxListing>> {
+pub(crate) fn listing_named(home: &Path, id: &str) -> Result<Option<UxListing>> {
     Ok(ux::list(home)?
         .into_iter()
         .find(|listing| listing.id == id || declared_plugin_id(listing) == id))
@@ -138,6 +157,7 @@ where
         contributes: None,
         default_enabled: None,
         data: Vec::new(),
+        digest: None,
     };
     let module = file_module(home, &draft, None)?;
     Ok(PreviewTarget {
@@ -205,7 +225,7 @@ impl Door {
     fn binding(listing: Option<&UxListing>) -> (Option<String>, Value) {
         match listing {
             Some(listing) => (
-                (listing.door == UxDoor::Pack).then(|| listing.id.clone()),
+                carries_grants(listing).then(|| listing.id.clone()),
                 json!(listing.contributes),
             ),
             None => (None, Value::Null),
@@ -702,7 +722,7 @@ async fn run_inner(request: PreviewRequest, target: PreviewTarget) -> Result<UxP
     let listing = target
         .listing
         .as_ref()
-        .filter(|l| l.door == UxDoor::Pack)
+        .filter(|l| carries_grants(l))
         .map(|l| l.id.clone());
     let door = Arc::new(Door {
         home: request.home.clone(),
