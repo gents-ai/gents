@@ -1214,10 +1214,12 @@ async fn overlapping_native_workspace_fences_conflict(
     let query = super::super::overlay::workspace_bindings_for_parent_query(workspace_doc);
     for handle in [&first, &second] {
         let response = node
-            .execute_request_in_txn_with_signer(
-                defra_node::QueryRequest::new(&query).with_identity(Some(writer.did().parse()?)),
+            .execute_request_in_txn(
+                signer.native().attach(
+                    defra_node::QueryRequest::new(&query)
+                        .with_identity(Some(writer.did().parse()?)),
+                ),
                 handle,
-                signer.native(),
             )
             .await;
         anyhow::ensure!(
@@ -1245,10 +1247,12 @@ async fn overlapping_native_workspace_fences_conflict(
             name
         );
         let response = node
-            .execute_request_in_txn_with_signer(
-                defra_node::QueryRequest::new(&fence).with_identity(Some(writer.did().parse()?)),
+            .execute_request_in_txn(
+                signer.native().attach(
+                    defra_node::QueryRequest::new(&fence)
+                        .with_identity(Some(writer.did().parse()?)),
+                ),
                 handle,
-                signer.native(),
             )
             .await;
         anyhow::ensure!(
@@ -1269,10 +1273,12 @@ async fn overlapping_native_workspace_fences_conflict(
         };
         let mutation = workspace_binding_upsert_mutation(&document);
         let response = node
-            .execute_request_in_txn_with_signer(
-                defra_node::QueryRequest::new(&mutation).with_identity(Some(writer.did().parse()?)),
+            .execute_request_in_txn(
+                signer.native().attach(
+                    defra_node::QueryRequest::new(&mutation)
+                        .with_identity(Some(writer.did().parse()?)),
+                ),
                 handle,
-                signer.native(),
             )
             .await;
         anyhow::ensure!(

@@ -851,10 +851,9 @@ impl ConfigApplyTxn<'_> {
                     async move {
                         match agent_signer {
                             Some(signer) => {
-                                node.execute_request_in_txn_with_signer(
-                                    request,
+                                node.execute_request_in_txn(
+                                    signer.native().attach(request),
                                     &handle,
-                                    signer.native(),
                                 )
                                 .await
                             }
@@ -1204,7 +1203,7 @@ impl ConfigApplyTxn<'_> {
             async move {
                 match agent_signer {
                     Some(signer) => {
-                        node.execute_request_in_txn_with_signer(request, &handle, signer.native())
+                        node.execute_request_in_txn(signer.native().attach(request), &handle)
                             .await
                     }
                     None => node.execute_request_in_txn(request, &handle).await,

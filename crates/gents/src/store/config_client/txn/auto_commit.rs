@@ -379,10 +379,7 @@ impl ConfigAccess {
                 native_completion.started = true;
                 let request = query::QueryRequest::new(&mutation).with_identity(identity);
                 let result = match signer {
-                    Some(signer) => {
-                        node.execute_request_with_signer(request, signer.native())
-                            .await
-                    }
+                    Some(signer) => node.execute_request(signer.native().attach(request)).await,
                     None => node.execute_request(request).await,
                 };
                 let elapsed = started.elapsed();
