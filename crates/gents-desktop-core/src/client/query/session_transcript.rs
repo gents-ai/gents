@@ -349,9 +349,13 @@ async fn load_page_canonical_dependencies(
         &mut queried_rows,
     )
     .await?;
+    // A copied fork reconstructs from its own documents (Lean
+    // `SessionFork.fork_reader_needs_only_child_grant`); its origin chain is
+    // provenance only (`retentionDependencies`). It is still followed where
+    // the reader may see it, for the input attribution a copy keeps, but its
+    // headers never become content to resolve.
     let mut pending_origins = page_headers
         .iter()
-        .filter(|header| !copied.contains(&header.doc_id))
         .filter_map(|header| match &header.message.publication {
             MessagePublication::Fork {
                 origin_message_doc_id,
@@ -360,13 +364,16 @@ async fn load_page_canonical_dependencies(
                 header.message.node_did.clone(),
                 header.message.requester_did.clone(),
                 1_usize,
+                copied.contains(&header.doc_id),
             )),
             _ => None,
         })
         .collect::<VecDeque<_>>();
     let mut queried_headers = BTreeSet::new();
 
-    while let Some((origin_id, node_did, requester_did, depth)) = pending_origins.pop_front() {
+    while let Some((origin_id, node_did, requester_did, depth, provenance)) =
+        pending_origins.pop_front()
+    {
         if known_headers.contains_key(&origin_id) || !queried_headers.insert(origin_id.clone()) {
             continue;
         }
@@ -407,10 +414,13 @@ async fn load_page_canonical_dependencies(
                         origin.message.node_did.clone(),
                         origin.message.requester_did.clone(),
                         depth.saturating_add(1),
+                        provenance,
                     ));
                 }
-                insert_exact_header(&mut known_headers, origin.clone())?;
-                validate_known_header_identities(&known_headers)?;
+                if !provenance {
+                    insert_exact_header(&mut known_headers, origin.clone())?;
+                    validate_known_header_identities(&known_headers)?;
+                }
                 dependencies.origin_headers.push(origin);
             }
             _ => bail!("exact canonical fork origin has conflicting physical rows: {origin_id}"),
