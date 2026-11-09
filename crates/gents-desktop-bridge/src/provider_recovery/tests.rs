@@ -103,36 +103,62 @@ impl Fixture {
             "2026-10-23T11:00:00Z",
             gents_protocol::request_admission::AgentRequestAdmissionRecord::client(identity.did()),
         );
-        request.session_doc_id = Some(
-            runtime
-                .agent_session(&engineer, "session", identity.did())
-                .await,
-        );
+        let session_doc = gents::request::lifecycle::reserve_goal_session(&access, &request)
+            .await
+            .unwrap();
+        request.session_doc_id = Some(session_doc.clone());
         request.agent_doc_id = Some(runtime.agent_doc_id(&engineer).await);
         gents::sign_agent_request_create(identity.as_ref(), &mut request)
             .await
             .unwrap();
-        runtime
-            .user_graphql_access()
-            .write(
-                "test.recovery.request",
-                &request.graphql_mutation().unwrap(),
-            )
+        gents::request::lifecycle::submit_client_request(&access, &request)
             .await
             .unwrap();
-        let did = gents::store::graphql::escape_graphql_string(&owner);
-        let engineer_did = gents::store::graphql::escape_graphql_string(&engineer.agent_did);
-        let reason = gents::store::graphql::escape_graphql_string(reason);
-        // The working Agent records the failed turn and its inference calls.
-        runtime.agent_access(&engineer).await.write("test.recovery.failed_request", &format!(r#"mutation {{
-            update_AgentRequest(filter: {{request_id: {{_eq: "stopped"}}}}, input: {{lifecycle_state: "failed"}}) {{_docID}}
-            own_call: create_InferenceCall(input: {{call_id: "failed-call", request_id: "stopped", node_did: "{did}",
-                agent_did: "{engineer_did}", backend_id: "main", call_kind: "inference", call_state: "failed",
-                attempt: 1, failure_reason: "{reason}", ended_at: "2026-10-23T12:00:00Z"}}) {{_docID}}
-            foreign_call: create_InferenceCall(input: {{call_id: "foreign-call", request_id: "stopped", node_did: "did:key:foreign",
-                agent_did: "{engineer_did}", backend_id: "foreign", call_kind: "inference", call_state: "failed",
-                attempt: 2, failure_reason: "unrelated failure", ended_at: "2099-10-23T12:00:00Z"}}) {{_docID}}
-        }}"#)).await.unwrap();
+        let request_doc = runtime
+            .user_access()
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "stopped"}}) { _docID } }"#)
+            .await
+            .unwrap()["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // The working Agent records the failed inference calls as session
+        // children, as the admission owner persists them, and the request
+        // lifecycle owner ends the turn failed with the provider's reason.
+        let engineer_did = engineer.agent_did.clone();
+        let calls = [
+            json!({"call_id": "failed-call", "request_id": "stopped", "request_doc_id": request_doc,
+                "session_id": "session", "node_did": owner, "agent_did": engineer_did,
+                "backend_id": "main", "call_kind": "inference", "call_state": "failed", "attempt": 1,
+                "failure_reason": reason, "ended_at": "2026-10-23T12:00:00Z"}),
+            json!({"call_id": "foreign-call", "request_id": "stopped", "request_doc_id": request_doc,
+                "session_id": "session", "node_did": "did:key:foreign", "agent_did": engineer_did,
+                "backend_id": "foreign", "call_kind": "inference", "call_state": "failed", "attempt": 2,
+                "failure_reason": "unrelated failure", "ended_at": "2099-10-23T12:00:00Z"}),
+        ];
+        runtime
+            .agent_access(&engineer)
+            .await
+            .transact_write("test.recovery.failed_calls", |txn| {
+                let (calls, session_doc) = (&calls, &session_doc);
+                Box::pin(async move {
+                    for call in calls {
+                        let response = txn
+                            .execute_with_variables(
+                                "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) {_docID} }",
+                                &json!({"input": call}),
+                            )
+                            .await?;
+                        let doc = gents::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                        txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc)
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        crate::tests::support::reject_admission(&runtime, &engineer, &request_doc, reason).await;
         gents::goal::set_goal_from_access(
             &access,
             &owner,
