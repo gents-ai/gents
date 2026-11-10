@@ -43,13 +43,9 @@ pub async fn request_renewal_offer(
         node.node_identity_did() == Some(identity.did()),
         "renewal requires the local node identity"
     );
-    let network = escape_graphql_string(network_id);
-    let query = format!(
-        r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{network}" }} }}) {{ admin_did }} }}"#
-    );
-    let pins = graphql_with_transaction_retry(node, &query, "read renewal admin pin").await?;
+    let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did())?);
     anyhow::ensure!(
-        matches!(rows::<AdminPinRow>(&pins, "NetworkAdminPin")?.as_slice(), [pin] if pin.admin_did == admin_did),
+        matches!(network_admin_pins(&access, network_id).await?.as_slice(), [pin] if pin.admin_did == admin_did),
         "renewal owner is not pinned"
     );
     let p2p = crate::store::identity::node_p2p(node).context("this node has no P2P transport")?;
@@ -358,6 +354,22 @@ struct AdminPinRow {
     parent_linked: Option<bool>,
 }
 
+/// The local runtime's admin pins for `network_id`. Pins are `operations`
+/// documents, so they are read as the runtime actor that owns them.
+async fn network_admin_pins(access: &ConfigAccess, network_id: &str) -> Result<Vec<AdminPinRow>> {
+    let query = format!(
+        r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{}" }} }}) {{ _docID admin_did parent_linked }} }}"#,
+        escape_graphql_string(network_id)
+    );
+    let response = access.execute(&query).await?;
+    Ok(serde_json::from_value(
+        response
+            .pointer("/data/NetworkAdminPin")
+            .cloned()
+            .context("network admin pin query omitted rows")?,
+    )?)
+}
+
 /// Pin the offer's admin as the only admin this candidate accepts for its
 /// network; a conflicting existing pin refuses the offer.
 pub async fn confirm_network_admin_pin(
@@ -371,16 +383,7 @@ pub async fn confirm_network_admin_pin(
     let access = ConfigAccess::local_as(node.clone(), runtime.clone());
     let (network_id, admin_did) = (&offer.network_id, &offer.admin_did);
     let network_id_escaped = escape_graphql_string(network_id);
-    let query = format!(
-        r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{network_id_escaped}" }} }}) {{ _docID admin_did parent_linked }} }}"#
-    );
-    let response = access.execute(&query).await?;
-    let pins: Vec<AdminPinRow> = serde_json::from_value(
-        response
-            .pointer("/data/NetworkAdminPin")
-            .cloned()
-            .context("network admin pin query omitted rows")?,
-    )?;
+    let pins = network_admin_pins(&access, network_id).await?;
     match pins.as_slice() {
         [pin] if &pin.admin_did == admin_did => {
             if !pin
@@ -456,13 +459,7 @@ pub async fn confirm_network_admin_pin(
         })
         .await
     {
-        let response = access.execute(&query).await?;
-        let pins: Vec<AdminPinRow> = serde_json::from_value(
-            response
-                .pointer("/data/NetworkAdminPin")
-                .cloned()
-                .context("network admin pin recovery omitted rows")?,
-        )?;
+        let pins = network_admin_pins(&access, network_id).await?;
         anyhow::ensure!(
             matches!(pins.as_slice(), [pin] if &pin.admin_did == admin_did),
             "admin pin commit was not observably recovered after: {commit_error:#}"
