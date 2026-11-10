@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
+use gents_desktop_core::client::{ClientCore, SendMessage, SubmitRequestOptions};
 use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
@@ -96,82 +96,75 @@ pub async fn send_chat_message(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let requested_session_id = request
+    let session_id = request
         .session_id
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let (Some(request_id), Some(session_id)) = (request_id.as_deref(), requested_session_id) {
-        if let Some(held) = core.held_send(session_id, &node_did, request_id).await? {
-            return Ok(held.into());
-        }
-    }
-
-    let captured_context = request.captured_context.unwrap_or_default();
-    let attachments = request.attachments.unwrap_or_default();
-    let (content, question_reply) = match &request.answer {
-        Some(answer) => {
-            if !request.content.trim().is_empty()
-                || !captured_context.is_empty()
-                || !attachments.is_empty()
-            {
-                bail!("an answer renders its own content; send empty content");
-            }
-            super::mailbox::question_reply_content(
-                core,
-                request.caused_by_source_doc_id.as_deref(),
-                request.session_id.as_deref(),
-                &node_did,
-                request.agent_did.as_deref(),
-                answer,
-            )?
-        }
-        None => (request.content.trim().to_string(), None),
-    };
-    if content.is_empty() && captured_context.is_empty() && attachments.is_empty() {
-        bail!("content is required");
-    }
-
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| Uuid::new_v4().to_string(), str::to_string);
     let agent_did = request
         .agent_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-
-    let session_id = requested_session_id
-        .map(str::to_string)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-
-    let input = core
-        .prepare_user_message_input_with_delivery(
-            &node_did,
-            &session_id,
-            gents_protocol::request_input::RequestInput {
-                question_reply,
-                cwd: chat_folder(request.cwd.as_deref())?,
-                captured_context,
-                attachments,
-                ..Default::default()
-            },
-            request
-                .delivery
-                .unwrap_or(gents_protocol::request_input::QueueDelivery::Steer),
-        )
-        .await?;
-
+    let options = SubmitRequestOptions {
+        request_id,
+        caused_by_source_doc_id: request.caused_by_source_doc_id.clone(),
+        ..SubmitRequestOptions::default()
+    };
+    // The core asks the runtime for a held request first; these checks and
+    // reads run only for a send it does not hold yet.
+    let message = async {
+        let captured_context = request.captured_context.unwrap_or_default();
+        let attachments = request.attachments.unwrap_or_default();
+        let (content, question_reply) = match &request.answer {
+            Some(answer) => {
+                if !request.content.trim().is_empty()
+                    || !captured_context.is_empty()
+                    || !attachments.is_empty()
+                {
+                    bail!("an answer renders its own content; send empty content");
+                }
+                super::mailbox::question_reply_content(
+                    core,
+                    request.caused_by_source_doc_id.as_deref(),
+                    request.session_id.as_deref(),
+                    &node_did,
+                    request.agent_did.as_deref(),
+                    answer,
+                )?
+            }
+            None => (request.content.trim().to_string(), None),
+        };
+        if content.is_empty() && captured_context.is_empty() && attachments.is_empty() {
+            bail!("content is required");
+        }
+        let input = core
+            .prepare_user_message_input_with_delivery(
+                &node_did,
+                &session_id,
+                gents_protocol::request_input::RequestInput {
+                    question_reply,
+                    cwd: chat_folder(request.cwd.as_deref())?,
+                    captured_context,
+                    attachments,
+                    ..Default::default()
+                },
+                request
+                    .delivery
+                    .unwrap_or(gents_protocol::request_input::QueueDelivery::Steer),
+            )
+            .await?;
+        Ok(SendMessage { content, input })
+    };
     let submitted = core
         .submit_request_with_options(
             &session_id,
             &node_did,
-            &content,
             agent_did.as_deref(),
-            SubmitRequestOptions {
-                request_id,
-                caused_by_source_doc_id: request.caused_by_source_doc_id,
-                input,
-                ..SubmitRequestOptions::default()
-            },
+            options,
+            message,
         )
         .await?;
     Ok(submitted.into())

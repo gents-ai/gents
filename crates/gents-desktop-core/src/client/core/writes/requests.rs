@@ -5,16 +5,7 @@ use super::{
     acknowledge_submitted_request, agent_did_for_write, ensure_peer_chat_ready,
     find_request_in_scope, observe_submitted_request, ClientCore,
 };
-use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
-use crate::client::peer_directory::PeerRecord;
-
-/// Who signs a send to a chat and whose requester scope it belongs to.
-struct SendAuthority {
-    peer_record: Option<PeerRecord>,
-    signer: std::sync::Arc<dyn gents::store::identity::NodeIdentity>,
-    admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
-    requester_did: String,
-}
+use crate::client::mutations::{self, SendMessage, SubmitRequestOptions, SubmittedRequest};
 
 fn request_in_scope(
     rows: &[AgentRequestRow],
@@ -36,31 +27,68 @@ impl ClientCore {
         self.submit_request_with_options(
             session_id,
             node_did,
-            content,
             agent_did,
             SubmitRequestOptions::default(),
+            std::future::ready(Ok(SendMessage {
+                content: content.to_owned(),
+                ..SendMessage::default()
+            })),
         )
         .await
     }
 
     /// The optimistic send's one signed create (Lean `ClientOptimisticSend`):
     /// `options.request_id` is the identity the client picked, and a retry
-    /// with the same identity is the same request.
-    pub async fn submit_request_with_options(
+    /// with the same identity is the same request. Its first step asks the
+    /// runtime for the request it already holds under that identity (Lean
+    /// `ClientOptimisticSend.held_resend_never_refused`); that needs only the
+    /// route to the runtime and the requester scope. A held send confirms
+    /// before `message` is prepared and before any check a new send must pass,
+    /// so it confirms even when its question has closed or its folder is gone.
+    /// `message` brings the request's input; `options.input` is not read.
+    pub async fn submit_request_with_options<M>(
         &self,
         session_id: &str,
         node_did: &str,
-        content: &str,
         agent_did: Option<&str>,
         mut options: SubmitRequestOptions,
-    ) -> Result<SubmittedRequest> {
+        message: M,
+    ) -> Result<SubmittedRequest>
+    where
+        M: std::future::Future<Output = Result<SendMessage>>,
+    {
+        let peer_record = self.peer_record_for_chat_write(node_did)?;
+        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
+        let access = self.session_queue_access(node_did)?;
+        let requester_did = gents::session::client_requester_scope(
+            &access,
+            node_did,
+            session_id,
+            self.node_identity.did(),
+        )
+        .await?;
+        if let Some(request_id) = options.request_id.as_deref() {
+            let scope = gents::request::lifecycle::ClientRequestScope {
+                node_did,
+                session_id,
+                requester_did: &requester_did,
+                request_id,
+            };
+            let held = mutations::held_request(&access, scope)
+                .await
+                .map_err(|error| self.record_mutation_error("submit request", error))?;
+            if let Some(held) = held {
+                acknowledge_submitted_request(&self.store, &held);
+                self.clear_mutation_error();
+                return Ok(held);
+            }
+        }
+        let SendMessage { content, input } = message.await?;
+        options.input = input;
         let snapshot = self.store.snapshot();
-        let SendAuthority {
-            peer_record,
-            signer,
-            admission,
-            requester_did,
-        } = self.send_authority(session_id, node_did).await?;
+        let (signer, admission, _) = self
+            .request_authority(node_did, peer_record.as_ref())
+            .await?;
         // Queue preparation captures assignment intent before signing; a later
         // replacement must not change an already prepared unassigned message.
         if options.input.queue.is_none() {
@@ -71,15 +99,15 @@ impl ClientCore {
         crate::local_runtime::ensure_request_input_supported(peer_record.as_ref(), &options.input)
             .await?;
         let agent_did = agent_did_for_write(agent_did);
-        match mutations::submit_request(
+        match mutations::submit_new_request(
             snapshot.as_ref(),
-            &self.session_queue_access(node_did)?,
+            &access,
             session_id,
             node_did,
             &requester_did,
             signer.as_ref(),
             admission,
-            content,
+            &content,
             agent_did.as_deref(),
             options,
         )
@@ -98,54 +126,6 @@ impl ClientCore {
             }
             Err(error) => Err(self.record_mutation_error("submit request", error)),
         }
-    }
-
-    /// The request the runtime already holds under a send's identity
-    /// (Lean `ClientOptimisticSend.held_resend_never_refused`). A resend asks
-    /// this before any check that a new send must pass, so a send that landed
-    /// confirms even when its question has closed or its folder is gone.
-    pub async fn held_send(
-        &self,
-        session_id: &str,
-        node_did: &str,
-        request_id: &str,
-    ) -> Result<Option<SubmittedRequest>> {
-        let SendAuthority { requester_did, .. } = self.send_authority(session_id, node_did).await?;
-        let held = mutations::held_request(
-            &self.session_queue_access(node_did)?,
-            gents::request::lifecycle::ClientRequestScope {
-                node_did,
-                session_id,
-                requester_did: &requester_did,
-                request_id,
-            },
-        )
-        .await?;
-        if let Some(held) = held.as_ref() {
-            acknowledge_submitted_request(&self.store, held);
-        }
-        Ok(held)
-    }
-
-    async fn send_authority(&self, session_id: &str, node_did: &str) -> Result<SendAuthority> {
-        let peer_record = self.peer_record_for_chat_write(node_did)?;
-        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
-        let (signer, admission, actor_did) = self
-            .request_authority(node_did, peer_record.as_ref())
-            .await?;
-        let requester_did = gents::session::client_requester_scope(
-            &self.session_queue_access(node_did)?,
-            node_did,
-            session_id,
-            &actor_did,
-        )
-        .await?;
-        Ok(SendAuthority {
-            peer_record,
-            signer,
-            admission,
-            requester_did,
-        })
     }
 
     pub fn request_in_scope(

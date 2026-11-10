@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::store::config_client::ConfigAccess;
-use gents_desktop_core::client::{
-    ClientCore, ClientCoreOptions, DesktopPaths, SubmitRequestOptions,
-};
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_desktop_core::test_fixtures::{until, ServedRuntimeHome};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -140,14 +138,12 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
 
     let session_id = Uuid::new_v4().to_string();
 
-    let options = SubmitRequestOptions::default();
     let original = core
-        .submit_request_with_options(
+        .submit_request(
             &session_id,
             &node_did,
             "please preserve this request",
             Some(&agent_did),
-            options,
         )
         .await?;
 

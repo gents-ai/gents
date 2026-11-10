@@ -40,6 +40,14 @@ pub struct SubmitRequestOptions {
     pub retry_key: Option<String>,
 }
 
+/// A send's message, prepared only when the runtime does not already hold
+/// the send's identity: what the person wrote and the request's input.
+#[derive(Debug, Clone, Default)]
+pub struct SendMessage {
+    pub content: String,
+    pub input: RequestInput,
+}
+
 /// One signed, idempotent create (`send_client_request`). A resend of an
 /// identity the runtime already holds returns that request before any other
 /// check, so a held answer to a question the runtime has since claimed still
@@ -62,8 +70,7 @@ pub async fn submit_request(
     agent_did: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
-    let request_id = options.request_id.clone();
-    if let Some(request_id) = request_id.as_deref() {
+    if let Some(request_id) = options.request_id.as_deref() {
         let scope = gents::request::lifecycle::ClientRequestScope {
             node_did,
             session_id,
@@ -74,6 +81,59 @@ pub async fn submit_request(
             return Ok(held);
         }
     }
+    submit_new_request(
+        store,
+        access,
+        session_id,
+        node_did,
+        requester_did,
+        signer,
+        admission,
+        content,
+        agent_did,
+        options,
+    )
+    .await
+}
+
+/// The request the runtime already holds under a send's identity, as that
+/// send's confirmation.
+pub async fn held_request(
+    access: &ConfigAccess,
+    scope: gents::request::lifecycle::ClientRequestScope<'_>,
+) -> Result<Option<SubmittedRequest>> {
+    Ok(
+        gents::request::lifecycle::held_client_request(access, scope)
+            .await?
+            .map(|held| SubmittedRequest {
+                request_id: held.request_id,
+                session_id: held.session_id,
+                node_did: scope.node_did.to_owned(),
+                agent_did: held.agent_did,
+            }),
+    )
+}
+
+/// The create of a send whose identity [`held_request`] found no request
+/// under. The runtime's create stays idempotent, so a send of the identity
+/// committing meanwhile still confirms as that request.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "admission inputs from separate owners (store, access, identity, admission record)"
+)]
+pub async fn submit_new_request(
+    store: &ClientStore,
+    access: &ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: &str,
+    signer: &dyn gents::NodeIdentity,
+    admission: AgentRequestAdmissionRecord,
+    content: &str,
+    agent_did: Option<&str>,
+    options: SubmitRequestOptions,
+) -> Result<SubmittedRequest> {
+    let request_id = options.request_id.clone();
     let (result, create) = prepare_request_submission(
         access,
         store,
@@ -93,24 +153,6 @@ pub async fn submit_request(
         request_id: held,
         ..result
     })
-}
-
-/// The request the runtime already holds under a send's identity, as that
-/// send's confirmation.
-pub async fn held_request(
-    access: &ConfigAccess,
-    scope: gents::request::lifecycle::ClientRequestScope<'_>,
-) -> Result<Option<SubmittedRequest>> {
-    Ok(
-        gents::request::lifecycle::held_client_request(access, scope)
-            .await?
-            .map(|held| SubmittedRequest {
-                request_id: held.request_id,
-                session_id: held.session_id,
-                node_did: scope.node_did.to_owned(),
-                agent_did: held.agent_did,
-            }),
-    )
 }
 
 #[cfg(test)]

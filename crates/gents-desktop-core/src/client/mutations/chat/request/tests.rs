@@ -1402,6 +1402,76 @@ async fn force_request_state_for_test(
     Ok(())
 }
 
+/// The core send asks the runtime for a held request once, first: a resend
+/// of a landed identity confirms as that request without preparing its
+/// message or writing again, and a new identity prepares its message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_send_confirms_before_its_message_is_prepared() -> Result<()> {
+    let chat = ServedChat::start().await?;
+    let core = &chat.core;
+    let result = async {
+        let session_id = Uuid::new_v4().to_string();
+        let options = |request_id: &str| SubmitRequestOptions {
+            request_id: Some(request_id.to_owned()),
+            ..SubmitRequestOptions::default()
+        };
+        let unprepared = || async { bail!("the message of a held send was prepared") };
+        let landed = core
+            .submit_request_with_options(
+                &session_id,
+                chat.node_did(),
+                Some(chat.agent_did.as_str()),
+                options("held-send"),
+                std::future::ready(Ok(SendMessage {
+                    content: "landed".into(),
+                    ..SendMessage::default()
+                })),
+            )
+            .await?;
+        let resent = core
+            .submit_request_with_options(
+                &session_id,
+                chat.node_did(),
+                Some(chat.agent_did.as_str()),
+                options("held-send"),
+                unprepared(),
+            )
+            .await?;
+        assert_eq!(resent, landed);
+        assert_eq!(
+            core.store().focused_request_id().as_deref(),
+            Some("held-send")
+        );
+        assert_eq!(
+            request_count_by_id_for_test(&chat.owner(), "held-send").await?,
+            1
+        );
+
+        let refused = core
+            .submit_request_with_options(
+                &session_id,
+                chat.node_did(),
+                Some(chat.agent_did.as_str()),
+                options("new-send"),
+                unprepared(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{refused:#}").contains("was prepared"),
+            "{refused:#}"
+        );
+        assert_eq!(
+            request_count_by_id_for_test(&chat.owner(), "new-send").await?,
+            0
+        );
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    chat.shutdown().await?;
+    result
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Result<()> {
     let chat = ServedChat::start().await?;

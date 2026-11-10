@@ -23,7 +23,7 @@ pub use core::{
 };
 
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
-pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
+pub use mutations::{PeerMutationResult, SendMessage, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, RuntimeConnectionStatus,
     StoreProjectionRevision, StoreUpdateNotice,
