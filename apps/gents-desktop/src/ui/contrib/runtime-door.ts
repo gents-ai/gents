@@ -8,30 +8,63 @@
    the lifecycle. */
 import type { UxPluginListing, UxPluginSource } from "@source-inc/gents-desktop-client";
 import { loadRuntimeUxPlugin, retireRuntimeUxPlugin } from "./loader";
-import { publishUxPlugin, uxPluginActive, uxPluginRecords } from "./plugins-store";
+import {
+  publishUxPlugin,
+  uxDecisionKey,
+  uxPluginActive,
+  uxPluginRecords,
+} from "./plugins-store";
 
 /* the listing and the source as the client's adapter types them; the door
    narrows nothing further */
 export type { UxPluginListing, UxPluginSource };
 
-/* live runtime plugins by listing id -> loaded plugin id (null while broken
-   or shadowed) */
-const known = new Map<string, string | null>();
-/* plugin id -> the listing that owns it. Two packs may ship a plugin of one
-   name; the first listing (scan order) owns the id whatever its state, and
-   the other is shown as shadowed until the owner leaves. */
+/* A listing as one scan read it. A page document's id (`page/<page_id>`)
+   names it only within its node, so everything this window keeps about one
+   (what is loaded, its digest, the person's choice, its storage) is kept
+   under `key`, which carries the node; a home listing's key is its id. The
+   node and its epoch are the ones the scan captured, so the module is read
+   from the node that listed it and is dropped if that node was left. */
+interface Scanned extends UxPluginListing {
+  key: string;
+  node: string | null;
+  epoch: number;
+}
+
+interface Known {
+  /* the listing id, which the entry's error and shadowed rows are named by */
+  listing: string;
+  /* the loaded plugin id; null while broken or shadowed */
+  loaded: string | null;
+  document: boolean;
+}
+
+/* live runtime plugins by listing key */
+const known = new Map<string, Known>();
+/* plugin id -> the listing key that owns it. Two packs may ship a plugin of
+   one name; the first listing (scan order) owns the id whatever its state,
+   and the other is shown as shadowed until the owner leaves. */
 const owners = new Map<string, string>();
-/* page document listing id -> the content digest it was last loaded or
+/* page document listing key -> the content digest it was last loaded or
    listed at; a different digest in a later scan is an edit */
 const digests = new Map<string, string | null>();
 /* the scan in flight; a scan asked for meanwhile runs after it */
 let inFlight: Promise<void> | null = null;
+/* the node whose page documents this window holds, and a count of the times
+   it changed: a scan that began under an earlier count holds another node's
+   pages, even when the selection has since come back to that node */
+let pageNode: string | null = null;
+let nodeEpoch = 0;
 
 /* the bridge verbs the doors read through, given by the app that owns the
-   client adapter: the inventory on disk and one plugin's module */
+   client adapter: the inventory on disk and one plugin's module, each read
+   for the node the door names, and the node selected now */
 export interface UxDoorApi {
-  list: () => Promise<{ plugins: UxPluginListing[] }>;
-  source: (id: string) => Promise<UxPluginSource>;
+  list: (
+    nodeDid: string | null,
+  ) => Promise<{ plugins: UxPluginListing[]; pagesError?: string | null }>;
+  source: (id: string, nodeDid: string | null) => Promise<UxPluginSource>;
+  node?: () => string | null;
 }
 
 let doors: UxDoorApi | null = null;
@@ -45,9 +78,39 @@ function doorApi(): UxDoorApi {
   return doors;
 }
 
-export async function listRuntimeUxPlugins(): Promise<UxPluginListing[]> {
-  const { plugins } = await doorApi().list();
-  return plugins;
+const selectedNode = (): string | null => doorApi().node?.() ?? null;
+
+const isDocument = (entry: UxPluginListing) => entry.door === "document";
+
+function scanned(entry: UxPluginListing, node: string | null, epoch: number): Scanned {
+  const key = isDocument(entry) ? `${node ?? ""}/${entry.id}` : entry.id;
+  return { ...entry, key, node, epoch };
+}
+
+/* what a page document's choice and storage are kept under; a home plugin
+   keeps its own id */
+const scopeOf = (entry: Scanned) => (isDocument(entry) ? entry.key : undefined);
+
+/* a page document is current only while the node it was listed on has not
+   been left since */
+const current = (entry: Scanned) => !isDocument(entry) || entry.epoch === nodeEpoch;
+
+/* the row that says a node's page documents could not be read. No listing
+   id is `page/` (a page id is never empty), so it shadows no entry's row. */
+const PAGES_ROW = "page/";
+
+function showPagesError(error: string | null): void {
+  if (error === null) {
+    if (uxPluginRecords()[PAGES_ROW]) retireRuntimeUxPlugin(PAGES_ROW);
+    return;
+  }
+  publishUxPlugin({
+    id: PAGES_ROW,
+    name: "Pages on this node",
+    door: "document",
+    status: "error",
+    error,
+  });
 }
 
 /* the inventory row for an entry whose source never arrived: published as
@@ -79,24 +142,32 @@ export function declaredPluginId(entry: UxPluginListing): string {
 const enabledByDocument = (entry: UxPluginListing) =>
   !(entry.door === "document" && entry.defaultEnabled === false);
 
-function enabledByListing(entry: UxPluginListing): boolean {
+function enabledByListing(entry: Scanned): boolean {
   if (!enabledByDocument(entry)) return false;
-  return uxPluginActive(declaredPluginId(entry), listingDefaultEnabled(entry));
+  return uxPluginActive(
+    uxDecisionKey({ id: declaredPluginId(entry), scope: scopeOf(entry) }),
+    listingDefaultEnabled(entry),
+  );
 }
 
 /* whether a page document differs from what this window holds: its content
    was edited, or it was enabled or disabled since it was loaded or listed */
-function documentChanged(entry: UxPluginListing): boolean {
-  if (entry.door !== "document" || !digests.has(entry.id)) return false;
-  const loaded = uxPluginRecords()[known.get(entry.id) ?? ""]?.status === "loaded";
+function documentChanged(entry: Scanned): boolean {
+  if (!isDocument(entry) || !digests.has(entry.key)) return false;
+  const loaded =
+    uxPluginRecords()[known.get(entry.key)?.loaded ?? ""]?.status === "loaded";
   return (
-    digests.get(entry.id) !== (entry.digest ?? null) ||
+    digests.get(entry.key) !== (entry.digest ?? null) ||
     enabledByListing(entry) !== loaded
   );
 }
 
-function noteDigest(entry: UxPluginListing): void {
-  if (entry.door === "document") digests.set(entry.id, entry.digest ?? null);
+function noteDigest(entry: Scanned): void {
+  if (isDocument(entry)) digests.set(entry.key, entry.digest ?? null);
+}
+
+function note(entry: Scanned, loaded: string | null): void {
+  known.set(entry.key, { listing: entry.id, loaded, document: isDocument(entry) });
 }
 
 /* a pack page and a page document carry grants: the frame is told its
@@ -116,25 +187,52 @@ function ownerOf(id: string): string | undefined {
   return owners.get(id);
 }
 
-function claim(entry: UxPluginListing): string | null {
+function claim(entry: Scanned): string | null {
   const id = declaredPluginId(entry);
   const owner = ownerOf(id);
-  if (owner && owner !== entry.id) return owner;
-  owners.set(id, entry.id);
+  if (owner && owner !== entry.key) return owner;
+  owners.set(id, entry.key);
   return null;
 }
 
-function release(listingId: string): void {
+function release(key: string): void {
   for (const [id, owner] of owners) {
-    if (owner === listingId) owners.delete(id);
+    if (owner === key) owners.delete(id);
   }
+}
+
+/* everything one listing put in this window: its plugin (only the
+   incarnation it owns; a shadowed copy's owner keeps running), its error
+   and shadowed rows, its claim and its digest */
+function retireListing(key: string, entry: Known): void {
+  if (entry.loaded && owners.get(entry.loaded) === key) {
+    retireRuntimeUxPlugin(entry.loaded);
+  }
+  for (const row of [entry.listing, `${entry.listing}:shadowed`]) {
+    if (uxPluginRecords()[row]) retireRuntimeUxPlugin(row);
+  }
+  release(key);
+  known.delete(key);
+  digests.delete(key);
+}
+
+/* The selection left a node: its pages stop at once, not when the next
+   node's scan gets to them. A frame left running would make its data calls
+   against the node now selected, under grants its own node gave it. */
+function leaveNode(next: string | null): void {
+  nodeEpoch += 1;
+  pageNode = next;
+  for (const [key, entry] of known) {
+    if (entry.document) retireListing(key, entry);
+  }
+  showPagesError(null);
 }
 
 const shadowedId = (entry: UxPluginListing) => `${entry.id}:shadowed`;
 
 /* the row of a listing whose plugin id another listing owns: visible,
    off, and refusing to load until the owner is gone */
-function publishShadowed(entry: UxPluginListing, owner: string): void {
+function publishShadowed(entry: Scanned, owner: string): void {
   const id = declaredPluginId(entry);
   const error = `duplicate id "${id}", owned by ${owner}; this copy is not used`;
   const row = {
@@ -154,12 +252,12 @@ function publishShadowed(entry: UxPluginListing, owner: string): void {
       deactivate: () => publishUxPlugin({ ...row, status: "disabled" }),
     },
   );
-  known.set(entry.id, null);
+  note(entry, null);
 }
 
 /* the inventory row of a plugin that is off: built from the listing alone,
    its producer never run and its module never evaluated; the switch loads it */
-function publishListed(entry: UxPluginListing): void {
+function publishListed(entry: Scanned): void {
   const id = declaredPluginId(entry);
   const owner = claim(entry);
   if (owner) {
@@ -176,6 +274,7 @@ function publishListed(entry: UxPluginListing): void {
       producer: entry.producer,
       pack: entry.pack ?? undefined,
       declared: entry.contributes ?? undefined,
+      scope: scopeOf(entry),
       status: "disabled",
     },
     {
@@ -190,16 +289,17 @@ function publishListed(entry: UxPluginListing): void {
               door: entry.door,
               file: entry.file,
               declared: entry.contributes ?? undefined,
+              scope: scopeOf(entry),
               status: "disabled",
             }),
       deactivate: () => undefined,
     },
   );
-  known.set(entry.id, id);
+  note(entry, id);
 }
 
-async function loadListing(entry: UxPluginListing): Promise<void> {
-  const previous = known.get(entry.id) ?? null;
+async function loadListing(entry: Scanned): Promise<void> {
+  const previous = known.get(entry.key)?.loaded ?? null;
   const owner = claim(entry);
   if (owner) {
     if (previous) retireRuntimeUxPlugin(previous);
@@ -209,9 +309,15 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
   let module: UxPluginSource | null = null;
   let unreadable: unknown = null;
   try {
-    module = await doorApi().source(entry.id);
+    module = await doorApi().source(entry.id, entry.node);
   } catch (error) {
     unreadable = error;
+  }
+  /* its node was left while the module was read: leaving retired what the
+     page had here, and the module belongs to no page of the node selected */
+  if (!current(entry)) {
+    release(entry.key);
+    return;
   }
   /* the previous incarnation goes before anything is published for this
      entry: a plugin that no longer loads must not stay registered beside
@@ -220,7 +326,7 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
   if (previous) retireRuntimeUxPlugin(previous);
   if (!module) {
     publishUnreadable(entry, unreadable);
-    known.set(entry.id, null);
+    note(entry, null);
     return;
   }
   const id = await loadRuntimeUxPlugin(
@@ -235,40 +341,56 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
       listing: carriesGrants(entry) ? entry.id : undefined,
       declared: entry.contributes ?? undefined,
       defaultEnabled: listingDefaultEnabled(entry),
+      scope: scopeOf(entry),
     },
   );
-  known.set(entry.id, id);
+  /* left while its frame was loading: the frame goes, or the row its
+     failure was published on */
+  if (!current(entry)) {
+    retireRuntimeUxPlugin(id ?? entry.id);
+    release(entry.key);
+    return;
+  }
+  note(entry, id);
 }
 
-/* reconcile disk with the inventory; `reloadKnown` re-reads every entry,
-   a plain scan re-reads only what is new or broken */
+/* reconcile disk and the selected node with the inventory; `reloadKnown`
+   re-reads every entry, a plain scan re-reads only what is new or broken.
+   The node is read once: the listing and every module of this scan come
+   from it, whatever the selection does meanwhile. */
 async function reconcile(reloadKnown: boolean, reloadPack?: string): Promise<void> {
-  let listings: UxPluginListing[];
+  const node = selectedNode();
+  if (node !== pageNode) leaveNode(node);
+  const epoch = nodeEpoch;
+  let answer: Awaited<ReturnType<UxDoorApi["list"]>>;
   try {
-    listings = await listRuntimeUxPlugins();
+    answer = await doorApi().list(node);
   } catch (error) {
     if (reloadPack !== undefined) throw error;
     /* no local agent home (mobile, or not started): nothing to scan */
     return;
   }
-  const seen = new Set(listings.map((entry) => entry.id));
+  /* the node was left while it was listed: its pages are not wanted, and
+     the scan that leaving queued reads the node selected now */
+  const left = epoch !== nodeEpoch;
+  /* a node whose pages could not be read listed none; that is not the
+     pages being deleted, so the ones loaded stay and the row says why */
+  const pagesError = left ? null : (answer.pagesError ?? null);
+  if (!left) showPagesError(pagesError);
+  const listings = answer.plugins
+    .filter((entry) => !(left && isDocument(entry)))
+    .map((entry) => scanned(entry, node, epoch));
+  const seen = new Set(listings.map((entry) => entry.key));
   /* what left the disk goes first, so an id it owned is free for a listing
      that was shadowed behind it in this same scan */
-  for (const [id, loaded] of known) {
-    if (seen.has(id)) continue;
-    /* only the incarnation this listing owns leaves with it: a shadowed
-       copy's owner keeps running */
-    if (loaded && owners.get(loaded) === id) retireRuntimeUxPlugin(loaded);
-    for (const row of [id, `${id}:shadowed`]) {
-      if (uxPluginRecords()[row]) retireRuntimeUxPlugin(row);
-    }
-    release(id);
-    known.delete(id);
-    digests.delete(id);
+  for (const [key, entry] of known) {
+    if (seen.has(key) || (entry.document && pagesError !== null)) continue;
+    retireListing(key, entry);
   }
   for (const entry of listings.sort((a, b) => a.id.localeCompare(b.id))) {
+    if (!current(entry)) continue;
     if (
-      known.get(entry.id) &&
+      known.get(entry.key)?.loaded &&
       !reloadKnown &&
       !documentChanged(entry) &&
       (reloadPack === undefined || entry.pack !== reloadPack)
@@ -277,7 +399,7 @@ async function reconcile(reloadKnown: boolean, reloadPack?: string): Promise<voi
     noteDigest(entry);
     if (!enabledByListing(entry)) {
       /* off: the row says so from the manifest; nothing of it runs */
-      const previous = known.get(entry.id) ?? null;
+      const previous = known.get(entry.key)?.loaded ?? null;
       if (previous) retireRuntimeUxPlugin(previous);
       publishListed(entry);
       continue;
@@ -300,6 +422,15 @@ function queueScan(reloadKnown: boolean, reloadPack?: string): Promise<void> {
 
 export function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
   return queueScan(reloadKnown);
+}
+
+/** the selected node may have changed: if it did, the pages of the node
+    left are retired before this returns, and a scan reads the new one's */
+export function followSelectedUxNode(): Promise<void> {
+  const node = selectedNode();
+  if (node === pageNode) return uxScanSettled();
+  leaveNode(node);
+  return queueScan(false);
 }
 
 /* A page document changes on its node, not in this window, so nothing here
@@ -364,6 +495,8 @@ export function resetRuntimeDoor(): void {
   known.clear();
   owners.clear();
   digests.clear();
+  pageNode = null;
+  nodeEpoch = 0;
   if (rescan !== null) clearTimeout(rescan);
   rescan = null;
   inFlight = null;

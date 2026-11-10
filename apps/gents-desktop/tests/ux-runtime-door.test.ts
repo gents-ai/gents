@@ -13,11 +13,13 @@ import { installUxHost, type UxHost } from "@/contrib/plugin";
 import {
   resetUxPluginStore,
   setUxPluginEnabled,
+  uxDecisions,
   uxPluginRecords,
 } from "@/contrib/plugins-store";
 import { registry } from "@/contrib/registry";
 import {
   configureUxDoors,
+  followSelectedUxNode,
   refreshRuntimePackUxPlugins,
   reloadRuntimeUxPlugins,
   resetRuntimeDoor,
@@ -26,7 +28,11 @@ import {
 } from "@/contrib/runtime-door";
 import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
 import { resetSdkImportMap } from "@/sdk/runtime";
-import { installInProcessSandbox, uninstallInProcessSandbox } from "./sandbox-fixture";
+import {
+  installInProcessSandbox,
+  settle,
+  uninstallInProcessSandbox,
+} from "./sandbox-fixture";
 
 const host: UxHost = {
   shell: {
@@ -480,5 +486,205 @@ describe("page documents", () => {
     await scanRuntimeUxPlugins();
     expect(uxPluginRecords().notes).toBeUndefined();
     expect(chips()).toEqual([]);
+  });
+});
+
+/* Page documents are per node: two nodes may each hold a page of one id,
+   and the window shows the selected node's. The bridge here answers for the
+   node it is asked about, as the real one does. */
+describe("page documents across nodes", () => {
+  interface NodePages {
+    pages: UxPluginListing[];
+    modules: Record<string, string>;
+    error?: string | null;
+  }
+  let selected: string | null = null;
+  let nodes: Record<string, NodePages> = {};
+  let sourceGate: Promise<void> = Promise.resolve();
+  const sourceReads = () =>
+    reads().map(([, args]) => args as { id: string; node: string | null });
+  const labelled = (label: string) =>
+    `import { SESSION_HEADER_ACTIONS_AREA } from '@gents/ux-sdk'
+export default { id: 'notes', register(ctx) {
+  ctx.register({ id: '${label}', area: SESSION_HEADER_ACTIONS_AREA, data: { label: '${label}' } }) } }`;
+  const holding = (label: string, digest: string): NodePages => ({
+    pages: [pageDoc("notes", digest)],
+    modules: { "page/notes": labelled(label) },
+  });
+
+  beforeEach(() => {
+    selected = null;
+    nodes = {};
+    sourceGate = Promise.resolve();
+    configureUxDoors({
+      node: () => selected,
+      list: async (node) => {
+        call("desktop_ux_plugins_list", { node });
+        await listGate;
+        const held = nodes[node ?? ""];
+        return {
+          plugins: [...listings, ...(held?.error ? [] : (held?.pages ?? []))],
+          pagesError: held?.error ?? null,
+        };
+      },
+      source: async (id, node) => {
+        call("desktop_ux_plugin_source", { id, node });
+        await sourceGate;
+        const source = nodes[node ?? ""]?.modules[id];
+        if (source === undefined) throw new Error(`no source for ${id} on ${node}`);
+        return { source, css: null, digest: "sha256:0" };
+      },
+    });
+  });
+
+  it("reads a page's module from the node that listed it, and drops it once that node is left", async () => {
+    nodes = {
+      "did:x": holding("from-x", "sha256:1"),
+      "did:y": holding("from-y", "sha256:1"),
+    };
+    selected = "did:x";
+    let open = () => {};
+    sourceGate = new Promise((resolve) => (open = resolve));
+    const first = scanRuntimeUxPlugins();
+    await vi.waitFor(() => expect(sourceReads()).toHaveLength(1));
+    /* the selection moves while x's module is being read */
+    selected = "did:y";
+    const followed = followSelectedUxNode();
+    open();
+    await Promise.all([first, followed]);
+    expect(sourceReads()).toEqual([
+      { id: "page/notes", node: "did:x" },
+      { id: "page/notes", node: "did:y" },
+    ]);
+    expect(chips()).toEqual(["notes:from-y"]);
+  });
+
+  it("does not take an unchanged digest for the page of a node the selection left and came back to", async () => {
+    nodes = {
+      "did:x": holding("from-x", "sha256:1"),
+      "did:y": holding("from-y", "sha256:1"),
+    };
+    selected = "did:x";
+    let open = () => {};
+    sourceGate = new Promise((resolve) => (open = resolve));
+    const first = scanRuntimeUxPlugins();
+    await vi.waitFor(() => expect(sourceReads()).toHaveLength(1));
+    selected = "did:y";
+    const away = followSelectedUxNode();
+    selected = "did:x";
+    const back = followSelectedUxNode();
+    open();
+    await Promise.all([first, away, back]);
+    await scanRuntimeUxPlugins();
+    /* never y's module under x's listing, and x's page is running */
+    expect(sourceReads().every((read) => read.node === "did:x")).toBe(true);
+    expect(chips()).toEqual(["notes:from-x"]);
+    expect(uxPluginRecords().notes).toMatchObject({ status: "loaded" });
+  });
+
+  it("retires the left node's pages when the selection moves, before the next node is scanned", async () => {
+    nodes = {
+      "did:a": holding("from-a", "sha256:1"),
+      "did:b": holding("from-b", "sha256:2"),
+    };
+    selected = "did:a";
+    await scanRuntimeUxPlugins();
+    expect(isUxPluginLive("notes")).toBe(true);
+
+    let open = () => {};
+    listGate = new Promise((resolve) => (open = resolve));
+    selected = "did:b";
+    const followed = followSelectedUxNode();
+    /* b has not answered yet; a's frame is already gone */
+    expect(isUxPluginLive("notes")).toBe(false);
+    expect(uxPluginRecords().notes).toBeUndefined();
+    expect(chips()).toEqual([]);
+    open();
+    await followed;
+    expect(chips()).toEqual(["notes:from-b"]);
+  });
+
+  it("keeps a page's choice and storage per node, apart from a pack plugin of the same name", async () => {
+    const remembering = (mark: string) =>
+      `import { SESSION_HEADER_ACTIONS_AREA } from '@gents/ux-sdk'
+export default { id: 'notes', register(ctx) {
+  ctx.register({ id: 'read-' + ctx.storage.get('seen', 'nothing'), area: SESSION_HEADER_ACTIONS_AREA, data: { label: 'chip' } })
+  ctx.storage.set('seen', '${mark}') } }`;
+    nodes = {
+      "did:a": {
+        pages: [pageDoc("notes", "sha256:1")],
+        modules: { "page/notes": remembering("a") },
+      },
+      "did:b": {
+        pages: [pageDoc("notes", "sha256:1")],
+        modules: { "page/notes": remembering("b") },
+      },
+    };
+    /* what a pack plugin named `notes` keeps, under the plain id */
+    window.localStorage.setItem("gents.ux.notes.seen", JSON.stringify("pack"));
+
+    selected = "did:a";
+    await scanRuntimeUxPlugins();
+    await settle();
+    expect(chips()).toEqual(["notes:read-nothing"]);
+    selected = "did:b";
+    await followSelectedUxNode();
+    await settle();
+    expect(chips()).toEqual(["notes:read-nothing"]);
+    expect(window.localStorage.getItem("gents.ux.did:a/page/notes.seen")).toBe('"a"');
+    expect(window.localStorage.getItem("gents.ux.did:b/page/notes.seen")).toBe('"b"');
+    expect(window.localStorage.getItem("gents.ux.notes.seen")).toBe('"pack"');
+
+    /* switched off on b: a's page of the same id is not */
+    await setUxPluginEnabled("notes", false);
+    expect(uxDecisions()).toEqual({ "did:b/page/notes": false });
+    selected = "did:a";
+    await followSelectedUxNode();
+    await settle();
+    expect(uxPluginRecords().notes).toMatchObject({ status: "loaded" });
+    expect(chips()).toEqual(["notes:read-a"]);
+    selected = "did:b";
+    await followSelectedUxNode();
+    expect(uxPluginRecords().notes).toMatchObject({ status: "disabled" });
+    expect(
+      reads().filter(([, args]) => (args as { node: string }).node === "did:b"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps a pack plugin's choice under its own id", async () => {
+    listings = [packed("clock", true)];
+    sources.set("acme/tools/clock", chipPlugin("clock"));
+    nodes = {
+      "did:a": { pages: [], modules: { "acme/tools/clock": chipPlugin("clock") } },
+    };
+    selected = "did:a";
+    await scanRuntimeUxPlugins();
+    await setUxPluginEnabled("clock", false);
+    expect(uxDecisions()).toEqual({ clock: false });
+  });
+
+  it("keeps the pages already loaded when the node's pages cannot be read, and says so on a row", async () => {
+    nodes = { "did:a": holding("from-a", "sha256:1") };
+    selected = "did:a";
+    await scanRuntimeUxPlugins();
+    expect(chips()).toEqual(["notes:from-a"]);
+
+    nodes["did:a"]!.error = "node did:a is unreachable";
+    await scanRuntimeUxPlugins();
+    expect(isUxPluginLive("notes")).toBe(true);
+    expect(chips()).toEqual(["notes:from-a"]);
+    expect(uxPluginRecords()["page/"]).toMatchObject({
+      door: "document",
+      status: "error",
+      error: "node did:a is unreachable",
+    });
+    /* a Reload is no different: nothing says the page is gone */
+    await reloadRuntimeUxPlugins();
+    expect(isUxPluginLive("notes")).toBe(true);
+
+    nodes["did:a"]!.error = null;
+    await scanRuntimeUxPlugins();
+    expect(uxPluginRecords()["page/"]).toBeUndefined();
+    expect(isUxPluginLive("notes")).toBe(true);
   });
 });

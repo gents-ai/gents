@@ -8,6 +8,7 @@ import { createUxContext, type GentsUxPlugin } from "./plugin";
 import {
   patchUxPlugin,
   publishUxPlugin,
+  uxDecisionKey,
   uxPluginActive,
   type UxDeclaredContributions,
   type UxPluginDoor,
@@ -24,6 +25,8 @@ export interface ActivateOptions {
   declared?: UxDeclaredContributions;
   /** a root-level cap: false ships the plugin opt-in whatever it says */
   defaultEnabled?: boolean;
+  /** what its choice and storage are kept under, for a page document */
+  scope?: string;
 }
 
 /** What a plugin's notification switches are kept under: a pack plugin's
@@ -71,6 +74,7 @@ export function activateUxPlugin(
     pack: options.pack,
     declared: options.declared,
     notifications: plugin.notifications,
+    scope: options.scope,
   };
 
   const fail = (error: unknown) => {
@@ -104,6 +108,7 @@ export function activateUxPlugin(
           notifier: notifierKey(record),
           notifications: plugin.notifications,
           pack: record.pack,
+          storage: options.scope,
         }),
       );
     } catch (error) {
@@ -132,7 +137,7 @@ export function activateUxPlugin(
   publishUxPlugin({ ...record, status: "disabled" }, { activate, deactivate });
   if (
     uxPluginActive(
-      plugin.id,
+      uxDecisionKey(record),
       (plugin.defaultEnabled ?? true) && (options.defaultEnabled ?? true),
     )
   ) {

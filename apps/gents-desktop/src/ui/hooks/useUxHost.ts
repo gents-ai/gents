@@ -22,6 +22,7 @@ import { followOtherWindowsDecisions } from "@/contrib/plugins-store";
 import {
   configureUxDoors,
   followOtherWindowsPackChanges,
+  followSelectedUxNode,
   rescanRuntimeUxPluginsSoon,
   scanRuntimeUxPlugins,
 } from "@/contrib/runtime-door";
@@ -165,19 +166,14 @@ export function openUxDoors(app: DesktopApp): void {
     return selected?.nodeDid ?? null;
   };
   configureUxDoors({
-    list: () => app.actions.listUxPlugins(nodeDid()),
-    source: (id) => app.actions.readUxPluginSource(id, nodeDid()),
+    list: (node) => app.actions.listUxPlugins(node),
+    source: (id, node) => app.actions.readUxPluginSource(id, node),
+    node: nodeDid,
   });
   discoverBundledUxPlugins();
   void scanRuntimeUxPlugins();
   /* another node's pages replace this one's when the selection moves */
-  let scanned = nodeDid();
-  const followNode = () => {
-    const current = nodeDid();
-    if (current === scanned) return;
-    scanned = current;
-    void scanRuntimeUxPlugins().catch(() => undefined);
-  };
+  const followNode = () => void followSelectedUxNode().catch(() => undefined);
   following = [
     followOtherWindowsDecisions(),
     followOtherWindowsPackChanges(),

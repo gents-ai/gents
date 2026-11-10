@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PacksPanel } from "../src/ui/screens/agent/PacksPanel";
+import { UxPluginsPanel } from "../src/ui/screens/agent/UxPluginsPanel";
+import { resetUxPluginStore } from "../src/ui/contrib/plugins-store";
 import { renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
@@ -139,5 +141,31 @@ describe("pack page discovery", () => {
     );
     expect(within(review).getByRole("button", { name: "Install" })).toBeEnabled();
     expect(scan).not.toHaveBeenCalled();
+  });
+});
+
+describe("a node whose pages cannot be read", () => {
+  it("shows the reason on a row of the plugins panel", async () => {
+    const door = await vi.importActual<typeof import("../src/ui/contrib/runtime-door")>(
+      "../src/ui/contrib/runtime-door",
+    );
+    resetUxPluginStore();
+    door.resetRuntimeDoor();
+    door.configureUxDoors({
+      node: () => "did:key:a",
+      list: async () => ({ plugins: [], pagesError: "the node refused the read" }),
+      source: async () => {
+        throw new Error("no page is listed");
+      },
+    });
+    await door.scanRuntimeUxPlugins();
+    renderIn(testApp(), <UxPluginsPanel />);
+    expect(await screen.findByText("Pages on this node")).toBeInTheDocument();
+    expect(screen.getByText("the node refused the read")).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "Enable Pages on this node" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    resetUxPluginStore();
+    door.resetRuntimeDoor();
   });
 });

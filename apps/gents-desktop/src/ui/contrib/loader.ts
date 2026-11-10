@@ -101,6 +101,7 @@ export async function loadRuntimeUxPlugin(
       css: module.css,
       listing: options.listing,
       declared: options.declared,
+      scope: options.scope,
     });
     const meta = await host.load();
     /* a runtime copy of a plugin that ships bundled must not register a

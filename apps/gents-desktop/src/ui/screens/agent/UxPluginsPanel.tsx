@@ -10,6 +10,7 @@ import { revealInFolderLabel } from "../../../lib/shellPlatform";
 import { reloadRuntimeUxPlugins } from "@/contrib/runtime-door";
 import {
   setUxPluginEnabled,
+  uxDecisionKey,
   useUxDecisions,
   useUxPluginRecords,
   type UxPluginRecord,
@@ -114,7 +115,7 @@ export function UxPluginSwitch({ record }: { record: UxPluginRecord }) {
     <Switch
       aria-label={`Enable ${record.name}`}
       checked={record.status === "loaded"}
-      disabled={record.status === "error" && !(record.id in decisions)}
+      disabled={record.status === "error" && !(uxDecisionKey(record) in decisions)}
       onCheckedChange={(checked) =>
         void setUxPluginEnabled(record.id, checked).catch((error: unknown) =>
           toast.error(error instanceof Error ? error.message : String(error)),
