@@ -47,7 +47,7 @@ fi
 [[ "$(lipo -archs "$app/Contents/MacOS/gents-desktop-tauri")" == arm64 ]]
 bundled_cli="$app/Contents/MacOS/gents"
 [[ -x "$bundled_cli" ]]
-"$bundled_cli" version | grep -F "$RELEASE_VERSION"
+"$bundled_cli" runtime version | grep -F "$RELEASE_VERSION"
 
 shopt -s nullglob
 images=("$CARGO_TARGET_DIR"/release/bundle/dmg/*"${RELEASE_VERSION}"*.dmg)
@@ -73,7 +73,7 @@ if [[ "$candidate" != true ]]; then
   spctl --assess --type execute "$smoke_dir/Gents.app"
 fi
 [[ -x "$smoke_dir/Gents.app/Contents/MacOS/gents" ]]
-"$smoke_dir/Gents.app/Contents/MacOS/gents" version | grep -F "$RELEASE_VERSION"
+"$smoke_dir/Gents.app/Contents/MacOS/gents" runtime version | grep -F "$RELEASE_VERSION"
 node --input-type=module - "$smoke_dir" <<'NODE'
 import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';

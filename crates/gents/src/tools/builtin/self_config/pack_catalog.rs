@@ -264,7 +264,7 @@ impl PackInstaller {
         ordered! {
             "pack": coordinate,
             "removed": json!({"kind": removal.record.kind, "plugins": removal.plugins, "pages": removal.record.ux.iter().map(|page| page.name.clone()).collect::<Vec<_>>()}),
-            "effect": "The pack's install record and plugin records were released. Its cached assets, plugin bytes and archive stay until the operator runs `gents pack prune`.",
+            "effect": "The pack's install record and plugin records were released. Its cached assets, plugin bytes and archive stay until the operator runs `gents config pack prune`.",
         }
         .pretty()
     }
@@ -272,7 +272,7 @@ impl PackInstaller {
     /// Removes an installed pack's `PackInstallation` record and everything
     /// it lists. Never resolves the package (no
     /// store or registry lookup); releases its home and plugin store records
-    /// but no plugin bytes or archive; use `gents pack remove` for that.
+    /// but no plugin bytes or archive; use `gents config pack remove` for that.
     /// `with_collections` then also empties and removes each collection the
     /// pack's SDL declared that nothing else on the node names.
     /// What `pack remove` would do to an installed document pack, read from

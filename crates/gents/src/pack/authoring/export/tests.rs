@@ -63,6 +63,7 @@ async fn install_in(
         plugin_home,
         &|_| None,
         runtime.as_ref(),
+        &Default::default(),
     )
     .await?;
     install_prepared_document_pack(

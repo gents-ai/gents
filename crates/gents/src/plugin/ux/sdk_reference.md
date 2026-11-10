@@ -116,7 +116,7 @@ Helpers:
 
 ## Tokens
 
-`gents ux lint` refuses raw hex, rgb() and hsl() colors, and any custom property
+`gents config pack ux lint` refuses raw hex, rgb() and hsl() colors, and any custom property
 the frame does not define and the plugin does not define itself. Frame tokens
 follow the theme, so use them instead of a color: `var(--text)`, never
 `--background` or `--foreground`, which do not exist here. Most used:

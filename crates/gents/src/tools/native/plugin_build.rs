@@ -116,7 +116,9 @@ fn builder_program() -> Result<String> {
     }
     self_runner_binary()
         .map(|path: PathBuf| path.to_string_lossy().into_owned())
-        .context("this runtime has no plugin builder; have the operator run `gents pack build`")
+        .context(
+            "this runtime has no plugin builder; have the operator run `gents config pack build`",
+        )
 }
 
 /// The sandbox refuses writes outside its root, so caches a toolchain keeps in

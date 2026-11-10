@@ -95,7 +95,7 @@ jobs:
           )
 
           binary="${assets}/gents-x86_64-unknown-linux-gnu/gents"
-          version_output="$("${binary}" version)"
+          version_output="$("${binary}" runtime version)"
           printf '%s\n' "${version_output}"
           expected_prefix="gents ${RELEASE_TAG#v} ("
           if [[ "${version_output}" != "${expected_prefix}"* ]]; then

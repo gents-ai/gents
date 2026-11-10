@@ -59,6 +59,7 @@ impl LiveView {
                     StreamPayload::ReasoningEncrypted
                         | StreamPayload::ReasoningRedacted
                         | StreamPayload::ReasoningSignature
+                        | StreamPayload::ReasoningStop
                 )
             })
             .collect()

@@ -1227,6 +1227,8 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
                 installed_via: None,
                 installed_at: "2026-01-01T00:00:00Z".into(),
                 ux,
+                source: None,
+                source_history: Vec::new(),
             },
         )
         .unwrap();

@@ -259,7 +259,7 @@ fn check_outcome_fields(report: &CheckReport) -> (bool, String) {
     let note = if !report.problems.is_empty() {
         "Fix each named problem before installing; this call made no change."
     } else if !report.unverified.is_empty() {
-        "unverified lists checks this call could not run. An empty problems list is not full validation; run `gents pack check` before reporting success."
+        "unverified lists checks this call could not run. An empty problems list is not full validation; run `gents config pack check` before reporting success."
     } else {
         "Every validation available in this call passed."
     };
@@ -440,7 +440,7 @@ impl ConfigCommandTool {
     fn ensure_compile_grant(&self, operation: &str, plugins: &[&str]) -> Result<()> {
         anyhow::ensure!(
             self.core.held_grants().pack_authority,
-            "pack {operation} would compile plugin source ({}), which needs self_config.enable_pack_authority on this agent's Tools; the operator can grant it or run `gents pack {operation}`",
+            "pack {operation} would compile plugin source ({}), which needs self_config.enable_pack_authority on this agent's Tools; the operator can grant it or run `gents config pack {operation}`",
             plugins.join(", ")
         );
         Ok(())

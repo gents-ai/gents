@@ -1231,7 +1231,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         Box::pin(async move {
             txn.execute_client_signed_update(
                 &format!(r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{doc}", input: $input) {{ _docID }} }}"#),
-                &json!({"input": {"tags": ["gents:pack:plugin_documents_fixture", "user:favorite"]}}),
+                &json!({"input": {"tags": ["gents:pack:fixture/plugin_documents_fixture", "user:favorite"]}}),
                 gents_protocol::schemas::AGENT,
             ).await
         })
@@ -1282,7 +1282,10 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .unwrap();
     assert_eq!(
         tags["data"]["Agent"][0]["tags"],
-        json!(["gents:pack:plugin_documents_fixture", "user:favorite"])
+        json!([
+            "gents:pack:fixture/plugin_documents_fixture",
+            "user:favorite"
+        ])
     );
     let store = crate::pack::store::PackStore::new(home.path());
     let installed_path = store
@@ -5673,6 +5676,7 @@ async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
     let created = hosted["agent_did"].as_str().unwrap();
     let access = &hosted["host_root_access"];
     assert_eq!(access["state"], "waiting_for_user", "{hosted}");
+    assert_eq!(access["published_root"], root.as_str(), "{hosted}");
     assert_eq!(
         access["user_command"],
         format!("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {root} --agent-did {created}"),
@@ -8555,7 +8559,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     .unwrap();
     assert_eq!(get["manifest"]["kind"], "documents");
     assert_eq!(get["installable"], true);
-    assert_eq!(get["source"], "store");
+    assert_eq!(get["source"], "local");
     let digest = get["artifact_digest"].as_str().unwrap().to_owned();
     assert_eq!(
         get["installation_blockers"]
@@ -8969,3 +8973,116 @@ static PLUGIN_BUILDER_STUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_n
 
 mod live_documents;
 mod pack_authoring;
+/// Lean `SelfConfig.yoloGroup` and `Identity.GrantSets.yoloRecipient`: an
+/// Agent the User grants its own self-configuration edits its own Tools
+/// through the self-config tool, writes no other Agent's configuration, and
+/// holds no node permission beyond the agent baseline. Granting again changes
+/// nothing.
+#[tokio::test]
+async fn an_agent_granted_its_own_self_configuration_edits_itself_and_nothing_else() {
+    use crate::store::config_client::ConfigAccess;
+    let fixture = SelfConfigFixture::new("own-self-config").await;
+    let engineer = fixture.agent_did.clone();
+    let node_did = fixture.node_did().to_owned();
+    let tools_of = |agent: String| {
+        let access = fixture.user_access.clone();
+        let node_did = node_did.clone();
+        async move {
+            access
+                .transact_readonly("test.own_self_config.tools", |txn| {
+                    let (node_did, agent) = (&node_did, &agent);
+                    Box::pin(async move {
+                        crate::documents::load_agent_tools_in_txn(txn, node_did, agent).await
+                    })
+                })
+                .await
+                .unwrap()
+                .expect("the Agent selects Tools")
+        }
+    };
+    let mut engineer_tools = tools_of(engineer.clone()).await;
+    engineer_tools.self_config = Some(engineer_self_config());
+    crate::documents::write_tools_document(&fixture.user_access, &engineer_tools)
+        .await
+        .unwrap();
+    let yolo = fixture.install_sibling("Yolo").await;
+    for _ in 0..2 {
+        grant_own_self_configuration(&fixture.user_access, &node_did, &yolo, &engineer)
+            .await
+            .unwrap();
+    }
+    let yolo_tools = tools_of(yolo.clone()).await;
+    assert_eq!(
+        serde_json::to_value(&yolo_tools.self_config).unwrap(),
+        serde_json::to_value(&engineer_tools.self_config).unwrap()
+    );
+
+    let yolo_doc = crate::load_agent(&fixture.db.node, &yolo)
+        .await
+        .unwrap()
+        .unwrap();
+    let yolo_signer = crate::store::identity::resolve_agent_identity(
+        fixture.db.node_identity.as_ref(),
+        &yolo_doc.identity_binding(),
+    )
+    .unwrap();
+    let core = SelfConfigCore::new(fixture.db.node.clone(), node_did.clone(), yolo.clone())
+        .unwrap()
+        .with_agent_signer(yolo_signer.managed_agent_signer())
+        .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+        .with_node_binding(Some(fixture.node_binding.clone()));
+    core.apply(tools_request(
+        &core,
+        vec![("display_name".into(), Some(json!("Yolo's own tools")))],
+    ))
+    .await
+    .expect("the agent edits its own Tools through the self-config tool");
+    assert_eq!(
+        tools_of(yolo.clone()).await.display_name.as_deref(),
+        Some("Yolo's own tools")
+    );
+
+    let as_yolo = ConfigAccess::local_with_optional_agent_signer(
+        fixture.db.node.clone(),
+        identity::Did::new(yolo.clone()).unwrap(),
+        yolo_signer.managed_agent_signer(),
+    )
+    .unwrap();
+    let mut foreign = tools_of(engineer.clone()).await;
+    foreign.display_name = Some("written by the yolo agent".into());
+    assert!(
+        crate::documents::write_tools_document(&as_yolo, &foreign)
+            .await
+            .is_err(),
+        "the agent writes no other Agent's configuration"
+    );
+    assert_ne!(
+        tools_of(engineer).await.display_name.as_deref(),
+        Some("written by the yolo agent")
+    );
+
+    // Its self-config Tools project `delete-dac-relation` as a tool-sourced
+    // node operation (Lean `Configuration.toolOperationSources`), as the
+    // Engineer's do; it manages no NAC relation and reads no NAC status.
+    let member = identity::Did::new(yolo).unwrap();
+    for permission in crate::store::identity::GrantSet::PolicyDelegate.permissions() {
+        if crate::store::identity::GrantSet::AgentBaseline
+            .permissions()
+            .contains(permission)
+            || permission.as_str() == "delete-dac-relation"
+        {
+            continue;
+        }
+        assert!(
+            !fixture
+                .db
+                .node
+                .nac_manager()
+                .check_permission(&member, *permission)
+                .await
+                .unwrap(),
+            "the agent holds no policy-delegate permission {}",
+            permission.as_str()
+        );
+    }
+}

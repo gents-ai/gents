@@ -26,7 +26,7 @@ impl ConfigCommandTool {
         }
     }
 
-    /// `task run`: fire one Task now through the owner `gents task run` uses.
+    /// `task run`: fire one Task now through the owner `gents automation task run` uses.
     /// The Task's agent answers, so another agent's Task needs the catalog grant.
     pub(super) async fn task_run(&self, argv: &[String]) -> Result<String> {
         self.ensure_resource("automation")?;

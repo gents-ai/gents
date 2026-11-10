@@ -178,7 +178,7 @@ impl ConfigCommandTool {
 
         let open_home = home.clone();
         let built = prepared.clone();
-        let distribution = ConfigPackDistribution(
+        let distribution = ConfigPackDistribution::resolved(
             tokio::task::spawn_blocking(move || {
                 source_pack::open_built_plugin_source(&open_home, &built)
             })

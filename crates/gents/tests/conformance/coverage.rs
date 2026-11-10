@@ -505,6 +505,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PackPlacementReaderCases",
         ),
         (
+            !snapshot.self_config_scope_cases.groups.is_empty(),
+            "self_config_scope_cases",
+            "SelfConfigScopeCases",
+        ),
+        (
+            !snapshot.pack_document_ownership_cases.is_empty(),
+            "pack_document_ownership_cases",
+            "PackDocumentOwnershipCases",
+        ),
+        (
             !snapshot.agent_target_access_cases.is_empty(),
             "agent_target_access_cases",
             "AgentTargetAccessCases",
@@ -915,6 +925,33 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "hosted_pack_schema_cases".into(),
             "HostedPackSchemaCases".into(),
         ));
+    }
+    // Pack generators the proofs build as their own executables, outside the
+    // snapshot; their Rust consumers run them directly.
+    let lakefile = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs/lakefile.lean"),
+    )
+    .expect("reading the proofs lakefile");
+    for (module, key, class) in [
+        (
+            "PackSourceSelection",
+            "pack_source_selection_cases",
+            "PackSourceSelectionCases",
+        ),
+        (
+            "PackInstallVariables",
+            "pack_install_variable_cases",
+            "PackInstallVariableCases",
+        ),
+        (
+            "PackInstallUpgrade",
+            "pack_install_upgrade_cases",
+            "PackInstallUpgradeCases",
+        ),
+    ] {
+        if lakefile.contains(&format!("`Proofs.Conformance.{module},")) {
+            emitted.insert((key.into(), class.into()));
+        }
     }
     if !snapshot.hosted_pack_home_cases.is_empty() {
         emitted.insert((
@@ -2201,6 +2238,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimBindingCases".to_string(),
         ));
     }
+    if !lean_codex_shim_connection_admission_cases().is_empty() {
+        emitted.insert((
+            "codex_shim_connection_admission_cases".to_string(),
+            "CodexShimConnectionAdmissionCases".to_string(),
+        ));
+    }
     if !lean_plugin_reference_cases().is_empty() {
         emitted.insert((
             "plugin_reference_cases".to_string(),
@@ -2295,6 +2338,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.goal_session_observation_cases,
             "goal_session_observation_cases",
             "GoalSessionObservationCases",
+        ),
+        (
+            &snapshot.goal_session_fold_cases,
+            "goal_session_fold_cases",
+            "GoalSessionFoldCases",
         ),
         (
             &snapshot.plugin_approval_cases,
@@ -2405,6 +2453,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "causal_hop_contract".into(),
         "SessionTargetAuthorityCases".into(),
     ));
+    assert!(!snapshot.causal_hop_contract.session_list_cases.is_empty());
+    emitted.insert(("causal_hop_contract".into(), "SessionListEntryCases".into()));
     assert!(!snapshot.title_text_cases["cases"]
         .as_array()
         .unwrap()

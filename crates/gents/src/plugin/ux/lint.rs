@@ -1,5 +1,5 @@
-//! The static lint a UX plugin's module must pass at `gents pack check`
-//! and `gents pack build`: an honest-author tripwire, not a sandbox. A
+//! The static lint a UX plugin's module must pass at `gents config pack check`
+//! and `gents config pack build`: an honest-author tripwire, not a sandbox. A
 //! plugin runs in the webview with the app's authority; the webview's CSP
 //! (`script-src 'self' blob:`) is what keeps a module from loading code the
 //! loader did not hand it. What is refused here is the set of things a

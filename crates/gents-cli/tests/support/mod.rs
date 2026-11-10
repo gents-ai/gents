@@ -6,6 +6,7 @@ pub mod graphql;
 #[path = "../../../gents/tests/support/inference_target.rs"]
 pub mod inference_target;
 pub mod mocks;
+pub mod pack_preview;
 pub mod ports;
 pub mod process;
 pub mod waits;
@@ -25,6 +26,7 @@ pub use mocks::{
     request_system_message, request_tool_names, request_tool_result_text, tool_call_sse,
     tool_call_sse_with_id, MockChatEndpoint, MockModelEndpoint, MockOpenAIEndpoint,
 };
+pub use pack_preview::{assert_preview_hides_the_secret, documents_fixture_with_secret_variable};
 pub use ports::{allocate_port, graphql_url};
 pub use process::{
     cli_bin, desktop_bin, run_cli_failure_stderr, run_cli_failure_stderr_with_env,

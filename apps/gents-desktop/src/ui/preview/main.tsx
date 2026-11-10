@@ -1,4 +1,4 @@
-/* The page `gents ux preview` drives: one UX plugin through the real frame
+/* The page `gents config pack ux preview` drives: one UX plugin through the real frame
    pipeline and the real plugin screen, over a host whose data door is the
    node. Every `/__preview/` request is answered by the Rust owner
    (`gents::plugin::ux::preview`) as the browser driver fulfils it, so a

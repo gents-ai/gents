@@ -28,10 +28,19 @@ pub(super) struct PackInstallParams {
 /// The drift decision as the document installer takes it.
 pub(super) type EditedDecision = DriftPolicy;
 
-/// The pack kinds this installer installs: document and plugins-only packs.
-pub(super) struct ConfigPackDistribution(pub(super) crate::pack::resolve::ResolvedNamedPack);
+/// A resolved pack and the provenance its installation records.
+pub(super) struct ConfigPackDistribution(
+    pub(super) crate::pack::resolve::ResolvedNamedPack,
+    pub(super) crate::pack::PackSource,
+);
 
 impl ConfigPackDistribution {
+    /// A pack the resolver found, recorded as coming from where it found it.
+    pub(super) fn resolved(resolved: crate::pack::resolve::ResolvedNamedPack) -> Self {
+        let source = crate::pack::PackSource::of_resolution(&resolved);
+        Self(resolved, source)
+    }
+
     pub(super) fn manifest(&self) -> &crate::pack::PackManifest {
         self.0.archive.manifest()
     }
@@ -41,11 +50,7 @@ impl ConfigPackDistribution {
     }
 
     pub(super) fn source(&self) -> &'static str {
-        match self.0.from {
-            crate::pack::resolve::ResolvedFrom::Installed => "installed",
-            crate::pack::resolve::ResolvedFrom::Store => "store",
-            crate::pack::resolve::ResolvedFrom::Registry { .. } => "registry",
-        }
+        self.1.kind()
     }
 
     /// Pin the preview's resolution so applying it resolves the same pack
@@ -117,6 +122,7 @@ impl PackInstaller {
         self.validate(args)?;
         let coordinate = args.package.trim();
         if let Some(local) = crate::pack::local::classify(coordinate) {
+            let source = crate::pack::PackSource::of_local_name(&local);
             let home = self
                 .home
                 .as_deref()
@@ -208,10 +214,8 @@ impl PackInstaller {
             // refuses them; with it the install grants what the pack asks
             // for and the receipt lists it.
             return Ok(ConfigPackDistribution(
-                crate::pack::resolve::ResolvedNamedPack {
-                    archive,
-                    from: crate::pack::resolve::ResolvedFrom::Store,
-                },
+                crate::pack::resolve::ResolvedNamedPack::stored(archive),
+                source,
             ));
         }
         let registry_url = crate::pack::registry::resolve_registry_url(None);
@@ -249,7 +253,7 @@ impl PackInstaller {
             },
         )
         .await?;
-        Ok(ConfigPackDistribution(resolved))
+        Ok(ConfigPackDistribution::resolved(resolved))
     }
 
     pub(super) async fn installation_status(

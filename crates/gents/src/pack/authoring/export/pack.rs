@@ -479,10 +479,10 @@ fn readme(name: &str, config: &Value, slots: &[Value], schemas: &[String]) -> St
     }
     format!(
         "# {name}\n\nExported from documents that were live on a node.\n\n\
-         ## Installation\n\n```sh\ngents pack install ./{name}\n```\n\n\
+         ## Installation\n\n```sh\ngents config pack install ./{name}\n```\n\n\
          ## Bindings and prerequisites\n\nBind each inference slot to a profile when installing.\n\n{bindings}\n\
          ## Documents\n\n{documents}\n\
          ## Collections\n\n{collections}\n\
-         ## Validation\n\n```sh\ngents pack check ./{name}\n```\n"
+         ## Validation\n\n```sh\ngents config pack check ./{name}\n```\n"
     )
 }

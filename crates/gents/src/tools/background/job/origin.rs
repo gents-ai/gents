@@ -43,6 +43,6 @@ pub fn engine_guard_next(plugin: &InstalledPlugin) -> String {
         .clone()
         .unwrap_or_else(|| format!("{}/{}", plugin.namespace, plugin.name));
     format!(
-        "Next: reinstall {pack} with `gents pack install`, or through config as an agent that holds pack authority (self_config.enable_pack_authority)"
+        "Next: reinstall {pack} with `gents config pack install`, or through config as an agent that holds pack authority (self_config.enable_pack_authority)"
     )
 }

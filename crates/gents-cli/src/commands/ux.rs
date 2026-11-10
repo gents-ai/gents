@@ -1,4 +1,4 @@
-//! `gents ux`: the UX plugins the desktop loads from a home, seen from the
+//! `gents config pack ux`: the UX plugins the desktop loads from a home, seen from the
 //! terminal. `list` and `module` are the same two reads the desktop bridge
 //! makes (`gents_server::packs::{ux_list, ux_module}`), so an author can see
 //! exactly what the webview will receive; `lint` runs the static lint on
@@ -48,7 +48,7 @@ async fn preview(args: UxPreviewArgs) -> Result<()> {
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let node_did = crate::packs::ux_installing_node(&home)?;
     let rerun = format!(
-        "gents ux preview {} --home {} --out {}",
+        "gents config pack ux preview {} --home {} --out {}",
         args.target,
         home.display(),
         args.out.display()

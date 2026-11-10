@@ -48,6 +48,8 @@ fn install_record(
             plugins,
             dependency_assets: Vec::new(),
             installed_via: None,
+            source: None,
+            source_history: Vec::new(),
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux,
         },
@@ -354,7 +356,10 @@ fn the_sdk_reference_carries_the_skeleton_and_every_token() {
 fn the_sdk_reference_is_an_index_and_one_section_per_export() {
     let index = reference::sdk_index();
     assert!(index.contains("export default {") && index.contains("ctx.registerMany"));
-    assert!(index.contains("`gents ux lint` refuses raw hex"), "{index}");
+    assert!(
+        index.contains("`gents config pack ux lint` refuses raw hex"),
+        "{index}"
+    );
     assert!(
         !index.contains("<!--") && !index.contains("\n### "),
         "{index}"

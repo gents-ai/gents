@@ -117,6 +117,7 @@ impl PackInstaller {
             Some(self.core.node_did()),
             &inference.bindings,
             installer_provenance(InstalledVia::SelfConfig, self.grants_authority()),
+            distribution.1.clone(),
             move |identity, changes| {
                 let access = notify_access;
                 let node_did = notify_node;

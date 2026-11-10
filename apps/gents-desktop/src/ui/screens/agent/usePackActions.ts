@@ -4,20 +4,46 @@ import type { PackEditedChoice } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
 import { refreshRuntimePackUxPlugins } from "@/contrib/runtime-door";
 import { errorText } from "../../../lib/errorText";
+import type { PackReviewRequest } from "@/lib/packReview";
+import { forgetSetAsideReview } from "../packs/preview";
 
 /** An install or update that would replace documents someone edited stops and
- * names them; the person chooses keep or overwrite. */
+    names them; the person chooses keep or overwrite. Read from the error's
+    words, since the install reports no typed refusal: replace with typed
+    errors from core. */
 function editedChoice(error: unknown): boolean {
   return errorText(error).includes("--overwrite");
 }
 
-/** Install, update and remove a pack on the desktop's own node, asking first
-    where the pack would gain authority, replace someone's edits, or take
-    what it installed with it. `busy` names the pack (or other work) under
-    way; the pack's pages reload in every window once one finishes. */
+/** What the person chose in an install's review. */
+export type PackInstallChoice = {
+  /** the digest the review showed: a pack that differs is refused */
+  digest: string;
+  /** the pack's coordinate, for the pages it brings */
+  pack: string;
+  edited: PackEditedChoice;
+  grantAuthority: boolean;
+  /** the `NAME=PROFILE` model bindings the review previewed */
+  inferenceSlots: string[];
+};
+
+/** Install, update and remove a pack on the desktop's own node. An install
+    opens a review first (`review`), and only the review's Install writes;
+    an update asks where it would replace someone's edits, and a removal
+    before it takes what the pack installed with it. `busy` names the pack
+    (or other work) under way; the pack's pages reload in every window once
+    one finishes. */
 export function usePackActions(refresh: () => Promise<void>) {
   const { actions } = useApp();
   const [busy, setBusy] = useState<string | null>(null);
+  const [review, setReview] = useState<PackReviewRequest | null>(null);
+  /* each review opened anew, so its choices start from nothing or from
+     where it was set aside */
+  const [opened, setOpened] = useState(0);
+  const open = (request: PackReviewRequest) => {
+    setOpened((n) => n + 1);
+    setReview(request);
+  };
 
   /* after the list: a reload waits behind any scan still running, and the
      list must not wait with it */
@@ -29,32 +55,31 @@ export function usePackActions(refresh: () => Promise<void>) {
     }
   }
 
-  async function install(
-    pack: string,
-    edited: PackEditedChoice = "refuse",
-    grantAuthority = false,
+  /** opens the review for a registry pack */
+  function install(pack: string) {
+    open({ package: pack, source: "registry" });
+  }
+
+  /** Installs what the review showed, pinned to its digest. A refusal is
+      thrown for the review to show; nothing else closes it. */
+  async function installReviewed(
+    request: PackReviewRequest,
+    choice: PackInstallChoice,
   ): Promise<void> {
-    setBusy(pack);
+    setBusy(choice.pack);
     try {
-      await actions.installPack({ package: pack, edited, grantAuthority });
-      toast.success(`Installed ${pack}`);
+      await actions.installPack({
+        package: request.package,
+        edited: choice.edited,
+        grantAuthority: choice.grantAuthority,
+        expectDigest: choice.digest,
+        inferenceSlots: choice.inferenceSlots,
+      });
+      toast.success(`Installed ${choice.pack}`);
+      forgetSetAsideReview(request);
+      setReview(null);
       await refresh();
-      void refreshPages(pack);
-    } catch (error) {
-      const text = errorText(error);
-      if (
-        text.includes("--grant-authority") &&
-        window.confirm(`${text}\n\nAllow it?`)
-      ) {
-        return install(pack, edited, true);
-      }
-      if (editedChoice(error)) {
-        const overwrite = window.confirm(
-          `${text}\n\nOK replaces them, Cancel keeps your edits.`,
-        );
-        return install(pack, overwrite ? "overwrite" : "keep", grantAuthority);
-      }
-      toast.error(text);
+      void refreshPages(choice.pack);
     } finally {
       setBusy(null);
     }
@@ -101,5 +126,24 @@ export function usePackActions(refresh: () => Promise<void>) {
     }
   }
 
-  return { busy, setBusy, install, update, remove };
+  return {
+    busy,
+    setBusy,
+    install,
+    update,
+    remove,
+    review,
+    /** which opening of a review this is */
+    opened,
+    /** opens the review for a file, a link or a registry pack */
+    reviewInstall: open,
+    /** closes the review and forgets it */
+    closeReview: () => {
+      if (review) forgetSetAsideReview(review);
+      setReview(null);
+    },
+    /** closes the review, which stays set aside to take back to */
+    setReviewAside: () => setReview(null),
+    installReviewed,
+  };
 }

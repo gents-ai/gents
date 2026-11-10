@@ -45,9 +45,8 @@ import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { holdRow } from "@/lib/scroll";
 import { GroupStateContext } from "./ActivityGroup";
-import { agentName } from "./behavior";
 import { Markdown } from "./Markdown";
-import { AgentInitials } from "./parts";
+import { AgentMark } from "./parts";
 import { ToolIcon } from "./tool-icon";
 import { spoken, toolSummary } from "./tool-summary";
 import { isWorkerStep } from "./WorkerStep";
@@ -423,8 +422,12 @@ function ModelInput({ content }: { content: string | null | undefined }) {
   );
 }
 
-const avatar = (name: string) => (
-  <AgentInitials name={name} className="size-4 text-[8px]" />
+const avatar = (agentDid: string | null, deployment: NodeView | null) => (
+  <AgentMark
+    agentDid={agentDid}
+    deployment={deployment}
+    className="size-4 text-[8px]"
+  />
 );
 
 export function AutomatedInput({
@@ -481,7 +484,7 @@ export function AutomatedInput({
       label
     );
     icon = sender ? (
-      avatar(agentName(sender.agentDid, senderNode ?? node))
+      avatar(sender.agentDid, senderNode ?? node)
     ) : (
       <OriginIcon origin={origin} />
     );
@@ -490,7 +493,7 @@ export function AutomatedInput({
     title = <BackgroundTitle named={named} content={content} />;
     const agentDid = named?.worker?.agentDid;
     icon = agentDid ? (
-      avatar(agentName(agentDid, node))
+      avatar(agentDid, node)
     ) : call ? (
       <ToolIcon tool={call} className="size-3.5 shrink-0" />
     ) : (

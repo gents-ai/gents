@@ -34,7 +34,7 @@ pub(crate) enum UxCommand {
     List(UxListArgs),
     /// Print one UX plugin's module as the desktop would receive it.
     Module(UxModuleArgs),
-    /// Run the static lint on a plugin.js file, as `gents pack check` does.
+    /// Run the static lint on a plugin.js file, as `gents config pack check` does.
     Lint(UxLintArgs),
     /// Render a plugin's page in the real sandbox on its node, at light and dark, and report what it shows.
     Preview(UxPreviewArgs),
@@ -135,7 +135,7 @@ pub(crate) struct PluginPublishArgs {
     pub(crate) registry: Option<String>,
     #[arg(
         long,
-        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents config pack login"
     )]
     pub(crate) token: Option<String>,
     #[arg(
@@ -208,7 +208,9 @@ pub(crate) struct PluginRunArgs {
 pub(crate) struct PluginBindArgs {
     #[arg(help = "Installed plugin, as `name` or `namespace/name`")]
     pub(crate) name: String,
-    #[arg(help = "Existing inference profile (see `gents profile list`) the plugin calls through")]
+    #[arg(
+        help = "Existing inference profile (see `gents config profile list`) the plugin calls through"
+    )]
     pub(crate) profile: String,
     #[command(flatten)]
     pub(crate) scope: ScopeArgs,

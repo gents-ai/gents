@@ -95,6 +95,28 @@ pub fn provider_down(error: &anyhow::Error) -> Option<&ProviderDown> {
     error.downcast_ref::<ProviderDown>()
 }
 
+/// Most trials one process runs at once on in-process (embedded) DefraDB
+/// nodes, whatever a run or batch asks for.
+///
+/// External premise (DefraDB `db::txn::catalog::Catalog` at the pinned
+/// revision): each collection a transaction loads clones the transaction's
+/// whole collection cache through an RCU swap, and the replaced copies wait
+/// for kovan's deferred reclamation, which every embedded node in the process
+/// shares. Those copies dominated the live heap, and the footprint grew
+/// faster than the node count: on `configurator-l1-inference`, 4 embedded
+/// trials peaked at 2.4 GB and 8 at 5.6 GB, while 16 passed 18 GB within
+/// 70 seconds and an unbounded batch reached a 132 GB footprint. Raise this
+/// only with a re-measured footprint.
+pub const EMBEDDED_TRIAL_CEILING: usize = 4;
+
+/// The trials `isolation` may hold at once when `requested` are asked for.
+pub fn trial_ceiling(requested: usize, isolation: Isolation) -> usize {
+    match isolation {
+        Isolation::Embedded => requested.clamp(1, EMBEDDED_TRIAL_CEILING),
+        Isolation::Process => requested.max(1),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TrialBudget(Arc<tokio::sync::Semaphore>);
 
@@ -185,7 +207,16 @@ pub(crate) async fn execute_frozen(
     let owner = frozen.record.owner.as_str();
     let run_id = frozen.record.run_id.as_str();
     let origin = &frozen.record.origin;
-    let concurrency = origin.concurrency.max(1) as usize;
+    let requested = origin.concurrency.max(1) as usize;
+    let concurrency = trial_ceiling(requested, executor.isolation());
+    if concurrency < requested {
+        tracing::warn!(
+            run_id,
+            requested,
+            running = concurrency,
+            "eval run holds embedded trials to the per-process ceiling"
+        );
+    }
 
     let mut outcome = RunOutcome {
         run_id: run_id.to_owned(),

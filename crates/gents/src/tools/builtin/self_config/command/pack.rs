@@ -56,7 +56,7 @@ impl ConfigCommandTool {
     }
 
     /// `plugin run`: call an installed plugin once through the owner
-    /// `gents plugin run` uses, sealed: no bound directory and no data caller.
+    /// `gents config pack plugin run` uses, sealed: no bound directory and no data caller.
     pub(super) async fn plugin_run(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(
             self.core.held_grants().pack_install || self.categories.contains("tools"),

@@ -1,4 +1,4 @@
-//! `gents ux preview`: one UX plugin rendered by a real browser, at light and
+//! `gents config pack ux preview`: one UX plugin rendered by a real browser, at light and
 //! dark, through the desktop's frame pipeline and the real node data path,
 //! with a report a model can use without vision.
 //!

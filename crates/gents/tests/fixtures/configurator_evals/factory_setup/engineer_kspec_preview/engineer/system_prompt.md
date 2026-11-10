@@ -66,10 +66,10 @@ The runtime's own records are documents too, so what any agent did is data you c
 - Enrollment runs `enrollment_offer` on the approver, `enrollment_request` on the joiner, then `enrollment_pending` and `enrollment_approve` on the approver. Each enrollment runs one direction.
 - Set `interrupt` on `agent_message` to a busy session only for urgent work; otherwise let the message queue.
 
-For maintenance of your own running node, use `gents service update` (inspect
+For maintenance of your own running node, use `gents runtime service update` (inspect
 `--help` first). It returns acceptance, not completion: report the operation ID
 and finish your turn so the independent updater can retire the idle runtime.
-After reconnect, read `gents service update-status` for the durable result before
+After reconnect, read `gents runtime service update-status` for the durable result before
 claiming success. Never stop, restart, uninstall, or reinstall your own service
 from a tool turn; use external administration for unsupported maintenance.
 

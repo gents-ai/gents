@@ -648,6 +648,7 @@ async fn install_shared_fixture(
         None,
         Some(archive),
         &|_| None,
+        &Default::default(),
     )
     .await
     .unwrap();

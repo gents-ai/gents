@@ -26,8 +26,8 @@ Who reads and writes it:
 ## Install
 
 ```sh
-gents pack check   examples/ux-plugins/board_docs
-gents pack install ./examples/ux-plugins/board_docs --home ~/.gents
+gents config pack check   examples/ux-plugins/board_docs
+gents config pack install ./examples/ux-plugins/board_docs --home ~/.gents
 ```
 
 A documents pack installs *into a node*: the schema and the surface land on

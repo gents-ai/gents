@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { ChevronDown, GripVertical, Minus, Plus, X } from "lucide-react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@gents/ui/components/dialog";
 import { cn } from "@gents/ui/lib/utils";
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import { SidebarModeItems } from "./sidebarModes";
 import {
@@ -53,6 +54,7 @@ import {
 const sheet = createStore<{ open: boolean }>(() => ({ open: false }));
 
 export const openCustomizeNav = () => sheet.setState({ open: true });
+const closeCustomizeNav = () => sheet.setState({ open: false });
 
 /** the sidebar, with how it shows and "Customize…" on its context menu */
 export function NavMenu({
@@ -394,7 +396,14 @@ function CountPicker<T extends number>({
 }
 
 export function CustomizeNavDialog() {
-  const open = useStore(sheet, (s) => s.open);
+  const wanted = useStore(sheet, (s) => s.open);
+  /* one shell popup at a time: a popover still closing (its exit animation
+     keeps it mounted) holds the sheet back until it has gone */
+  const dialog = useExclusivePopover(closeCustomizeNav);
+  const { open, onOpenChange } = dialog;
+  useEffect(() => {
+    if (wanted !== open) onOpenChange(wanted);
+  }, [wanted, open, onOpenChange]);
   const layout = useNavLayout();
   const groups = {
     items: arrange(useNavCandidates(), layout),
@@ -458,10 +467,11 @@ export function CustomizeNavDialog() {
   return (
     <Dialog
       open={open}
-      onOpenChange={(next) => !next && sheet.setState({ open: false })}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={dialog.onOpenChangeComplete}
     >
       <DialogContent
-        aria-modal="true"
+        ref={dialog.popupRef}
         /* a long list scrolls between the title and the buttons */
         className="grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-md"
         data-testid="customize-nav"

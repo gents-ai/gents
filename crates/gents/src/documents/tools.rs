@@ -1219,8 +1219,9 @@ pub fn wire_plugin(
         context.skill_ids.extend(skills);
     }
 
-    let next_call = (plugin.declaration.job.0 && job.is_none())
-        .then(|| format!("gents pack wire {coordinate} --agent <agent> --targets-from <pack>"));
+    let next_call = (plugin.declaration.job.0 && job.is_none()).then(|| {
+        format!("gents config pack wire {coordinate} --agent <agent> --targets-from <pack>")
+    });
     Ok((
         tools,
         context,
@@ -1331,7 +1332,7 @@ pub fn unwire_plugin(
             job = None;
             changed.push(format!("dropped the job block for {coordinate}"));
             next_call = Some(format!(
-                "{coordinate} now serves non-job verbs only; to run jobs again: gents pack wire {coordinate} --agent <agent> --targets-from <pack>"
+                "{coordinate} now serves non-job verbs only; to run jobs again: gents config pack wire {coordinate} --agent <agent> --targets-from <pack>"
             ));
         } else {
             let problems = settings::validate(block);

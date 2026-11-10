@@ -75,7 +75,7 @@ export function StartedCount({
         }
       >
         {agents.length > 0 ? (
-          <WorkerAgents names={agents} />
+          <WorkerAgents agents={agents} />
         ) : (
           <SquareStack className="size-3.5" />
         )}

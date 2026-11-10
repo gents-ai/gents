@@ -322,13 +322,10 @@ export function AreaRow({
       />
       {stacked && (overflowing || expanded) && (
         <div className="-mt-1 flex justify-end">
-          <Button
-            variant="quiet"
-            size="sm"
-            onClick={() => setExpanded((open) => !open)}
-          >
-            {expanded ? "Show less" : "Show all"}
-          </Button>
+          <ShowAllToggle
+            expanded={expanded}
+            onToggle={() => setExpanded((open) => !open)}
+          />
         </div>
       )}
     </Wrap>
@@ -427,13 +424,10 @@ export function MarkdownRow({
       )}
       {(overflowing || expanded) && (
         <div className="-mt-1 flex justify-end">
-          <Button
-            variant="quiet"
-            size="sm"
-            onClick={() => setExpanded((open) => !open)}
-          >
-            {expanded ? "Show less" : "Show all"}
-          </Button>
+          <ShowAllToggle
+            expanded={expanded}
+            onToggle={() => setExpanded((open) => !open)}
+          />
         </div>
       )}
     </StackedRow>
@@ -448,6 +442,7 @@ export function ChoiceRow({
   onChange,
   items,
   none,
+  placeholder,
   error,
   disabled,
 }: Common & {
@@ -455,13 +450,15 @@ export function ChoiceRow({
   onChange: (v: string) => void;
   items: Choice[];
   none?: string;
+  /** shown while nothing is chosen, when there is no `none` choice */
+  placeholder?: string;
 }) {
   const all = none ? [{ value: "", label: none }, ...items] : items;
   return (
     <Row label={label} description={description} htmlFor={id} error={error}>
       <Select
         items={all}
-        value={value}
+        value={value === "" && !none ? null : value}
         onValueChange={(v) => onChange(v ?? "")}
         disabled={disabled}
       >
@@ -470,7 +467,7 @@ export function ChoiceRow({
           aria-invalid={error ? true : undefined}
           className="w-72 max-md:w-full"
         >
-          <SelectValue />
+          <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
           {all.map((i) => (
@@ -1052,6 +1049,31 @@ export function FactRow({
   );
 }
 
+/* Not a native button: a read-only view disables every button inside its
+   fieldset, and reading a long value in full is still allowed there. */
+function ShowAllToggle({
+  expanded,
+  onToggle,
+  className,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <Button
+      variant="quiet"
+      size="sm"
+      className={className}
+      nativeButton={false}
+      render={<span />}
+      onClick={onToggle}
+    >
+      {expanded ? "Show less" : "Show all"}
+    </Button>
+  );
+}
+
 export function LongFactRow({
   label,
   description,
@@ -1069,14 +1091,11 @@ export function LongFactRow({
         {children}
       </p>
       {(overflowing || expanded) && (
-        <Button
-          variant="quiet"
-          size="sm"
+        <ShowAllToggle
+          expanded={expanded}
+          onToggle={() => setExpanded((open) => !open)}
           className="-mt-1 -ml-3 self-start"
-          onClick={() => setExpanded((open) => !open)}
-        >
-          {expanded ? "Show less" : "Show all"}
-        </Button>
+        />
       )}
     </StackedRow>
   );

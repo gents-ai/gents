@@ -11,6 +11,7 @@ mod install;
 mod local;
 pub(crate) mod registry;
 mod remove;
+mod review;
 pub(crate) use remove::{ensure_home_plugins_unreferenced, remove, remove_home_install_with_guard};
 mod scaffold;
 mod scenario;
@@ -23,7 +24,8 @@ pub(crate) mod wire;
 use crate::cli::*;
 use anyhow::{Context, Result};
 pub(crate) use install::{
-    install, install_documents_pack, install_documents_pack_resolved, wire_pack_plugins,
+    install, install_documents_pack, install_documents_pack_resolved, parse_dependency_variables,
+    wire_pack_plugins,
 };
 pub(crate) use scope::{
     plugin_notification_scope, record_plugin_store_change, resolve_home_owner_under_plugin_store,
@@ -95,6 +97,8 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Owner(args) => account::owner(args).await,
         PackCommand::Publish(args) => registry::publish(args).await,
         PackCommand::Fetch(args) => registry::fetch(args).await,
+        PackCommand::Plugin { command } => crate::commands::plugin::dispatch(command).await,
+        PackCommand::Ux { command } => crate::commands::ux::dispatch(command).await,
     }
 }
 #[cfg(test)]
@@ -148,6 +152,7 @@ pub(crate) mod test_support {
         super::PackSource {
             archive: archive.into(),
             from: super::source::Source::Local,
+            file_name: None,
         }
     }
 

@@ -1,6 +1,6 @@
 //! Firing one Task on demand: render its prompt and goal, sign the request as
 //! the actor `access` acts for, admit it through the Task delivery owner. The
-//! CLI's `gents task run` and the Engineer's `config task run` both come here.
+//! CLI's `gents automation task run` and the Engineer's `config task run` both come here.
 
 use anyhow::{anyhow, Context, Result};
 use gents_protocol::request_input::RequestInput;

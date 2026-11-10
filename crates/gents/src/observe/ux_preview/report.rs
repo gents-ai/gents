@@ -496,7 +496,7 @@ mod tests {
             theme("light", audit_with_token(), Vec::new()),
             theme("dark", audit_with_token(), Vec::new()),
         ])
-        .to_text("gents ux preview board");
+        .to_text("gents config pack ux preview board");
         let answer = text
             .find("rendered 2 of 2 themes (light and dark), 1 problem.")
             .unwrap();

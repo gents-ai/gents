@@ -491,4 +491,42 @@ theorem engineer_can_revoke_baseline_from_others_under_no_lockout :
     policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) true false
       ⟨.permission "read-document", true, true, false⟩ = true := by decide
 
+/-! ### The yolo agent
+
+`gents --yolo` issues no direct grant set: the yolo agent is an ordinary
+Agent recipient, holding the projected agent baseline only. Its
+self-configuration is a document relation on its own Agent, not a node grant
+(`SelfConfig.yoloGroup`). -/
+
+def yoloRecipient : Recipient := .agent
+
+theorem yolo_receives_agent_baseline_only : receives yoloRecipient = [.agentBaseline] := by
+  decide
+
+/-- No grant set gives it any of the policy delegation's permissions beyond the
+baseline's own `add-dac-relation`, which every Agent holds to create its
+documents. Its self-config Tools still project `delete-dac-relation` and
+`delete-document` as tool-sourced node operations, as the Engineer's do
+(`Identity.Configuration.toolOperationSources`); those grant nothing and
+confer no document ACP, so it manages no NAC relation and reads no NAC
+status. -/
+theorem yolo_holds_no_policy_delegate_permission :
+    (GrantSet.policyDelegate.permissions.filter
+        (fun p => !GrantSet.agentBaseline.permissions.contains p)).all
+      (fun p => !(holderOf (receives yoloRecipient)).held.contains p) = true := by
+  decide
+
+theorem yolo_holds_no_schema_change_permission :
+    ["patch-collection", "set-migration", "add-view"].all
+      (fun p => !(holderOf (receives yoloRecipient)).held.contains p) = true := by
+  decide
+
+theorem yolo_is_not_admin : (holderOf (receives yoloRecipient)).admin = false := by decide
+
+/-- Under the preset's `self_config_no_lockout` the yolo agent cannot revoke
+its own baseline. -/
+theorem yolo_cannot_lock_itself_out :
+    policyToolAdmitsSelf [policyCategory] (holderOf (receives yoloRecipient)) true true
+      ⟨.permission "read-document", true, true, false⟩ = false := by decide
+
 end Identity.GrantSets
