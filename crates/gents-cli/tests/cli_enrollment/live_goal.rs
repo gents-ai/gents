@@ -87,8 +87,8 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
             let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
             let pending = core.request_status_enrollment_with_label(&status, Some("live Goal")).await?;
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
-            run_cli_json_with_env(&home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home_arg], &owner_env)?;
-            run_cli_json_with_env(&home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home_arg], &owner_env)?;
+            run_cli_json_with_env(&home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home_arg], &owner_env)?;
+            run_cli_json_with_env(&home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home_arg], &owner_env)?;
             wait_for_chat_ready_enrollment(&core, &node_did).await?;
             wait_for_client_node_readiness(&core, &node_did).await?;
             let access = core.operator_access(&node_did)?;

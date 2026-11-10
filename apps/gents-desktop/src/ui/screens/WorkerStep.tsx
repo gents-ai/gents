@@ -2,8 +2,7 @@ import { type ReactNode } from "react";
 import { ArrowUpRight, Ban, CircleCheck, CircleX } from "lucide-react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Spinner } from "@gents/ui/components/spinner";
-import { AgentInitials } from "./parts";
-import { agentName } from "./behavior";
+import { AgentMark } from "./parts";
 import { useExclusiveStep } from "@gents/ui/conversation";
 import {
   Collapsible,
@@ -266,8 +265,9 @@ export function WorkerStep({
   const sessionId = reached?.request.sessionId ?? p.sessionId ?? null;
   const agentDid = summary?.agentDid ?? null;
   const mark = agentDid ? (
-    <AgentInitials
-      name={agentName(agentDid, deployment)}
+    <AgentMark
+      agentDid={agentDid}
+      deployment={deployment}
       className="size-4 text-[8px]"
     />
   ) : undefined;

@@ -153,7 +153,9 @@ where
                         .get_mut("EnvironmentVariables")
                         .and_then(plist::Value::as_dictionary_mut)
                         .context("service environment")?;
-                    env.retain(|key, _| matches!(key.as_str(), "PATH" | "GENTS_SYSTEM_LOG"));
+                    env.retain(|key, _| {
+                        matches!(key.as_str(), "PATH" | "GENTS_SYSTEM_LOG" | "HOME")
+                    });
                 }
                 let mut out = Vec::new();
                 value.to_writer_xml(&mut out)?;
@@ -429,6 +431,19 @@ mod tests {
             let text = String::from_utf8(result).unwrap();
             assert!(!text.contains("FLEET_HOST"));
             assert!(text.contains("GENTS_SYSTEM_LOG"));
+            if platform == NativeServicePlatform::Macos {
+                let plist = plist::Value::from_reader_xml(text.as_bytes()).unwrap();
+                assert_eq!(
+                    plist
+                        .as_dictionary()
+                        .and_then(|dict| dict.get("EnvironmentVariables"))
+                        .and_then(plist::Value::as_dictionary)
+                        .and_then(|env| env.get("HOME"))
+                        .and_then(plist::Value::as_string),
+                    next.user_home.to_str(),
+                    "the LaunchAgent runs with the installer's HOME"
+                );
+            }
         }
     }
     #[test]

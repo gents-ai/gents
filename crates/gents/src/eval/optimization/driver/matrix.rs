@@ -258,7 +258,11 @@ async fn fixture_installs_bound_pack_documents_with_authored_origin() {
             .as_array()
             .expect("pack origin tags must be present");
         assert!(
-            tags.iter().any(|tag| tag == "gents:pack:monitor_fixture"),
+            tags.iter().any(|tag| tag
+                == &format!(
+                    "gents:pack:{}/monitor_fixture",
+                    crate::pack::archive::DEFAULT_NAMESPACE
+                )),
             "{collection} lost its pack origin"
         );
     }

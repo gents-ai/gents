@@ -48,7 +48,7 @@ where
         let message = if error.is_connect() {
             format!(
                 "no gents server found at {url}. Start one first with \
-                 `gents server`. Remote runtimes must be added \
+                 `gents runtime server`. Remote runtimes must be added \
                  through authenticated status enrollment in the desktop app."
             )
         } else {

@@ -30,7 +30,7 @@ pub(crate) enum ServiceCommand {
     },
     #[command(
         about = "Write the native user-service definition without starting it",
-        long_about = "Write the native user-service definition without starting it. The definition runs `gents server --home <HOME>`; network flags persist into <HOME>/network.json, which `gents server` reads for every flag it is not given, so the settings survive reinstalls and desktop-managed updates and apply at the next start"
+        long_about = "Write the native user-service definition without starting it. The definition runs `gents runtime server --home <HOME>`; network flags persist into <HOME>/network.json, which `gents runtime server` reads for every flag it is not given, so the settings survive reinstalls and desktop-managed updates and apply at the next start"
     )]
     Install {
         #[command(flatten)]

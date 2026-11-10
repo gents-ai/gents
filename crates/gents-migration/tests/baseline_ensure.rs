@@ -764,8 +764,9 @@ async fn removed_node_memory_is_not_registered_or_deleted() {
     node.shutdown().await.expect("shut down test node");
 }
 
-/// Native workflow documents gain immutable handoff route columns and
-/// configuration gains declared reader policy; an existing store keeps its
+/// Native workflow documents gain immutable handoff route columns,
+/// configuration gains declared reader policy and pack installations gain
+/// their recorded source and install values; an existing store keeps its
 /// collection, field positions and rows, and its existing rows read nulls.
 #[tokio::test]
 async fn added_route_and_reader_columns_preserve_existing_rows() {
@@ -804,6 +805,16 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
             schemas::REPOSITORY_PLACEMENT,
             r#"mutation {create_RepositoryPlacement(input: {repository_id: "retained", node_did: "owner"}) {_docID}}"#,
             &[("readers", false)][..],
+        ),
+        (
+            schemas::PACK_INSTALLATION_NAME,
+            schemas::PACK_INSTALLATION,
+            r#"mutation {create_PackInstallation(input: {node_did: "owner", coordinate: "acme/retained"}) {_docID}}"#,
+            &[
+                ("source", false),
+                ("source_history", false),
+                ("variables", false),
+            ][..],
         ),
     ] {
         let node = fresh_node().await;

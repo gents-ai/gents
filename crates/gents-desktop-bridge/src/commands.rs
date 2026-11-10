@@ -11,7 +11,6 @@ pub use attachments::request_attachments;
 mod chat;
 #[path = "commands/goal.rs"]
 mod goal;
-pub(crate) use goal::verified_session_goal;
 pub use goal::{control_goal, session_goal};
 #[path = "commands/goal_submission.rs"]
 mod goal_submission;

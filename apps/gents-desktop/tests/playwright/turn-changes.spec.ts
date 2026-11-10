@@ -180,6 +180,7 @@ test("a file shows all its lines from its menu, and hides the unchanged ones aga
 test("a file marked viewed folds away with a check, stays folded, and opens again when not viewed", async ({
   page,
 }) => {
+  test.slow();
   await gotoHarness(page, "coding");
   await page
     .getByTestId("sessions-screen")

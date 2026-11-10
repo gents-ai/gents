@@ -6,6 +6,7 @@ pub mod db_explorer;
 pub mod e2e;
 pub mod external_url;
 pub mod inference_setup;
+pub mod join_requests;
 pub mod lifecycle;
 pub mod mailbox;
 pub mod managed_server;

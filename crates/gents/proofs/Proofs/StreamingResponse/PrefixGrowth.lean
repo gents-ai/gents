@@ -134,7 +134,8 @@ theorem reconstructOpen_grows_under_benign_arrival
     hfuel hselect hselectNew
   exact (reconstructed_prefix_grows _ _ _ _ hp hconsume hconsumeNew).filterDeclarations
     (fun declaration => declaration.kind != .encrypted &&
-      declaration.kind != .redacted && declaration.kind != .signature)
+      declaration.kind != .redacted && declaration.kind != .signature &&
+      declaration.kind != .reasoningStop)
 
 theorem open_live_view_has_reconstructed_prefix
     (observation : Observation) (streams : Streams)
