@@ -2,16 +2,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::extract::State;
+use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use axum::{Json, Router};
 use gents::pack::PackChangeError;
 use gents::plugin::authority::GrantError;
-use gents::store::config_client::GraphqlEndpoint;
-use gents_codex_protocol as codex;
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents::store::graphql::escape_graphql_string;
+use gents_protocol::output::MessageRole;
+use gents_protocol::row::AgentRequestRow;
 use gents_shell::app::{App, ChatLine};
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
@@ -20,19 +20,14 @@ use gents_shell::source::{
     FormError, FormRef, FormValues, Input, Intent, Job, JobEnd, MenuAct, MenuRow, PackAct, Prompt,
     PromptKind, Session, Skill, Update,
 };
-use rapidhash::RapidHashMap;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
-use super::client::{Client, ClientError, ClientEvent, ANSWER_WAIT};
 use super::source::{self, Opening};
-use super::testing::{question, shown_rows};
+use super::testing::{question, shown_rows, text_message, At};
 use super::work::{self, Work};
-use crate::commands::codex::tests::identity;
-use crate::commands::codex_shim::RuntimeIdentity;
 use crate::commands::config::crud::{
     load_one, query_collection, query_collection_sorted, MCP_SPEC, NODE_SPEC, SCHEDULE_SPEC,
     SKILL_SPEC, TRIGGER_SPEC,
@@ -40,121 +35,589 @@ use crate::commands::config::crud::{
 use crate::commands::eval::testing::test_runtime_handle;
 
 const WAIT: Duration = Duration::from_secs(10);
+/// Long enough for a read that would come, short enough to keep a test quick.
+const SHORT_WAIT: Duration = Duration::from_secs(1);
 
-/// `None` leaves the request unanswered.
-pub(super) type Answer = Option<Result<Value, (i64, String)>>;
-type Script = Box<dyn Fn(&str, &str, &Value) -> Answer + Send + Sync>;
-/// Answers a GraphQL query, given its text.
-type Graphql = Box<dyn Fn(&str) -> Value + Send + Sync>;
-type Chunks = mpsc::UnboundedSender<Result<Bytes, std::io::Error>>;
+/// The fixture runtime the nodes here run as.
+pub(super) const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
 
-#[derive(Debug, Clone)]
-pub(super) struct Call {
-    pub(super) agent: String,
-    /// `None` on a notification.
-    pub(super) id: Option<Value>,
-    pub(super) method: String,
-    pub(super) params: Value,
-    pub(super) headers: HeaderMap,
+/// The DID a fixture's Agent named `name` takes.
+pub(super) fn did(name: &str) -> String {
+    crate::shared::test_support::fixture_agent_named(name).agent_did
 }
 
+pub(super) async fn within<F>(future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    tokio::time::timeout(WAIT, future)
+        .await
+        .expect("the shell should have answered by now")
+}
+
+pub(super) fn line(text: &str, tone: Tone, item: &str) -> ChatLine {
+    ChatLine {
+        text: text.to_string(),
+        tone,
+        item: Some(item.to_string()),
+        change: None,
+    }
+}
+
+fn blank() -> ChatLine {
+    ChatLine {
+        text: String::new(),
+        tone: Tone::Plain,
+        item: None,
+        change: None,
+    }
+}
+
+/// The User every test shell signs as; its key lives as long as the process.
+fn test_user() -> &'static gents::KeyIdentity {
+    static USER: std::sync::LazyLock<(tempfile::TempDir, gents::KeyIdentity)> =
+        std::sync::LazyLock::new(|| {
+            let keys = tempfile::tempdir().unwrap();
+            let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None);
+            (keys, user.unwrap())
+        });
+    &USER.1
+}
+
+/// The test User's signed endpoint on `graphql`, as `work_for`'s endpoint signs.
+fn user_endpoint(graphql: &str) -> GraphqlEndpoint {
+    crate::shared::test_support::user_endpoint(graphql, test_user())
+}
+
+/// The test User's access for writing fixtures: the same signer, without the signed-create
+/// rule that refuses an ordinary mutation.
+fn seeding_access(graphql: &str) -> ConfigAccess {
+    use gents::NodeIdentity as _;
+    let user = test_user();
+    let endpoint = GraphqlEndpoint::as_principal(graphql, user.did());
+    let capability = user.client_signing_capability().unwrap();
+    ConfigAccess::Graphql(endpoint.with_client_signing_capability(capability).unwrap())
+}
+
+/// `config`'s inference backend and profile, under which each of `agents` runs.
+fn chat_config(agents: &[&str]) -> Value {
+    let agents: Vec<_> = agents
+        .iter()
+        .map(|name| {
+            let binding = crate::shared::test_support::fixture_agent_named(name);
+            json!({
+                "node_did": OWNER, "agent_did": binding.agent_did,
+                "creation_nonce": binding.creation_nonce, "display_name": name,
+                "inference_profile_id": "profile",
+            })
+        })
+        .collect();
+    json!({
+        "node": { "node_did": OWNER, "default_agent_did": did("a") },
+        "inference_backends": [{
+            "node_did": OWNER, "backend_id": "backend", "name": "Backend",
+            "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
+            "auth": { "kind": "unauthenticated" },
+        }],
+        "inference_profiles": [{
+            "node_did": OWNER, "profile_id": "profile", "backend_id": "backend",
+            "model_name": "model",
+        }],
+        "agents": agents,
+    })
+}
+
+/// Publishes the runtime's readiness, with each of `agents` ready and the first its default,
+/// as the runtime publishes it: under its Node, which shares it with the Node's household.
+async fn publish_ready(access: &ConfigAccess, agents: &[&str]) {
+    use gents_protocol::node_readiness::{
+        AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState, NodeReadinessSnapshot,
+        NODE_READINESS_FORMAT_VERSION,
+    };
+    let mut entries: Vec<_> = agents
+        .iter()
+        .map(|name| AgentReadinessEntry {
+            agent_did: did(name),
+            state: AgentReadinessState::Ready,
+            reason: None,
+        })
+        .collect();
+    entries.sort_by(|left, right| left.agent_did.cmp(&right.agent_did));
+    let snapshot = NodeReadinessSnapshot {
+        format_version: NODE_READINESS_FORMAT_VERSION,
+        process_state: NodeReadinessProcessState::Ready,
+        active_generation: 1,
+        router_generation: 1,
+        default_agent_did: did(agents[0]),
+        agents: entries,
+    };
+    let snapshot = escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
+    let read = format!(r#"{{ Node(filter: {{ node_did: {{ _eq: "{OWNER}" }} }}) {{ _docID }} }}"#);
+    let nodes = access.execute(&read).await.unwrap();
+    let parent = nodes["data"]["Node"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mutation = format!(
+        r#"mutation {{ create_NodeReadiness(input: {{ node_did: "{OWNER}", node_doc_id: "{parent}", parent_linked: true, snapshot_json: "{snapshot}", updated_at: "2026-11-05T12:00:00Z" }}) {{ _docID }} }}"#
+    );
+    let created = access
+        .transact_write("test.readiness", |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute(mutation).await })
+        })
+        .await
+        .unwrap();
+    let doc = gents_protocol::graphql::extract_mutation_doc_id(&created, "NodeReadiness").unwrap();
+    let linked =
+        access.add_resource_relationship("NodeReadiness", &doc, "parent", "nodes", &parent);
+    linked.await.unwrap();
+}
+
+/// A node whose runtime is the fixture signer, served over its HTTP endpoint without node ACP.
+/// The test User writes its config and, standing in for the runtime, its chat documents: the
+/// User reads its own documents as it reads those the runtime shares with it.
+pub(super) struct ChatNode {
+    /// Kept serving while the test reads it.
+    _node: Arc<defra_node::Node>,
+    pub(super) graphql: String,
+    written: std::sync::atomic::AtomicU32,
+}
+
+impl ChatNode {
+    /// Agents `a` and `b`, both ready, `a` the default, and `researcher`, which only agents
+    /// start sessions on.
+    pub(super) async fn new() -> ChatNode {
+        Self::with_agents(&["a", "b", "researcher"], &["a", "b"]).await
+    }
+
+    /// The `agents` of the config, of which `ready` are ready.
+    async fn with_agents(agents: &[&str], ready: &[&str]) -> ChatNode {
+        use gents::documents::apply_desired_state_plan;
+        use gents::store::config_client::DesiredStateApplyPlan;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
+        let builder = crate::shared::test_support::fixture_node_builder();
+        let node = Arc::new(builder.with_http(http).build().await.unwrap());
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let config = serde_json::from_value(chat_config(agents)).unwrap();
+        let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+        let user = ConfigAccess::Graphql(user_endpoint(&graphql));
+        user.transact_write("test.chat_node.config", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+        if !ready.is_empty() {
+            publish_ready(&seeding_access(&graphql), ready).await;
+        }
+        ChatNode {
+            _node: node,
+            graphql,
+            written: Default::default(),
+        }
+    }
+
+    pub(super) fn work(&self) -> Work {
+        Work {
+            endpoint: user_endpoint(&self.graphql),
+            home: std::path::PathBuf::new(),
+        }
+    }
+
+    /// The test User's access, which writes the runtime's documents here.
+    pub(super) fn access(&self) -> ConfigAccess {
+        seeding_access(&self.graphql)
+    }
+
+    /// Runs `request` as the test User, and returns its data.
+    pub(super) async fn run(&self, request: &str) -> Value {
+        let access = self.access();
+        let answered = match request.trim_start().starts_with("mutation") {
+            true => {
+                let written = access.transact_write("test.chat_node", |txn| {
+                    Box::pin(async move { txn.execute(request).await })
+                });
+                written.await
+            }
+            false => access.execute(request).await,
+        };
+        let answered = answered.unwrap_or_else(|error| panic!("{request}: {error:#}"));
+        answered["data"].clone()
+    }
+
+    /// Creates the one document `mutation` with `variables` makes, and returns its id.
+    async fn create(&self, mutation: &str, variables: Value, collection: &str) -> String {
+        let answered = self
+            .access()
+            .transact_write("test.chat_node.create", |txn| {
+                let (mutation, variables) = (mutation, &variables);
+                Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+            })
+            .await
+            .unwrap();
+        gents_protocol::graphql::extract_mutation_doc_id(&answered, collection).unwrap()
+    }
+
+    async fn segment(&self, segment: &gents_protocol::output::OutputSegment) -> String {
+        use gents_protocol::output::rows::{
+            output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        };
+        let variables = output_segment_create_variables(segment).unwrap();
+        let mutation = CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
+        self.create(mutation, variables, "AgentOutputSegment").await
+    }
+
+    async fn header(&self, header: &gents_protocol::output::TranscriptMessage) -> String {
+        use gents_protocol::output::rows::{
+            transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
+        };
+        let variables = transcript_message_create_variables(header).unwrap();
+        self.create(CREATE_AGENT_MESSAGE_MUTATION, variables, "AgentMessage")
+            .await
+    }
+
+    /// A time after every document written before it, so the newest reads last.
+    fn next_at(&self) -> String {
+        let n = self
+            .written
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let at = chrono::DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z").unwrap();
+        let at = at + chrono::Duration::seconds(i64::from(n));
+        at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
+    /// The runtime's session `id`, on `agent`.
+    pub(super) async fn session(&self, id: &str, agent: &str) {
+        let (id, agent) = (escape_graphql_string(id), did(agent));
+        let at = self.next_at();
+        self.run(&format!(
+            r#"mutation {{ create_AgentSession(input: {{ session_id: "{id}", node_did: "{OWNER}", requester_did: "{OWNER}", agent_did: "{agent}", created_at: "{at}" }}) {{ _docID }} }}"#
+        ))
+        .await;
+    }
+
+    /// The runtime's request `id` in `session`, in `state`, on agent `a`.
+    pub(super) async fn request(&self, session: &str, id: &str, state: &str) -> AgentRequestRow {
+        self.request_with(session, id, state, r#"content: "work""#)
+            .await
+    }
+
+    /// [`ChatNode::request`] with `fields`, its content among them.
+    async fn request_with(
+        &self,
+        session: &str,
+        id: &str,
+        state: &str,
+        fields: &str,
+    ) -> AgentRequestRow {
+        let at = self.next_at();
+        let agent = did("a");
+        self.run(&format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{id}", purpose: "normal", node_did: "{OWNER}", requester_did: "{OWNER}", agent_did: "{agent}", session_id: "{session}", {fields}, lifecycle_state: "{state}", execution_generation: "g-{id}", execution_lease_secs: 300, execution_lease_expires_at: "2126-01-01T00:00:00Z", created_at: "{at}" }}) {{ _docID }} }}"#
+        ))
+        .await;
+        self.request_row(id).await
+    }
+
+    pub(super) async fn request_row(&self, id: &str) -> AgentRequestRow {
+        let filter = format!(r#"request_id: {{ _eq: "{}" }}"#, escape_graphql_string(id));
+        let mut rows = self.requests(&filter).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        rows.remove(0)
+    }
+
+    /// The requests `filter` picks.
+    async fn requests(&self, filter: &str) -> Vec<AgentRequestRow> {
+        let fields = "_docID request_id node_did requester_did agent_did session_id content input lifecycle_state interrupt_requested_at";
+        let rows = self
+            .run(&format!(
+                "{{ AgentRequest(filter: {{ {filter} }}) {{ {fields} }} }}"
+            ))
+            .await;
+        serde_json::from_value(rows["AgentRequest"].clone()).unwrap()
+    }
+
+    /// Sets `fields` on the request, as its runtime's lifecycle does.
+    pub(super) async fn update(&self, request: &AgentRequestRow, fields: &str) {
+        let doc = escape_graphql_string(request.doc_id.as_deref().unwrap());
+        self.run(&format!(
+            r#"mutation {{ update_AgentRequest(docID: "{doc}", input: {{ {fields} }}) {{ _docID }} }}"#
+        ))
+        .await;
+    }
+
+    /// Where `request`'s output is written.
+    pub(super) fn at(request: &AgentRequestRow) -> At {
+        At {
+            node: OWNER.to_string(),
+            session: request.session_id.clone().unwrap(),
+            requester: request.requester_did.clone(),
+            request: request.doc_id.clone().unwrap(),
+            generation: format!("g-{}", request.request_id),
+        }
+    }
+
+    /// A published text message of `request` at `sequence`.
+    pub(super) async fn text(
+        &self,
+        request: &AgentRequestRow,
+        sequence: u32,
+        role: MessageRole,
+        text: &str,
+    ) {
+        let at = Self::at(request);
+        let (segment, _) = text_message(&at, sequence, role, text, "");
+        let close = self.segment(&segment).await;
+        let (_, header) = text_message(&at, sequence, role, text, &close);
+        self.header(&header).await;
+    }
+
+    /// The running turn's next flush of its reply, `ordinal` counting from 0.
+    pub(super) async fn flush(&self, request: &AgentRequestRow, ordinal: u32, text: &str) {
+        use gents_protocol::output::{SegmentRun, StreamDeclaration, StreamPayload};
+        let at = Self::at(request);
+        let declaration = (ordinal == 0).then_some(StreamDeclaration {
+            block_index: 0,
+            part_index: 0,
+            payload: StreamPayload::Text,
+        });
+        let segment = gents_protocol::output::OutputSegment {
+            ordinal: Some(ordinal),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: u32::try_from(text.len()).unwrap(),
+                declaration,
+            }],
+            close: None,
+            ..super::testing::closed(
+                &at,
+                super::testing::turn_source(0),
+                super::testing::execution(&at),
+                StreamPayload::Text,
+                text,
+            )
+        };
+        self.segment(&segment).await;
+    }
+
+    /// A call of `tool` with `arguments` at `sequence`, in `state`, delivered `result` at the
+    /// next sequence. Returns the call's document.
+    pub(super) async fn tool(
+        &self,
+        request: &AgentRequestRow,
+        sequence: u32,
+        tool: &str,
+        arguments: Value,
+        state: &str,
+        result: Option<&str>,
+    ) -> String {
+        use super::testing::{closed, execution, header, presented, turn_source};
+        use gents_protocol::output::{
+            MessageBlock, MessagePublication, OutputSource, OutputWriter, StreamPayload,
+            ToolResultPart,
+        };
+        let at = Self::at(request);
+        let call = format!("call-{sequence}");
+        let (doc, request_id) = (escape_graphql_string(&at.request), &request.request_id);
+        let started = self.next_at();
+        let requester = at.requester.as_deref().map(escape_graphql_string);
+        let requester = requester.map_or("null".to_string(), |did| format!(r#""{did}""#));
+        let mutation = format!(
+            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "{doc}:{call}", request_id: "{request_id}", request_doc_id: "{doc}", node_did: "{OWNER}", requester_did: {requester}, session_id: "{}", tool_call_id: "{call}", tool_name: "{tool}", message_sequence: {sequence}, lifecycle_state: "{state}", started_at: "{started}" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&at.session),
+        );
+        let tool_doc = self.create(&mutation, json!({}), "AgentToolCall").await;
+        let payload = StreamPayload::ToolArguments {
+            id: call.clone(),
+            call_id: None,
+            name: tool.to_string(),
+        };
+        let source = turn_source(sequence);
+        let arguments = arguments.to_string();
+        let segment = closed(&at, source, execution(&at), payload, &arguments);
+        let close = self.segment(&segment).await;
+        let block = MessageBlock::ToolCall {
+            tool_call_doc_id: tool_doc.clone(),
+            id: call.clone(),
+            call_id: None,
+            name: tool.to_string(),
+            arguments: presented(&close).output,
+            signature: None,
+            additional_params: None,
+        };
+        let publication = MessagePublication::RequestExecution {
+            execution_generation: at.generation.clone(),
+        };
+        let key = format!("accepted:{}:{sequence}", at.request);
+        let role = MessageRole::Assistant;
+        self.header(&header(&at, &key, sequence, role, publication, vec![block]))
+            .await;
+        let Some(result) = result else {
+            return tool_doc;
+        };
+        let source = OutputSource::ToolCall {
+            tool_call_doc_id: tool_doc.clone(),
+        };
+        let writer = OutputWriter::ToolExecution {
+            tool_call_doc_id: tool_doc.clone(),
+        };
+        let segment = closed(&at, source, writer, StreamPayload::ToolOutput, result);
+        let close = self.segment(&segment).await;
+        let block = MessageBlock::ToolResult {
+            tool_call_doc_id: tool_doc.clone(),
+            id: call.clone(),
+            call_id: None,
+            parts: vec![ToolResultPart::Text {
+                text: presented(&close),
+            }],
+        };
+        let publication = MessagePublication::ToolDelivery {
+            tool_call_doc_id: tool_doc.clone(),
+        };
+        let key = format!("delivery:{}:{call}", at.request);
+        let (next, role) = (sequence + 1, MessageRole::User);
+        self.header(&header(&at, &key, next, role, publication, vec![block]))
+            .await;
+        tool_doc
+    }
+
+    /// `agent`'s session `child`, started by `request` of its parent as `agent_new` starts one:
+    /// its opening request names the parent's, and its receipt is the runtime's.
+    pub(super) async fn child(&self, request: &AgentRequestRow, child: &str, agent: &str) {
+        use gents::NodeIdentity as _;
+        use gents_protocol::session::{
+            SessionCreationCause, SessionCreationReceipt, SessionCreationStarter,
+            SessionProvenance, SessionReference,
+        };
+        let parent = request.doc_id.clone().unwrap();
+        // `agent_new` records the call that started it beside the request.
+        let caused = format!(
+            r#"caused_by_parent_request_doc_id: "{}", caused_by_parent_tool_call_doc_id: "fixture-call", content: "{child} job""#,
+            escape_graphql_string(&parent)
+        );
+        let id = format!("{child}-r1");
+        let opening = self.request_with(child, &id, "completed", &caused).await;
+        let opened = opening.doc_id.clone().unwrap();
+        let source = SessionReference {
+            node_did: OWNER.to_string(),
+            session_id: request.session_id.clone().unwrap(),
+            requester_did: Some(OWNER.to_string()),
+        };
+        let mut session = crate::caused_sessions::fixtures::fixture_session(OWNER, child);
+        session.agent_did = did(agent);
+        session.created_at = self.next_at();
+        let mut provenance = SessionProvenance {
+            parent_request_doc_id: Some(parent.clone()),
+            opening_request_doc_id: Some(opened.clone()),
+            started_by: Some(source.clone()),
+            ..Default::default()
+        };
+        session.provenance = Some(provenance.clone());
+        let mut input = serde_json::to_value(&session).unwrap();
+        input["started_by_node_did"] = source.node_did.clone().into();
+        input["started_by_session_id"] = source.session_id.clone().into();
+        let mutation = "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }";
+        let doc = self
+            .create(mutation, json!({ "input": input }), "AgentSession")
+            .await;
+        let mut receipt = SessionCreationReceipt {
+            node_did: OWNER.to_string(),
+            session_id: child.to_string(),
+            session_doc_id: doc.clone(),
+            requester_did: session.requester_did.clone(),
+            agent_did: session.agent_did.clone(),
+            opening_request_doc_id: opened,
+            cause: SessionCreationCause::AgentNew,
+            cause_binding: "fixture-call".to_string(),
+            starter: Some(SessionCreationStarter {
+                source,
+                parent_request_doc_id: parent,
+            }),
+            signature: Vec::new(),
+        };
+        let signer = crate::caused_sessions::fixtures::fixture_signer();
+        receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
+        provenance.creation_receipt = Some(receipt);
+        let input = json!({ "provenance": provenance });
+        let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
+        let doc = escape_graphql_string(&doc);
+        self.run(&format!(
+            r#"mutation {{ update_AgentSession(docID: "{doc}", input: {input}) {{ _docID }} }}"#
+        ))
+        .await;
+    }
+}
+
+/// Answers a GraphQL query, given its text; `None` lets it reach the node.
+type Script = Box<dyn Fn(&str) -> Option<Value> + Send + Sync>;
+type Chunks = mpsc::UnboundedSender<Result<Bytes, std::io::Error>>;
+
 struct Shared {
-    identity: Option<RuntimeIdentity>,
     script: Script,
-    calls: watch::Sender<Vec<Call>>,
-    sockets: Mutex<RapidHashMap<String, mpsc::UnboundedSender<Message>>>,
-    graphql: Graphql,
+    /// The node every request the script does not answer reaches.
+    upstream: String,
+    client: reqwest::Client,
     /// Every GraphQL document posted, subscriptions included, in order.
     queries: watch::Sender<Vec<String>>,
     /// The open subscriptions' documents and event streams.
     streams: Mutex<Vec<(String, Chunks)>>,
-    /// While true, every query waits before it is answered.
+    /// While true, every query the script answers waits before it is answered.
     held: watch::Sender<bool>,
 }
 
-/// `/runtime` answers `identity`, or fails without one. `/agents/{id}` serves that agent and
-/// `/` the bound one, whose calls it records under the agent `/`. Each answers `initialize`
-/// itself and every other request from `script`, given the agent, the method and the params.
-/// `/api/v0/graphql` answers each query from a second script and holds each subscription open.
-pub(super) struct FakeRuntime {
+/// A node's GraphQL as the shell reaches it, with each subscription held here, so a test sends
+/// its events, and each query the script answers answered here. Every other request reaches
+/// the node unchanged, its signature with it.
+pub(super) struct FakeGraphql {
     shared: Arc<Shared>,
-    authority: String,
+    graphql: String,
+    pub(super) node: ChatNode,
 }
 
-/// No jobs, no background calls and an empty mailbox.
-fn no_work(query: &str) -> Value {
-    match query.contains("MailboxItem") {
-        true => json!({ "data": { "MailboxItem": [] } }),
-        false => json!({ "data": { "AgentToolCall": [] } }),
-    }
-}
-
-impl FakeRuntime {
-    pub(super) async fn start<F>(identity: Option<RuntimeIdentity>, script: F) -> FakeRuntime
+impl FakeGraphql {
+    pub(super) async fn start<G>(node: ChatNode, script: G) -> FakeGraphql
     where
-        F: Fn(&str, &str, &Value) -> Answer + Send + Sync + 'static,
-    {
-        Self::start_with(identity, script, no_work).await
-    }
-
-    pub(super) async fn start_with<F, G>(
-        identity: Option<RuntimeIdentity>,
-        script: F,
-        graphql: G,
-    ) -> FakeRuntime
-    where
-        F: Fn(&str, &str, &Value) -> Answer + Send + Sync + 'static,
-        G: Fn(&str) -> Value + Send + Sync + 'static,
+        G: Fn(&str) -> Option<Value> + Send + Sync + 'static,
     {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let authority = listener.local_addr().unwrap().to_string();
+        let upstream = node.graphql.strip_suffix("/api/v0/graphql").unwrap();
         let shared = Arc::new(Shared {
-            identity,
             script: Box::new(script),
-            calls: watch::channel(Vec::new()).0,
-            sockets: Mutex::default(),
-            graphql: Box::new(graphql),
+            upstream: upstream.to_string(),
+            client: reqwest::Client::new(),
             queries: watch::channel(Vec::new()).0,
             streams: Mutex::default(),
             held: watch::channel(false).0,
         });
-        let app = Router::new()
-            .route("/runtime", get(runtime))
-            .route("/", get(root))
-            .route("/agents/{id}", get(routed))
-            .route("/api/v0/graphql", post(serve_graphql))
-            .route("/api/v0/tx", post(|| async { Json(json!({ "id": 1 })) }))
-            .route(
-                "/api/v0/tx/{id}",
-                post(|| async { "" }).delete(|| async { "" }),
-            )
-            .with_state(shared.clone());
+        let app = Router::new().fallback(serve).with_state(shared.clone());
         tokio::spawn(async move { axum::serve(listener, app).await });
-        FakeRuntime { shared, authority }
+        let graphql = format!("http://{authority}/api/v0/graphql");
+        FakeGraphql {
+            shared,
+            graphql,
+            node,
+        }
     }
 
-    pub(super) fn remote(&self) -> String {
-        format!("ws://{}/", self.authority)
-    }
-
-    pub(super) fn route(&self, agent: &str) -> String {
-        format!("ws://{}/agents/{agent}", self.authority)
-    }
-
-    pub(super) fn graphql(&self) -> String {
-        format!("http://{}/api/v0/graphql", self.authority)
+    pub(super) fn work(&self) -> Work {
+        Work {
+            endpoint: user_endpoint(&self.graphql),
+            home: std::path::PathBuf::new(),
+        }
     }
 
     pub(super) fn queries(&self) -> Vec<String> {
         self.shared.queries.borrow().clone()
     }
 
-    fn subscriptions(&self) -> usize {
+    /// How many times `document` was subscribed.
+    fn subscribed(&self, document: &str) -> usize {
         let queries = self.queries();
-        queries
-            .iter()
-            .filter(|query| query.starts_with("subscription"))
-            .count()
+        queries.iter().filter(|query| *query == document).count()
     }
 
     /// Returns once `count` posted GraphQL documents contain `text`.
@@ -178,441 +641,123 @@ impl FakeRuntime {
 
     /// One `next` event on each open tool-call subscription, as a tool call's commit sends.
     fn changed(&self) {
-        self.next_event("AgentToolCall");
+        self.next_event(source::WATCHED, "AgentToolCall");
     }
 
     /// One `next` event on each open mailbox subscription, as an item's commit sends.
     fn mailbox_changed(&self) {
-        self.next_event("MailboxItem");
+        self.next_event(source::MAILBOX_WATCHED, "MailboxItem");
     }
 
-    fn next_event(&self, collection: &str) {
+    /// One `next` event on the chat's subscription to `collection`.
+    fn chat_changed(&self, collection: &str) {
+        self.next_event(&source::chat_document(collection, OWNER), collection);
+    }
+
+    fn next_event(&self, document: &str, collection: &str) {
         let event = format!(
             "event: next\ndata: {{\"data\":{{\"{collection}\":[{{\"_docID\":\"bae-1\"}}]}}}}\n\n"
         );
         let streams = self.shared.streams.lock().unwrap();
-        for (_, stream) in streams
-            .iter()
-            .filter(|(query, _)| query.contains(collection))
-        {
+        for (_, stream) in streams.iter().filter(|(query, _)| query == document) {
             stream.send(Ok(Bytes::from(event.clone()))).unwrap();
         }
     }
 
-    /// Holds every query's answer until `hold(false)`, as a slow node would.
+    /// Holds every scripted answer until `hold(false)`, as a slow node would.
     fn hold(&self, held: bool) {
         self.shared.held.send_replace(held);
     }
 
-    /// Closes every subscription, as a node whose event bus stops does.
-    fn end_streams(&self) {
-        self.shared.streams.lock().unwrap().clear();
-    }
-
-    pub(super) fn calls(&self) -> Vec<Call> {
-        self.shared.calls.borrow().clone()
-    }
-
-    pub(super) fn methods(&self) -> Vec<String> {
-        self.calls().into_iter().map(|call| call.method).collect()
-    }
-
-    /// Returns once some connection has sent `method`.
-    pub(super) async fn called(&self, method: &str) {
-        let mut calls = self.shared.calls.subscribe();
-        within(calls.wait_for(|calls| calls.iter().any(|call| call.method == method)))
-            .await
-            .expect("the fake keeps its calls");
-    }
-
-    pub(super) fn push<T>(&self, agent: &str, message: &T)
+    /// Closes the subscriptions `ended` picks, as a node whose event bus stops does.
+    fn end_streams<F>(&self, ended: F)
     where
-        T: Serialize,
+        F: Fn(&str) -> bool,
     {
-        let text = serde_json::to_string(message).unwrap();
-        self.socket(agent).send(Message::Text(text.into())).unwrap();
+        let mut streams = self.shared.streams.lock().unwrap();
+        streams.retain(|(query, _)| !ended(query));
     }
 
-    pub(super) fn close(&self, agent: &str) {
-        self.socket(agent).send(Message::Close(None)).unwrap();
-    }
-
-    /// Drops the agent's socket with no close frame, as a runtime that died would.
-    pub(super) fn sever(&self, agent: &str) {
-        self.shared.sockets.lock().unwrap().remove(agent);
-    }
-
-    fn socket(&self, agent: &str) -> mpsc::UnboundedSender<Message> {
-        self.shared.sockets.lock().unwrap()[agent].clone()
-    }
-}
-
-async fn serve_graphql(
-    State(shared): State<Arc<Shared>>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Response {
-    let query = body["query"].as_str().unwrap_or_default().to_string();
-    shared
-        .queries
-        .send_modify(|queries| queries.push(query.clone()));
-    if headers
-        .get(header::ACCEPT)
-        .is_none_or(|accept| accept != "text/event-stream")
+    /// Breaks the subscriptions `broken` picks mid-stream, as a node that died would.
+    fn break_streams<F>(&self, broken: F)
+    where
+        F: Fn(&str) -> bool,
     {
-        let mut held = shared.held.subscribe();
-        let _ = held.wait_for(|held| !held).await;
-        return Json((shared.graphql)(&query)).into_response();
-    }
-    let (chunks, sent) = mpsc::unbounded_channel();
-    shared.streams.lock().unwrap().push((query, chunks));
-    let events = futures_util::stream::unfold(sent, |mut sent| async move {
-        sent.recv().await.map(|chunk| (chunk, sent))
-    });
-    let body = Body::from_stream(events);
-    ([(header::CONTENT_TYPE, "text/event-stream")], body).into_response()
-}
-
-async fn runtime(State(shared): State<Arc<Shared>>) -> Response {
-    match &shared.identity {
-        Some(identity) => Json(identity.clone()).into_response(),
-        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
-}
-
-async fn root(
-    State(shared): State<Arc<Shared>>,
-    headers: HeaderMap,
-    upgrade: WebSocketUpgrade,
-) -> Response {
-    upgrade.on_upgrade(move |socket| serve(socket, "/".to_string(), headers, shared))
-}
-
-async fn routed(
-    State(shared): State<Arc<Shared>>,
-    Path(agent): Path<String>,
-    headers: HeaderMap,
-    upgrade: WebSocketUpgrade,
-) -> Response {
-    upgrade.on_upgrade(move |socket| serve(socket, agent, headers, shared))
-}
-
-async fn serve(mut socket: WebSocket, agent: String, headers: HeaderMap, shared: Arc<Shared>) {
-    let (outgoing, mut queued) = mpsc::unbounded_channel();
-    shared
-        .sockets
-        .lock()
-        .unwrap()
-        .insert(agent.clone(), outgoing);
-    loop {
-        tokio::select! {
-            message = queued.recv() => {
-                let Some(message) = message else { return };
-                let closing = matches!(message, Message::Close(_));
-                if socket.send(message).await.is_err() || closing {
-                    return;
-                }
-            }
-            received = socket.recv() => {
-                let Some(Ok(Message::Text(text))) = received else { return };
-                let message: Value = serde_json::from_str(&text).unwrap();
-                let method = message["method"].as_str().unwrap().to_string();
-                let params = message.get("params").cloned().unwrap_or(Value::Null);
-                let call = Call {
-                    agent: agent.clone(),
-                    id: message.get("id").cloned(),
-                    method: method.clone(),
-                    params: params.clone(),
-                    headers: headers.clone(),
-                };
-                shared.calls.send_modify(|calls| calls.push(call));
-                let Some(id) = message.get("id") else { continue };
-                let answer = if method == "initialize" {
-                    Some(Ok(json!({})))
-                } else {
-                    (shared.script)(&agent, &method, &params)
-                };
-                let reply = match answer {
-                    Some(Ok(result)) => json!({ "id": id, "result": result }),
-                    Some(Err((code, message))) => {
-                        json!({ "id": id, "error": { "code": code, "message": message } })
-                    }
-                    None => continue,
-                };
-                if socket.send(Message::Text(reply.to_string().into())).await.is_err() {
-                    return;
-                }
-            }
+        let streams = self.shared.streams.lock().unwrap();
+        for (_, stream) in streams.iter().filter(|(query, _)| broken(query)) {
+            let reset = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset by peer");
+            let _ = stream.send(Err(reset));
         }
     }
 }
 
-pub(super) async fn within<F>(future: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    tokio::time::timeout(WAIT, future)
-        .await
-        .expect("the shell should have answered by now")
+fn is_chat(document: &str) -> bool {
+    source::CHAT
+        .iter()
+        .any(|collection| document == source::chat_document(collection, OWNER))
 }
 
-pub(super) fn agents_a_and_b() -> Option<RuntimeIdentity> {
-    Some(identity(Some(&["a", "b"])))
+fn is_work(document: &str) -> bool {
+    document == source::WATCHED || document == source::MAILBOX_WATCHED
 }
 
-pub(super) async fn connect(
-    fake: &FakeRuntime,
-    agent: &str,
-    events: mpsc::UnboundedSender<(String, ClientEvent)>,
-) -> Client {
-    connect_answering(fake, agent, events, ANSWER_WAIT).await
-}
-
-async fn connect_answering(
-    fake: &FakeRuntime,
-    agent: &str,
-    events: mpsc::UnboundedSender<(String, ClientEvent)>,
-    answer_wait: Duration,
-) -> Client {
-    within(Client::connect(
-        &fake.route(agent),
-        agent.to_string(),
-        events,
-        &test_runtime_handle(),
-        answer_wait,
-    ))
-    .await
-    .expect("the fake accepts the handshake")
-}
-
-/// Short enough to keep a timeout test quick, long enough for the fake's real answers.
-const SHORT_WAIT: Duration = Duration::from_secs(1);
-
-#[tokio::test]
-async fn connect_sends_initialize_then_initialized() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, _, _| None).await;
-    let (events, _events) = mpsc::unbounded_channel();
-
-    let _client = connect(&fake, "a", events).await;
-
-    fake.called("initialized").await;
-    assert_eq!(fake.methods(), ["initialize", "initialized"]);
-    let initialize = &fake.calls()[0];
-    assert_eq!(initialize.agent, "a");
-    assert_eq!(initialize.params["clientInfo"]["name"], "gents-shell");
-}
-
-#[tokio::test]
-async fn a_request_returns_its_typed_result() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/list" => Some(Ok(json!({ "data": [], "nextCursor": "page-2" }))),
-        _ => Some(Ok(json!({ "unexpected": true }))),
-    })
-    .await;
-    let (events, _events) = mpsc::unbounded_channel();
-    let client = connect(&fake, "a", events).await;
-
-    let listed: codex::ThreadListResponse =
-        within(client.request("thread/list", &json!({ "limit": 1 })))
-            .await
-            .unwrap();
-
-    assert_eq!(listed.next_cursor.as_deref(), Some("page-2"));
-    assert_eq!(fake.calls().last().unwrap().params, json!({ "limit": 1 }));
-    let misshapen =
-        within(client.request::<_, codex::ThreadListResponse>("thread/read", &json!({})))
-            .await
-            .expect_err("the answer does not fit the type");
-    assert!(
-        matches!(
-            misshapen,
-            ClientError::Decode {
-                method: "thread/read",
-                ..
-            }
-        ),
-        "{misshapen:?}"
-    );
-}
-
-#[tokio::test]
-async fn an_error_reply_keeps_method_code_and_message() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, _, _| {
-        Some(Err((-32602, "unknown Codex thread `t9`".to_string())))
-    })
-    .await;
-    let (events, _events) = mpsc::unbounded_channel();
-    let client = connect(&fake, "a", events).await;
-
-    let refused = within(client.request::<_, Value>("thread/resume", &json!({ "threadId": "t9" })))
-        .await
-        .expect_err("the fake refuses");
-
-    let ClientError::Rpc {
-        method,
-        code,
-        message,
-    } = &refused
-    else {
-        panic!("{refused:?}");
-    };
-    assert_eq!((*method, *code), ("thread/resume", -32602));
-    assert_eq!(message, "unknown Codex thread `t9`");
-    assert_eq!(
-        refused.to_string(),
-        "thread/resume: unknown Codex thread `t9`"
-    );
-}
-
-#[tokio::test]
-async fn notifications_arrive_decoded_and_tagged_with_the_agent() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, _, _| None).await;
-    let (events, mut received) = mpsc::unbounded_channel();
-    let _client = connect(&fake, "b", events).await;
-
-    fake.push(
-        "b",
-        &json!({ "id": 7, "method": "item/tool/requestUserInput", "params": {} }),
-    );
-    fake.push("b", &json!({ "method": "no/suchMethod", "params": {} }));
-    fake.push(
-        "b",
-        &json!({
-            "method": "thread/status/changed",
-            "params": { "threadId": "t1", "status": { "type": "idle" } },
-        }),
-    );
-
-    let (agent, event) = within(received.recv()).await.unwrap();
-    assert_eq!(agent, "b");
-    let ClientEvent::Notification(notification) = event else {
-        panic!("{event:?}");
-    };
-    let codex::ServerNotification::ThreadStatusChanged(changed) = *notification else {
-        panic!("the server request and the unknown method are dropped: {notification:?}");
-    };
-    assert_eq!(changed.thread_id, "t1");
-    assert_eq!(changed.status, codex::ThreadStatus::Idle);
-}
-
-#[tokio::test]
-async fn a_closed_socket_fails_pending_requests_and_reports_closed() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, _, _| None).await;
-    let (events, mut received) = mpsc::unbounded_channel();
-    let client = connect(&fake, "a", events).await;
-    let params = json!({});
-
-    let (answer, ()) = within(async {
-        tokio::join!(client.request::<_, Value>("thread/list", &params), async {
-            fake.called("thread/list").await;
-            fake.close("a");
-        },)
-    })
-    .await;
-
-    assert!(matches!(answer, Err(ClientError::Closed)), "{answer:?}");
-    let (agent, event) = within(received.recv()).await.unwrap();
-    assert_eq!(agent, "a");
-    assert!(matches!(event, ClientEvent::Closed(None)), "{event:?}");
-    let after = within(client.request::<_, Value>("thread/list", &params)).await;
-    assert!(matches!(after, Err(ClientError::Closed)), "{after:?}");
-}
-
-#[tokio::test]
-async fn the_handshake_carries_no_origin() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, _, _| None).await;
-    let (events, _events) = mpsc::unbounded_channel();
-
-    let _client = connect(&fake, "a", events).await;
-
-    let headers = &fake.calls()[0].headers;
-    assert!(headers.contains_key("upgrade"), "{headers:?}");
-    assert!(!headers.contains_key("origin"), "{headers:?}");
-}
-
-pub(super) fn thread(id: &str, updated_at: i64) -> Value {
-    json!({
-        "id": id,
-        "sessionId": id,
-        "preview": "",
-        "ephemeral": false,
-        "modelProvider": "gents",
-        "createdAt": updated_at,
-        "updatedAt": updated_at,
-        "status": { "type": "idle" },
-        "cwd": "/srv/root",
-        "cliVersion": "test",
-        "source": "appServer",
-        "turns": [],
-    })
-}
-
-pub(super) fn turn(id: &str, status: &str, items: Value) -> Value {
-    json!({ "id": id, "items": items, "status": status, "error": null })
-}
-
-/// What `thread/start` and `thread/resume` answer.
-pub(super) fn thread_answer(thread: Value) -> Value {
-    json!({
-        "thread": thread,
-        "model": "m",
-        "modelProvider": "gents",
-        "serviceTier": null,
-        "cwd": "/srv/root",
-        "approvalPolicy": "never",
-        "approvalsReviewer": "user",
-        "sandbox": { "type": "dangerFullAccess" },
-        "reasoningEffort": null,
-    })
-}
-
-fn page(threads: &[Value], next: Option<&str>) -> Answer {
-    Some(Ok(json!({ "data": threads, "nextCursor": next })))
-}
-
-fn turn_answer(id: &str) -> Answer {
-    Some(Ok(json!({ "turn": turn(id, "inProgress", json!([])) })))
-}
-
-/// Lists nothing and leaves everything else unanswered.
-pub(super) fn quiet(method: &str) -> Answer {
-    match method {
-        "thread/list" => page(&[], None),
-        _ => None,
+async fn serve(State(shared): State<Arc<Shared>>, request: axum::extract::Request) -> Response {
+    use axum::extract::FromRequestParts as _;
+    let (mut parts, body) = request.into_parts();
+    // A client-signed write holds its signing conversation with the node.
+    if parts.headers.contains_key(header::UPGRADE) {
+        let upgrade = axum::extract::ws::WebSocketUpgrade::from_request_parts(&mut parts, &());
+        let upgrade = upgrade.await.unwrap();
+        let upstream = shared.upstream.replacen("http://", "ws://", 1);
+        return upgrade.on_upgrade(move |socket| {
+            crate::shared::test_support::pipe_websocket(socket, upstream, parts)
+        });
     }
-}
-
-pub(super) fn user_message(id: &str, text: &str) -> Value {
-    json!({ "type": "userMessage", "id": id, "content": [{ "type": "text", "text": text }] })
-}
-
-fn agent_message(id: &str, text: &str) -> Value {
-    json!({ "type": "agentMessage", "id": id, "text": text })
-}
-
-fn item_note(method: &str, session: &str, item: Value) -> Value {
-    json!({
-        "method": method,
-        "params": { "item": item, "threadId": session, "turnId": "t1", "startedAtMs": 0, "completedAtMs": 0 },
-    })
-}
-
-pub(super) fn line(text: &str, tone: Tone, item: &str) -> ChatLine {
-    ChatLine {
-        text: text.to_string(),
-        tone,
-        item: Some(item.to_string()),
-        change: None,
+    let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    if parts.uri.path() == "/api/v0/graphql" {
+        let posted: Value = serde_json::from_slice(&body).unwrap_or_default();
+        let query = posted["query"].as_str().unwrap_or_default().to_string();
+        shared
+            .queries
+            .send_modify(|queries| queries.push(query.clone()));
+        let accept = parts.headers.get(header::ACCEPT);
+        if accept.is_some_and(|accept| accept == "text/event-stream") {
+            let (chunks, sent) = mpsc::unbounded_channel();
+            shared.streams.lock().unwrap().push((query, chunks));
+            let events = futures_util::stream::unfold(sent, |mut sent| async move {
+                sent.recv().await.map(|chunk| (chunk, sent))
+            });
+            let body = Body::from_stream(events);
+            return ([(header::CONTENT_TYPE, "text/event-stream")], body).into_response();
+        }
+        if let Some(answer) = (shared.script)(&query) {
+            let mut held = shared.held.subscribe();
+            let _ = held.wait_for(|held| !held).await;
+            return Json(answer).into_response();
+        }
     }
-}
-
-fn blank() -> ChatLine {
-    ChatLine {
-        text: String::new(),
-        tone: Tone::Plain,
-        item: None,
-        change: None,
+    let path = parts.uri.path_and_query().map_or("/", |path| path.as_str());
+    let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes()).unwrap();
+    let mut outbound = shared
+        .client
+        .request(method, format!("{}{path}", shared.upstream));
+    // The signed authorization binds the request's authority, so the client's Host goes along.
+    for (name, value) in &parts.headers {
+        if name != header::CONTENT_LENGTH {
+            outbound = outbound.header(name.as_str(), value.as_bytes());
+        }
     }
+    let answer = outbound.body(body).send().await.unwrap();
+    let status = axum::http::StatusCode::from_u16(answer.status().as_u16()).unwrap();
+    let kind = answer.headers().get("content-type").cloned();
+    let bytes = answer.bytes().await.unwrap();
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = status;
+    if let Some(kind) = kind.and_then(|kind| header::HeaderValue::from_bytes(kind.as_bytes()).ok())
+    {
+        response.headers_mut().insert(header::CONTENT_TYPE, kind);
+    }
+    response
 }
 
 /// The source on the test runtime, fed and read as the shell would.
@@ -621,83 +766,40 @@ struct Shell {
     updates: Arc<Mutex<std::sync::mpsc::Receiver<Input>>>,
 }
 
-/// A User's signed endpoint on `graphql`; the key lives as long as the process.
-fn fake_user_endpoint(graphql: &str) -> GraphqlEndpoint {
-    static USER: std::sync::LazyLock<(tempfile::TempDir, gents::KeyIdentity)> =
-        std::sync::LazyLock::new(|| {
-            let keys = tempfile::tempdir().unwrap();
-            let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None);
-            (keys, user.unwrap())
-        });
-    crate::shared::test_support::user_endpoint(graphql, &USER.1)
-}
-
-fn open_shell(fake: &FakeRuntime) -> Shell {
-    open_shell_answering(fake, ANSWER_WAIT)
-}
-
-fn open_shell_answering(fake: &FakeRuntime, answer_wait: Duration) -> Shell {
-    open_shell_with(fake, None, None, answer_wait)
-}
-
-/// As `gents --agent AGENT PROMPT` opens it.
-fn open_shell_with(
-    fake: &FakeRuntime,
-    agent: Option<&str>,
-    prompt: Option<&str>,
-    answer_wait: Duration,
-) -> Shell {
-    // Signed by a User, as `work_for`'s endpoint is; the fake checks no signature.
-    let endpoint = fake_user_endpoint(&fake.graphql());
-    let home = std::path::PathBuf::new();
-    let work = Work {
-        endpoint,
-        home: home.clone(),
-    };
-    open_shell_on(fake, agent, prompt, answer_wait, Ok(work), home)
-}
-
-fn open_shell_on(
-    fake: &FakeRuntime,
-    agent: Option<&str>,
-    prompt: Option<&str>,
-    answer_wait: Duration,
-    work: Result<Work, String>,
-    home: std::path::PathBuf,
-) -> Shell {
-    open_shell_in(fake, agent, prompt, answer_wait, work, home, None, None)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn open_shell_in(
-    fake: &FakeRuntime,
-    agent: Option<&str>,
-    prompt: Option<&str>,
-    answer_wait: Duration,
-    work: Result<Work, String>,
-    home: std::path::PathBuf,
+/// What `gents` opens the shell with, beside its work.
+#[derive(Default)]
+struct Launch<'a> {
+    agent: Option<&'a str>,
+    prompt: Option<&'a str>,
+    session: Option<&'a str>,
     cwd: Option<std::path::PathBuf>,
-    session: Option<&str>,
-) -> Shell {
+    tree: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+}
+
+fn open_shell(work: Work) -> Shell {
+    open_shell_with(Ok(work), Launch::default())
+}
+
+fn open_shell_with(work: Result<Work, String>, launch: Launch) -> Shell {
     let runtime = test_runtime_handle();
     let (intents, intended) = mpsc::unbounded_channel();
     let (sender, updates) = std::sync::mpsc::channel();
+    let home = launch.home.unwrap_or_else(|| match &work {
+        Ok(work) => work.home.clone(),
+        Err(_) => std::path::PathBuf::new(),
+    });
     let opening = Opening {
-        remote: fake.remote(),
-        agent: agent.map(str::to_string),
-        prompt: prompt.map(str::to_string),
-        session: session.map(str::to_string),
+        node: OWNER.to_string(),
+        agent: launch.agent.map(str::to_string),
+        prompt: launch.prompt.map(str::to_string),
+        session: launch.session.map(str::to_string),
         work,
         home,
-        cwd,
+        cwd: launch.cwd,
+        tree: launch.tree,
     };
-    runtime.spawn(source::run(
-        opening,
-        intended,
-        sender,
-        runtime.clone(),
-        answer_wait,
-    ));
+    runtime.spawn(source::run(opening, intended, sender, runtime.clone()));
     Shell {
         intents,
         updates: Arc::new(Mutex::new(updates)),
@@ -718,6 +820,19 @@ impl Shell {
         }
     }
 
+    /// Whether nothing more is told within `SHORT_WAIT`.
+    async fn quiet(&self) -> Option<Update> {
+        let updates = self.updates.clone();
+        let input = test_runtime_handle()
+            .spawn_blocking(move || updates.lock().unwrap().recv_timeout(SHORT_WAIT))
+            .await
+            .unwrap();
+        input.ok().map(|input| match input {
+            Input::Runtime(update) => update,
+            other => panic!("{other:?}"),
+        })
+    }
+
     /// Reads `Agents`, `Ready`, the first session list, then the first jobs and background
     /// calls.
     async fn ready(&self) -> Vec<Session> {
@@ -731,10 +846,10 @@ impl Shell {
 
     /// Reads `Agents`, `Ready` and the first session list.
     async fn opened(&self) -> Vec<Session> {
-        self.opened_as(&["a", "b"]).await
+        self.opened_as(&[&did("a"), &did("b")]).await
     }
 
-    /// [`Shell::opened`], on a runtime whose agents are `ids`.
+    /// [`Shell::opened`], on a node whose ready agents are `ids`.
     async fn opened_as(&self, ids: &[&str]) -> Vec<Session> {
         let update = self.next().await;
         let Update::Agents(agents) = update else {
@@ -798,15 +913,96 @@ fn is_begin(update: &Update) -> bool {
     matches!(update, Update::Begin { .. })
 }
 
+fn is_item(update: &Update) -> bool {
+    matches!(update, Update::Item { .. })
+}
+
+fn is_rows_of(update: &Update, at: &str) -> bool {
+    matches!(update, Update::Running { session, .. } if session == at)
+}
+
+fn is_opened(update: &Update, at: &str) -> bool {
+    matches!(update, Update::Opened { session, .. } if session == at)
+}
+
+fn open(shell: &Shell, session: &str) {
+    shell.intend(Intent::Open {
+        session: session.to_string(),
+        agent: did("a"),
+    });
+}
+
+fn send(tab: u64, session: Option<&str>, agent: &str, text: &str) -> Intent {
+    Intent::Send {
+        tab,
+        session: session.map(str::to_string),
+        agent: agent.to_string(),
+        text: text.to_string(),
+    }
+}
+
+fn turn(session: &str, turn: &str) -> Update {
+    Update::Turn {
+        session: session.to_string(),
+        turn: turn.to_string(),
+    }
+}
+
+fn ended(session: &str, turn: &str) -> Update {
+    Update::TurnEnded {
+        session: session.to_string(),
+        turn: turn.to_string(),
+    }
+}
+
+fn item(session: &str, line: ChatLine) -> Update {
+    Update::Item {
+        session: session.to_string(),
+        line,
+    }
+}
+
+fn rows(session: &str, rows: Vec<Running>) -> Update {
+    Update::Running {
+        session: session.to_string(),
+        rows,
+    }
+}
+
+/// What the runtime sets on a request it claims and runs.
+fn claimed(request: &AgentRequestRow) -> String {
+    let generation = format!("g-{}", request.request_id);
+    format!(
+        r#"lifecycle_state: "processing", execution_generation: "{generation}", execution_lease_secs: 300, execution_lease_expires_at: "2126-01-01T00:00:00Z""#
+    )
+}
+
+/// The request the shell sent in `session`.
+async fn sent_in(node: &ChatNode, session: &str) -> AgentRequestRow {
+    let filter = format!(
+        r#"session_id: {{ _eq: "{}" }}"#,
+        escape_graphql_string(session)
+    );
+    let mut rows = node.requests(&filter).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    rows.remove(0)
+}
+
 #[tokio::test]
 async fn a_given_agent_becomes_the_first_tabs_agent() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell_with(&fake, Some("b"), None, ANSWER_WAIT);
+    let node = ChatNode::new().await;
+    let agent = did("b");
+    let opened = Launch {
+        agent: Some(&agent),
+        ..Default::default()
+    };
+    let shell = open_shell_with(Ok(node.work()), opened);
     let (mut app, intended) = connected_app();
 
     shell.apply_through(&mut app, is_begin).await;
 
-    assert_eq!(app.tabs[0].agent_id, "b");
+    assert_eq!(app.tabs[0].agent_id, did("b"));
+    assert_eq!(app.tabs[0].agent, "b", "named as setup names it");
     assert_eq!(app.notice, None);
     assert!(
         intended.try_recv().is_err(),
@@ -816,25 +1012,54 @@ async fn a_given_agent_becomes_the_first_tabs_agent() {
 
 #[tokio::test]
 async fn an_unknown_agent_is_named_and_the_first_tab_keeps_the_default() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell_with(&fake, Some("zed"), None, ANSWER_WAIT);
+    let node = ChatNode::new().await;
+    let opened = Launch {
+        agent: Some("zed"),
+        ..Default::default()
+    };
+    let shell = open_shell_with(Ok(node.work()), opened);
     let (mut app, _intended) = connected_app();
 
     shell.apply_through(&mut app, is_begin).await;
 
-    assert_eq!(app.tabs[0].agent_id, "a");
+    assert_eq!(app.tabs[0].agent_id, did("a"));
     assert_eq!(
         app.notice.as_deref(),
         Some("agent zed is not open in this shell; using a")
     );
 }
 
+/// Only the agents the runtime says are ready are offered, the node's default first.
+#[tokio::test]
+async fn only_the_ready_agents_are_listed_the_default_first() {
+    let node = ChatNode::with_agents(&["c", "b", "a"], &["b", "a"]).await;
+    let shell = open_shell(node.work());
+
+    shell.opened_as(&[&did("a"), &did("b")]).await;
+}
+
+/// With no ready agent there is nothing to talk to, so the shell is lost before it opens.
+#[tokio::test]
+async fn a_runtime_with_no_ready_agent_is_lost() {
+    let node = ChatNode::with_agents(&["a"], &[]).await;
+    let shell = open_shell(node.work());
+
+    let lost =
+        "no runtime: check `gents status`, then reopen the shell (no agent is ready on this node)";
+    let update = Update::Connection(Connection::Lost(lost.to_string()));
+    assert_eq!(shell.next().await, update);
+}
+
 /// `Begin` is told straight after `Agents`, before the first sweep, so a send the user makes
 /// while the sweep runs comes after it in the shell's one queue of updates and keys.
 #[tokio::test]
 async fn begin_follows_agents_before_the_first_session_sweep() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell_with(&fake, None, Some("hello"), ANSWER_WAIT);
+    let node = ChatNode::new().await;
+    let opened = Launch {
+        prompt: Some("hello"),
+        ..Default::default()
+    };
+    let shell = open_shell_with(Ok(node.work()), opened);
     let (mut app, _intended) = connected_app();
 
     let applied = shell
@@ -859,24 +1084,14 @@ async fn begin_follows_agents_before_the_first_session_sweep() {
 /// key the user presses while the session lists load can reach the starter tab first.
 #[tokio::test]
 async fn a_continued_session_is_told_where_begin_would_be() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let endpoint = GraphqlEndpoint::with_delegated_authorization(fake.graphql(), "Bearer shell")
-        .expect("a bearer");
-    let home = std::path::PathBuf::new();
-    let work = Work {
-        endpoint,
-        home: home.clone(),
+    let node = ChatNode::new().await;
+    let agent = did("b");
+    let opened = Launch {
+        agent: Some(&agent),
+        session: Some("s1"),
+        ..Default::default()
     };
-    let shell = open_shell_in(
-        &fake,
-        Some("b"),
-        None,
-        ANSWER_WAIT,
-        Ok(work),
-        home,
-        None,
-        Some("s1"),
-    );
+    let shell = open_shell_with(Ok(node.work()), opened);
     let (mut app, _intended) = connected_app();
 
     let applied = shell
@@ -885,7 +1100,7 @@ async fn a_continued_session_is_told_where_begin_would_be() {
 
     let continued = Update::Continue {
         session: "s1".to_string(),
-        agent: Some("b".to_string()),
+        agent: Some(did("b")),
     };
     assert!(
         matches!(
@@ -900,18 +1115,19 @@ async fn a_continued_session_is_told_where_begin_would_be() {
         "{applied:?}"
     );
     assert_eq!(app.tabs[0].session.as_deref(), Some("s1"));
-    assert_eq!(app.tabs[0].agent_id, "b");
+    assert_eq!(app.tabs[0].agent_id, did("b"));
 }
 
 #[tokio::test]
 async fn a_given_prompt_is_sent_once_as_the_first_tabs_first_message() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/start" => Some(Ok(thread_answer(thread("s-new", 100)))),
-        "turn/start" => turn_answer("t1"),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell_with(&fake, Some("b"), Some("hello"), ANSWER_WAIT);
+    let node = ChatNode::new().await;
+    let agent = did("b");
+    let opened = Launch {
+        agent: Some(&agent),
+        prompt: Some("hello"),
+        ..Default::default()
+    };
+    let shell = open_shell_with(Ok(node.work()), opened);
     let (mut app, intended) = connected_app();
 
     let applied = shell.apply_through(&mut app, is_begin).await;
@@ -920,40 +1136,30 @@ async fn a_given_prompt_is_sent_once_as_the_first_tabs_first_message() {
     assert!(intended.try_recv().is_err(), "the prompt goes out once");
     assert!(
         matches!(&sent, Intent::Send { tab: 0, session: None, agent, text }
-            if agent == "b" && text == "hello"),
+            if *agent == did("b") && text == "hello"),
         "{sent:?}"
     );
     shell.intend(sent);
     shell
         .apply_through(&mut app, |update| matches!(update, Update::Turn { .. }))
         .await;
-    fake.push(
-        "b",
-        &item_note("item/started", "s-new", user_message("u1", "hello")),
-    );
-    shell
-        .apply_through(&mut app, |update| matches!(update, Update::Item { .. }))
-        .await;
-
-    let first = &app.tabs[0];
-    assert_eq!(first.session.as_deref(), Some("s-new"));
-    assert_eq!(first.lines, [line("hello", Tone::You, "u1"), blank()]);
-    let sent: Vec<_> = fake
-        .calls()
-        .into_iter()
-        .filter(|call| call.agent == "b" && call.method != "thread/list")
-        .map(|call| call.method)
-        .collect();
+    let session = app.tabs[0].session.clone().expect("the tab's new session");
+    let request = sent_in(&node, &session).await;
     assert_eq!(
-        sent,
-        ["initialize", "initialized", "thread/start", "turn/start"]
+        (request.content.as_deref(), request.agent_did.as_deref()),
+        (Some("hello"), Some(did("b").as_str()))
     );
+    // The runtime publishes the prompt it claims.
+    node.text(&request, 0, MessageRole::User, "hello").await;
+    shell.apply_through(&mut app, is_item).await;
+
+    assert_eq!(app.tabs[0].lines, [line("hello", Tone::You, "m0"), blank()]);
 }
 
 #[tokio::test]
 async fn with_no_agent_or_prompt_the_shell_opens_as_before() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    let shell = open_shell(node.work());
     let (mut app, intended) = connected_app();
 
     let applied = shell
@@ -961,141 +1167,73 @@ async fn with_no_agent_or_prompt_the_shell_opens_as_before() {
             matches!(update, Update::Background { .. })
         })
         .await;
-    fake.push(
-        "a",
-        &item_note("item/completed", "s1", agent_message("r1", "hi")),
-    );
 
     assert_eq!(applied.len(), 5, "{applied:?}");
-    let item = Update::Item {
-        session: "s1".to_string(),
-        line: line("hi", Tone::Reply, "r1"),
-    };
-    assert_eq!(
-        shell.next().await,
-        item,
-        "nothing else was queued before it"
-    );
-    assert_eq!(app.tabs[0].agent_id, "a");
+    assert_eq!(shell.quiet().await, None, "nothing else was queued");
+    assert_eq!(app.tabs[0].agent_id, did("a"));
     assert_eq!(app.notice, None);
     assert!(intended.try_recv().is_err());
 }
 
 #[tokio::test]
 async fn sessions_from_every_agent_merge_newest_first() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |agent, method, params| {
-        match (agent, method, params["cursor"].as_str()) {
-            ("a", "thread/list", None) => {
-                page(&[thread("a1", 300), thread("a2", 100)], Some("a-2"))
-            }
-            ("a", "thread/list", Some("a-2")) => page(&[thread("a3", 200)], None),
-            ("b", "thread/list", _) => page(&[thread("b1", 250)], None),
-            _ => None,
-        }
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    for (session, agent) in [("a2", "a"), ("b1", "b"), ("a1", "a")] {
+        node.session(session, agent).await;
+    }
+    let shell = open_shell(node.work());
 
     let sessions = shell.ready().await;
 
     let listed: Vec<_> = sessions
         .iter()
-        .map(|session| (session.id.as_str(), session.agent.as_str()))
+        .map(|session| (session.id.as_str(), session.agent.clone()))
         .collect();
-    assert_eq!(listed, [("a1", "a"), ("b1", "b"), ("a3", "a"), ("a2", "a")]);
-    let lists: Vec<_> = fake
-        .calls()
-        .into_iter()
-        .filter(|call| call.method == "thread/list")
-        .map(|call| (call.agent, call.params))
-        .collect();
-    assert_eq!(lists.len(), 3, "{lists:?}");
-    for (_, params) in &lists {
-        assert_eq!(params["sortKey"], "updated_at");
-        assert_eq!(params["limit"], 100);
-    }
     assert_eq!(
-        (lists[1].0.as_str(), &lists[1].1["cursor"]),
-        ("a", &json!("a-2"))
+        listed,
+        [("a1", did("a")), ("b1", did("b")), ("a2", did("a"))]
     );
-    assert_eq!(lists[2].0, "b");
 }
 
 #[tokio::test]
 async fn opening_a_session_sends_its_transcript_and_running_turn() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    node.session("s1", "a").await;
+    let first = node.request("s1", "t1", "completed").await;
+    node.text(&first, 0, MessageRole::User, "hello").await;
+    node.text(&first, 1, MessageRole::Assistant, "hi").await;
+    let running = node.request("s1", "t2", "processing").await;
+    node.text(&running, 2, MessageRole::User, "and now?").await;
+    let shell = open_shell(node.work());
     shell.ready().await;
 
-    shell.intend(Intent::Open {
-        session: "s1".to_string(),
-        agent: "b".to_string(),
-    });
-    fake.called("thread/resume").await;
-    let resume = fake.calls().pop().unwrap();
-    assert_eq!(resume.agent, "b");
-    assert_eq!(resume.params["threadId"], "s1");
-    assert!(
-        resume.params.get("excludeTurns").is_none(),
-        "{:?}",
-        resume.params
-    );
-    // Sent before the answer, so it reaches the shell only after the transcript.
-    fake.push(
-        "b",
-        &item_note("item/completed", "s1", agent_message("r2", "still going")),
-    );
-    let mut resumed = thread("s1", 100);
-    resumed["turns"] = json!([
-        turn(
-            "t1",
-            "completed",
-            json!([user_message("u1", "hello"), agent_message("r1", "hi")])
-        ),
-        turn("t2", "inProgress", json!([user_message("u2", "and now?")])),
-    ]);
-    fake.push(
-        "b",
-        &json!({ "id": resume.id, "result": thread_answer(resumed) }),
-    );
+    open(&shell, "s1");
 
     let opened = Update::Opened {
         session: "s1".to_string(),
         lines: vec![
-            line("hello", Tone::You, "u1"),
+            line("hello", Tone::You, "m0"),
             blank(),
-            line("hi", Tone::Reply, "r1"),
+            line("hi", Tone::Reply, "m1"),
             blank(),
-            line("and now?", Tone::You, "u2"),
+            line("and now?", Tone::You, "m2"),
             blank(),
         ],
     };
-    let running = Update::Turn {
-        session: "s1".to_string(),
-        turn: "t2".to_string(),
-    };
-    assert_eq!(shell.next().await, running, "before the transcript");
+    assert_eq!(
+        shell.next().await,
+        turn("s1", "t2"),
+        "before the transcript"
+    );
     assert_eq!(shell.next().await, opened);
     assert_eq!(shell.next().await, rows("s1", Vec::new()));
-    let item = Update::Item {
-        session: "s1".to_string(),
-        line: line("still going", Tone::Reply, "r2"),
-    };
-    let read = reread_and(&shell, is_item).await;
-    let items: Vec<_> = read.iter().filter(|update| is_item(update)).collect();
-    assert_eq!(items, [&item]);
-}
+    reread(&shell, 1).await;
 
-const EDIT: &str = "@@ -1 +1 @@\n-a\n+b\n";
-
-/// A `fileChange` item with one change.
-fn file_change(id: &str, status: &str, path: &str, kind: &str, diff: &str) -> Value {
-    json!({
-        "type": "fileChange",
-        "id": id,
-        "status": status,
-        "changes": [{ "path": path, "kind": { "type": kind }, "diff": diff }],
-    })
+    node.text(&running, 3, MessageRole::Assistant, "still going")
+        .await;
+    let still = item("s1", line("still going", Tone::Reply, "m3"));
+    let read = shell.until(is_item).await;
+    assert_eq!(read.last(), Some(&still));
 }
 
 /// Where each text sits among the conversation's rows.
@@ -1110,41 +1248,106 @@ fn diff_view(app: &App) -> Vec<String> {
 }
 
 fn is_s1_rows(update: &Update) -> bool {
-    matches!(update, Update::Running { session, .. } if session == "s1")
+    is_rows_of(update, "s1")
+}
+
+/// An edit of `path` from `before` to `after`, recorded as the runtime records a native file
+/// edit's versions, by `request`'s `edit_file` call at `sequence`.
+async fn edit(
+    node: &ChatNode,
+    request: &AgentRequestRow,
+    sequence: u32,
+    path: &str,
+    before: Option<&str>,
+    after: &str,
+) {
+    edit_in(node, request, sequence, path, before, after, "completed").await;
+}
+
+async fn edit_in(
+    node: &ChatNode,
+    request: &AgentRequestRow,
+    sequence: u32,
+    path: &str,
+    before: Option<&str>,
+    after: &str,
+    state: &str,
+) -> String {
+    let arguments = json!({ "path": path });
+    let tool = node
+        .tool(request, sequence, "edit_file", arguments, state, None)
+        .await;
+    if state == "completed" {
+        record(node, request, &tool, path, before, after).await;
+    }
+    tool
+}
+
+/// The versions of `path` the runtime recorded for `tool`'s edit.
+async fn record(
+    node: &ChatNode,
+    request: &AgentRequestRow,
+    tool: &str,
+    path: &str,
+    before: Option<&str>,
+    after: &str,
+) {
+    use base64::Engine as _;
+    use gents_protocol::file_changes::{
+        FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
+    };
+    let image = |text: Option<&str>| match text {
+        None => FileImage::Missing,
+        Some(text) => FileImage::File {
+            content_hash: {
+                use sha2::Digest as _;
+                let digest = sha2::Sha256::digest(text.as_bytes());
+                let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+                format!("sha256:{hex}")
+            },
+            data: base64::engine::general_purpose::STANDARD.encode(text),
+            permissions: FilePermissions {
+                readonly: false,
+                unix_mode: None,
+            },
+            links: None,
+        },
+    };
+    let changes = ToolFileChanges {
+        version: FILE_CHANGES_VERSION,
+        tool_call_doc_id: tool.to_string(),
+        changes: vec![FileChangeImages {
+            root: "/srv/root".to_string(),
+            path: path.to_string(),
+            before: image(before),
+            after: image(Some(after)),
+        }],
+    };
+    let input = json!({ "input": {
+        "tool_call_doc_id": tool, "request_doc_id": request.doc_id,
+        "node_did": OWNER, "session_id": request.session_id,
+        "requester_did": request.requester_did, "file_changes": changes,
+    }});
+    let mutation = "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }";
+    node.create(mutation, input, "ToolFileChange").await;
 }
 
 #[tokio::test]
 async fn an_opened_sessions_changes_carry_their_turns() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/resume" => {
-            let mut resumed = thread("s1", 100);
-            resumed["turns"] = json!([
-                turn(
-                    "t1",
-                    "completed",
-                    json!([
-                        user_message("u1", "edit it"),
-                        file_change("fc1", "completed", "a.rs", "update", EDIT),
-                    ])
-                ),
-                turn(
-                    "t2",
-                    "completed",
-                    json!([file_change("fc2", "completed", "b.rs", "add", "x\n")])
-                ),
-            ]);
-            Some(Ok(thread_answer(resumed)))
-        }
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    node.session("s1", "a").await;
+    let first = node.request("s1", "t1", "completed").await;
+    node.text(&first, 0, MessageRole::User, "edit it").await;
+    edit(&node, &first, 1, "a.rs", Some("a\n"), "b\n").await;
+    let second = node.request("s1", "t2", "completed").await;
+    edit(&node, &second, 2, "b.rs", None, "x\n").await;
+    let shell = open_shell(node.work());
     let (mut app, _intended) = connected_app();
     app.tabs[0].session = Some("s1".to_string());
     let ready = |update: &Update| matches!(update, Update::Background { .. });
     shell.apply_through(&mut app, ready).await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
     let applied = shell.apply_through(&mut app, is_s1_rows).await;
 
     let opened = applied.iter().find_map(|update| match update {
@@ -1171,45 +1374,43 @@ async fn an_opened_sessions_changes_carry_their_turns() {
 
 #[tokio::test]
 async fn a_streamed_file_change_shows_its_card_when_the_turn_completes() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "turn/start" => turn_answer("t1"),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    let shell = open_shell(node.work());
     let (mut app, _intended) = connected_app();
-    app.tabs[0].session = Some("s1".to_string());
     let ready = |update: &Update| matches!(update, Update::Background { .. });
     shell.apply_through(&mut app, ready).await;
 
-    shell.intend(Intent::Send {
-        tab: app.tabs[0].id,
-        session: Some("s1".to_string()),
-        agent: "a".to_string(),
-        text: "edit it".to_string(),
-    });
+    shell.intend(send(app.tabs[0].id, None, &did("a"), "edit it"));
     let started = |update: &Update| matches!(update, Update::Turn { .. });
     shell.apply_through(&mut app, started).await;
-    assert_eq!(app.tabs[0].turn.as_deref(), Some("t1"));
-    for (method, status) in [
-        ("item/started", "inProgress"),
-        ("item/completed", "completed"),
-    ] {
-        let edit = file_change("fc", status, "a.rs", "update", EDIT);
-        fake.push("a", &item_note(method, "s1", edit));
-        let item = |update: &Update| matches!(update, Update::Item { .. });
-        shell.apply_through(&mut app, item).await;
-    }
-    assert!(row_of(&app, "✓ edit  a.rs").is_some());
-    assert_eq!(row_of(&app, "1 file changed"), None);
-
-    let completed = json!({ "threadId": "s1", "turn": turn("t1", "completed", json!([])) });
-    fake.push(
-        "a",
-        &json!({ "method": "turn/completed", "params": completed }),
+    let session = app.tabs[0].session.clone().unwrap();
+    let request = sent_in(&node, &session).await;
+    assert_eq!(
+        app.tabs[0].turn.as_deref(),
+        Some(request.request_id.as_str())
     );
-    let ended = |update: &Update| matches!(update, Update::TurnEnded { .. });
-    shell.apply_through(&mut app, ended).await;
+    node.update(&request, &claimed(&request)).await;
+    let running = edit_in(&node, &request, 0, "a.rs", None, "", "running").await;
+    shell.apply_through(&mut app, is_item).await;
+    assert!(row_of(&app, "… edit  a.rs").is_some());
+
+    // The runtime commits an edit's versions beside its end.
+    record(&node, &request, &running, "a.rs", Some("a\n"), "b\n").await;
+    let tool = escape_graphql_string(&running);
+    node.run(&format!(
+        r#"mutation {{ update_AgentToolCall(docID: "{tool}", input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#
+    ))
+    .await;
+    let changed =
+        |update: &Update| matches!(update, Update::Item { line, .. } if line.change.is_some());
+    shell.apply_through(&mut app, changed).await;
+    assert!(row_of(&app, "✓ edit  a.rs").is_some());
+    assert_eq!(row_of(&app, "1 file changed"), None, "the turn still runs");
+
+    node.update(&request, r#"lifecycle_state: "completed""#)
+        .await;
+    let turn_ended = |update: &Update| matches!(update, Update::TurnEnded { .. });
+    shell.apply_through(&mut app, turn_ended).await;
     assert!(row_of(&app, "1 file changed  +1 -1").is_some());
     app.show_file(0);
     assert!(app.diff_rows(0).contains(&(" +b".to_string(), Tone::Add)));
@@ -1218,39 +1419,22 @@ async fn a_streamed_file_change_shows_its_card_when_the_turn_completes() {
 /// A running turn has no card, from the first update the tab applies.
 #[tokio::test]
 async fn opening_a_session_with_a_running_turn_never_shows_its_card() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/resume" => {
-            let mut resumed = thread("s1", 100);
-            resumed["turns"] = json!([
-                turn(
-                    "t1",
-                    "completed",
-                    json!([
-                        user_message("u1", "edit it"),
-                        file_change("fc1", "completed", "a.rs", "update", EDIT),
-                    ])
-                ),
-                turn(
-                    "t2",
-                    "inProgress",
-                    json!([
-                        user_message("u2", "and add one"),
-                        file_change("fc2", "completed", "b.rs", "add", "x\n"),
-                    ])
-                ),
-            ]);
-            Some(Ok(thread_answer(resumed)))
-        }
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    node.session("s1", "a").await;
+    let first = node.request("s1", "t1", "completed").await;
+    node.text(&first, 0, MessageRole::User, "edit it").await;
+    edit(&node, &first, 1, "a.rs", Some("a\n"), "b\n").await;
+    let running = node.request("s1", "t2", "processing").await;
+    node.text(&running, 2, MessageRole::User, "and add one")
+        .await;
+    edit(&node, &running, 3, "b.rs", None, "x\n").await;
+    let shell = open_shell(node.work());
     let (mut app, _intended) = connected_app();
     app.tabs[0].session = Some("s1".to_string());
     let ready = |update: &Update| matches!(update, Update::Background { .. });
     shell.apply_through(&mut app, ready).await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
     let card = |app: &App, text: &str| {
         let rows = app.conversation_rows(120);
         rows.iter().any(|(row, _)| row == text)
@@ -1273,35 +1457,29 @@ async fn opening_a_session_with_a_running_turn_never_shows_its_card() {
 /// Opening a tab again replaces the changes it shows with the reread transcript's.
 #[tokio::test]
 async fn reopening_a_session_shows_only_the_reread_changes() {
-    let reread = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let again = reread.clone();
-    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
-        "thread/resume" => {
-            let path = match again.load(std::sync::atomic::Ordering::SeqCst) {
-                false => "a.rs",
-                true => "z.rs",
-            };
-            let mut resumed = thread("s1", 100);
-            let edit = file_change("fc", "completed", path, "update", EDIT);
-            resumed["turns"] = json!([turn("t1", "completed", json!([edit]))]);
-            Some(Ok(thread_answer(resumed)))
-        }
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    node.session("s1", "a").await;
+    let first = node.request("s1", "t1", "completed").await;
+    edit(&node, &first, 0, "a.rs", Some("a\n"), "b\n").await;
+    let shell = open_shell(node.work());
     let (mut app, _intended) = connected_app();
     app.tabs[0].session = Some("s1".to_string());
     let ready = |update: &Update| matches!(update, Update::Background { .. });
     shell.apply_through(&mut app, ready).await;
-    open_s1(&shell);
+    open(&shell, "s1");
     shell.apply_through(&mut app, is_s1_rows).await;
     // Then the reread opening asks for.
     shell.apply_through(&mut app, is_s1_rows).await;
     assert!(row_of(&app, "M a.rs").is_some());
 
-    reread.store(true, std::sync::atomic::Ordering::SeqCst);
-    open_s1(&shell);
+    // A session's newest page: an older one's edits are not on it.
+    let later = node.request("s1", "t2", "completed").await;
+    for sequence in 1..=60 {
+        node.text(&later, sequence, MessageRole::Assistant, "more")
+            .await;
+    }
+    edit(&node, &later, 61, "z.rs", Some("a\n"), "b\n").await;
+    open(&shell, "s1");
     shell.apply_through(&mut app, is_s1_rows).await;
 
     assert!(row_of(&app, "M z.rs").is_some());
@@ -1309,55 +1487,6 @@ async fn reopening_a_session_shows_only_the_reread_changes() {
     let view = diff_view(&app);
     assert!(view.iter().any(|row| row.contains("M z.rs")), "{view:?}");
     assert!(!view.iter().any(|row| row.contains("a.rs")), "{view:?}");
-}
-
-/// A subagent's thread as the endpoint lists it: under its root `s1`, named after its job, on
-/// the agent `local:researcher`.
-pub(super) fn child(id: &str, parent: &str, status: Value) -> Value {
-    let mut thread = thread(id, 100);
-    thread["sessionId"] = json!("s1");
-    thread["name"] = json!(format!("{id} job"));
-    thread["status"] = status;
-    thread["source"] = json!({
-        "subAgent": {
-            "thread_spawn": {
-                "parent_thread_id": parent,
-                "depth": 1,
-                "agent_nickname": "local:researcher",
-                "agent_role": "local:researcher",
-            }
-        }
-    });
-    thread["threadSource"] = json!("subagent");
-    thread["agentNickname"] = json!("local:researcher");
-    thread["agentRole"] = json!("local:researcher");
-    thread
-}
-
-fn active() -> Value {
-    json!({ "type": "active", "activeFlags": [] })
-}
-
-fn idle() -> Value {
-    json!({ "type": "idle" })
-}
-
-fn is_child_list(method: &str, params: &Value) -> bool {
-    method == "thread/list" && !params["sourceKinds"].is_null()
-}
-
-/// `thread/resume` answers each thread as `threads` has it, and `s1` as a plain session.
-fn resumed(params: &Value, threads: &[Value]) -> Answer {
-    let id = params["threadId"].as_str().unwrap();
-    let found = threads.iter().find(|thread| thread["id"] == id).cloned();
-    Some(Ok(thread_answer(found.unwrap_or_else(|| thread(id, 100)))))
-}
-
-fn rows(session: &str, rows: Vec<Running>) -> Update {
-    Update::Running {
-        session: session.to_string(),
-        rows,
-    }
 }
 
 fn row(id: &str, status: &str, state: RunState) -> Running {
@@ -1370,488 +1499,257 @@ fn row(id: &str, status: &str, state: RunState) -> Running {
     }
 }
 
-fn open_s1(shell: &Shell) {
-    shell.intend(Intent::Open {
-        session: "s1".to_string(),
-        agent: "a".to_string(),
-    });
-}
-
-pub(super) fn resumes_of(fake: &FakeRuntime, thread: &str) -> usize {
-    let calls = fake.calls().into_iter();
-    calls
-        .filter(|call| call.method == "thread/resume" && call.params["threadId"] == thread)
-        .count()
+/// `s1`, on agent `a`, whose request `r1` started a subagent session for each of `children` on
+/// agent `researcher`, with its latest request in that state.
+async fn spawned(node: &ChatNode, children: &[(&str, &str)]) -> AgentRequestRow {
+    node.session("s1", "a").await;
+    let request = node.request("s1", "r1", "completed").await;
+    for (child, state) in children {
+        node.child(&request, child, "researcher").await;
+        if *state != "completed" {
+            node.request(child, &format!("{child}-r2"), state).await;
+        }
+    }
+    request
 }
 
 #[tokio::test]
 async fn opening_a_session_lists_its_subagents_as_running_rows() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |agent, method, params| {
-        let error = json!({ "type": "systemError" });
-        let children = [
-            child("c1", "s1", idle()),
-            child("c2", "s2", idle()),
-            child("c3", "s1", error),
-        ];
-        match method {
-            "thread/resume" => resumed(params, &children),
-            _ if agent == "a" && is_child_list(method, params) => page(&children, None),
-            _ => quiet(method),
-        }
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    spawned(&node, &[("c1", "completed"), ("c3", "failed")]).await;
+    let shell = open_shell(node.work());
     shell.ready().await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
 
     let opened = shell.next().await;
-    assert!(
-        matches!(&opened, Update::Opened { session, .. } if session == "s1"),
-        "{opened:?}"
-    );
+    assert!(is_opened(&opened, "s1"), "{opened:?}");
     let expected = vec![
         row("c1", "finished", RunState::Done),
         row("c3", "error", RunState::Failed),
     ];
     assert_eq!(shell.next().await, rows("s1", expected));
-    let lists: Vec<_> = fake
-        .calls()
-        .into_iter()
-        .filter(|call| is_child_list(&call.method, &call.params))
-        .map(|call| (call.agent, call.params["sourceKinds"].clone()))
-        .collect();
-    let kinds = json!(["subAgent", "subAgentThreadSpawn"]);
-    assert_eq!(lists, [("a".to_string(), kinds)]);
-    assert_eq!(resumes_of(&fake, "c1") + resumes_of(&fake, "c3"), 0);
 }
 
 #[tokio::test]
-async fn a_working_subagent_is_resumed_once_and_its_end_refreshes_the_rows() {
-    let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let ends = ended.clone();
-    let fake = FakeRuntime::start(agents_a_and_b(), move |agent, method, params| {
-        let status = if ends.load(std::sync::atomic::Ordering::SeqCst) {
-            idle()
-        } else {
-            active()
-        };
-        let children = [child("c1", "s1", status)];
-        match method {
-            "thread/resume" => resumed(params, &children),
-            _ if agent == "a" && is_child_list(method, params) => page(&children, None),
-            _ => quiet(method),
-        }
-    })
-    .await;
-    let shell = open_shell(&fake);
+async fn a_working_subagents_end_refreshes_the_rows() {
+    let node = ChatNode::new().await;
+    spawned(&node, &[("c1", "processing")]).await;
+    let shell = open_shell(node.work());
     shell.ready().await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
     let opened = shell.next().await;
-    assert!(matches!(opened, Update::Opened { .. }), "{opened:?}");
+    assert!(is_opened(&opened, "s1"), "{opened:?}");
     let working = vec![row("c1", "working", RunState::Working)];
     assert_eq!(shell.next().await, rows("s1", working));
-    let resume = fake.calls().pop().unwrap();
-    assert_eq!(
-        (resume.agent.as_str(), resume.method.as_str()),
-        ("a", "thread/resume")
-    );
-    assert_eq!(resume.params["threadId"], "c1");
     reread(&shell, 1).await;
 
-    ended.store(true, std::sync::atomic::Ordering::SeqCst);
-    let completed = json!({ "threadId": "c1", "turn": turn("t1", "completed", json!([])) });
-    fake.push(
-        "a",
-        &json!({ "method": "turn/completed", "params": completed }),
-    );
+    let latest = node.request_row("c1-r2").await;
+    node.update(&latest, r#"lifecycle_state: "completed""#)
+        .await;
 
-    let done = Update::TurnEnded {
-        session: "c1".to_string(),
-        turn: "t1".to_string(),
-    };
-    assert_eq!(shell.next().await, done, "no Opened for the resumed child");
-    let relisted = shell.next().await;
-    assert!(matches!(relisted, Update::Sessions(_)), "{relisted:?}");
-    let finished = vec![row("c1", "finished", RunState::Done)];
-    assert_eq!(shell.next().await, rows("s1", finished));
-    assert_eq!(resumes_of(&fake, "c1"), 1);
-}
-
-#[tokio::test]
-async fn a_subagent_that_ended_before_its_resume_reads_finished() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |agent, method, params| match method {
-        "thread/resume" => resumed(params, &[child("c1", "s1", idle())]),
-        _ if agent == "a" && is_child_list(method, params) => {
-            page(&[child("c1", "s1", active())], None)
-        }
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
-    shell.ready().await;
-
-    open_s1(&shell);
-
-    shell.next().await;
-    let finished = vec![row("c1", "finished", RunState::Done)];
-    assert_eq!(shell.next().await, rows("s1", finished));
+    let finished = rows("s1", vec![row("c1", "finished", RunState::Done)]);
+    let read = shell.until(is_s1_rows).await;
+    assert_eq!(read.last(), Some(&finished));
 }
 
 #[tokio::test]
 async fn a_spawn_on_the_open_session_relists_its_subagents() {
-    let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let listed = lists.clone();
-    let fake = FakeRuntime::start(
-        agents_a_and_b(),
-        move |agent, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ if agent == "a" && is_child_list(method, params) => {
-                match listed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
-                    0 => page(&[], None),
-                    _ => page(&[child("c1", "s1", idle())], None),
-                }
-            }
-            _ => quiet(method),
-        },
-    )
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    let request = spawned(&node, &[]).await;
+    let shell = open_shell(node.work());
     shell.ready().await;
-    open_s1(&shell);
+    open(&shell, "s1");
     shell.next().await;
     assert_eq!(shell.next().await, rows("s1", Vec::new()));
     reread(&shell, 1).await;
 
-    let spawn = json!({
-        "type": "collabAgentToolCall",
-        "id": "k1",
-        "tool": "spawnAgent",
-        "status": "inProgress",
-        "senderThreadId": "s1",
-        "receiverThreadIds": [],
-        "prompt": "look into it",
-        "agentsStates": {},
-    });
-    fake.push("a", &item_note("item/started", "s1", spawn));
+    node.child(&request, "c1", "researcher").await;
 
-    let item = shell.next().await;
-    assert!(matches!(item, Update::Item { .. }), "{item:?}");
-    let spawned = vec![row("c1", "finished", RunState::Done)];
-    assert_eq!(shell.next().await, rows("s1", spawned));
+    let spawned = rows("s1", vec![row("c1", "finished", RunState::Done)]);
+    let read = shell.until(is_s1_rows).await;
+    assert_eq!(read.last(), Some(&spawned));
 }
 
 #[tokio::test]
-async fn opening_a_subagent_resumes_it_and_streams_it() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, params| {
-        let mut spawned = child("c1", "s1", active());
-        spawned["turns"] = json!([turn(
-            "t1",
-            "inProgress",
-            json!([user_message("u1", "look into it")])
-        )]);
-        match method {
-            "thread/resume" => resumed(params, &[spawned]),
-            _ => quiet(method),
-        }
-    })
-    .await;
-    let shell = open_shell(&fake);
+async fn opening_a_subagent_shows_it_and_streams_it() {
+    let node = ChatNode::new().await;
+    spawned(&node, &[("c1", "processing")]).await;
+    let working = node.request_row("c1-r2").await;
+    node.text(&working, 0, MessageRole::User, "look into it")
+        .await;
+    let shell = open_shell(node.work());
     shell.ready().await;
 
     shell.intend(Intent::Open {
         session: "c1".to_string(),
-        agent: "a".to_string(),
+        agent: did("researcher"),
     });
 
     let opened = Update::Opened {
         session: "c1".to_string(),
-        lines: vec![line("look into it", Tone::You, "u1"), blank()],
+        lines: vec![line("look into it", Tone::You, "m0"), blank()],
     };
-    let turn = Update::Turn {
-        session: "c1".to_string(),
-        turn: "t1".to_string(),
-    };
-    assert_eq!(shell.next().await, turn);
+    assert_eq!(shell.next().await, turn("c1", "c1-r2"));
     assert_eq!(shell.next().await, opened);
     assert_eq!(shell.next().await, rows("c1", Vec::new()));
     reread(&shell, 1).await;
-    let params = json!({ "threadId": "c1", "turnId": "t1", "itemId": "r1", "delta": "found" });
-    fake.push(
-        "a",
-        &json!({ "method": "item/agentMessage/delta", "params": params }),
-    );
-    let delta = Update::Delta {
+    node.flush(&working, 0, "found").await;
+    let delta = Update::Item {
         session: "c1".to_string(),
-        item: "r1".to_string(),
-        text: "found".to_string(),
-        tone: Tone::Reply,
+        line: line("found", Tone::Reply, "m1"),
     };
-    assert_eq!(shell.next().await, delta);
-    assert_eq!(resumes_of(&fake, "c1"), 1);
+    let read = shell.until(is_item).await;
+    assert_eq!(read.last(), Some(&delta));
 }
 
 #[tokio::test]
-async fn a_first_send_starts_a_thread_then_a_turn() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "turn/start" => turn_answer("t1"),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+async fn a_first_send_starts_a_session_then_a_turn() {
+    let node = ChatNode::new().await;
+    let shell = open_shell(node.work());
     shell.ready().await;
 
-    shell.intend(Intent::Send {
-        tab: 7,
-        session: None,
-        agent: "a".to_string(),
-        text: "hello".to_string(),
-    });
-    fake.called("thread/start").await;
-    let start = fake.calls().pop().unwrap();
-    // The runtime may report on the new thread before it answers; that waits for `Started`.
-    fake.push(
-        "a",
-        &item_note("item/started", "s-new", user_message("u1", "hello")),
-    );
-    fake.push(
-        "a",
-        &json!({ "id": start.id, "result": thread_answer(thread("s-new", 100)) }),
-    );
+    shell.intend(send(7, None, &did("a"), "hello"));
 
-    let started = Update::Started {
-        tab: 7,
-        session: "s-new".to_string(),
+    let Update::Started { tab: 7, session } = shell.next().await else {
+        panic!("Started first");
     };
-    assert_eq!(shell.next().await, started);
-    let running = Update::Turn {
-        session: "s-new".to_string(),
-        turn: "t1".to_string(),
-    };
-    assert_eq!(shell.next().await, running);
-    let item = Update::Item {
-        session: "s-new".to_string(),
-        line: line("hello", Tone::You, "u1"),
-    };
-    let read = reread_and(&shell, is_item).await;
-    let items: Vec<_> = read.iter().filter(|update| is_item(update)).collect();
-    assert_eq!(items, [&item]);
-    let sent: Vec<_> = fake
-        .calls()
-        .into_iter()
-        .filter(|call| call.agent == "a" && call.method != "thread/list")
-        .collect();
-    let methods: Vec<_> = sent.iter().map(|call| call.method.as_str()).collect();
+    let started = shell.next().await;
+    let request = sent_in(&node, &session).await;
+    assert_eq!(started, turn(&session, &request.request_id));
+    reread(&shell, 1).await;
+    assert_eq!(request.content.as_deref(), Some("hello"));
+    let input = request.input.clone().unwrap_or_default();
+    let queue = input.queue.expect("a user message is queued");
     assert_eq!(
-        methods,
-        ["initialize", "initialized", "thread/start", "turn/start"]
+        queue.delivery,
+        gents_protocol::request_input::QueueDelivery::Steer,
+        "it steers a running turn, as the desktop's does"
     );
-    let turn_start = &sent[3].params;
-    assert_eq!(turn_start["threadId"], "s-new");
-    assert_eq!(
-        turn_start["input"],
-        json!([{ "type": "text", "text": "hello", "text_elements": [] }])
-    );
+    node.text(&request, 0, MessageRole::User, "hello").await;
+    let said = item(&session, line("hello", Tone::You, "m0"));
+    let read = shell.until(is_item).await;
+    assert_eq!(read.last(), Some(&said));
 }
 
 #[tokio::test]
 async fn a_reply_streams_as_deltas() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "turn/start" => turn_answer("t1"),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    let shell = open_shell(node.work());
     shell.ready().await;
 
-    shell.intend(Intent::Send {
-        tab: 0,
-        session: Some("s1".to_string()),
-        agent: "a".to_string(),
-        text: "hi".to_string(),
-    });
-    let running = Update::Turn {
-        session: "s1".to_string(),
-        turn: "t1".to_string(),
+    shell.intend(send(0, None, &did("a"), "hi"));
+    let Update::Started { session, .. } = shell.next().await else {
+        panic!("Started first");
     };
-    assert_eq!(shell.next().await, running);
+    let started = shell.next().await;
+    let request = sent_in(&node, &session).await;
+    assert_eq!(started, turn(&session, &request.request_id));
     reread(&shell, 1).await;
-    for delta in ["Hel", "lo"] {
-        let params = json!({ "threadId": "s1", "turnId": "t1", "itemId": "r1", "delta": delta });
-        fake.push(
-            "a",
-            &json!({ "method": "item/agentMessage/delta", "params": params }),
-        );
-    }
-    for text in ["Hel", "lo"] {
-        let delta = Update::Delta {
-            session: "s1".to_string(),
-            item: "r1".to_string(),
-            text: text.to_string(),
-            tone: Tone::Reply,
-        };
-        assert_eq!(shell.next().await, delta);
-    }
+    node.update(&request, &claimed(&request)).await;
+    node.text(&request, 0, MessageRole::User, "hi").await;
+    shell.until(is_item).await;
 
-    let completed = json!({ "threadId": "s1", "turn": turn("t1", "completed", json!([])) });
-    fake.push(
-        "a",
-        &json!({ "method": "turn/completed", "params": completed }),
-    );
-    let done = Update::TurnEnded {
-        session: "s1".to_string(),
-        turn: "t1".to_string(),
+    node.flush(&request, 0, "Hel").await;
+    let first = item(&session, line("Hel", Tone::Reply, "m1"));
+    assert_eq!(shell.until(is_item).await.last(), Some(&first));
+    node.flush(&request, 1, "lo").await;
+    let delta = |update: &Update| matches!(update, Update::Delta { .. });
+    let more = Update::Delta {
+        session: session.clone(),
+        item: "m1".to_string(),
+        text: "lo".to_string(),
+        tone: Tone::Reply,
     };
-    assert_eq!(shell.next().await, done);
-    let relisted = shell.next().await;
-    assert!(matches!(relisted, Update::Sessions(_)), "{relisted:?}");
+    assert_eq!(shell.until(delta).await.last(), Some(&more));
+
+    node.text(&request, 1, MessageRole::Assistant, "Hello")
+        .await;
+    node.update(&request, r#"lifecycle_state: "completed""#)
+        .await;
+    let done = ended(&session, &request.request_id);
+    let turn_ended = |update: &Update| matches!(update, Update::TurnEnded { .. });
+    let read = shell.until(turn_ended).await;
+    assert_eq!(read.last(), Some(&done));
 }
 
-/// What `thread/read` answers for `s1` with these turns.
-fn read_answer(turns: Value) -> Answer {
-    let mut read = thread("s1", 100);
-    read["turns"] = turns;
-    Some(Ok(json!({ "thread": read })))
-}
-
-fn interrupt_t1(shell: &Shell) {
-    shell.intend(Intent::Interrupt {
-        session: "s1".to_string(),
-        agent: "b".to_string(),
-        turn: "t1".to_string(),
-    });
-}
-
-fn t1_ended() -> Update {
-    Update::TurnEnded {
-        session: "s1".to_string(),
-        turn: "t1".to_string(),
+fn interrupt(session: &str, turn: &str) -> Intent {
+    Intent::Interrupt {
+        session: session.to_string(),
+        agent: did("b"),
+        turn: turn.to_string(),
     }
 }
 
 #[tokio::test]
-async fn interrupt_sends_turn_interrupt_for_a_running_turn() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/read" => read_answer(json!([turn("t1", "inProgress", json!([]))])),
-        "turn/interrupt" => Some(Ok(json!({}))),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+async fn interrupt_stops_the_running_turn() {
+    let node = ChatNode::new().await;
+    node.session("s1", "a").await;
+    node.request("s1", "t1", "processing").await;
+    let shell = open_shell(node.work());
     shell.ready().await;
 
-    interrupt_t1(&shell);
+    shell.intend(interrupt("s1", "t1"));
 
-    assert_eq!(shell.next().await, t1_ended());
-    let calls: Vec<_> = fake
-        .calls()
-        .into_iter()
-        .filter(|call| call.agent == "b")
-        .filter(|call| {
-            !["initialize", "initialized", "thread/list"].contains(&call.method.as_str())
-        })
-        .map(|call| (call.method, call.params))
-        .collect();
-    let expected = [
-        (
-            "thread/read".to_string(),
-            json!({ "threadId": "s1", "includeTurns": true }),
-        ),
-        (
-            "turn/interrupt".to_string(),
-            json!({ "threadId": "s1", "turnId": "t1" }),
-        ),
-    ];
-    assert_eq!(calls, expected);
+    assert_eq!(shell.next().await, ended("s1", "t1"));
+    let stopped = node.request_row("t1").await;
+    assert!(
+        stopped.interrupt_requested_at.is_some(),
+        "the request is latched: {stopped:?}"
+    );
 }
 
-/// The endpoint interrupts whichever turn runs, so stopping an ended one would stop
-/// another client's newer turn.
+/// Stopping exactly the tab's turn leaves another client's newer turn running.
 #[tokio::test]
 async fn interrupt_clears_a_turn_that_has_ended_without_stopping_another() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/read" => read_answer(json!([
-            turn("t1", "completed", json!([])),
-            turn("t2", "inProgress", json!([])),
-        ])),
-        "turn/interrupt" => Some(Ok(json!({}))),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    node.session("s1", "a").await;
+    node.request("s1", "t1", "completed").await;
+    node.request("s1", "t2", "processing").await;
+    let shell = open_shell(node.work());
     shell.ready().await;
 
-    interrupt_t1(&shell);
+    shell.intend(interrupt("s1", "t1"));
 
-    assert_eq!(shell.next().await, t1_ended());
-    let methods = fake.methods();
-    assert!(methods.contains(&"thread/read".to_string()), "{methods:?}");
-    assert!(
-        !methods.contains(&"turn/interrupt".to_string()),
-        "{methods:?}"
-    );
+    assert_eq!(shell.next().await, ended("s1", "t1"));
+    for request in ["t1", "t2"] {
+        let row = node.request_row(request).await;
+        assert_eq!(row.interrupt_requested_at, None, "{request}");
+    }
 }
 
 #[tokio::test]
-async fn a_refused_send_becomes_a_notice_in_the_runtimes_words() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/start" => Some(Err((-32602, "no model can run yet".to_string()))),
-        "turn/start" => Some(Err((-32602, "the session is busy".to_string()))),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+async fn a_refused_send_becomes_a_start_failure_in_the_owners_words() {
+    let node = ChatNode::new().await;
+    let shell = open_shell(node.work());
     shell.ready().await;
+    let agent = escape_graphql_string(&did("a"));
+    node.run(&format!(
+        r#"mutation {{ update_Agent(filter: {{ agent_did: {{ _eq: "{agent}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#
+    ))
+    .await;
 
-    shell.intend(Intent::Send {
-        tab: 3,
-        session: Some("s1".to_string()),
-        agent: "a".to_string(),
-        text: "hi".to_string(),
-    });
+    shell.intend(send(3, Some("s1"), &did("a"), "hi"));
+
     // A failure the tab is told of, so it stops showing the turn as running.
     let refused = Update::StartFailed {
         tab: 3,
-        message: "turn/start: the session is busy".to_string(),
+        message: "request agent is disabled".to_string(),
     };
-    assert_eq!(shell.next().await, refused);
-    reread(&shell, 1).await;
-
-    shell.intend(Intent::Send {
+    let read = shell
+        .until(|update| matches!(update, Update::StartFailed { .. }))
+        .await;
+    assert_eq!(read.last(), Some(&refused));
+    shell.intend(send(4, Some("s1"), "did:key:z:nobody", "hi"));
+    let unknown = Update::StartFailed {
         tab: 4,
-        session: None,
-        agent: "a".to_string(),
-        text: "hi".to_string(),
-    });
-    let failed = Update::StartFailed {
-        tab: 4,
-        message: "thread/start: no model can run yet".to_string(),
+        message: "agent did:key:z:nobody is not open in this shell".to_string(),
     };
-    assert_eq!(shell.next().await, failed);
-    let turns = fake
-        .methods()
-        .into_iter()
-        .filter(|method| method == "turn/start")
-        .count();
-    assert_eq!(turns, 1, "a failed start sends no turn");
-}
-
-/// What `skills/list` answers: `commit` and `review` enabled and `old` disabled, at the paths
-/// the endpoint lists a skill at.
-fn skills_answer() -> Answer {
-    let skill = |id: &str, description: &str, enabled: bool| {
-        let path = format!("/gents/skills/{id}");
-        json!({ "name": id, "description": description, "path": path, "scope": "system", "enabled": enabled })
-    };
-    let skills = [
-        skill("commit", "Writes commits", true),
-        skill("review", "", true),
-        skill("old", "Retired", false),
-    ];
-    Some(Ok(
-        json!({ "data": [{ "cwd": "/srv/root", "skills": skills, "errors": [] }] }),
-    ))
+    let read = shell
+        .until(|update| matches!(update, Update::StartFailed { .. }))
+        .await;
+    assert_eq!(read.last(), Some(&unknown));
 }
 
 fn shown_skill(id: &str, about: &str) -> Skill {
@@ -1865,15 +1763,17 @@ fn is_skills(update: &Update) -> bool {
     matches!(update, Update::Skills { .. })
 }
 
-/// `node_settings_of(did)` with agent `a` on context `main`, which lists `commit`, and agent `b`
-/// on no context.
+/// `node_settings_of(did)` with agent `a` on context `main`, which lists `commit` and `review`,
+/// and agent `b` on no context. `old` is listed too, and turned off.
 fn skill_settings(did: &str) -> Value {
     let mut config = node_settings_of(did);
+    config["node"]["default_agent_did"] = json!("a");
     config["contexts"] = json!([
-        { "node_did": did, "context_id": "main", "skill_ids": ["commit"] },
+        { "node_did": did, "context_id": "main", "skill_ids": ["commit", "review", "old"] },
     ]);
-    let commit = json!({ "node_did": did, "skill_id": "commit", "name": "commit" });
-    config["skills"].as_array_mut().unwrap().push(commit);
+    let skills = config["skills"].as_array_mut().unwrap();
+    skills.push(json!({ "node_did": did, "skill_id": "commit", "name": "commit", "description": "Writes commits" }));
+    skills.push(json!({ "node_did": did, "skill_id": "old", "name": "old", "description": "Retired", "enabled": false }));
     let agent = |id: &str| json!({ "node_did": did, "agent_did": id, "display_name": id, "inference_profile_id": "profile" });
     let mut a = agent("a");
     a["context_id"] = json!("main");
@@ -1884,51 +1784,20 @@ fn skill_settings(did: &str) -> Value {
     config
 }
 
-/// The shell on a fake runtime for agents `a` and `b`, whose work is a node served with
-/// `skill_settings` and signed by an initialized home's key, as on a home `gents init` set up.
+/// The shell on a node served with `skill_settings`, as on a home `gents init` set up.
 struct OnNode {
     shell: Shell,
     node: Arc<defra_node::Node>,
     work: Work,
-    did: String,
-    _served: crate::shared::test_support::Served,
-    _home: tempfile::TempDir,
 }
 
-async fn on_node<F>(script: F) -> OnNode
-where
-    F: Fn(&str, &str, &Value) -> Answer + Send + Sync + 'static,
-{
-    let served = crate::shared::test_support::served_config(skill_settings(OWNER)).await;
-    let (home, _) = home_serving(&served.graphql, None);
-    let did = OWNER.to_string();
-    let node = served.node.clone();
-    let work = Work {
-        endpoint: served.user.clone(),
-        home: home.path().into(),
-    };
-    let (a, b) = (self::did("a"), self::did("b"));
-    let mut runtime = identity(Some(&[a.as_str(), b.as_str()]));
-    runtime.node_did = did.clone();
-    runtime.bound_agent = a.clone();
-    let fake = FakeRuntime::start(Some(runtime), script).await;
-    let shell = open_shell_on(
-        &fake,
-        None,
-        None,
-        ANSWER_WAIT,
-        Ok(work.clone()),
-        home.path().into(),
-    );
-    shell.opened_as(&[&a, &b]).await;
-    OnNode {
-        shell,
-        node,
-        work,
-        did,
-        _served: served,
-        _home: home,
-    }
+async fn on_node() -> OnNode {
+    let (node, work, _home) = served(skill_settings(OWNER)).await;
+    let runtime = ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
+    publish_ready(&runtime, &["a", "b"]).await;
+    let shell = open_shell(work.clone());
+    shell.ready().await;
+    OnNode { shell, node, work }
 }
 
 fn read_skills(agent: &str) -> Intent {
@@ -1938,19 +1807,18 @@ fn read_skills(agent: &str) -> Intent {
 }
 
 #[tokio::test]
-async fn skills_list_only_what_the_agents_context_allows() {
-    let on = on_node(|_, method, _| match method {
-        "skills/list" => skills_answer(),
-        _ => quiet(method),
-    })
-    .await;
+async fn skills_list_only_what_the_agents_context_allows_and_is_on() {
+    let on = on_node().await;
 
     on.shell.intend(read_skills(&did("a")));
     let told = on.shell.until(is_skills).await;
 
     let allowed = Update::Skills {
         agent: did("a"),
-        skills: vec![shown_skill("commit", "Writes commits")],
+        skills: vec![
+            shown_skill("commit", "Writes commits"),
+            shown_skill("review", "review"),
+        ],
     };
     assert_eq!(told.last(), Some(&allowed));
     on.node.shutdown().await.expect("node shutdown");
@@ -1958,11 +1826,7 @@ async fn skills_list_only_what_the_agents_context_allows() {
 
 #[tokio::test]
 async fn an_agent_with_no_context_offers_no_skills() {
-    let on = on_node(|_, method, _| match method {
-        "skills/list" => skills_answer(),
-        _ => quiet(method),
-    })
-    .await;
+    let on = on_node().await;
 
     on.shell.intend(read_skills(&did("b")));
     let told = on.shell.until(is_skills).await;
@@ -1975,106 +1839,99 @@ async fn an_agent_with_no_context_offers_no_skills() {
     on.node.shutdown().await.expect("node shutdown");
 }
 
-/// With work off the context cannot be read, so every enabled skill is listed and admission
-/// refuses one outside the context.
 #[tokio::test]
-async fn a_skill_turn_sends_the_listed_skill_input() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "skills/list" => skills_answer(),
-        "turn/start" => turn_answer("t1"),
-        _ => quiet(method),
-    })
-    .await;
-    let off = "jobs and the mailbox are off: no runtime".to_string();
-    let home = tempfile::tempdir().unwrap();
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Err(off), home.path().into());
-    shell.opened().await;
-    let send = |skill: &str, text: &str| Intent::SendSkill {
+async fn a_skill_turn_sends_the_listed_skill() {
+    let on = on_node().await;
+    let send = |session: &str, skill: &str, text: &str| Intent::SendSkill {
         tab: 7,
-        session: Some("s1".to_string()),
-        agent: "a".to_string(),
+        session: Some(session.to_string()),
+        agent: did("a"),
         skill: skill.to_string(),
         text: text.to_string(),
     };
     let is_turn = |update: &Update| matches!(update, Update::Turn { .. });
 
-    shell.intend(read_skills("a"));
-    let listed = shell.until(is_skills).await;
-    shell.intend(send("commit", "fix it"));
-    shell.until(is_turn).await;
-    shell.intend(send("commit", ""));
-    shell.until(is_turn).await;
-    shell.intend(send("nope", "fix it"));
-    let missed = shell
+    on.shell.intend(read_skills(&did("a")));
+    on.shell.until(is_skills).await;
+    on.shell.intend(send("s1", "commit", "fix it"));
+    on.shell.until(is_turn).await;
+    on.shell.intend(send("s2", "commit", ""));
+    on.shell.until(is_turn).await;
+    on.shell.intend(send("s3", "nope", "fix it"));
+    let missed = on
+        .shell
         .until(|update| matches!(update, Update::StartFailed { .. }))
         .await;
 
-    let enabled = Update::Skills {
-        agent: "a".to_string(),
-        skills: vec![
-            shown_skill("commit", "Writes commits"),
-            shown_skill("review", "review"),
-        ],
-    };
-    assert_eq!(listed.last(), Some(&enabled));
     let unknown = Update::StartFailed {
         tab: 7,
         message: "unknown skill /nope".to_string(),
     };
     assert_eq!(missed.last(), Some(&unknown));
-    let inputs: Vec<_> = fake
-        .calls()
-        .into_iter()
-        .filter(|call| call.method == "turn/start")
-        .map(|call| call.params["input"].clone())
-        .collect();
-    let commit = json!({ "type": "skill", "name": "commit", "path": "/gents/skills/commit" });
-    let fix = json!({ "type": "text", "text": "fix it", "text_elements": [] });
-    assert_eq!(inputs, [json!([commit, fix]), json!([commit])]);
+    let access = on.work.access();
+    for (session, content) in [("s1", "fix it"), ("s2", "")] {
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ content input }} }}"#
+        );
+        let requests = access.execute(&query).await.unwrap();
+        let request = &requests["data"]["AgentRequest"][0];
+        assert_eq!(request["content"], json!(content), "{requests}");
+        let input: gents_protocol::request_input::RequestInput =
+            serde_json::from_value(request["input"].clone()).unwrap();
+        assert_eq!(input.selected_skill_ids, ["commit"]);
+    }
+    on.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn a_failed_skills_read_leaves_no_rows_to_show_or_send() {
+    let node = ChatNode::new().await;
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let read = reads.clone();
-    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
-        "skills/list" if read.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 => {
-            skills_answer()
+    let fake = FakeGraphql::start(node, move |query| {
+        let skills = query.contains("Skill(") && !query.contains("DesktopSnapshot");
+        match skills && read.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+            true => Some(
+                json!({ "data": null, "errors": [{ "message": "the skills are unreadable" }] }),
+            ),
+            false => None,
         }
-        "skills/list" => Some(Err((-32603, "the skills are unreadable".to_string()))),
-        _ => quiet(method),
     })
     .await;
-    let off = "jobs and the mailbox are off: no runtime".to_string();
-    let home = tempfile::tempdir().unwrap();
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Err(off), home.path().into());
-    shell.opened().await;
+    let shell = open_shell(fake.work());
+    shell.ready().await;
 
-    shell.intend(read_skills("a"));
+    shell.intend(read_skills(&did("a")));
     shell.until(is_skills).await;
-    shell.intend(read_skills("a"));
+    shell.intend(read_skills(&did("a")));
     let told = shell.until(is_skills).await;
     shell.intend(Intent::SendSkill {
         tab: 7,
         session: Some("s1".to_string()),
-        agent: "a".to_string(),
-        skill: "commit".to_string(),
+        agent: did("a"),
+        skill: "review".to_string(),
         text: String::new(),
     });
     let missed = shell
         .until(|update| matches!(update, Update::StartFailed { .. }))
         .await;
 
-    let notice = Update::Notice("skills/list: the skills are unreadable".to_string());
-    assert!(told.contains(&notice), "{told:?}");
+    let notice = told.iter().find_map(|update| match update {
+        Update::Notice(notice) => Some(notice),
+        _ => None,
+    });
+    assert!(
+        notice.is_some_and(|notice| notice.contains("the skills are unreadable")),
+        "{told:?}"
+    );
     let cleared = Update::Skills {
-        agent: "a".to_string(),
+        agent: did("a"),
         skills: Vec::new(),
     };
     assert_eq!(told.last(), Some(&cleared));
     let unknown = Update::StartFailed {
         tab: 7,
-        message: "unknown skill /commit".to_string(),
+        message: "unknown skill /review".to_string(),
     };
     assert_eq!(missed.last(), Some(&unknown));
 }
@@ -2088,33 +1945,29 @@ fn set_goal(agent: &str, session: Option<&str>, objective: &str) -> Intent {
     }
 }
 
+/// A goal set opens its session, whose rows end the opening; a refused one fails the tab's
+/// start.
 fn is_goal_answer(update: &Update) -> bool {
-    match update {
-        Update::Notice(notice) => notice == source::GOAL_SET,
-        Update::StartFailed { .. } => true,
-        _ => false,
-    }
-}
-
-fn is_opened(update: &Update, at: &str) -> bool {
-    matches!(update, Update::Opened { session, .. } if session == at)
+    matches!(update, Update::Running { .. } | Update::StartFailed { .. })
 }
 
 #[tokio::test]
 async fn a_goal_starts_with_its_objective_as_the_sessions_next_message() {
-    let on = on_node(|_, method, params| match method {
-        "thread/resume" => resumed(params, &[]),
-        _ => quiet(method),
-    })
-    .await;
+    let on = on_node().await;
 
     on.shell.intend(set_goal(&did("a"), Some("s1"), "ship it"));
     let told = on.shell.until(is_goal_answer).await;
 
     let opened = told.iter().position(|update| is_opened(update, "s1"));
-    assert!(opened.is_some(), "{told:?}");
-    let set = Update::Notice(source::GOAL_SET.to_string());
-    assert_eq!(told.last(), Some(&set));
+    let running = told
+        .iter()
+        .position(|update| matches!(update, Update::Turn { session, .. } if session == "s1"));
+    assert!(
+        running
+            .zip(opened)
+            .is_some_and(|(running, opened)| running < opened),
+        "its request runs as the session's turn: {told:?}"
+    );
     let access = on.work.access();
     let goals = access
         .execute(r#"{ Goal(filter: { session_id: { _eq: "s1" } }) { objective assignment_root_request_doc_id } }"#)
@@ -2126,7 +1979,7 @@ async fn a_goal_starts_with_its_objective_as_the_sessions_next_message() {
     let root = goals[0]["assignment_root_request_doc_id"].as_str().unwrap();
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ content session_id }} }}"#,
-        gents::store::graphql::escape_graphql_string(root)
+        escape_graphql_string(root)
     );
     let requests = access.execute(&query).await.unwrap();
     let request = &requests["data"]["AgentRequest"][0];
@@ -2140,33 +1993,22 @@ async fn a_goal_starts_with_its_objective_as_the_sessions_next_message() {
 
 #[tokio::test]
 async fn a_goal_with_no_session_starts_one_first() {
-    let on = on_node(|agent, method, params| match method {
-        "thread/start" => Some(Ok(thread_answer(thread("s-new", 100)))),
-        "thread/resume" => resumed(params, &[]),
-        "thread/list" if agent == did("a") && !is_child_list(method, params) => {
-            page(&[thread("s-new", 100)], None)
-        }
-        _ => quiet(method),
-    })
-    .await;
+    let on = on_node().await;
 
     on.shell.intend(set_goal(&did("a"), None, "ship it"));
-    let told = on.shell.until(is_goal_answer).await;
-
-    let started = Update::Started {
-        tab: 7,
-        session: "s-new".to_string(),
-    };
-    let started = told.iter().position(|update| *update == started);
-    let opened = told.iter().position(|update| is_opened(update, "s-new"));
-    assert!(
-        started
-            .zip(opened)
-            .is_some_and(|(started, opened)| started < opened),
-        "{told:?}"
+    let mut told = on.shell.until(is_goal_answer).await;
+    told.extend(
+        on.shell
+            .until(|update| matches!(update, Update::Sessions(_)))
+            .await,
     );
+
+    let Some(Update::Started { tab: 7, session }) = told.first().cloned() else {
+        panic!("{told:?}");
+    };
+    let opened = told.iter().position(|update| is_opened(update, &session));
     let lists_new = |update: &Update| match update {
-        Update::Sessions(sessions) => sessions.iter().any(|session| session.id == "s-new"),
+        Update::Sessions(sessions) => sessions.iter().any(|listed| listed.id == session),
         _ => false,
     };
     let listed = told.iter().position(lists_new);
@@ -2176,22 +2018,18 @@ async fn a_goal_with_no_session_starts_one_first() {
             .is_some_and(|(opened, listed)| opened < listed),
         "the new session joins the list: {told:?}"
     );
-    let set = Update::Notice(source::GOAL_SET.to_string());
-    assert_eq!(told.last(), Some(&set));
     on.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn a_refused_goal_shows_the_owners_reason() {
-    let on = on_node(|_, method, params| match method {
-        "thread/resume" => resumed(params, &[]),
-        _ => quiet(method),
-    })
-    .await;
+    let on = on_node().await;
     on.shell.intend(set_goal(&did("a"), Some("s1"), "ship it"));
     let first = on.shell.until(is_goal_answer).await;
-    let set = Update::Notice(source::GOAL_SET.to_string());
-    assert_eq!(first.last(), Some(&set), "the first goal is set");
+    assert!(
+        matches!(first.last(), Some(Update::Running { .. })),
+        "the first goal is set: {first:?}"
+    );
 
     on.shell
         .intend(set_goal(&did("a"), Some("s1"), "ship more"));
@@ -2206,10 +2044,10 @@ async fn a_refused_goal_shows_the_owners_reason() {
         ..Default::default()
     };
     let agent = did("a");
-    let (did, work) = (&on.did, &on.work);
+    let work = &on.work;
     let prepared = crate::prepare_agent_request_with_input(
         &work.endpoint,
-        did,
+        OWNER,
         "ship more",
         Some("s1"),
         Some(agent.as_str()),
@@ -2219,62 +2057,49 @@ async fn a_refused_goal_shows_the_owners_reason() {
     let create = prepared.await.unwrap().create;
     let access = work.access();
     let owner =
-        gents::goal::submit_goal_backed_request(&access, did, "s1", "ship more", None, &create);
+        gents::goal::submit_goal_backed_request(&access, OWNER, "s1", "ship more", None, &create);
     let owner = owner.await.unwrap_err();
     assert_eq!(*message, format!("Couldn’t set the goal: {owner:#}"));
     on.node.shutdown().await.expect("node shutdown");
 }
 
+/// The chat streams over the feed, so its end leaves the shell nothing to show: it is lost.
 #[tokio::test]
-async fn goal_is_off_without_work() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let off = "jobs and the mailbox are off: no runtime".to_string();
-    let home = tempfile::tempdir().unwrap();
-    let work = Err(off.clone());
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, work, home.path().into());
-    shell.opened().await;
-
-    shell.intend(set_goal("a", None, "ship it"));
-    let told = shell.until(is_goal_answer).await;
-
-    let refused = Update::StartFailed {
-        tab: 7,
-        message: off,
-    };
-    assert_eq!(told.last(), Some(&refused));
-    assert!(!fake.methods().contains(&"thread/start".to_string()));
-}
-
-#[tokio::test]
-async fn a_lost_connection_names_the_next_step() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
+async fn a_lost_feed_names_the_next_step() {
+    let node = ChatNode::new().await;
+    let fake = FakeGraphql::start(node, |_| None).await;
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
-    fake.close("a");
+    fake.end_streams(is_chat);
 
     let lost = "runtime closed: check `gents status`, then reopen the shell";
+    let read = shell
+        .until(|update| matches!(update, Update::Connection(_)))
+        .await;
     assert_eq!(
-        shell.next().await,
-        Update::Connection(Connection::Lost(lost.to_string()))
+        read.last(),
+        Some(&Update::Connection(Connection::Lost(lost.to_string())))
     );
 }
 
 #[tokio::test]
-async fn a_broken_connection_names_its_error() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
+async fn a_broken_feed_names_its_error() {
+    let node = ChatNode::new().await;
+    let fake = FakeGraphql::start(node, |_| None).await;
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
-    fake.sever("a");
+    fake.break_streams(is_chat);
 
-    let update = shell.next().await;
-    let Update::Connection(Connection::Lost(lost)) = &update else {
-        panic!("{update:?}");
+    let read = shell
+        .until(|update| matches!(update, Update::Connection(_)))
+        .await;
+    let Some(Update::Connection(Connection::Lost(lost))) = read.last() else {
+        panic!("{read:?}");
     };
     assert!(
         lost.starts_with("runtime closed: check `gents status`, then reopen the shell (")
-            && lost.contains("without closing handshake")
             && lost.ends_with(')'),
         "{lost}"
     );
@@ -2299,55 +2124,59 @@ fn the_status_bar_shows_the_whole_next_step_of_a_closed_connection() {
 }
 
 #[tokio::test]
-async fn an_unreadable_runtime_is_lost_before_anything_connects() {
-    let fake = FakeRuntime::start(None, |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
+async fn an_unreadable_runtime_is_lost_before_anything_is_read() {
+    let off = "no runtime recorded".to_string();
+    let shell = open_shell_with(Err(off), Launch::default());
 
-    let lost = format!(
-        "no runtime: check `gents status`, then reopen the shell (could not read this home's runtime at {})",
-        fake.remote()
-    );
+    let lost = "no runtime: check `gents status`, then reopen the shell (no runtime recorded)";
     assert_eq!(
         shell.next().await,
-        Update::Connection(Connection::Lost(lost))
+        Update::Connection(Connection::Lost(lost.to_string()))
     );
-    assert!(fake.calls().is_empty(), "{:?}", fake.methods());
+    let unanswering = Work {
+        endpoint: user_endpoint("http://127.0.0.1:1/api/v0/graphql"),
+        home: std::path::PathBuf::new(),
+    };
+    let shell = open_shell(unanswering);
+    let update = shell.next().await;
+    let Update::Connection(Connection::Lost(lost)) = &update else {
+        panic!("{update:?}");
+    };
+    assert!(
+        lost.starts_with("no runtime: check `gents status`, then reopen the shell ("),
+        "{lost}"
+    );
+}
+
+/// A repository in a new folder, on branch `trunk`.
+fn repository() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    git(repo.path(), &["init", "-b", "trunk"]);
+    git(repo.path(), &["commit", "--allow-empty", "-m", "start"]);
+    repo
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(["-c", "commit.gpgsign=false"])
+        .args(["-c", "core.hooksPath=/dev/null"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
 }
 
 #[tokio::test]
 async fn the_branch_comes_from_git_in_the_working_directory() {
-    let repo = tempfile::tempdir().unwrap();
-    let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(["-c", "commit.gpgsign=false"])
-            .args(["-c", "core.hooksPath=/dev/null"])
-            .args(args)
-            .current_dir(repo.path())
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{out:?}");
+    let repo = repository();
+    let node = ChatNode::new().await;
+    let opened = Launch {
+        cwd: Some(repo.path().into()),
+        ..Default::default()
     };
-    git(&["init", "-b", "trunk"]);
-    git(&["commit", "--allow-empty", "-m", "start"]);
-    let fake = FakeRuntime::start(Some(identity(None)), |_, method, _| quiet(method)).await;
-    let endpoint = GraphqlEndpoint::with_delegated_authorization(fake.graphql(), "Bearer shell")
-        .expect("a bearer");
-    let home = std::path::PathBuf::new();
-    let work = Work {
-        endpoint,
-        home: home.clone(),
-    };
-    let shell = open_shell_in(
-        &fake,
-        None,
-        None,
-        ANSWER_WAIT,
-        Ok(work),
-        home,
-        Some(repo.path().into()),
-        None,
-    );
+    let shell = open_shell_with(Ok(node.work()), opened);
 
     assert!(matches!(shell.next().await, Update::Agents(_)));
     assert_eq!(shell.next().await, Update::Connection(Connection::Ready));
@@ -2355,114 +2184,6 @@ async fn the_branch_comes_from_git_in_the_working_directory() {
     // `next` panics when nothing more arrives within its wait.
     while shell.next().await != branch {}
 }
-
-#[tokio::test]
-async fn a_pinned_runtime_serves_only_its_bound_agent_at_the_endpoint() {
-    let fake = FakeRuntime::start(Some(identity(None)), |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
-
-    let update = shell.next().await;
-    let Update::Agents(agents) = update else {
-        panic!("{update:?}");
-    };
-    let ids: Vec<_> = agents.iter().map(|agent| agent.id.as_str()).collect();
-    assert_eq!(ids, ["a"]);
-    assert_eq!(shell.next().await, Update::Connection(Connection::Ready));
-    assert_eq!(shell.next().await, Update::Sessions(Vec::new()));
-    let routes: Vec<_> = fake.calls().into_iter().map(|call| call.agent).collect();
-    assert_eq!(routes, ["/", "/", "/"], "{:?}", fake.methods());
-}
-
-#[tokio::test]
-async fn a_request_with_no_answer_times_out() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/read" => Some(Ok(json!({ "ok": true }))),
-        _ => None,
-    })
-    .await;
-    let (events, _events) = mpsc::unbounded_channel();
-    let client = connect_answering(&fake, "a", events, SHORT_WAIT).await;
-
-    let silent = within(client.request::<_, Value>("thread/list", &json!({})))
-        .await
-        .expect_err("nothing answers");
-
-    assert!(
-        matches!(
-            silent,
-            ClientError::Timeout {
-                method: "thread/list",
-                secs: 1
-            }
-        ),
-        "{silent:?}"
-    );
-    assert_eq!(
-        silent.to_string(),
-        "no answer from the runtime: check `gents status`, then reopen the shell (thread/list waited 1s)"
-    );
-    // A late answer to the expired request is dropped, and the connection still answers.
-    let late = fake.calls().last().unwrap().id.clone();
-    fake.push("a", &json!({ "id": late, "result": {} }));
-    let answered: Value = within(client.request("thread/read", &json!({})))
-        .await
-        .unwrap();
-    assert_eq!(answered, json!({ "ok": true }));
-}
-
-#[tokio::test]
-async fn an_unanswered_request_becomes_a_notice_and_the_shell_goes_on() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "thread/read" => read_answer(json!([turn("t1", "inProgress", json!([]))])),
-        "turn/interrupt" => Some(Ok(json!({}))),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell_answering(&fake, SHORT_WAIT);
-    shell.ready().await;
-
-    shell.intend(Intent::Send {
-        tab: 0,
-        session: Some("s1".to_string()),
-        agent: "a".to_string(),
-        text: "hi".to_string(),
-    });
-    let expired = |method: &str| {
-        format!("no answer from the runtime: check `gents status`, then reopen the shell ({method} waited 1s)")
-    };
-    let unanswered = Update::StartFailed {
-        tab: 0,
-        message: expired("turn/start"),
-    };
-    assert_eq!(shell.next().await, unanswered);
-    reread(&shell, 1).await;
-    shell.intend(Intent::Send {
-        tab: 1,
-        session: None,
-        agent: "a".to_string(),
-        text: "hi".to_string(),
-    });
-    let failed = Update::StartFailed {
-        tab: 1,
-        message: expired("thread/start"),
-    };
-    assert_eq!(shell.next().await, failed);
-
-    shell.intend(Intent::Interrupt {
-        session: "s1".to_string(),
-        agent: "a".to_string(),
-        turn: "t1".to_string(),
-    });
-    assert_eq!(shell.next().await, t1_ended());
-    let started = json!({ "threadId": "s1", "turn": turn("t2", "inProgress", json!([])) });
-    fake.push("a", &json!({ "method": "turn/started", "params": started }));
-    let running = Update::Turn {
-        session: "s1".to_string(),
-        turn: "t2".to_string(),
-    };
-    assert_eq!(shell.next().await, running);
-}
-
 /// An initialized home whose recorded runtime serves GraphQL at `graphql`, signed by `key` when
 /// one is given.
 pub(super) fn home_serving(
@@ -2525,48 +2246,21 @@ async fn work_for_signs_as_this_clis_user() {
     assert_eq!(work.access().actor_did().as_deref(), Some(user.did()));
 }
 
-/// With no runtime recorded there is nothing to read.
-#[test]
-fn work_for_turns_off_with_no_runtime_recorded() {
+/// With no runtime recorded there is nothing to read, so the shell has nothing to show.
+#[tokio::test]
+async fn work_for_turns_off_with_no_runtime_recorded() {
     let bare = tempfile::tempdir().unwrap();
     let off = work::work_for(bare.path())
         .err()
         .expect("no runtime recorded");
-    assert!(off.starts_with("jobs and the mailbox are off: "), "{off}");
     assert!(off.contains("gents runtime server"), "{off}");
-}
-
-#[tokio::test]
-async fn an_unavailable_graphql_is_told_once_and_the_shell_still_opens() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let off = "jobs and the mailbox are off: no runtime".to_string();
-    let home = std::path::PathBuf::new();
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Err(off.clone()), home);
-
-    shell.opened().await;
-    assert_eq!(shell.next().await, Update::Notice(off));
-    let off_jobs = Update::Jobs {
-        jobs: Vec::new(),
-        as_of: "off".to_string(),
-    };
-    assert_eq!(shell.next().await, off_jobs);
-    let off_calls = Update::Background {
-        calls: Vec::new(),
-        as_of: "off".to_string(),
-    };
-    assert_eq!(shell.next().await, off_calls);
-    fake.push(
-        "a",
-        &item_note("item/completed", "s1", agent_message("r1", "hi")),
-    );
-
-    let item = shell.next().await;
-    assert!(
-        matches!(item, Update::Item { .. }),
-        "one notice only: {item:?}"
+    let shell = open_shell_with(Err(off.clone()), Launch::default());
+    let lost = format!("no runtime: check `gents status`, then reopen the shell ({off})");
+    assert_eq!(
+        shell.next().await,
+        Update::Connection(Connection::Lost(lost))
     );
 }
-
 /// A running plugin job's row in session `session`, as `list_jobs` reads it.
 fn job_row(session: &str, call: &str) -> Value {
     json!({
@@ -2637,22 +2331,41 @@ fn background_row(tool: &str, state: &str) -> Value {
     })
 }
 
+/// The start of `list_jobs`' row read.
+const JOB_LIST: &str = "{ AgentToolCall(filter: { job_pin: { _ne: null }";
+
+fn is_job_list(query: &str) -> bool {
+    query.starts_with(JOB_LIST)
+}
+
+/// The background owner's read of the running calls.
+fn is_call_list(query: &str) -> bool {
+    query.contains("await_mode") && query.contains(RUNNING_CALLS)
+}
+
 /// Answers `list_jobs`' query with the `jobs` of the session it names, as the node filters
-/// them, the background owner's with `calls`, and the children and output reads with none.
-fn work_answer(query: &str, jobs: &[Value], calls: &[Value]) -> Value {
-    if query.contains("job_pin") {
+/// them, and the background owner's with `calls`. The node answers the rest.
+fn work_answer(query: &str, jobs: &[Value], calls: &[Value]) -> Option<Value> {
+    if is_job_list(query) {
         let named = |job: &&Value| {
             query.contains(&format!(r#"session_id: {{ _eq: {} }}"#, job["session_id"]))
         };
         let jobs: Vec<_> = jobs.iter().filter(named).collect();
-        json!({ "data": { "AgentToolCall": jobs } })
-    } else if query.contains("await_mode") {
-        json!({ "data": { "AgentToolCall": calls } })
-    } else if query.contains("MailboxItem") {
-        json!({ "data": { "MailboxItem": [] } })
+        Some(json!({ "data": { "AgentToolCall": jobs } }))
+    } else if is_call_list(query) {
+        Some(json!({ "data": { "AgentToolCall": calls } }))
     } else {
-        json!({ "data": { "AgentRequest": [], "AgentOutputSegment": [] } })
+        None
     }
+}
+
+/// The work views' reads: the job rows and the running calls.
+fn work_reads(fake: &FakeGraphql) -> usize {
+    let queries = fake.queries();
+    let reads = queries
+        .iter()
+        .filter(|query| is_job_list(query) || is_call_list(query));
+    reads.count()
 }
 
 fn shown_job(session: &str, call: &str) -> Job {
@@ -2690,16 +2403,12 @@ const RUNNING_CALLS: &str = r#"lifecycle_state: { _in: ["pending", "running"] }"
 
 #[tokio::test]
 async fn jobs_and_background_calls_are_read_once_the_shell_is_ready() {
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |_, method, _| quiet(method),
-        |query| {
-            let calls = [background_row("bash", "pending")];
-            work_answer(query, &[job_row("s1", "call-1")], &calls)
-        },
-    )
+    let fake = FakeGraphql::start(ChatNode::new().await, |query| {
+        let calls = [background_row("bash", "pending")];
+        work_answer(query, &[job_row("s1", "call-1")], &calls)
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.opened().await;
 
     let jobs = Update::Jobs {
@@ -2722,12 +2431,13 @@ async fn jobs_and_background_calls_are_read_once_the_shell_is_ready() {
     };
     assert_eq!(shell.next().await, calls);
     let queries = fake.queries();
-    assert_eq!(
-        queries[0],
-        source::WATCHED,
+    let watched = queries.iter().position(|query| query == source::WATCHED);
+    let read = queries.iter().position(|query| is_call_list(query));
+    assert!(
+        watched.is_some() && watched < read,
         "it subscribes before it reads: {queries:?}"
     );
-    let background = queries.last().unwrap();
+    let background = &queries[read.unwrap()];
     assert!(background.contains("await_mode"), "{queries:?}");
     assert!(
         background.contains(RUNNING_CALLS),
@@ -2793,19 +2503,13 @@ where
     read
 }
 
-fn is_item(update: &Update) -> bool {
-    matches!(update, Update::Item { .. })
-}
-
-/// The `list_jobs` row reads: only they select `job_progress`.
-fn job_reads(fake: &FakeRuntime) -> Vec<String> {
+/// The `list_jobs` row reads.
+fn job_reads(fake: &FakeGraphql) -> Vec<String> {
     let queries = fake.queries().into_iter();
-    queries
-        .filter(|query| query.contains("job_progress"))
-        .collect()
+    queries.filter(|query| is_job_list(query)).collect()
 }
 
-fn call_reads(fake: &FakeRuntime) -> usize {
+fn call_reads(fake: &FakeGraphql) -> usize {
     let queries = fake.queries();
     queries
         .iter()
@@ -2815,30 +2519,23 @@ fn call_reads(fake: &FakeRuntime) -> usize {
 
 #[tokio::test]
 async fn jobs_are_read_per_open_session_in_every_state() {
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |_, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ => quiet(method),
-        },
-        |query| {
-            let jobs = [
-                job_row("s1", "call-1"),
-                ended_row("s1", "call-2", "completed"),
-                job_row("s2", "call-3"),
-                ended_row("s1", "call-4", "failed"),
-                ended_row("s1", "call-5", "cancelled"),
-                ended_row("s1", "call-6", "timedOut"),
-            ];
-            work_answer(query, &jobs, &[])
-        },
-    )
+    let fake = FakeGraphql::start(ChatNode::new().await, |query| {
+        let jobs = [
+            job_row("s1", "call-1"),
+            ended_row("s1", "call-2", "completed"),
+            job_row("s2", "call-3"),
+            ended_row("s1", "call-4", "failed"),
+            ended_row("s1", "call-5", "cancelled"),
+            ended_row("s1", "call-6", "timedOut"),
+        ];
+        work_answer(query, &jobs, &[])
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
     assert_eq!(job_reads(&fake), Vec::<String>::new(), "no session is open");
 
-    open_s1(&shell);
+    open(&shell, "s1");
     opening(&shell, "s1").await;
 
     let read = reread(&shell, 1).await;
@@ -2898,23 +2595,15 @@ async fn jobs_are_read_per_open_session_in_every_state() {
 /// A session opens when a tab picks it or sends to it, and either reads its jobs.
 #[tokio::test]
 async fn opening_a_session_rereads_work() {
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |_, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            "turn/start" => turn_answer("t1"),
-            _ => quiet(method),
-        },
-        |query| {
-            let jobs = [job_row("s1", "call-1"), job_row("s2", "call-2")];
-            work_answer(query, &jobs, &[])
-        },
-    )
+    let fake = FakeGraphql::start(ChatNode::new().await, |query| {
+        let jobs = [job_row("s1", "call-1"), job_row("s2", "call-2")];
+        work_answer(query, &jobs, &[])
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
     opening(&shell, "s1").await;
 
     let read = reread(&shell, 1).await;
@@ -2924,17 +2613,12 @@ async fn opening_a_session_rereads_work() {
     };
     assert_eq!(read[0], s1);
 
-    shell.intend(Intent::Send {
-        tab: 1,
-        session: Some("s2".to_string()),
-        agent: "a".to_string(),
-        text: "hi".to_string(),
-    });
-    let turn = Update::Turn {
-        session: "s2".to_string(),
-        turn: "t1".to_string(),
-    };
-    assert_eq!(shell.next().await, turn);
+    shell.intend(send(1, Some("s2"), &did("a"), "hi"));
+    let update = shell.next().await;
+    assert!(
+        matches!(&update, Update::Turn { session, .. } if session == "s2"),
+        "{update:?}"
+    );
 
     let read = reread(&shell, 2).await;
     let jobs = read.iter().find_map(|update| match update {
@@ -2950,8 +2634,8 @@ async fn opening_a_session_rereads_work() {
 /// The no-polling rule: only an event, or the view being shown, reads again.
 #[tokio::test]
 async fn nothing_rereads_without_an_event() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
+    let fake = FakeGraphql::start(ChatNode::new().await, |_| None).await;
+    let shell = open_shell(fake.work());
     shell.ready().await;
     let read = fake.queries().len();
 
@@ -2969,31 +2653,25 @@ async fn nothing_rereads_without_an_event() {
         "the calls, and no jobs with no session open: {:?}",
         fake.queries()
     );
-    assert_eq!(fake.subscriptions(), 1, "a live subscription is kept");
+    let kept = fake.subscribed(source::WATCHED);
+    assert_eq!(kept, 1, "a live subscription is kept");
 }
 
 #[tokio::test]
 async fn a_tool_call_change_rereads_the_jobs() {
     let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let job = started.clone();
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |_, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ => quiet(method),
-        },
-        move |query| {
-            let jobs = match job.load(std::sync::atomic::Ordering::SeqCst) {
-                true => vec![job_row("s1", "call-1")],
-                false => Vec::new(),
-            };
-            work_answer(query, &jobs, &[])
-        },
-    )
+    let fake = FakeGraphql::start(ChatNode::new().await, move |query| {
+        let jobs = match job.load(std::sync::atomic::Ordering::SeqCst) {
+            true => vec![job_row("s1", "call-1")],
+            false => Vec::new(),
+        };
+        work_answer(query, &jobs, &[])
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
-    open_s1(&shell);
+    open(&shell, "s1");
     opening(&shell, "s1").await;
     reread(&shell, 1).await;
 
@@ -3009,34 +2687,25 @@ async fn a_tool_call_change_rereads_the_jobs() {
     assert!(matches!(update, Update::Background { .. }), "{update:?}");
 }
 
-fn turn_completed(fake: &FakeRuntime) {
-    let completed = json!({ "threadId": "s9", "turn": turn("t1", "completed", json!([])) });
-    fake.push(
-        "a",
-        &json!({ "method": "turn/completed", "params": completed }),
-    );
+/// A request changing, as a turn starting or ending does.
+fn turn_changed(fake: &FakeGraphql) {
+    fake.chat_changed("AgentRequest");
 }
 
 /// The node sends no keep-alives and replays nothing, so an ended subscription is only noticed,
 /// and the next turn subscribes again and rereads, once.
 #[tokio::test]
 async fn an_ended_subscription_goes_stale_until_the_next_turn() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
+    let fake = FakeGraphql::start(ChatNode::new().await, |_| None).await;
+    let shell = open_shell(fake.work());
     shell.ready().await;
-    let read = fake.queries().len();
+    let read = work_reads(&fake);
 
-    turn_completed(&fake);
-    assert!(matches!(shell.next().await, Update::TurnEnded { .. }));
-    assert!(matches!(shell.next().await, Update::Sessions(_)));
-    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 1)).await;
-    assert!(
-        more.is_err(),
-        "a live view needs no reread: {:?}",
-        fake.queries()
-    );
+    turn_changed(&fake);
+    assert_eq!(shell.quiet().await, None, "a live view needs no reread");
+    assert_eq!(work_reads(&fake), read);
 
-    fake.end_streams();
+    fake.end_streams(is_work);
     for _ in 0..2 {
         let update = shell.next().await;
         let (Update::Jobs { as_of, .. } | Update::Background { as_of, .. }) = &update else {
@@ -3044,53 +2713,40 @@ async fn an_ended_subscription_goes_stale_until_the_next_turn() {
         };
         assert!(as_of.starts_with("as of "), "{update:?}");
     }
-    assert_eq!(fake.queries().len(), read, "ending reads nothing");
+    assert_eq!(work_reads(&fake), read, "ending reads nothing");
 
-    turn_completed(&fake);
-    assert!(matches!(shell.next().await, Update::TurnEnded { .. }));
-    assert!(matches!(shell.next().await, Update::Sessions(_)));
+    turn_changed(&fake);
     let live = |update: &Update| matches!(update, Update::Jobs { as_of, .. } | Update::Background { as_of, .. } if as_of == "live");
     assert!(live(&shell.next().await));
     assert!(live(&shell.next().await));
-    assert_eq!(fake.subscriptions(), 2);
-    assert_eq!(
-        fake.queries()[read],
-        source::WATCHED,
-        "it subscribes before it reads"
-    );
+    assert_eq!(fake.subscribed(source::WATCHED), 2);
+    let queries = fake.queries();
+    let again = queries.iter().rposition(|query| query == source::WATCHED);
+    let reread = queries.iter().rposition(|query| is_call_list(query));
+    assert!(again < reread, "it subscribes before it reads: {queries:?}");
 
-    turn_completed(&fake);
-    assert!(matches!(shell.next().await, Update::TurnEnded { .. }));
-    assert!(matches!(shell.next().await, Update::Sessions(_)));
-    let more = tokio::time::timeout(SHORT_WAIT, fake.queried(read + 4)).await;
-    assert!(more.is_err(), "live again: {:?}", fake.queries());
+    turn_changed(&fake);
+    assert_eq!(shell.quiet().await, None, "live again");
+    assert_eq!(work_reads(&fake), read + 1);
 }
 
 #[tokio::test]
 async fn a_sessions_jobs_follow_its_subagents_in_its_running_rows() {
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |agent, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ if agent == "a" && is_child_list(method, params) => {
-                page(&[child("c1", "s1", idle())], None)
-            }
-            _ => quiet(method),
-        },
-        |query| {
-            let jobs = [
-                job_row("s1", "call-1"),
-                ended_row("s1", "call-3", "completed"),
-                job_row("s2", "call-2"),
-            ];
-            work_answer(query, &jobs, &[])
-        },
-    )
+    let node = ChatNode::new().await;
+    spawned(&node, &[("c1", "completed")]).await;
+    let fake = FakeGraphql::start(node, |query| {
+        let jobs = [
+            job_row("s1", "call-1"),
+            ended_row("s1", "call-3", "completed"),
+            job_row("s2", "call-2"),
+        ];
+        work_answer(query, &jobs, &[])
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
 
     let opened = shell.next().await;
     assert!(matches!(opened, Update::Opened { .. }), "{opened:?}");
@@ -3114,22 +2770,15 @@ async fn a_sessions_jobs_follow_its_subagents_in_its_running_rows() {
 
 #[tokio::test]
 async fn a_failed_job_read_is_one_notice_and_the_background_still_reads() {
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |_, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ => quiet(method),
-        },
-        |query| match query.contains("job_pin") {
-            true => json!({ "data": null, "errors": [{ "message": "the job store is closed" }] }),
-            false => work_answer(query, &[], &[background_row("bash", "running")]),
-        },
-    )
+    let fake = FakeGraphql::start(ChatNode::new().await, |query| match is_job_list(query) {
+        true => Some(json!({ "data": null, "errors": [{ "message": "the job store is closed" }] })),
+        false => work_answer(query, &[], &[background_row("bash", "running")]),
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
     opening(&shell, "s1").await;
 
     let update = shell.next().await;
@@ -3154,26 +2803,19 @@ async fn a_failed_job_read_is_one_notice_and_the_background_still_reads() {
 async fn a_failed_reread_after_a_good_one_says_as_of() {
     let failing = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let fails = failing.clone();
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |_, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ => quiet(method),
-        },
-        move |query| {
-            let failed = fails.load(std::sync::atomic::Ordering::SeqCst);
-            match failed && query.contains("job_pin") {
-                true => {
-                    json!({ "data": null, "errors": [{ "message": "the job store is closed" }] })
-                }
-                false => work_answer(query, &[job_row("s1", "call-1")], &[]),
+    let fake = FakeGraphql::start(ChatNode::new().await, move |query| {
+        let failed = fails.load(std::sync::atomic::Ordering::SeqCst);
+        match failed && is_job_list(query) {
+            true => {
+                Some(json!({ "data": null, "errors": [{ "message": "the job store is closed" }] }))
             }
-        },
-    )
+            false => work_answer(query, &[job_row("s1", "call-1")], &[]),
+        }
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
-    open_s1(&shell);
+    open(&shell, "s1");
     opening(&shell, "s1").await;
     reread(&shell, 1).await;
 
@@ -3195,34 +2837,30 @@ async fn a_failed_reread_after_a_good_one_says_as_of() {
     );
 }
 
-/// A reread waits on the node, never the chat: deltas and intents go on meanwhile.
+/// A reread waits on the node, never the chat: transcripts and intents go on meanwhile.
 #[tokio::test]
 async fn a_slow_reread_holds_back_no_chat() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| match method {
-        "turn/start" => turn_answer("t1"),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let node = ChatNode::new().await;
+    node.session("s1", "a").await;
+    let request = node.request("s1", "t1", "processing").await;
+    let fake = FakeGraphql::start(node, |query| work_answer(query, &[], &[])).await;
+    let shell = open_shell(fake.work());
     shell.ready().await;
-    let read = fake.queries().len();
+    open(&shell, "s1");
+    shell.until(|update| is_rows_of(update, "s1")).await;
+    reread(&shell, 1).await;
+    let jobs = job_reads(&fake).len();
     fake.hold(true);
     fake.changed();
-    within(fake.queried(read + 1)).await;
+    fake.posted(JOB_LIST, jobs + 1).await;
 
-    let params = json!({ "threadId": "s1", "turnId": "t1", "itemId": "r1", "delta": "Hel" });
-    fake.push(
-        "a",
-        &json!({ "method": "item/agentMessage/delta", "params": params }),
-    );
+    fake.node
+        .text(&request, 0, MessageRole::Assistant, "Hel")
+        .await;
+    fake.chat_changed("AgentMessage");
     let update = shell.next().await;
-    assert!(matches!(update, Update::Delta { .. }), "{update:?}");
-    shell.intend(Intent::Send {
-        tab: 0,
-        session: Some("s1".to_string()),
-        agent: "a".to_string(),
-        text: "hi".to_string(),
-    });
+    assert!(matches!(update, Update::Item { .. }), "{update:?}");
+    shell.intend(send(0, Some("s2"), &did("a"), "hi"));
     let update = shell.next().await;
     assert!(matches!(update, Update::Turn { .. }), "{update:?}");
 
@@ -3235,29 +2873,24 @@ async fn a_slow_reread_holds_back_no_chat() {
 
 #[tokio::test]
 async fn changes_during_a_reread_read_exactly_once_more() {
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |_, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ => quiet(method),
-        },
-        |query| work_answer(query, &[job_row("s1", "call-1")], &[]),
-    )
+    let fake = FakeGraphql::start(ChatNode::new().await, |query| {
+        work_answer(query, &[job_row("s1", "call-1")], &[])
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
-    open_s1(&shell);
+    open(&shell, "s1");
     opening(&shell, "s1").await;
     reread(&shell, 1).await;
     let (jobs, calls) = (job_reads(&fake).len(), call_reads(&fake));
     fake.hold(true);
     fake.changed();
-    fake.posted("job_progress", jobs + 1).await;
+    fake.posted(JOB_LIST, jobs + 1).await;
 
     for _ in 0..3 {
         fake.changed();
     }
-    let more = tokio::time::timeout(SHORT_WAIT, fake.posted("job_progress", jobs + 2)).await;
+    let more = tokio::time::timeout(SHORT_WAIT, fake.posted(JOB_LIST, jobs + 2)).await;
     assert!(
         more.is_err(),
         "one reread at a time while its job read is out: {:?}",
@@ -3281,7 +2914,6 @@ async fn changes_during_a_reread_read_exactly_once_more() {
         "two rereads, each of s1's jobs and the calls"
     );
 }
-
 /// An open mailbox item on `session` for node `node`, created `at` minutes past noon.
 pub(super) fn mailbox_item(
     id: &str,
@@ -3294,8 +2926,8 @@ pub(super) fn mailbox_item(
     json!({
         "_docID": id,
         "item_key": format!("key:{id}"),
-        "requester_did": "did:key:z",
-        "node_did": "did:key:z",
+        "requester_did": OWNER,
+        "node_did": OWNER,
         "status": "open",
         "kind": kind,
         "action": action,
@@ -3320,10 +2952,10 @@ pub(super) fn mailbox_item(
 }
 
 /// Answers the open-mailbox list with the open `items`, newest first as the node orders them,
-/// each `_docID` read with its item, and every other query with no work.
-fn mailbox_answer(query: &str, items: &[Value]) -> Value {
-    if !query.contains("MailboxItem") {
-        return no_work(query);
+/// each `_docID` read with its item. The node answers every other query.
+fn mailbox_answer(query: &str, items: &[Value]) -> Option<Value> {
+    if !query.trim_start().starts_with("{ MailboxItem(") {
+        return None;
     }
     let rows: Vec<&Value> = match query.split_once(r#"_docID: { _eq: ""#) {
         Some((_, rest)) => {
@@ -3341,7 +2973,7 @@ fn mailbox_answer(query: &str, items: &[Value]) -> Value {
             open
         }
     };
-    json!({ "data": { "MailboxItem": rows } })
+    Some(json!({ "data": { "MailboxItem": rows } }))
 }
 
 fn asked(id: &str, kind: PromptKind, answer: PromptAnswer) -> Prompt {
@@ -3368,36 +3000,28 @@ fn is_prompts(update: &Update) -> bool {
 
 const MAILBOX_LIST: &str = r#"MailboxItem(filter: { status: { _eq: "open" } },"#;
 
-/// Runs `fake`'s threads as plain sessions, with `items` in its mailbox.
-async fn with_mailbox<G>(graphql: G) -> FakeRuntime
+/// The chat node, with the mailbox `graphql` answers.
+async fn with_mailbox<G>(graphql: G) -> FakeGraphql
 where
-    G: Fn(&str) -> Value + Send + Sync + 'static,
+    G: Fn(&str) -> Option<Value> + Send + Sync + 'static,
 {
-    FakeRuntime::start_with(
-        agents_a_and_b(),
-        |_, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ => quiet(method),
-        },
-        graphql,
-    )
-    .await
+    FakeGraphql::start(ChatNode::new().await, graphql).await
 }
 
 #[tokio::test]
 async fn an_open_session_shows_its_ask_and_gate_items_oldest_first() {
     let items = [
         mailbox_item("i5", "s1", "ask", "ack", "did:key:zOther", 5),
-        mailbox_item("i4", "s1", "finished", "ack", "did:key:z", 4),
-        mailbox_item("i3", "s2", "ask", "ack", "did:key:z", 3),
-        mailbox_item("i2", "s1", "gate", "ack", "did:key:z", 2),
-        mailbox_item("i1", "s1", "ask", "start_request", "did:key:z", 1),
+        mailbox_item("i4", "s1", "finished", "ack", OWNER, 4),
+        mailbox_item("i3", "s2", "ask", "ack", OWNER, 3),
+        mailbox_item("i2", "s1", "gate", "ack", OWNER, 2),
+        mailbox_item("i1", "s1", "ask", "start_request", OWNER, 1),
     ];
     let fake = with_mailbox(move |query| mailbox_answer(query, &items)).await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
 
     let read = shell.until(is_prompts).await;
     let shown = vec![
@@ -3430,19 +3054,19 @@ async fn reopening_an_open_tab_clears_a_prompt_answered_elsewhere() {
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let elsewhere = closed.clone();
     let fake = with_mailbox(move |query| {
-        let mut item = mailbox_item("p1", "s1", "gate", "ack", "did:key:z", 1);
+        let mut item = mailbox_item("p1", "s1", "gate", "ack", OWNER, 1);
         if elsewhere.load(std::sync::atomic::Ordering::SeqCst) {
             item["status"] = json!("acted");
         }
         mailbox_answer(query, &[item])
     })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     let (mut app, _intended) = connected_app();
     app.tabs[0].session = Some("s1".to_string());
     let ready = |update: &Update| matches!(update, Update::Background { .. });
     shell.apply_through(&mut app, ready).await;
-    open_s1(&shell);
+    open(&shell, "s1");
     let mut read = opening(&shell, "s1").await;
     read.extend(reread_and(&shell, is_prompts).await);
     for update in read {
@@ -3451,7 +3075,7 @@ async fn reopening_an_open_tab_clears_a_prompt_answered_elsewhere() {
     assert_eq!(app.tabs[0].prompts.len(), 1);
     closed.store(true, std::sync::atomic::Ordering::SeqCst);
 
-    open_s1(&shell);
+    open(&shell, "s1");
     let opened_rows =
         |update: &Update| matches!(update, Update::Running { session, .. } if session == "s1");
     shell.apply_through(&mut app, opened_rows).await;
@@ -3464,25 +3088,17 @@ async fn reopening_an_open_tab_clears_a_prompt_answered_elsewhere() {
 /// parent's row for it says so.
 #[tokio::test]
 async fn a_subagent_waiting_on_a_question_says_so_in_its_parents_row() {
-    let fake = FakeRuntime::start_with(
-        agents_a_and_b(),
-        |agent, method, params| match method {
-            "thread/resume" => resumed(params, &[]),
-            _ if agent == "a" && is_child_list(method, params) => {
-                page(&[child("c1", "s1", idle())], None)
-            }
-            _ => quiet(method),
-        },
-        |query| {
-            let asked = mailbox_item("i1", "c1", "ask", "start_request", "did:key:z", 1);
-            mailbox_answer(query, &[asked])
-        },
-    )
+    let node = ChatNode::new().await;
+    spawned(&node, &[("c1", "completed")]).await;
+    let fake = FakeGraphql::start(node, |query| {
+        let asked = mailbox_item("i1", "c1", "ask", "start_request", OWNER, 1);
+        mailbox_answer(query, &[asked])
+    })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
-    open_s1(&shell);
+    open(&shell, "s1");
 
     let waits = |update: &Update| matches!(update, Update::Running { rows, .. } if rows.iter().any(|row| row.status == "waiting on you"));
     let read = shell.until(waits).await;
@@ -3496,7 +3112,7 @@ async fn a_subagent_waiting_on_a_question_says_so_in_its_parents_row() {
 #[tokio::test]
 async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
     use gents::session::mailbox::{MailboxAction, MailboxKind};
-    let (node, work, home) = served_settings().await;
+    let (node, work, _home) = served_settings().await;
     let gate = filed(
         &node,
         &work,
@@ -3507,11 +3123,9 @@ async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
     .await;
     let ask = MailboxAction::StartRequest;
     let question = filed(&node, &work, "i2 title", MailboxKind::Ask, ask).await;
-    let fake = on_the_served_node().await;
     let access = work.access();
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Ok(work), home.path().into());
-    shell.ready().await;
-    open_s1(&shell);
+    let shell = shell_on_served(&node, work).await;
+    open(&shell, "s1");
     opening(&shell, "s1").await;
     let read = reread_and(&shell, is_prompts).await;
     let titled = |prompt: Prompt, item: &str, title: &str| Prompt {
@@ -3548,16 +3162,16 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let elsewhere = closed.clone();
     let fake = with_mailbox(move |query| {
-        let mut item = mailbox_item("i1", "s1", "ask", "start_request", "did:key:z", 1);
+        let mut item = mailbox_item("i1", "s1", "ask", "start_request", OWNER, 1);
         if elsewhere.load(std::sync::atomic::Ordering::SeqCst) {
             item["status"] = json!("acted");
         }
         mailbox_answer(query, &[item])
     })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
-    open_s1(&shell);
+    open(&shell, "s1");
     opening(&shell, "s1").await;
     let read = reread_and(&shell, is_prompts).await;
     let question = vec![asked("i1", PromptKind::Ask, PromptAnswer::Reply)];
@@ -3577,11 +3191,47 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
         shell.until(is_prompts).await,
         [closed, prompts("s1", Vec::new())]
     );
-    assert_eq!(
-        resumes_of(&fake, "s1"),
-        1,
-        "a refused reply reopens nothing"
+}
+
+/// A reply is a request in the item's session, caused by the item, which the session's feed
+/// shows like any other request.
+#[tokio::test]
+async fn a_reply_is_a_request_caused_by_its_item() {
+    use gents::session::mailbox::{MailboxAction, MailboxKind};
+    let (node, work, _home) = served_settings().await;
+    let ask = MailboxAction::StartRequest;
+    let question = filed(&node, &work, "i1 title", MailboxKind::Ask, ask).await;
+    let access = work.access();
+    let shell = shell_on_served(&node, work).await;
+    open(&shell, "s1");
+    shell.until(is_prompts).await;
+
+    shell.intend(Intent::Reply {
+        session: "s1".to_string(),
+        agent: did("engineer"),
+        item: question.clone(),
+        text: "ship it".to_string(),
+    });
+
+    // Intents are answered in order, so the reply is in once the next is answered.
+    shell.intend(Intent::Refresh);
+    let read = shell
+        .until(|update| matches!(update, Update::Background { .. }))
+        .await;
+    assert!(
+        !read
+            .iter()
+            .any(|update| matches!(update, Update::Notice(_))),
+        "{read:?}"
     );
+    let query = r#"{ AgentRequest(filter: { session_id: { _eq: "s1" } }) { content caused_by_source_doc_id } }"#;
+    let requests = access.execute(query).await.unwrap();
+    let requests = requests["data"]["AgentRequest"].as_array().unwrap().clone();
+    assert_eq!(
+        requests,
+        [json!({ "content": "ship it", "caused_by_source_doc_id": question })]
+    );
+    node.shutdown().await.expect("node shutdown");
 }
 
 /// The mailbox subscription is the only reason to read the prompts again.
@@ -3591,15 +3241,15 @@ async fn a_mailbox_change_rereads_the_open_sessions_prompts() {
     let asking = asked_now.clone();
     let fake = with_mailbox(move |query| {
         let items = match asking.load(std::sync::atomic::Ordering::SeqCst) {
-            true => vec![mailbox_item("i1", "s1", "gate", "ack", "did:key:z", 1)],
+            true => vec![mailbox_item("i1", "s1", "gate", "ack", OWNER, 1)],
             false => Vec::new(),
         };
         mailbox_answer(query, &items)
     })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
-    open_s1(&shell);
+    open(&shell, "s1");
     fake.posted(MAILBOX_LIST, 1).await;
 
     let more = tokio::time::timeout(SHORT_WAIT, fake.posted(MAILBOX_LIST, 2)).await;
@@ -3622,16 +3272,16 @@ async fn a_mailbox_change_rereads_the_open_sessions_prompts() {
 #[tokio::test]
 async fn an_ended_mailbox_subscription_is_told_and_the_next_turn_subscribes_again() {
     let fake = with_mailbox(|query| mailbox_answer(query, &[])).await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
-    open_s1(&shell);
+    open(&shell, "s1");
     fake.posted(MAILBOX_LIST, 1).await;
 
-    fake.end_streams();
+    fake.end_streams(is_work);
 
     let not_live = |update: &Update| matches!(update, Update::Notice(notice) if notice.starts_with("prompts are not live"));
     shell.until(not_live).await;
-    turn_completed(&fake);
+    turn_changed(&fake);
     fake.posted(MAILBOX_LIST, 2).await;
     let watched = fake
         .queries()
@@ -3648,11 +3298,11 @@ fn is_menu(update: &Update) -> bool {
 #[tokio::test]
 async fn reading_the_mailbox_menu_lists_every_open_item() {
     let items = [
-        mailbox_item("i2", "s1", "ask", "ack", "did:key:z", 2),
-        mailbox_item("i1", "s1", "finished", "ack", "did:key:z", 1),
+        mailbox_item("i2", "s1", "ask", "ack", OWNER, 2),
+        mailbox_item("i1", "s1", "finished", "ack", OWNER, 1),
     ];
     let fake = with_mailbox(move |query| mailbox_answer(query, &items)).await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
     shell.intend(Intent::ReadMenu(MenuId::Mailbox));
@@ -3683,28 +3333,14 @@ async fn reading_the_mailbox_menu_lists_every_open_item() {
 /// The installed workflows are read from the home alone.
 #[tokio::test]
 async fn a_menu_without_work_says_why() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let off = "jobs and the mailbox are off: no runtime".to_string();
+    let off: Result<Work, String> = Err("no runtime recorded".to_string());
     let home = tempfile::tempdir().unwrap();
-    let work = Err(off.clone());
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, work, home.path().into());
-    shell.opened().await;
 
-    shell.intend(Intent::ReadMenu(MenuId::Mailbox));
-    let read = shell.until(is_menu).await;
-    let why = Update::Menu {
-        menu: MenuId::Mailbox,
-        rows: Err(off),
-    };
-    assert_eq!(read.last(), Some(&why));
+    let mailbox = super::menus::read_menu(&off, home.path(), OWNER, MenuId::Mailbox).await;
+    let installed = super::menus::read_menu(&off, home.path(), OWNER, MenuId::Workflows).await;
 
-    shell.intend(Intent::ReadMenu(MenuId::Workflows));
-    let read = shell.until(is_menu).await;
-    let installed = Update::Menu {
-        menu: MenuId::Workflows,
-        rows: Ok(Vec::new()),
-    };
-    assert_eq!(read.last(), Some(&installed));
+    assert_eq!(mailbox, Err("no runtime recorded".to_string()));
+    assert_eq!(installed, Ok(Vec::new()));
 }
 
 fn dismiss_from_the_mailbox(item: &str) -> Intent {
@@ -3765,21 +3401,24 @@ async fn filed(
     item.await.unwrap().doc_id
 }
 
-/// The fake runtime for agents `a` and `b` of the served node, whose threads are plain sessions.
-async fn on_the_served_node() -> FakeRuntime {
-    let mut runtime = identity(Some(&["a", "b"]));
-    runtime.node_did = OWNER.to_string();
-    FakeRuntime::start(Some(runtime), |_, method, params| match method {
-        "thread/resume" => resumed(params, &[]),
-        _ => quiet(method),
-    })
-    .await
+/// The shell on `node`, served as `served` serves one, once its runtime says its agent
+/// `engineer` is ready.
+async fn shell_on_served(node: &Arc<defra_node::Node>, work: Work) -> Shell {
+    let runtime = ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
+    publish_ready(&runtime, &["engineer"]).await;
+    let shell = open_shell(work);
+    shell.opened_as(&[&did("engineer")]).await;
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
+    let update = shell.next().await;
+    assert!(matches!(update, Update::Background { .. }), "{update:?}");
+    shell
 }
 
 #[tokio::test]
 async fn an_act_notices_and_rereads_its_menu() {
     use gents::session::mailbox::{MailboxAction, MailboxKind};
-    let (node, work, home) = served_settings().await;
+    let (node, work, _home) = served_settings().await;
     let item = filed(
         &node,
         &work,
@@ -3788,10 +3427,8 @@ async fn an_act_notices_and_rereads_its_menu() {
         MailboxAction::Ack,
     )
     .await;
-    let fake = on_the_served_node().await;
     let access = work.access();
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Ok(work), home.path().into());
-    shell.ready().await;
+    let shell = shell_on_served(&node, work).await;
 
     shell.intend(dismiss_from_the_mailbox(&item));
 
@@ -3811,12 +3448,12 @@ async fn an_act_notices_and_rereads_its_menu() {
 #[tokio::test]
 async fn a_refused_act_notices_why_and_rereads() {
     let fake = with_mailbox(|query| {
-        let mut question = mailbox_item("i1", "s1", "ask", "start_request", "did:key:z", 1);
+        let mut question = mailbox_item("i1", "s1", "ask", "start_request", OWNER, 1);
         question["payload"] = json!(r#"{"version":2}"#);
         mailbox_answer(query, &[question])
     })
     .await;
-    let shell = open_shell(&fake);
+    let shell = open_shell(fake.work());
     shell.ready().await;
 
     shell.intend(dismiss_from_the_mailbox("i1"));
@@ -3849,28 +3486,34 @@ async fn a_refused_act_notices_why_and_rereads() {
     assert!(!wrote, "{:?}", fake.queries());
 }
 
-fn read_tree(agent: &str) -> Intent {
-    Intent::WorkingTree {
-        agent: agent.to_string(),
-    }
+fn read_tree() -> Intent {
+    Intent::WorkingTree { agent: did("a") }
 }
 
 fn is_tree(update: &Update) -> bool {
     matches!(update, Update::WorkingTree(_))
 }
 
+fn on_tree(node: &ChatNode, tree: &std::path::Path) -> Shell {
+    let launch = Launch {
+        tree: Some(tree.into()),
+        ..Default::default()
+    };
+    open_shell_with(Ok(node.work()), launch)
+}
+
 #[tokio::test]
-async fn the_working_tree_is_read_through_git_diff_to_remote() {
-    let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-a\n+b\n";
-    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
-        "gitDiffToRemote" => Some(Ok(json!({ "sha": "abc123", "diff": diff }))),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+async fn the_working_tree_is_read_from_git_in_the_tool_root() {
+    let repo = repository();
+    std::fs::write(repo.path().join("a.rs"), "a\n").unwrap();
+    git(repo.path(), &["add", "a.rs"]);
+    git(repo.path(), &["commit", "-m", "a"]);
+    std::fs::write(repo.path().join("a.rs"), "b\n").unwrap();
+    let node = ChatNode::new().await;
+    let shell = on_tree(&node, repo.path());
     shell.ready().await;
 
-    shell.intend(read_tree("a"));
+    shell.intend(read_tree());
 
     let read = shell.until(is_tree).await;
     let edited = Change::new(
@@ -3880,97 +3523,121 @@ async fn the_working_tree_is_read_through_git_diff_to_remote() {
         "@@ -1 +1 @@\n-a\n+b\n".to_string(),
     );
     assert_eq!(read.last(), Some(&Update::WorkingTree(Ok(vec![edited]))));
-    let wire = codex::ClientRequest::GitDiffToRemote {
-        request_id: codex::RequestId::Integer(0),
-        params: codex::GitDiffToRemoteParams { cwd: ".".into() },
-    };
-    let calls = fake.calls();
-    let call = calls.iter().find(|call| call.method == wire.method());
-    let call = call.expect("the runtime's git diff");
-    assert_eq!(call.agent, "a");
-    assert_eq!(call.params, json!({ "cwd": "." }));
 }
 
 #[tokio::test]
 async fn a_refused_working_tree_read_says_why() {
-    let why = "git rev-parse --show-toplevel failed: fatal: not a git repository";
-    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
-        "gitDiffToRemote" => Some(Err((-32603, why.to_string()))),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell(&fake);
+    let plain = tempfile::tempdir().unwrap();
+    let node = ChatNode::new().await;
+    let shell = on_tree(&node, plain.path());
     shell.ready().await;
 
-    shell.intend(read_tree("a"));
+    shell.intend(read_tree());
     let read = shell.until(is_tree).await;
-    assert_eq!(
-        read.last(),
-        Some(&Update::WorkingTree(Err(why.to_string())))
+    let Some(Update::WorkingTree(Err(why))) = read.last() else {
+        panic!("{read:?}");
+    };
+    assert!(
+        why.starts_with("git rev-parse --show-toplevel failed: "),
+        "{why}"
     );
 
-    shell.intend(read_tree("nobody"));
+    let shell = open_shell(node.work());
+    shell.ready().await;
+    shell.intend(read_tree());
     let read = shell.until(is_tree).await;
-    let unconnected = Update::WorkingTree(Err("not connected".to_string()));
-    assert_eq!(read.last(), Some(&unconnected));
+    let unread = Update::WorkingTree(Err("no working directory to read".to_string()));
+    assert_eq!(read.last(), Some(&unread));
 }
 
+/// A repository whose git waits on its config until `release` lets it go: the config
+/// includes a named pipe, which git blocks opening until a writer opens it.
+#[cfg(unix)]
+struct Held {
+    repo: tempfile::TempDir,
+    /// Outside the repository, which would list it as an untracked file and read it.
+    _pipes: tempfile::TempDir,
+    pipe: std::path::PathBuf,
+    config: String,
+}
+
+#[cfg(unix)]
+impl Held {
+    fn new() -> Held {
+        let repo = repository();
+        let pipes = tempfile::tempdir().unwrap();
+        let pipe = pipes.path().join("held");
+        let made = std::process::Command::new("mkfifo").arg(&pipe).status();
+        assert!(made.unwrap().success());
+        let config = repo.path().join(".git/config");
+        let original = std::fs::read_to_string(&config).unwrap();
+        let held = format!("{original}[include]\n\tpath = {}\n", pipe.display());
+        std::fs::write(&config, held).unwrap();
+        Held {
+            repo,
+            _pipes: pipes,
+            pipe,
+            config: original,
+        }
+    }
+
+    /// Waits until git has opened the pipe, restores the config so no later git waits, then
+    /// ends the pipe empty, so the waiting git reads on.
+    async fn release(&self) {
+        let (pipe, repo) = (self.pipe.clone(), self.repo.path().to_path_buf());
+        let config = self.config.clone();
+        let released = test_runtime_handle().spawn_blocking(move || {
+            let writer = std::fs::OpenOptions::new().write(true).open(&pipe).unwrap();
+            std::fs::write(repo.join(".git/config"), config).unwrap();
+            drop(writer);
+        });
+        within(released).await.unwrap();
+    }
+}
+
+/// A read waits on git, never the chat: another intent is answered meanwhile.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_working_tree_read_holds_up_no_other_intent() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
-    let shell = open_shell(&fake);
+    let held = Held::new();
+    let node = ChatNode::new().await;
+    let shell = on_tree(&node, held.repo.path());
     shell.ready().await;
 
-    shell.intend(read_tree("a"));
-    fake.called("gitDiffToRemote").await;
+    shell.intend(read_tree());
     shell.intend(Intent::Refresh);
 
     let update = shell.next().await;
     assert!(matches!(update, Update::Jobs { .. }), "{update:?}");
+    held.release().await;
+    shell.until(is_tree).await;
 }
 
-/// The first read is left unanswered until it times out, and the next two are asked for while
-/// it is out: they become one read, so the older answer never lands after the newer one.
+/// The next two asked for while the first is out become one read, so the older answer never
+/// lands after the newer one.
+#[cfg(unix)]
 #[tokio::test]
 async fn working_tree_reads_land_in_order() {
-    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = asked.clone();
-    let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, _| match method {
-        "gitDiffToRemote" if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 => None,
-        "gitDiffToRemote" => Some(Ok(json!({ "sha": "abc123", "diff": "" }))),
-        _ => quiet(method),
-    })
-    .await;
-    let shell = open_shell_answering(&fake, SHORT_WAIT);
+    let held = Held::new();
+    let node = ChatNode::new().await;
+    let shell = on_tree(&node, held.repo.path());
     shell.ready().await;
 
     for _ in 0..3 {
-        shell.intend(read_tree("a"));
+        shell.intend(read_tree());
     }
+    held.release().await;
 
     let first = shell.until(is_tree).await;
-    assert!(
-        matches!(first.last(), Some(Update::WorkingTree(Err(_)))),
-        "the unanswered read lands first: {first:?}"
-    );
+    assert_eq!(first.last(), Some(&Update::WorkingTree(Ok(Vec::new()))));
     let second = shell.until(is_tree).await;
     assert_eq!(second.last(), Some(&Update::WorkingTree(Ok(Vec::new()))));
-    let reads = fake
-        .methods()
-        .iter()
-        .filter(|method| *method == "gitDiffToRemote")
-        .count();
-    assert_eq!(reads, 2, "the two asked while one was out are read once");
+    assert_eq!(
+        shell.quiet().await,
+        None,
+        "the two asked meanwhile are read once"
+    );
 }
-
-/// The fixture runtime `served_config` publishes a config's `owner` as.
-const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
-
-/// The DID `served_config` gives the Agent a config names `name`.
-fn did(name: &str) -> String {
-    crate::shared::test_support::fixture_agent_named(name).agent_did
-}
-
 fn node_settings() -> Value {
     node_settings_of(OWNER)
 }
@@ -4355,13 +4022,9 @@ async fn new_then_nothing_writes_nothing() {
 
 #[tokio::test]
 async fn a_new_form_saves_under_the_id_it_showed() {
-    let mut runtime = identity(Some(&["a", "b"]));
-    runtime.node_did = OWNER.to_string();
-    let fake = FakeRuntime::start(Some(runtime), |_, method, _| quiet(method)).await;
-    let (node, work, home) = served(node_settings()).await;
+    let (node, work, _home) = served(node_settings()).await;
     let access = work.access();
-    let shell = open_shell_on(&fake, None, None, ANSWER_WAIT, Ok(work), home.path().into());
-    shell.opened().await;
+    let shell = shell_on_served(&node, work).await;
     let new = FormRef::New(Doc::Skill);
 
     shell.intend(Intent::OpenForm {
@@ -5091,16 +4754,13 @@ fn the_key_set_survives_a_restart() {
 
 #[tokio::test]
 async fn a_failed_key_save_says_so() {
-    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, _| quiet(method)).await;
+    let node = ChatNode::new().await;
     let missing = tempfile::tempdir().unwrap().path().join("gone");
-    let shell = open_shell_on(
-        &fake,
-        None,
-        None,
-        ANSWER_WAIT,
-        Err("off".into()),
-        missing.clone(),
-    );
+    let launch = Launch {
+        home: Some(missing),
+        ..Default::default()
+    };
+    let shell = open_shell_with(Ok(node.work()), launch);
     shell.opened().await;
 
     shell.intend(Intent::SaveKeys(KeySet::Emacs));
@@ -5119,9 +4779,6 @@ async fn a_failed_key_save_says_so() {
 
 #[tokio::test]
 async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
-    let mut runtime = identity(Some(&["a", "b"]));
-    runtime.node_did = OWNER.to_string();
-    let fake = FakeRuntime::start(Some(runtime), |_, method, _| quiet(method)).await;
     let mut config = node_settings_of("did:key:z");
     config["inference_profiles"]
         .as_array_mut()
@@ -5130,16 +4787,8 @@ async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
             "node_did": "did:key:z", "profile_id": "other", "backend_id": "backend",
             "model_name": "other-model", "display_name": "Other",
         }));
-    let (node, work, home) = served(config).await;
-    let shell = open_shell_on(
-        &fake,
-        None,
-        None,
-        ANSWER_WAIT,
-        Ok(work.clone()),
-        home.path().into(),
-    );
-    shell.opened().await;
+    let (node, work, _home) = served(config).await;
+    let shell = shell_on_served(&node, work.clone()).await;
     let choose = MenuAct::SetAgentProfile {
         agent: did("engineer"),
         name: "Engineer".into(),
@@ -5370,7 +5019,7 @@ async fn packs_wait_for_the_runtime() {
         "this CLI's User signs: {:?}",
         work.as_ref().err()
     );
-    let off: Result<Work, String> = Err("jobs and the mailbox are off: no runtime".to_string());
+    let off: Result<Work, String> = Err("no runtime recorded".to_string());
     let runtime = test_runtime_handle();
 
     let rows = super::packs::read(&work, home.path(), &did, &runtime, "", 1).await;

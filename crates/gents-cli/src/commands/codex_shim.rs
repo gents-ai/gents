@@ -34,7 +34,6 @@ mod continuation_stream;
 mod handlers;
 mod history_projection;
 mod host_runtime;
-pub(crate) use host_runtime::thread_git_info;
 mod progress;
 mod projection_state;
 mod protocol;

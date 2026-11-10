@@ -5,7 +5,9 @@ use anyhow::{bail, ensure, Context, Result};
 use gents::store::config_client::GraphqlEndpoint;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
-use gents_protocol::node_readiness::{AgentReadinessEntry, AgentReadinessState};
+use gents_protocol::node_readiness::{
+    AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
+};
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
 use serde_json::Value;
 
@@ -200,6 +202,16 @@ async fn readiness(
     node_did: &str,
     agent_did: &str,
 ) -> Result<Option<AgentReadinessEntry>> {
+    let snapshot = node_readiness(access, node_did).await?;
+    let mut agents = snapshot.into_iter().flat_map(|snapshot| snapshot.agents);
+    Ok(agents.find(|agent| agent.agent_did == agent_did))
+}
+
+/// The node's latest published readiness, once its router has taken on the active generation.
+pub(crate) async fn node_readiness(
+    access: &ConfigAccess,
+    node_did: &str,
+) -> Result<Option<NodeReadinessSnapshot>> {
     let rows = crate::graphql_rows(
         access,
         "NodeReadiness",
@@ -215,11 +227,5 @@ async fn readiness(
     let row: NodeReadinessRow = serde_json::from_value(row).context("reading NodeReadiness")?;
     Ok(decode_node_readiness_snapshot(&row, node_did)
         .ok()
-        .filter(|snapshot| snapshot.router_generation == snapshot.active_generation)
-        .and_then(|snapshot| {
-            snapshot
-                .agents
-                .into_iter()
-                .find(|agent| agent.agent_did == agent_did)
-        }))
+        .filter(|snapshot| snapshot.router_generation == snapshot.active_generation))
 }

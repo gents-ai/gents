@@ -1,102 +1,100 @@
-use chrono::{Local, NaiveDate, TimeZone};
-use gents_codex_protocol as codex;
+use base64::Engine as _;
+use chrono::{DateTime, Local, NaiveDate};
+use gents::tools::call::lifecycle::ToolCallState;
+use gents::tools::native::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
+use gents_desktop_core::client::canonical_output::{
+    project_canonical_message, terminal_tool_output, CanonicalMessageProjection,
+};
+use gents_desktop_core::client::{
+    session_summary_entries, ClientStore, SessionTranscriptQueryPage,
+};
+use gents_desktop_core::inference::AgentView;
+use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::file_changes::{FileImage, ToolFileChanges};
+use gents_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
+use gents_protocol::output::rows::authored_message_key;
+use gents_protocol::output::{MessageBlock, MessageRole};
+use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
+use gents_protocol::transcript::present_message;
 use gents_shell::app::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
-use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState, Update};
+use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};
+use rapidhash::{HashMapExt, RapidHashMap};
+use serde_json::Value;
 
-use crate::commands::codex_shim::RuntimeIdentity;
+use crate::caused_sessions::CausedSession;
 
-/// The thread's name, or the first line of its preview.
-fn title(thread: &codex::Thread) -> String {
-    [thread.name.as_deref(), thread.preview.lines().next()]
+/// The node's root sessions, newest activity first. A session an agent started is listed
+/// beside its parent instead, and an archived one not at all.
+pub(super) fn sessions(store: &ClientStore, node: &str, today: NaiveDate) -> Vec<Session> {
+    let entries = session_summary_entries(&store.sessions, &store.requests, node);
+    let roots = entries.into_iter().filter(|entry| {
+        let started = entry.session.provenance.as_ref();
+        entry.session.archived_at.is_none() && started.is_none_or(|by| by.started_by.is_none())
+    });
+    roots
+        .map(|entry| {
+            let session = entry.session;
+            let observation = session.observation.as_ref();
+            let preview = observation.and_then(|seen| seen.preview.as_deref());
+            let name = session_title(session.title.as_ref().map(|title| &title.text), preview);
+            let active = observation.map(|seen| seen.last_activity_at.as_str());
+            Session {
+                id: session.session_id.clone(),
+                agent: session.agent_did.clone(),
+                tab: name.clone(),
+                name,
+                day: day(active.unwrap_or(&session.created_at), today),
+                state: match entry.turn_state {
+                    Some(ClientTurnState::Running | ClientTurnState::WaitingForClaim) => {
+                        SessionState::Active
+                    }
+                    Some(ClientTurnState::Failed) => SessionState::Error,
+                    _ => SessionState::Idle,
+                },
+            }
+        })
+        .collect()
+}
+
+/// The session's title, or the first line of `preview`.
+fn session_title(title: Option<&String>, preview: Option<&str>) -> String {
+    let previewed = preview.and_then(|text| text.lines().next());
+    [title.map(String::as_str), previewed]
         .into_iter()
         .flatten()
         .map(clean)
-        .find(|name| !name.is_empty())
+        .find(|name| !name.trim().is_empty())
         .unwrap_or_else(|| "untitled".to_string())
 }
 
-pub(super) fn session(thread: &codex::Thread, agent: &str, today: NaiveDate) -> Session {
-    let name = title(thread);
-    let updated = Local.timestamp_opt(thread.updated_at, 0).single();
-    let day = match updated.map(|at| at.date_naive()) {
-        Some(date) if date == today => Day::Today,
-        Some(date) if Some(date) == today.pred_opt() => Day::Yesterday,
+fn day(at: &str, today: NaiveDate) -> Day {
+    let date = DateTime::parse_from_rfc3339(at).map(|at| at.with_timezone(&Local).date_naive());
+    match date {
+        Ok(date) if date == today => Day::Today,
+        Ok(date) if Some(date) == today.pred_opt() => Day::Yesterday,
         _ => Day::Older,
-    };
-    Session {
-        id: thread.id.clone(),
-        agent: agent.to_string(),
-        tab: name.clone(),
-        name,
-        day,
-        state: state(&thread.status),
     }
 }
 
-/// The session a subagent's thread was spawned from.
-pub(super) fn parent(thread: &codex::Thread) -> Option<&str> {
-    match &thread.source {
-        codex::SessionSource::SubAgent(codex::SubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            ..
-        }) => Some(parent_thread_id),
-        _ => None,
-    }
-}
-
-/// A subagent's running row, named by its agent as the agent picker names agents.
-pub(super) fn subagent(thread: &codex::Thread) -> Running {
-    let agent = thread
-        .agent_nickname
-        .as_deref()
-        .or(thread.agent_role.as_deref());
-    let agent = clean(agent.unwrap_or("subagent"));
-    let (status, state) = match thread.status {
-        codex::ThreadStatus::Active { .. } => ("working", RunState::Working),
-        codex::ThreadStatus::Idle | codex::ThreadStatus::NotLoaded => ("finished", RunState::Done),
-        codex::ThreadStatus::SystemError => ("error", RunState::Failed),
-    };
-    Running {
-        name: agent
-            .rsplit_once(':')
-            .map_or(agent.as_str(), |(_, name)| name)
-            .to_string(),
-        job: title(thread),
-        status: status.to_string(),
-        state,
-        opens: Opens::Agent(thread.id.clone()),
-    }
-}
-
-fn state(status: &codex::ThreadStatus) -> SessionState {
-    match status {
-        codex::ThreadStatus::Active { .. } => SessionState::Active,
-        codex::ThreadStatus::Idle | codex::ThreadStatus::NotLoaded => SessionState::Idle,
-        codex::ThreadStatus::SystemError => SessionState::Error,
-    }
-}
-
-/// The bound agent first, marked default.
-pub(super) fn agents(identity: &RuntimeIdentity) -> Vec<Agent> {
-    let bound = &identity.bound_agent;
-    let rest = identity
-        .runnable_agents
+/// The enabled agents the runtime has made ready, its default first and marked so.
+pub(super) fn agents(views: &[AgentView], ready: &[String]) -> Vec<Agent> {
+    let runnable = views
         .iter()
-        .flatten()
-        .filter(|id| *id != bound);
-    std::iter::once(bound)
-        .chain(rest)
-        .map(|id| {
-            let name = id.rsplit_once(':').map_or(id.as_str(), |(_, name)| name);
-            let text = if id == bound {
-                format!(" {name:<12} default")
-            } else {
-                format!(" {name}")
+        .filter(|view| view.enabled && ready.contains(&view.agent_did));
+    let (default, rest): (Vec<_>, Vec<_>) = runnable.partition(|view| view.is_default);
+    default
+        .iter()
+        .chain(&rest)
+        .map(|view| {
+            let name = agent_name(view);
+            let text = match view.is_default {
+                true => format!(" {name:<12} default"),
+                false => format!(" {name}"),
             };
             Agent {
-                id: id.clone(),
-                name: name.to_string(),
+                id: view.agent_did.clone(),
+                name,
                 text,
                 tone: Tone::Plain,
             }
@@ -104,123 +102,422 @@ pub(super) fn agents(identity: &RuntimeIdentity) -> Vec<Agent> {
         .collect()
 }
 
-/// Every line carries an item id. A line under the item (its output, one changed path) has
-/// its own, because a line with an id the tab has seen replaces that line.
-pub(super) fn lines(item: &codex::ThreadItem, turn: &str) -> Vec<ChatLine> {
-    let id = item.id();
-    let line = |text: String, tone| shown(text, tone, id.to_string());
-    match item {
-        codex::ThreadItem::UserMessage { content, .. } => {
-            let text: Vec<_> = content
-                .iter()
-                .filter_map(|input| match input {
-                    codex::UserInput::Text { text, .. } => Some(clean(text)),
-                    _ => None,
-                })
-                .collect();
-            vec![line(text.join("\n"), Tone::You)]
+fn agent_name(view: &AgentView) -> String {
+    match clean(&view.display_name).trim() {
+        "" => did_tail(&view.agent_did).to_string(),
+        name => name.to_string(),
+    }
+}
+
+fn did_tail(did: &str) -> &str {
+    did.rsplit_once(':').map_or(did, |(_, tail)| tail)
+}
+
+/// A subagent's running row, named by its agent as the agent picker names agents.
+pub(super) fn subagent(child: &CausedSession, agents: &[AgentView]) -> Running {
+    let agent = agents.iter().find(|view| view.agent_did == child.agent_did);
+    let name = agent.map_or_else(|| did_tail(&child.agent_did).to_string(), agent_name);
+    use gents_protocol::request_lifecycle::RequestLifecycleState as Request;
+    let (status, state) = match child.latest.lifecycle_state {
+        Some(
+            Request::WorkspaceBindingPending
+            | Request::Pending
+            | Request::Claimed
+            | Request::Processing,
+        ) => ("working", RunState::Working),
+        Some(Request::Failed | Request::Dead) => ("error", RunState::Failed),
+        _ => ("finished", RunState::Done),
+    };
+    Running {
+        name,
+        job: session_title(None, child.first.content.as_deref()),
+        status: status.to_string(),
+        state,
+        opens: Opens::Agent(child.scope.session_id.clone()),
+    }
+}
+
+/// An opened session's lines, and the sequence its next message takes.
+#[derive(Debug, Default)]
+pub(super) struct Transcript {
+    pub(super) lines: Vec<ChatLine>,
+    pub(super) next: u32,
+}
+
+/// The native file tools, the only ones whose file versions the runtime records.
+const FILE_TOOLS: [&str; 2] = ["write_file", "edit_file"];
+
+/// Each file edit of the page that has finished, as `(tool call, request)`: its recorded
+/// changes can be read.
+pub(super) fn finished_edits(
+    page: &SessionTranscriptQueryPage,
+    session: &str,
+) -> Vec<(String, String)> {
+    let view = page.store.transcript(session);
+    let edits = view.tool_calls.into_iter().filter(|tool| {
+        FILE_TOOLS.contains(&tool.tool_name.as_deref().unwrap_or_default())
+            && state(tool) == Some(ToolCallState::Completed)
+    });
+    let ids = edits.filter_map(|tool| Some((tool.doc_id.clone()?, tool.request_id.clone()?)));
+    ids.collect()
+}
+
+/// A recorded edit as the shell shows its changes, in turn `turn`.
+pub(super) fn changes(recorded: &ToolFileChanges, turn: &str) -> Vec<Change> {
+    let shown = recorded.changes.iter().map(|change| {
+        let (before, after) = (text(&change.before), text(&change.after));
+        let (kind, diff) = match (&change.before, &change.after) {
+            (FileImage::Missing, _) => (ChangeKind::Add, after.unwrap_or_default()),
+            (_, FileImage::Missing) => (ChangeKind::Delete, before.unwrap_or_default()),
+            _ => match before.zip(after) {
+                Some((before, after)) => (ChangeKind::Update, hunk(&before, &after)),
+                None => (ChangeKind::Update, String::new()),
+            },
+        };
+        Change::new(turn.to_string(), clean(&change.path), kind, clean(&diff))
+    });
+    shown.collect()
+}
+
+fn text(image: &FileImage) -> Option<String> {
+    let FileImage::File { data, .. } = image else {
+        return None;
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// One hunk from the first changed line to the last.
+// ponytail: one hunk around every change; a line diff if edits far apart read poorly.
+fn hunk(before: &str, after: &str) -> String {
+    let (old, new): (Vec<_>, Vec<_>) = (before.lines().collect(), after.lines().collect());
+    let head = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    let (old_rest, new_rest) = (&old[head..], &new[head..]);
+    let same = |(a, b): &(&&str, &&str)| a == b;
+    let tail = old_rest
+        .iter()
+        .rev()
+        .zip(new_rest.iter().rev())
+        .take_while(same)
+        .count();
+    let removed = &old_rest[..old_rest.len() - tail];
+    let added = &new_rest[..new_rest.len() - tail];
+    let range = |count: usize| match count {
+        0 => format!("{head},0"),
+        1 => (head + 1).to_string(),
+        _ => format!("{},{count}", head + 1),
+    };
+    let mut diff = format!("@@ -{} +{} @@\n", range(removed.len()), range(added.len()));
+    for line in removed {
+        diff.push_str(&format!("-{line}\n"));
+    }
+    for line in added {
+        diff.push_str(&format!("+{line}\n"));
+    }
+    diff
+}
+
+fn state(tool: &AgentToolCallRow) -> Option<ToolCallState> {
+    let state = tool.lifecycle_state.as_deref().map(str::trim);
+    state.and_then(ToolCallState::from_persisted)
+}
+
+/// Every line carries an item id: `m{sequence}` for a message's text, so a running turn's live
+/// text, shown under the sequence its message will take, is replaced by it. A line under an
+/// item (its output, one changed path) has its own, because a line with an id the tab has seen
+/// replaces that line.
+pub(super) fn transcript(
+    page: &SessionTranscriptQueryPage,
+    compactions: &[CompactionEntryRow],
+    session: &str,
+    edits: &RapidHashMap<String, Option<Vec<Change>>>,
+) -> Transcript {
+    let view = page.store.transcript(session);
+    let dependencies = &page.canonical_dependencies;
+    let segments = view.output_segments.iter().map(|row| (*row).clone());
+    let segments: Vec<_> = segments
+        .chain(dependencies.output_segments.iter().cloned())
+        .collect();
+    let denied = &dependencies.denied_segment_doc_ids;
+    let denials = &dependencies.dependency_denials;
+    let tools: RapidHashMap<&str, &AgentToolCallRow> = view
+        .tool_calls
+        .iter()
+        .filter_map(|tool| Some((tool.doc_id.as_deref()?, *tool)))
+        .collect();
+    let mut messages = view.messages;
+    messages.sort_by_key(|row| row.message.sequence);
+    // A compaction shows after the last message it compacted.
+    let through =
+        |entry: &&CompactionEntryRow| entry.compacted_through_sequence.unwrap_or(i64::MAX);
+    let mut compacted = compactions.iter().collect::<Vec<_>>();
+    compacted.sort_by_key(through);
+    let mut compacted = compacted.into_iter().peekable();
+    let mut lines = Vec::new();
+    let mut names = RapidHashMap::new();
+    let mut delivered = Vec::new();
+    for row in &messages {
+        let sequence = i64::from(row.message.sequence);
+        while let Some(entry) = compacted.next_if(|entry| through(entry) < sequence) {
+            lines.push(compaction(entry));
         }
-        codex::ThreadItem::AgentMessage { text, .. } => vec![line(clean(text), Tone::Reply)],
-        codex::ThreadItem::Reasoning {
-            summary, content, ..
-        } => {
-            let text: Vec<_> = summary
-                .iter()
-                .chain(content)
-                .map(|part| clean(part))
-                .collect();
-            vec![line(text.join("\n"), Tone::Label)]
+        if row
+            .message
+            .request_doc_id
+            .as_deref()
+            .is_some_and(|request| {
+                row.message.message_key == authored_message_key(request, "context")
+            })
+        {
+            continue;
         }
-        codex::ThreadItem::CommandExecution {
-            command,
-            status,
-            aggregated_output,
-            ..
-        } => {
-            let (mark, tone) = match status {
-                codex::CommandExecutionStatus::InProgress => RUNNING,
-                codex::CommandExecutionStatus::Completed => DONE,
-                codex::CommandExecutionStatus::Failed | codex::CommandExecutionStatus::Declined => {
-                    FAILED
+        let CanonicalMessageProjection::Ready(message) =
+            project_canonical_message(row, &segments, denied, denials)
+        else {
+            continue;
+        };
+        let id = format!("m{}", row.message.sequence);
+        let shown = present_message(&message);
+        let reasoning = shown.reasoning_markdown.as_deref().map(clean);
+        let body = clean(&shown.body_markdown);
+        match row.message.role {
+            MessageRole::User if shown.has_tool_results => {
+                for block in &row.message.blocks {
+                    let MessageBlock::ToolResult {
+                        tool_call_doc_id,
+                        id: call,
+                        ..
+                    } = block
+                    else {
+                        continue;
+                    };
+                    delivered.push(tool_call_doc_id.clone());
+                    let command = tools.get(tool_call_doc_id.as_str()).copied();
+                    let named = names.get(tool_call_doc_id).map(String::as_str);
+                    if is_command(named.unwrap_or_default(), command) {
+                        let result = tool_result(&message, call);
+                        lines.extend(output(tool_call_doc_id, &result));
+                    }
                 }
-            };
-            let mut lines = vec![line(format!("  {mark} run   {}", clean(command)), tone)];
-            let output = aggregated_output.as_deref().map(clean).unwrap_or_default();
-            let output = output.trim_end();
-            if !output.is_empty() {
-                lines.push(shown(capped(output), Tone::Label, format!("{id}/output")));
             }
-            lines
+            MessageRole::User if shown.has_visible_body() => {
+                lines.push(shown_line(body, Tone::You, id));
+            }
+            MessageRole::Assistant => {
+                if let Some(reasoning) = reasoning.filter(|text| !text.trim().is_empty()) {
+                    lines.push(shown_line(
+                        reasoning,
+                        Tone::Label,
+                        format!("{id}/reasoning"),
+                    ));
+                }
+                if shown.has_visible_body() {
+                    lines.push(shown_line(body, Tone::Reply, id));
+                }
+                for block in &row.message.blocks {
+                    let MessageBlock::ToolCall {
+                        tool_call_doc_id,
+                        id: call,
+                        name,
+                        ..
+                    } = block
+                    else {
+                        continue;
+                    };
+                    names.insert(tool_call_doc_id.clone(), name.clone());
+                    let tool = tools.get(tool_call_doc_id.as_str()).copied();
+                    let arguments = tool_arguments(&message, call);
+                    let changed = edits.get(tool_call_doc_id).and_then(Option::as_deref);
+                    let made = tool_lines(tool_call_doc_id, name, tool, &arguments, changed);
+                    lines.extend(made);
+                }
+            }
+            _ => {}
         }
-        codex::ThreadItem::FileChange {
-            changes, status, ..
-        } => {
-            let (mark, tone) = match status {
-                codex::PatchApplyStatus::InProgress => RUNNING,
-                codex::PatchApplyStatus::Completed => DONE,
-                codex::PatchApplyStatus::Failed | codex::PatchApplyStatus::Declined => FAILED,
-            };
-            changes
+    }
+    lines.extend(compacted.map(compaction));
+    // A spawned or background run has no result message: its own output is its result.
+    for tool in view.tool_calls.iter().copied() {
+        let Some(id) = tool.doc_id.as_deref() else {
+            continue;
+        };
+        if delivered.iter().any(|done| done == id) || !names.contains_key(id) {
+            continue;
+        }
+        if !is_command(&names[id], Some(tool)) {
+            continue;
+        }
+        if let Ok(Some(result)) = terminal_tool_output(tool, &segments, denied, denials) {
+            lines.extend(output(id, &result));
+        }
+    }
+    let next = messages.iter().map(|row| row.message.sequence + 1).max();
+    Transcript {
+        lines,
+        next: next.unwrap_or_default(),
+    }
+}
+
+fn compaction(entry: &CompactionEntryRow) -> ChatLine {
+    let text = "  ✓ compacted the conversation".to_string();
+    shown_line(text, Tone::Label, entry.compaction_key.clone())
+}
+
+fn tool_arguments(message: &Message, call: &str) -> Value {
+    let Message::Assistant { content, .. } = message else {
+        return Value::Null;
+    };
+    let called = content.iter().find_map(|item| match item {
+        AssistantContent::ToolCall(tool) if tool.id == call => Some(&tool.function.arguments),
+        _ => None,
+    });
+    called.cloned().unwrap_or(Value::Null)
+}
+
+fn tool_result(message: &Message, call: &str) -> String {
+    let Message::User { content } = message else {
+        return String::new();
+    };
+    let result = content.iter().find_map(|item| match item {
+        UserContent::ToolResult(result) if result.id == call => Some(result),
+        _ => None,
+    });
+    let texts = result.into_iter().flat_map(|result| &result.content);
+    let texts = texts.filter_map(|item| match item {
+        ToolResultContent::Text(text) => Some(text.text.as_str()),
+        ToolResultContent::Image(_) => None,
+    });
+    texts.collect::<Vec<_>>().join("\n")
+}
+
+/// Commands, and the read-only file tools, which the shell shows as commands.
+fn is_command(name: &str, tool: Option<&AgentToolCallRow>) -> bool {
+    let background = tool.and_then(|tool| tool.await_mode.as_deref()) == Some("background");
+    background
+        || matches!(
+            name,
+            "bash" | "bash_unrestricted" | "read_file" | "list_files" | "glob" | "grep"
+        )
+}
+
+fn tool_lines(
+    id: &str,
+    name: &str,
+    tool: Option<&AgentToolCallRow>,
+    arguments: &Value,
+    changed: Option<&[Change]>,
+) -> Vec<ChatLine> {
+    let (mark, tone) = match tool.map(state) {
+        None | Some(Some(ToolCallState::Pending | ToolCallState::Running)) => RUNNING,
+        Some(Some(ToolCallState::Completed)) => DONE,
+        Some(_) => FAILED,
+    };
+    let line = |text: String, tone| shown_line(text, tone, id.to_string());
+    if name == AGENT_NEW_TOOL_NAME || name == AGENT_MESSAGE_TOOL_NAME {
+        let field = if name == AGENT_NEW_TOOL_NAME {
+            "prompt"
+        } else {
+            "message"
+        };
+        let prompt = arguments[field].as_str().unwrap_or_default();
+        let first = clean(prompt.lines().next().unwrap_or_default());
+        return vec![line(format!("  ◆ {first}"), Tone::Label)];
+    }
+    if is_command(name, tool) {
+        return vec![line(
+            format!("  {mark} run   {}", command(name, arguments)),
+            tone,
+        )];
+    }
+    if FILE_TOOLS.contains(&name) {
+        let edited = |n: usize, path: String| ChatLine {
+            text: format!("  {mark} edit  {path}"),
+            tone,
+            item: Some(format!("{id}/{n}")),
+            change: None,
+        };
+        return match changed {
+            Some(changes) => changes
                 .iter()
                 .enumerate()
-                .map(|(n, change)| {
-                    let path = clean(&change.path);
-                    let kind = match &change.kind {
-                        codex::PatchChangeKind::Add => ChangeKind::Add,
-                        codex::PatchChangeKind::Delete => ChangeKind::Delete,
-                        codex::PatchChangeKind::Update { move_path: None } => ChangeKind::Update,
-                        codex::PatchChangeKind::Update {
-                            move_path: Some(to),
-                        } => ChangeKind::Move {
-                            to: clean(&to.to_string_lossy()),
-                        },
-                    };
-                    let text = format!("  {mark} edit  {path}");
-                    let diff = clean(&change.diff);
-                    ChatLine {
-                        change: Some(Change::new(turn.to_string(), path, kind, diff)),
-                        ..shown(text, tone, format!("{id}/{n}"))
-                    }
+                .map(|(n, change)| ChatLine {
+                    change: Some(change.clone()),
+                    ..edited(n, change.path.clone())
                 })
-                .collect()
-        }
-        codex::ThreadItem::McpToolCall {
-            server,
-            tool,
-            status,
-            ..
-        } => {
-            let (mark, tone) = match status {
-                codex::McpToolCallStatus::InProgress => RUNNING,
-                codex::McpToolCallStatus::Completed => DONE,
-                codex::McpToolCallStatus::Failed => FAILED,
-            };
-            vec![line(
-                format!("  {mark} {} {}", clean(server), clean(tool)),
-                tone,
-            )]
-        }
-        codex::ThreadItem::CollabAgentToolCall { prompt, .. } => {
-            let first = prompt.as_deref().and_then(|prompt| prompt.lines().next());
-            let text = format!("  ◆ {}", clean(first.unwrap_or_default()));
-            vec![line(text, Tone::Label)]
-        }
-        codex::ThreadItem::ContextCompaction { .. } => {
-            vec![line(
-                "  ✓ compacted the conversation".to_string(),
-                Tone::Label,
-            )]
-        }
-        _ => Vec::new(),
+                .collect(),
+            None => {
+                let path = clean(arguments["path"].as_str().unwrap_or_default());
+                vec![edited(0, path)]
+            }
+        };
     }
+    let picked = |selected: Option<&str>, fallback: &str| {
+        let selected = selected.map(str::trim).filter(|value| !value.is_empty());
+        clean(selected.unwrap_or(fallback))
+    };
+    let service = picked(
+        tool.and_then(|tool| tool.selected_service_id.as_deref()),
+        "gents",
+    );
+    let called = picked(
+        tool.and_then(|tool| tool.selected_tool_name.as_deref()),
+        name,
+    );
+    vec![line(format!("  {mark} {service} {called}"), tone)]
+}
+
+/// A command as it was run: its argv joined as a shell would read it.
+fn command(name: &str, arguments: &Value) -> String {
+    let program = arguments["command"]
+        .as_str()
+        .map(str::trim)
+        .unwrap_or_default();
+    if !program.is_empty() {
+        let args = arguments["args"].as_array().into_iter().flatten();
+        let argv = std::iter::once(program).chain(args.filter_map(Value::as_str));
+        let joined = shlex::try_join(argv).unwrap_or_else(|_| program.to_string());
+        return clean(&joined);
+    }
+    match arguments {
+        Value::Null => format!("spawn_process {name}"),
+        Value::Object(fields) if fields.is_empty() => format!("spawn_process {name}"),
+        _ => clean(&format!("{name} {arguments}")),
+    }
+}
+
+/// A command's output line, none for no output. Its first line is the runner's metadata
+/// when it starts `gents_exec:`.
+fn output(id: &str, result: &str) -> Option<ChatLine> {
+    let shown = match result.strip_prefix("gents_exec:") {
+        Some(rest) => rest.split_once('\n').map_or("", |(_, output)| output),
+        None => result,
+    };
+    let shown = clean(shown);
+    let shown = shown.trim_end();
+    (!shown.is_empty()).then(|| shown_line(capped(shown), Tone::Label, format!("{id}/output")))
+}
+
+/// The running turn's reasoning and reply, under the sequence its message will take.
+pub(super) fn live(next: u32, reasoning: &str, reply: &str) -> Vec<ChatLine> {
+    let id = format!("m{next}");
+    let lines = [
+        (clean(reasoning), Tone::Label, format!("{id}/reasoning")),
+        (clean(reply), Tone::Reply, id),
+    ];
+    let lines = lines.into_iter().filter(|(text, ..)| !text.is_empty());
+    lines
+        .map(|(text, tone, id)| shown_line(text, tone, id))
+        .collect()
 }
 
 const RUNNING: (char, Tone) = ('…', Tone::Warn);
 const DONE: (char, Tone) = ('✓', Tone::Label);
-/// Failed or declined.
+/// Failed, timed out or cancelled.
 const FAILED: (char, Tone) = ('✗', Tone::Warn);
 
-fn shown(text: String, tone: Tone, item: String) -> ChatLine {
+fn shown_line(text: String, tone: Tone, item: String) -> ChatLine {
     ChatLine {
         text,
         tone,
@@ -229,79 +526,6 @@ fn shown(text: String, tone: Tone, item: String) -> ChatLine {
     }
 }
 
-pub(super) fn updates(note: codex::ServerNotification) -> Vec<Update> {
-    use codex::ServerNotification as Note;
-    // ponytail: each delta is cleaned on its own, so an escape split across two deltas shows
-    // until the completed item replaces the line; carry escape state per item if that shows.
-    let delta = |session, item, text: &str, tone| Update::Delta {
-        session,
-        item,
-        text: clean(text),
-        tone,
-    };
-    match note {
-        Note::TurnStarted(started) => vec![Update::Turn {
-            session: started.thread_id,
-            turn: started.turn.id,
-        }],
-        Note::TurnCompleted(completed) => {
-            let failed = completed
-                .turn
-                .error
-                .map(|error| Update::Notice(clean(&error.message)));
-            let done = Update::TurnEnded {
-                session: completed.thread_id,
-                turn: completed.turn.id,
-            };
-            std::iter::once(done).chain(failed).collect()
-        }
-        Note::ThreadStatusChanged(changed) => vec![Update::SessionState {
-            session: changed.thread_id,
-            state: state(&changed.status),
-        }],
-        Note::ItemStarted(started) => items(started.thread_id, &started.turn_id, &started.item),
-        Note::ItemCompleted(completed) => {
-            items(completed.thread_id, &completed.turn_id, &completed.item)
-        }
-        Note::AgentMessageDelta(reply) => {
-            vec![delta(
-                reply.thread_id,
-                reply.item_id,
-                &reply.delta,
-                Tone::Reply,
-            )]
-        }
-        Note::ReasoningTextDelta(reasoning) => vec![delta(
-            reasoning.thread_id,
-            reasoning.item_id,
-            &reasoning.delta,
-            Tone::Label,
-        )],
-        // ponytail: each delta is capped on its own; the endpoint sends a command's output as
-        // one delta before its completed item, which is capped the same way.
-        Note::CommandExecutionOutputDelta(output) => vec![Update::Delta {
-            session: output.thread_id,
-            item: format!("{}/output", output.item_id),
-            text: capped(&clean(&output.delta)),
-            tone: Tone::Label,
-        }],
-        _ => Vec::new(),
-    }
-}
-
-fn items(session: String, turn: &str, item: &codex::ThreadItem) -> Vec<Update> {
-    lines(item, turn)
-        .into_iter()
-        .map(|line| Update::Item {
-            session: session.clone(),
-            line,
-        })
-        .collect()
-}
-
-/// The shell draws text as given, so a carriage return or a terminal escape would move its
-/// cursor or restyle the screen. Drops both: CSI and OSC sequences whole, any other escape
-/// with the character after it.
 /// Lines of a command's output the chat keeps, and the characters it keeps of each: a page of
 /// output would otherwise fill the tab, and every line the tab holds is wrapped to draw it.
 const OUTPUT_LINES: usize = 20;
@@ -333,336 +557,467 @@ fn capped(output: &str) -> String {
     kept.join("\n")
 }
 
-fn clean(text: &str) -> String {
+/// The shell draws text as given, so a carriage return or a terminal escape would move its
+/// cursor or restyle the screen. Drops both: CSI and OSC sequences whole, any other escape
+/// with the character after it.
+pub(super) fn clean(text: &str) -> String {
     gents_desktop_core::ansi::strip_ansi(text).replace('\r', "")
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::{Local, NaiveDate, TimeZone};
-    use gents_codex_protocol as codex;
+    use gents_desktop_core::client::{ClientStore, ClientStoreRows, SessionTranscriptQueryPage};
+    use gents_protocol::file_changes::{
+        FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
+    };
+    use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter, StreamPayload,
+        ToolResultPart,
+    };
+    use gents_protocol::row::{AgentRequestRow, AgentToolCallRow, CompactionEntryRow};
+    use gents_protocol::session::AgentSession;
     use gents_shell::app::ChatLine;
     use gents_shell::sample::{Opens, RunState, Running, Tone};
-    use gents_shell::source::{Agent, Change, ChangeKind, Day, SessionState, Update};
+    use gents_shell::source::{Change, ChangeKind, Day, SessionState};
+    use rapidhash::{HashMapExt, RapidHashMap};
     use serde_json::{json, Value};
 
-    use super::{agents, lines, parent, session, subagent, updates};
-    use crate::commands::codex::tests::identity;
+    use super::super::testing::{agent, closed, execution, header, presented, text_message, At};
+    use super::*;
     use crate::commands::shell::tests::line;
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 11, 5).unwrap()
     }
 
-    fn noon(date: NaiveDate) -> i64 {
+    fn noon(date: NaiveDate) -> String {
         let noon = date.and_hms_opt(12, 0, 0).unwrap();
-        Local.from_local_datetime(&noon).unwrap().timestamp()
+        let at = Local.from_local_datetime(&noon).unwrap();
+        at.to_rfc3339()
     }
 
-    fn thread(name: Option<&str>, preview: &str, updated_at: i64) -> codex::Thread {
-        let mut thread: codex::Thread =
-            serde_json::from_value(crate::commands::shell::tests::thread("t1", updated_at))
-                .unwrap();
-        thread.name = name.map(str::to_string);
-        thread.preview = preview.to_string();
-        thread
+    fn session(id: &str, created: &str, value: Value) -> AgentSession {
+        let mut row = json!({
+            "session_id": id, "node_did": "n", "requester_did": "u", "agent_did": "a",
+            "created_at": created,
+        });
+        row.as_object_mut()
+            .unwrap()
+            .extend(value.as_object().unwrap().clone());
+        serde_json::from_value(row).unwrap()
+    }
+
+    fn request(id: &str, session: &str, state: &str, content: &str, at: &str) -> AgentRequestRow {
+        serde_json::from_value(json!({
+            "_docID": format!("bae-{id}"), "request_id": id, "node_did": "n", "requester_did": "u",
+            "agent_did": "a", "session_id": session, "lifecycle_state": state, "content": content,
+            "created_at": at,
+        }))
+        .unwrap()
     }
 
     #[test]
-    fn a_thread_becomes_a_session_row() {
-        let named = session(
-            &thread(Some("fix login"), "ignored", noon(today())),
-            "a",
-            today(),
-        );
-        assert_eq!(named.id, "t1");
-        assert_eq!(named.agent, "a");
-        assert_eq!(
-            (named.name.as_str(), named.tab.as_str()),
-            ("fix login", "fix login")
-        );
-        assert_eq!(named.day, Day::Today);
-        assert_eq!(named.state, SessionState::Idle);
-
+    fn a_session_becomes_a_row_named_by_its_title_or_preview() {
         let yesterday = today().pred_opt().unwrap();
-        let previewed = session(
-            &thread(None, "first line\nsecond", noon(yesterday)),
-            "a",
-            today(),
-        );
-        assert_eq!(
-            (previewed.name.as_str(), previewed.tab.as_str()),
-            ("first line", "first line")
-        );
-        assert_eq!(previewed.day, Day::Yesterday);
-
         let long_ago = today() - chrono::Days::new(3);
-        let untitled = session(&thread(Some(""), "", noon(long_ago)), "a", today());
-        assert_eq!(
-            (untitled.name.as_str(), untitled.tab.as_str()),
-            ("untitled", "untitled")
-        );
-        assert_eq!(untitled.day, Day::Older);
+        let seen = |request: &str, state: &str, preview: &str, at: &str| {
+            json!({ "observation": { "last_activity_at": at, "preview": preview,
+                "latest_request": { "request_doc_id": format!("bae-{request}"),
+                    "request_id": request, "lifecycle_state": state } } })
+        };
+        let mut titled = seen("r1", "processing", "ignored", &noon(today()));
+        titled["title"] = json!({ "text": "fix login", "source": "user" });
+        let started = json!({ "provenance": { "started_by": {
+            "node_did": "n", "session_id": "s1", "requester_did": "u" } } });
+        let archived = json!({ "archived_at": noon(today()) });
+        let previewed = seen("r2", "failed", "first line\nsecond", &noon(yesterday));
+        let rows = ClientStoreRows {
+            sessions: vec![
+                session("s1", &noon(long_ago), titled),
+                session("s2", &noon(long_ago), previewed),
+                session("s3", &noon(long_ago), json!({})),
+                session("child", &noon(today()), started),
+                session("gone", &noon(today()), archived),
+            ],
+            requests: vec![
+                request("r1", "s1", "processing", "ignored", &noon(today())),
+                request("r2", "s2", "failed", "first line\nsecond", &noon(yesterday)),
+                request("r4", "child", "completed", "child work", &noon(today())),
+            ],
+            ..Default::default()
+        };
+        let store = ClientStore::from_rows(rows);
 
-        for (status, state) in [
-            (
-                codex::ThreadStatus::Active {
-                    active_flags: Vec::new(),
-                },
-                SessionState::Active,
-            ),
-            (codex::ThreadStatus::Idle, SessionState::Idle),
-            (codex::ThreadStatus::NotLoaded, SessionState::Idle),
-            (codex::ThreadStatus::SystemError, SessionState::Error),
-        ] {
-            let mut thread = thread(None, "x", noon(today()));
-            thread.status = status;
-            assert_eq!(session(&thread, "a", today()).state, state);
-        }
+        let listed = sessions(&store, "n", today());
+
+        let shown: Vec<_> = listed
+            .iter()
+            .map(|row| (row.id.as_str(), row.name.as_str(), row.day, row.state))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("s1", "fix login", Day::Today, SessionState::Active),
+                ("s2", "first line", Day::Yesterday, SessionState::Error),
+                ("s3", "untitled", Day::Older, SessionState::Idle),
+            ],
+            "newest activity first; an agent's session sits beside its parent, and an archived one is gone"
+        );
+        assert_eq!(
+            (listed[0].agent.as_str(), listed[0].tab.as_str()),
+            ("a", "fix login")
+        );
     }
 
     #[test]
-    fn a_spawned_thread_becomes_a_subagent_row() {
-        let spawned = |status: Value| -> codex::Thread {
-            serde_json::from_value(crate::commands::shell::tests::child("c1", "s1", status))
-                .unwrap()
+    fn the_default_agent_leads_and_only_ready_enabled_agents_are_listed() {
+        let mut reviewer = agent("did:key:z:reviewer", "reviewer", true, false);
+        reviewer.display_name = String::new();
+        let views = [
+            reviewer,
+            agent("did:key:z:default", "Engineer", true, true),
+            agent("did:key:z:off", "off", false, false),
+            agent("did:key:z:unready", "unready", true, false),
+        ];
+        let ready = ["did:key:z:reviewer", "did:key:z:default", "did:key:z:off"].map(String::from);
+
+        let listed = agents(&views, &ready);
+
+        let shown: Vec<_> = listed
+            .iter()
+            .map(|agent| (agent.id.as_str(), agent.name.as_str(), agent.text.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("did:key:z:default", "Engineer", " Engineer     default"),
+                ("did:key:z:reviewer", "reviewer", " reviewer"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_caused_session_becomes_a_subagent_row() {
+        use crate::caused_sessions::{CausedSession, SessionScope};
+        let scope = |session: &str| SessionScope {
+            node_did: "n".to_string(),
+            session_id: session.to_string(),
+            requester_did: Some("u".to_string()),
+        };
+        let child = |state: &str| CausedSession {
+            scope: scope("c1"),
+            agent_did: "did:key:z:researcher".to_string(),
+            root_session_id: "s1".to_string(),
+            caused_by_scope: scope("s1"),
+            depth: 1,
+            first: request("r1", "c1", "completed", "look into it\nthen report", ""),
+            latest: request("r2", "c1", state, "more", ""),
         };
         let row = |status: &str, state| Running {
-            name: "researcher".to_string(),
-            job: "c1 job".to_string(),
+            name: "Researcher".to_string(),
+            job: "look into it".to_string(),
             status: status.to_string(),
             state,
             opens: Opens::Agent("c1".to_string()),
         };
-        for (status, expected) in [
-            (
-                json!({ "type": "active", "activeFlags": [] }),
-                row("working", RunState::Working),
-            ),
-            (json!({ "type": "idle" }), row("finished", RunState::Done)),
-            (
-                json!({ "type": "notLoaded" }),
-                row("finished", RunState::Done),
-            ),
-            (
-                json!({ "type": "systemError" }),
-                row("error", RunState::Failed),
-            ),
+        let named = [agent("did:key:z:researcher", "Researcher", true, false)];
+        for (state, expected) in [
+            ("pending", row("working", RunState::Working)),
+            ("processing", row("working", RunState::Working)),
+            ("completed", row("finished", RunState::Done)),
+            ("interrupted", row("finished", RunState::Done)),
+            ("failed", row("error", RunState::Failed)),
         ] {
-            let thread = spawned(status);
-            assert_eq!(parent(&thread), Some("s1"));
-            assert_eq!(subagent(&thread), expected);
+            assert_eq!(subagent(&child(state), &named), expected, "{state}");
         }
-
-        let mut unnamed = spawned(json!({ "type": "idle" }));
-        unnamed.name = None;
-        unnamed.preview = "look into it\nthen report".to_string();
-        unnamed.agent_nickname = None;
-        unnamed.agent_role = Some("local:triage".to_string());
-        let row = subagent(&unnamed);
+        let unnamed = subagent(&child("completed"), &[]);
         assert_eq!(
-            (row.name.as_str(), row.job.as_str()),
-            ("triage", "look into it")
+            unnamed.name, "researcher",
+            "named by its DID without an agent"
         );
     }
 
-    #[test]
-    fn a_root_thread_has_no_parent() {
-        assert_eq!(parent(&thread(None, "x", noon(today()))), None);
-    }
-
-    fn item(value: Value) -> codex::ThreadItem {
-        serde_json::from_value(value).unwrap()
-    }
-
-    /// `line` showing a change in turn `t1`.
-    fn changed(line: ChatLine, path: &str, kind: ChangeKind, diff: &str) -> ChatLine {
-        let change = Change::new("t1".into(), path.into(), kind, diff.into());
-        ChatLine {
-            change: Some(change),
-            ..line
+    fn at() -> At {
+        At {
+            node: "n".to_string(),
+            session: "s1".to_string(),
+            requester: Some("u".to_string()),
+            request: "bae-r1".to_string(),
+            generation: "g1".to_string(),
         }
     }
 
-    fn command(status: &str, output: Option<&str>) -> codex::ThreadItem {
-        item(json!({
-            "type": "commandExecution",
-            "id": "c1",
-            "command": "cargo test",
-            "cwd": "/srv/root",
-            "status": status,
-            "commandActions": [],
-            "aggregatedOutput": output,
-        }))
+    /// A transcript page of the rows `push`ed into it.
+    #[derive(Default)]
+    struct Page {
+        rows: ClientStoreRows,
+        closes: usize,
+    }
+
+    impl Page {
+        fn segment(&mut self, segment: gents_protocol::output::OutputSegment) -> String {
+            self.closes += 1;
+            let doc_id = format!("close-{}", self.closes);
+            let row = OutputSegmentRow {
+                doc_id: doc_id.clone(),
+                segment,
+            };
+            self.rows.output_segments.push(row);
+            doc_id
+        }
+
+        fn message(&mut self, message: gents_protocol::output::TranscriptMessage) {
+            let doc_id = format!("header-{}", message.sequence);
+            let row = TranscriptMessageRow { doc_id, message };
+            self.rows.transcript_messages.push(row);
+        }
+
+        fn text(&mut self, sequence: u32, role: MessageRole, text: &str) {
+            let close = format!("close-{}", self.closes + 1);
+            let (segment, message) = text_message(&at(), sequence, role, text, &close);
+            self.segment(segment);
+            self.message(message);
+        }
+
+        /// A call of `name` at `sequence` with `arguments`, in `state`, and its result in the
+        /// next message when it has one.
+        fn tool(&mut self, sequence: u32, id: &str, name: &str, arguments: Value, state: &str) {
+            let payload = StreamPayload::ToolArguments {
+                id: id.to_string(),
+                call_id: None,
+                name: name.to_string(),
+            };
+            let source = super::super::testing::turn_source(sequence);
+            let segment = closed(
+                &at(),
+                source,
+                execution(&at()),
+                payload,
+                &arguments.to_string(),
+            );
+            let close = self.segment(segment);
+            let block = MessageBlock::ToolCall {
+                tool_call_doc_id: id.to_string(),
+                id: id.to_string(),
+                call_id: None,
+                name: name.to_string(),
+                arguments: presented(&close).output,
+                signature: None,
+                additional_params: None,
+            };
+            let publication = MessagePublication::RequestExecution {
+                execution_generation: "g1".to_string(),
+            };
+            let key = format!("turn:{sequence}");
+            let call = header(
+                &at(),
+                &key,
+                sequence,
+                MessageRole::Assistant,
+                publication,
+                vec![block],
+            );
+            self.message(call);
+            let row = json!({
+                "_docID": id, "node_did": "n", "request_doc_id": "bae-r1", "tool_call_key": id,
+                "session_id": "s1", "request_id": "r1", "requester_did": "u", "tool_name": name,
+                "lifecycle_state": state,
+            });
+            self.rows
+                .tool_calls
+                .push(serde_json::from_value::<AgentToolCallRow>(row).unwrap());
+        }
+
+        fn result(&mut self, sequence: u32, id: &str, output: &str) {
+            let source = OutputSource::ToolCall {
+                tool_call_doc_id: id.to_string(),
+            };
+            let writer = OutputWriter::ToolExecution {
+                tool_call_doc_id: id.to_string(),
+            };
+            let segment = closed(&at(), source, writer, StreamPayload::ToolOutput, output);
+            let close = self.segment(segment);
+            let block = MessageBlock::ToolResult {
+                tool_call_doc_id: id.to_string(),
+                id: id.to_string(),
+                call_id: None,
+                parts: vec![ToolResultPart::Text {
+                    text: presented(&close),
+                }],
+            };
+            let publication = MessagePublication::ToolDelivery {
+                tool_call_doc_id: id.to_string(),
+            };
+            let key = format!("delivery:{id}");
+            let delivered = header(
+                &at(),
+                &key,
+                sequence,
+                MessageRole::User,
+                publication,
+                vec![block],
+            );
+            self.message(delivered);
+        }
+
+        fn read(self, compactions: &[CompactionEntryRow], edits: &Edits) -> Transcript {
+            let page = SessionTranscriptQueryPage {
+                store: ClientStore::from_rows(self.rows),
+                canonical_dependencies: Default::default(),
+                query_count: 0,
+                queried_rows: 0,
+                message_query_limit: 0,
+                tool_call_query_limit: 0,
+                source_exhausted: true,
+                has_newer: false,
+                covered: Default::default(),
+                requests: Vec::new(),
+                result_messages: Vec::new(),
+            };
+            transcript(&page, compactions, "s1", edits)
+        }
+    }
+
+    type Edits = RapidHashMap<String, Option<Vec<Change>>>;
+
+    fn compacted(key: &str, through: i64) -> CompactionEntryRow {
+        let entry = json!({ "compaction_key": key, "compacted_through_sequence": through });
+        serde_json::from_value(entry).unwrap()
     }
 
     #[test]
-    fn each_shown_item_maps_to_its_rows() {
+    fn each_message_and_tool_call_maps_to_its_rows() {
         use Tone::{Label, Reply, Warn, You};
-        let cases = [
-            (
-                item(
-                    json!({ "type": "userMessage", "id": "u1", "content": [{ "type": "text", "text": "hello" }] }),
-                ),
-                vec![line("hello", You, "u1")],
-            ),
-            (
-                item(
-                    json!({ "type": "agentMessage", "id": "r1", "text": "hi\r\n\u{1b}[1mthere\u{1b}[0m" }),
-                ),
-                vec![line("hi\nthere", Reply, "r1")],
-            ),
-            (
-                item(json!({ "type": "reasoning", "id": "g1", "content": ["weighing it"] })),
-                vec![line("weighing it", Label, "g1")],
-            ),
-            (
-                command("inProgress", None),
-                vec![line("  … run   cargo test", Warn, "c1")],
-            ),
-            (
-                command("completed", Some("\u{1b}[32mok\u{1b}[0m\r\n")),
-                vec![
-                    line("  ✓ run   cargo test", Label, "c1"),
-                    line("ok", Label, "c1/output"),
-                ],
-            ),
-            (
-                command("failed", Some("")),
-                vec![line("  ✗ run   cargo test", Warn, "c1")],
-            ),
-            (
-                item(json!({
-                    "type": "collabAgentToolCall",
-                    "id": "s1",
-                    "tool": "spawnAgent",
-                    "status": "inProgress",
-                    "senderThreadId": "t1",
-                    "receiverThreadIds": [],
-                    "prompt": "review the diff\nthen report",
-                    "agentsStates": {},
-                })),
-                vec![line("  ◆ review the diff", Label, "s1")],
-            ),
-            (
-                item(json!({ "type": "contextCompaction", "id": "k1" })),
-                vec![line("  ✓ compacted the conversation", Label, "k1")],
-            ),
-            (
-                item(json!({ "type": "webSearch", "id": "w1", "query": "rust" })),
-                Vec::new(),
-            ),
+        let mut page = Page::default();
+        page.text(0, MessageRole::User, "hello");
+        page.text(1, MessageRole::Assistant, "hi\r\n\u{1b}[1mthere\u{1b}[0m");
+        let bash = json!({ "command": "cargo", "args": ["test", "--all targets"] });
+        page.tool(2, "t1", "bash", bash, "completed");
+        page.result(
+            3,
+            "t1",
+            "gents_exec: {\"exit_code\":0}\n\u{1b}[32mok\u{1b}[0m\r\n",
+        );
+        page.tool(4, "t2", "search", json!({ "query": "rust" }), "running");
+        page.tool(5, "t3", "bash", json!({ "command": "false" }), "failed");
+        page.result(6, "t3", "");
+        page.tool(
+            7,
+            "t4",
+            AGENT_NEW_TOOL_NAME,
+            json!({ "prompt": "review it\nthen report" }),
+            "completed",
+        );
+        let compactions = [compacted("k1", 4), compacted("k2", 99)];
+
+        let read = page.read(&compactions, &Edits::new());
+
+        let expected = vec![
+            line("hello", You, "m0"),
+            line("hi\nthere", Reply, "m1"),
+            line("  ✓ run   cargo test '--all targets'", Label, "t1"),
+            line("ok", Label, "t1/output"),
+            line("  … gents search", Warn, "t2"),
+            line("  ✓ compacted the conversation", Label, "k1"),
+            line("  ✗ run   false", Warn, "t3"),
+            line("  ◆ review it", Label, "t4"),
+            line("  ✓ compacted the conversation", Label, "k2"),
         ];
-        for (item, expected) in cases {
-            assert_eq!(lines(&item, "t1"), expected, "{item:?}");
-        }
+        assert_eq!(read.lines, expected);
+        assert_eq!(read.next, 8, "the next message's sequence");
+    }
 
-        for (status, mark, tone) in [
-            ("inProgress", '…', Warn),
-            ("completed", '✓', Label),
-            ("failed", '✗', Warn),
-            ("declined", '✗', Warn),
-        ] {
-            let edit = item(json!({
-                "type": "fileChange",
-                "id": "f1",
-                "status": status,
-                "changes": [
-                    { "path": "src/a.rs", "kind": { "type": "update" }, "diff": "" },
-                    { "path": "src/b.rs", "kind": { "type": "add" }, "diff": "" },
-                ],
-            }));
-            let a = line(&format!("  {mark} edit  src/a.rs"), tone, "f1/0");
-            let b = line(&format!("  {mark} edit  src/b.rs"), tone, "f1/1");
-            let expected = vec![
-                changed(a, "src/a.rs", ChangeKind::Update, ""),
-                changed(b, "src/b.rs", ChangeKind::Add, ""),
-            ];
-            assert_eq!(lines(&edit, "t1"), expected, "{status}");
-        }
-
-        for (status, mark, tone) in [
-            ("inProgress", '…', Warn),
-            ("completed", '✓', Label),
-            ("failed", '✗', Warn),
-        ] {
-            let call = item(json!({
-                "type": "mcpToolCall",
-                "id": "m1",
-                "server": "\u{1b}[1mgithub\u{1b}[0m",
-                "tool": "search\r",
-                "status": status,
-                "arguments": {},
-            }));
-            let expected = vec![line(&format!("  {mark} github search"), tone, "m1")];
-            assert_eq!(lines(&call, "t1"), expected, "{status}");
+    fn file(path: &str, before: Option<&str>, after: Option<&str>) -> FileChangeImages {
+        use base64::Engine as _;
+        let image = |text: Option<&str>| match text {
+            None => FileImage::Missing,
+            Some(text) => FileImage::File {
+                content_hash: String::new(),
+                data: base64::engine::general_purpose::STANDARD.encode(text),
+                permissions: FilePermissions {
+                    readonly: false,
+                    unix_mode: None,
+                },
+                links: None,
+            },
+        };
+        FileChangeImages {
+            root: "/srv/root".to_string(),
+            path: path.to_string(),
+            before: image(before),
+            after: image(after),
         }
     }
 
     #[test]
-    fn a_file_change_carries_its_change_and_turn() {
-        let edit = item(json!({
-            "type": "fileChange",
-            "id": "fc",
-            "status": "completed",
-            "changes": [
-                { "path": "a.rs", "kind": { "type": "update", "move_path": null }, "diff": "@@ -1 +1 @@\n-a\n+b\n" },
-                { "path": "b.rs", "kind": { "type": "add" }, "diff": "x\n" },
-                { "path": "c.rs", "kind": { "type": "delete" }, "diff": "y\n" },
-                { "path": "d.rs", "kind": { "type": "update", "move_path": "e.rs" }, "diff": "" },
+    fn a_recorded_edit_becomes_its_changes_in_its_turn() {
+        let recorded = ToolFileChanges {
+            version: FILE_CHANGES_VERSION,
+            tool_call_doc_id: "t1".to_string(),
+            changes: vec![
+                file("a.rs", Some("one\ntwo\nthree\n"), Some("one\n2\nthree\n")),
+                file("b.rs", None, Some("x\n")),
+                file("c.rs", Some("y\n"), None),
+                file("d\u{1b}[2J.rs", Some("a\r\n"), Some("a\r\nb\r\n")),
             ],
-        }));
-        let shown = lines(&edit, "t1");
-        let rows: Vec<_> = shown
-            .iter()
-            .map(|line| (line.text.as_str(), line.item.as_deref().unwrap_or_default()))
-            .collect();
-        assert_eq!(
-            rows,
-            [
-                ("  ✓ edit  a.rs", "fc/0"),
-                ("  ✓ edit  b.rs", "fc/1"),
-                ("  ✓ edit  c.rs", "fc/2"),
-                ("  ✓ edit  d.rs", "fc/3"),
-            ]
-        );
+        };
+
+        let changes = changes(&recorded, "r1");
+
         let change = |path: &str, kind, diff: &str| {
-            Some(Change::new("t1".into(), path.into(), kind, diff.into()))
+            Change::new("r1".to_string(), path.to_string(), kind, diff.to_string())
         };
-        let moved = ChangeKind::Move {
-            to: "e.rs".to_string(),
-        };
-        let changes: Vec<_> = shown.into_iter().map(|line| line.change).collect();
         assert_eq!(
             changes,
             [
-                change("a.rs", ChangeKind::Update, "@@ -1 +1 @@\n-a\n+b\n"),
+                change("a.rs", ChangeKind::Update, "@@ -2 +2 @@\n-two\n+2\n"),
                 change("b.rs", ChangeKind::Add, "x\n"),
                 change("c.rs", ChangeKind::Delete, "y\n"),
-                change("d.rs", moved, ""),
-            ],
-            "the inner key stays `move_path`"
+                change("d.rs", ChangeKind::Update, "@@ -1,0 +2 @@\n+b\n"),
+            ]
         );
+        assert_eq!(changes[0].counts(), (1, 1));
     }
 
     #[test]
-    fn a_file_changes_text_is_cleaned() {
-        let edit = item(json!({
-            "type": "fileChange",
-            "id": "fc",
-            "status": "completed",
-            "changes": [{
-                "path": "a\u{1b}[2J.rs",
-                "kind": { "type": "update", "move_path": null },
-                "diff": "@@ -1 +1 @@\r\n-a\r\n+\u{1b}[31mb\r\n",
-            }],
-        }));
-        let shown = lines(&edit, "t1").pop().expect("a line");
-        assert_eq!(shown.text, "  ✓ edit  a.rs");
-        let change = shown.change.expect("its change");
-        assert_eq!(change.path, "a.rs");
-        assert_eq!(change.diff, "@@ -1 +1 @@\n-a\n+b\n");
-        assert_eq!(change.counts(), (1, 1));
+    fn a_file_edit_shows_its_recorded_changes_or_its_path_until_read() {
+        let mut page = Page::default();
+        page.tool(0, "t1", "edit_file", json!({ "path": "a.rs" }), "completed");
+        page.tool(
+            1,
+            "t2",
+            "write_file",
+            json!({ "path": "new.rs" }),
+            "running",
+        );
+        let changed = vec![
+            Change::new(
+                "r1".into(),
+                "a.rs".into(),
+                ChangeKind::Update,
+                "@@ -1 +1 @@\n-a\n+b\n".into(),
+            ),
+            Change::new("r1".into(), "b.rs".into(), ChangeKind::Add, "x\n".into()),
+        ];
+        let mut edits = Edits::new();
+        edits.insert("t1".to_string(), Some(changed.clone()));
+
+        let read = page.read(&[], &edits);
+
+        let edited = |text: &str, tone, item: &str, change: Option<&Change>| ChatLine {
+            change: change.cloned(),
+            ..line(text, tone, item)
+        };
+        assert_eq!(
+            read.lines,
+            [
+                edited("  ✓ edit  a.rs", Tone::Label, "t1/0", Some(&changed[0])),
+                edited("  ✓ edit  b.rs", Tone::Label, "t1/1", Some(&changed[1])),
+                edited("  … edit  new.rs", Tone::Warn, "t2/0", None),
+            ]
+        );
     }
 
     #[test]
@@ -670,183 +1025,23 @@ mod tests {
         let long: String = (1..=25).map(|n| format!("line {n}\n")).collect();
         let first: Vec<String> = (1..=20).map(|n| format!("line {n}")).collect();
         let capped = format!("{}\n… 5 more lines", first.join("\n"));
-        let output =
-            |item: &codex::ThreadItem| lines(item, "t1").pop().expect("an output line").text;
-        assert_eq!(output(&command("completed", Some(&long))), capped);
-
-        let delta = note(
-            "item/commandExecution/outputDelta",
-            json!({ "threadId": "s1", "turnId": "t1", "itemId": "c1", "delta": long }),
-        );
-        let streamed = updates(delta).into_iter().find_map(|update| match update {
-            Update::Delta { text, .. } => Some(text),
-            _ => None,
-        });
-        assert_eq!(streamed, Some(capped), "the endpoint sends it whole first");
+        assert_eq!(output("t1", &long).unwrap().text, capped);
 
         let wide = format!("{}\nend\n", "x".repeat(1000));
         let cut = format!("{}…\nend", "x".repeat(400));
-        assert_eq!(output(&command("completed", Some(&wide))), cut);
-    }
-
-    fn note(method: &str, params: Value) -> codex::ServerNotification {
-        serde_json::from_value(json!({ "method": method, "params": params })).unwrap()
-    }
-
-    fn turn(status: &str, error: Value) -> Value {
-        json!({ "id": "t1", "items": [], "status": status, "error": error })
+        assert_eq!(output("t1", &wide).unwrap().text, cut);
+        assert_eq!(output("t1", " \n"), None, "no output, no line");
     }
 
     #[test]
-    fn notifications_map_to_updates() {
-        let s1 = || "s1".to_string();
-        let delta = |item: &str, text: &str, tone| Update::Delta {
-            session: s1(),
-            item: item.to_string(),
-            text: text.to_string(),
-            tone,
-        };
-        let item_params = |item: Value| json!({ "item": item, "threadId": "s1", "turnId": "t1", "startedAtMs": 0, "completedAtMs": 0 });
-        let file_change = json!({
-            "type": "fileChange",
-            "id": "f1",
-            "status": "completed",
-            "changes": [
-                { "path": "a.rs", "kind": { "type": "add" }, "diff": "" },
-                { "path": "b.rs", "kind": { "type": "add" }, "diff": "" },
-            ],
-        });
-        let cases = [
-            (
-                note(
-                    "turn/started",
-                    json!({ "threadId": "s1", "turn": turn("inProgress", Value::Null) }),
-                ),
-                vec![Update::Turn {
-                    session: s1(),
-                    turn: "t1".to_string(),
-                }],
-            ),
-            (
-                note(
-                    "turn/completed",
-                    json!({ "threadId": "s1", "turn": turn("completed", Value::Null) }),
-                ),
-                vec![Update::TurnEnded {
-                    session: s1(),
-                    turn: "t1".to_string(),
-                }],
-            ),
-            (
-                note(
-                    "turn/completed",
-                    json!({ "threadId": "s1", "turn": turn("failed", json!({ "message": "the model went away" })) }),
-                ),
-                vec![
-                    Update::TurnEnded {
-                        session: s1(),
-                        turn: "t1".to_string(),
-                    },
-                    Update::Notice("the model went away".to_string()),
-                ],
-            ),
-            (
-                note(
-                    "thread/status/changed",
-                    json!({ "threadId": "s1", "status": { "type": "systemError" } }),
-                ),
-                vec![Update::SessionState {
-                    session: s1(),
-                    state: SessionState::Error,
-                }],
-            ),
-            (
-                note(
-                    "item/started",
-                    item_params(json!({ "type": "agentMessage", "id": "r1", "text": "" })),
-                ),
-                vec![Update::Item {
-                    session: s1(),
-                    line: line("", Tone::Reply, "r1"),
-                }],
-            ),
-            (
-                note("item/completed", item_params(file_change)),
-                vec![
-                    Update::Item {
-                        session: s1(),
-                        line: changed(
-                            line("  ✓ edit  a.rs", Tone::Label, "f1/0"),
-                            "a.rs",
-                            ChangeKind::Add,
-                            "",
-                        ),
-                    },
-                    Update::Item {
-                        session: s1(),
-                        line: changed(
-                            line("  ✓ edit  b.rs", Tone::Label, "f1/1"),
-                            "b.rs",
-                            ChangeKind::Add,
-                            "",
-                        ),
-                    },
-                ],
-            ),
-            (
-                note(
-                    "item/agentMessage/delta",
-                    json!({ "threadId": "s1", "turnId": "t1", "itemId": "r1", "delta": "hi" }),
-                ),
-                vec![delta("r1", "hi", Tone::Reply)],
-            ),
-            (
-                note(
-                    "item/reasoning/textDelta",
-                    json!({ "threadId": "s1", "turnId": "t1", "itemId": "g1", "delta": "hm", "contentIndex": 0 }),
-                ),
-                vec![delta("g1", "hm", Tone::Label)],
-            ),
-            (
-                note(
-                    "item/commandExecution/outputDelta",
-                    json!({ "threadId": "s1", "turnId": "t1", "itemId": "c1", "delta": "\u{1b}[31mok\r\n" }),
-                ),
-                vec![delta("c1/output", "ok\n", Tone::Label)],
-            ),
-            (
-                note("thread/archived", json!({ "threadId": "s1" })),
-                Vec::new(),
-            ),
-        ];
-        for (notification, expected) in cases {
-            let method = notification.to_string();
-            assert_eq!(updates(notification), expected, "{method}");
-        }
-    }
-
-    #[test]
-    fn runtime_agents_put_the_bound_one_first() {
-        let mut runtime = identity(Some(&["did:key:z:reviewer", "did:key:z:default"]));
-        runtime.bound_agent = "did:key:z:default".to_string();
-
-        let agent = |id: &str, name: &str, text: &str| Agent {
-            id: id.to_string(),
-            name: name.to_string(),
-            text: text.to_string(),
-            tone: Tone::Plain,
-        };
+    fn a_running_turn_shows_under_the_sequence_its_message_takes() {
         assert_eq!(
-            agents(&runtime),
+            live(4, "weighing\r it", "Hel\u{1b}[1mlo"),
             [
-                agent("did:key:z:default", "default", " default      default"),
-                agent("did:key:z:reviewer", "reviewer", " reviewer"),
+                line("weighing it", Tone::Label, "m4/reasoning"),
+                line("Hello", Tone::Reply, "m4"),
             ]
         );
-        let pinned: Vec<_> = agents(&identity(None))
-            .into_iter()
-            .map(|agent| agent.id)
-            .collect();
-        assert_eq!(pinned, ["a"]);
+        assert_eq!(live(4, "", "Hel"), [line("Hel", Tone::Reply, "m4")]);
     }
 }

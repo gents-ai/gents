@@ -1,15 +1,24 @@
-use std::cmp::Reverse;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{DateTime, Local, Utc};
 use gents::session::mailbox::MailboxItem;
 use gents::store::config_client::{ConfigAccess, GraphqlSubscription, SubscriptionEnd};
-use gents_codex_protocol as codex;
+use gents::store::graphql::escape_graphql_string;
+use gents_desktop_core::client::canonical_output::CanonicalLiveText;
+use gents_desktop_core::client::{
+    interrupt_request_on, load_node_snapshot_on, load_session_compaction_entries_on,
+    load_session_live_text_on, load_session_transcript_window_on, tool_file_changes_on,
+    ClientStore, TranscriptWindow,
+};
+use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
+use gents_protocol::node_readiness::AgentReadinessState;
+use gents_protocol::request_input::{QueueDelivery, RequestInput};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::session::SessionScope;
 use gents_shell::app::ChatLine;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
@@ -23,91 +32,71 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::client::{Client, ClientError, ClientEvent};
 use super::sections::{self, new_id};
 use super::tree::git_changes;
 use super::work::{self, Work};
-use super::{forms, items, menus, packs, prefs, setup, usage};
+use super::{forms, git, items, menus, packs, prefs, setup, usage};
+use crate::caused_sessions::{load_caused_sessions_as, CausedSession};
 use crate::commands::accounts::account_rows;
-use crate::commands::codex::relay::agent_route_target;
-use crate::commands::codex::{resolve_endpoint, runtime_identity_at, RemoteEndpoint};
-use crate::commands::codex_shim::{thread_git_info, RuntimeIdentity};
+use crate::commands::config::crud::{query_collection_sorted, SKILL_SPEC};
 use crate::commands::mailbox;
 
-/// What the shell opens with. `work` is why jobs and the mailbox are off when it is `Err`.
+/// What the shell opens with. `work` is why the shell has no runtime when it is `Err`.
 pub(super) struct Opening {
-    pub(super) remote: String,
+    /// This home's node, from its setup.
+    pub(super) node: String,
     pub(super) agent: Option<String>,
     pub(super) prompt: Option<String>,
     /// `gents --continue`'s session, which `agent` then names the agent of.
     pub(super) session: Option<String>,
     pub(super) work: Result<Work, String>,
     pub(super) home: PathBuf,
+    /// Where the branch is read.
     pub(super) cwd: Option<PathBuf>,
+    /// Where the Working Tree is read: the home's tool root, else `cwd`.
+    pub(super) tree: Option<PathBuf>,
 }
 
-/// Feeds the shell from the runtime at `remote`, over one connection per agent, waiting
-/// `answer_wait` for each answer. A given `agent` or `prompt` follows the agents.
+/// Feeds the shell from this home's runtime over its signed GraphQL endpoint. A given
+/// `agent` or `prompt` follows the agents.
 ///
-/// Each intent is answered before the next notification is read. The shell drops a tab's
-/// updates until `Started` binds its session, and `Opened` replaces a tab's lines, so both
-/// must reach it before any notification that arrived while their request was out.
+/// Each intent is answered before the next change is read. The shell drops a tab's updates
+/// until `Started` binds its session, and `Opened` replaces a tab's lines, so both must reach
+/// it before any change read while their reads were out.
 pub(super) async fn run(
     opening: Opening,
     mut intents: mpsc::UnboundedReceiver<Intent>,
     updates: Sender<Input>,
     runtime: Handle,
-    answer_wait: Duration,
 ) {
     let Opening {
-        remote,
+        node,
         agent,
         prompt,
         session,
         work,
         home,
         cwd,
+        tree,
     } = opening;
-    let off = work.as_ref().err().cloned();
     let (watching, mut watched) = mpsc::unbounded_channel();
     let mut source = Source::new(updates, work, home, runtime.clone(), watching);
-    let Some(identity) = runtime_identity_at(&remote).await else {
-        return source.lost(format!(
-            "no runtime: check `gents status`, then reopen the shell (could not read this home's runtime at {remote})"
-        ));
+    source.principal = node;
+    source.tree = tree;
+    let work = match source.work.clone() {
+        Ok(work) => work,
+        Err(off) => return source.lost(no_runtime(&off)),
     };
-    source.principal = identity.node_did.clone();
-    let (events, mut received) = mpsc::unbounded_channel();
-    let agents = items::agents(&identity);
-    for agent in &agents {
-        let url = agent_url(&remote, &identity, &agent.id);
-        let connected = Client::connect(
-            &url,
-            agent.id.clone(),
-            events.clone(),
-            &runtime,
-            answer_wait,
-        )
-        .await;
-        match connected {
-            Ok(client) => source.clients.push((agent.id.clone(), Arc::new(client))),
-            Err(error) => source.tell(Update::Notice(format!(
-                "could not open agent {}: {error}",
-                agent.name
-            ))),
-        }
+    let (views, agents) = match runnable(&work.access(), &source.principal).await {
+        Ok(read) => read,
+        Err(error) => return source.lost(no_runtime(&error)),
+    };
+    if agents.is_empty() {
+        return source.lost(no_runtime("no agent is ready on this node"));
     }
-    drop(events);
-    if source.clients.is_empty() {
-        return source.lost(format!(
-            "no runtime: check `gents status`, then reopen the shell (could not connect to this home's runtime at {remote})"
-        ));
-    }
-    let connected = agents
-        .into_iter()
-        .filter(|agent| source.client(&agent.id).is_some())
-        .collect();
-    source.tell(Update::Agents(connected));
+    source.agents = views;
+    source.shown_agents = agents.iter().map(|agent| agent.id.clone()).collect();
+    source.tell(Update::Agents(agents));
     // `Begin` or `Continue` must reach the shell before a send the user makes once the agents
     // are known. Both go through one queue, so it is told before the sweep awaits anything.
     match session {
@@ -123,37 +112,67 @@ pub(super) async fn run(
     if let Some(cwd) = cwd {
         let updates = source.updates.clone();
         tokio::spawn(async move {
-            let branch = thread_git_info(&cwd).await.and_then(|info| {
-                info.get("branch")
-                    .and_then(|branch| branch.as_str().map(str::to_string))
-            });
-            if let Some(branch) = branch {
+            if let Some(branch) = git::branch(&cwd).await {
                 let _ = updates.send(Input::Runtime(Update::Branch(branch)));
             }
         });
     }
-    source.tell(Update::Sessions(source.sessions().await));
-    match off {
-        Some(off) => {
-            source.tell(Update::Notice(off));
-            source.tell_jobs();
-            source.tell_background();
+    // The node replays nothing, so the feed is open before the first read.
+    let mut failed = None;
+    for collection in CHAT {
+        let changes = watch(&work, &chat_document(collection, &source.principal), true).await;
+        if let Some(error) = source.chat_watched(collection, changes) {
+            failed.get_or_insert(error);
         }
-        None => source.reread_work(),
     }
+    if let Some(error) = failed {
+        source.tell(Update::Notice(chat_not_live(&error)));
+    }
+    match load_node_snapshot_on(&work.access(), &source.principal).await {
+        Ok(store) => source.store = Arc::new(store),
+        Err(error) => source.tell(Update::Notice(format!("{error:#}"))),
+    }
+    source.listed = items::sessions(&source.store, &source.principal, today());
+    source.tell(Update::Sessions(source.listed.clone()));
+    source.reread_work();
     loop {
         tokio::select! {
             intent = intents.recv() => match intent {
                 Some(intent) => source.handle(intent).await,
                 None => return,
             },
-            Some((agent, event)) = received.recv() => match event {
-                ClientEvent::Notification(note) => source.notified(&agent, *note).await,
-                ClientEvent::Closed(error) => return source.lost(closed(error)),
+            Some(event) = watched.recv() => match event {
+                Watched::Ended(Feed::Chat(_), error) => return source.lost(closed(error)),
+                event => source.watched(event),
             },
-            Some(event) = watched.recv() => source.watched(event),
         }
     }
+}
+
+/// The node's enabled agents, and those of them its readiness says are ready, as the shell
+/// lists them.
+async fn runnable(
+    access: &ConfigAccess,
+    node: &str,
+) -> Result<(Vec<AgentView>, Vec<gents_shell::source::Agent>), String> {
+    let setup = load_inference_setup_state(access, node).await;
+    let views = setup.map_err(|error| format!("{error:#}"))?.agents;
+    let readiness = crate::commands::start::node_readiness(access, node).await;
+    let readiness = readiness.map_err(|error| format!("{error:#}"))?;
+    let ready = readiness.into_iter().flat_map(|snapshot| snapshot.agents);
+    let ready = ready.filter(|entry| entry.state == AgentReadinessState::Ready);
+    let ready: Vec<_> = ready.map(|entry| entry.agent_did).collect();
+    let agents = items::agents(&views, &ready);
+    Ok((views, agents))
+}
+
+/// The status bar clips on the right, so the next step leads and the detail ends.
+fn no_runtime(why: &str) -> String {
+    format!("no runtime: check `gents status`, then reopen the shell ({why})")
+}
+
+fn today() -> chrono::NaiveDate {
+    Local::now().date_naive()
 }
 
 /// The tool calls that are plugin jobs or background calls. Each event is only a hint to
@@ -166,13 +185,64 @@ pub(super) const WATCHED: &str = r#"subscription { AgentToolCall(filter: { _or: 
 pub(super) const MAILBOX_WATCHED: &str =
     r#"subscription { MailboxItem(filter: { kind: { _in: ["ask", "gate"] } }) { _docID } }"#;
 
+/// The node's documents the open sessions show, each watched as the desktop watches them: an
+/// event is only a hint to reread.
+pub(super) const CHAT: [&str; 5] = [
+    "AgentRequest",
+    "AgentSession",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentOutputSegment",
+];
+
+pub(super) fn chat_document(collection: &str, node: &str) -> String {
+    let node = escape_graphql_string(node);
+    format!(
+        r#"subscription {{ {collection}(filter: {{ node_did: {{ _eq: "{node}" }} }}) {{ _docID }} }}"#
+    )
+}
+
+/// What a change to `collection` makes stale: requests and sessions change the list, the
+/// running turns and the subagents, messages and tool calls the transcripts. A running
+/// turn's live text is read on every change.
+fn stale(collection: &str) -> Stale {
+    match collection {
+        "AgentRequest" | "AgentSession" => Stale {
+            sessions: true,
+            transcripts: false,
+        },
+        "AgentMessage" | "AgentToolCall" => Stale {
+            sessions: false,
+            transcripts: true,
+        },
+        _ => Stale::default(),
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Stale {
+    sessions: bool,
+    transcripts: bool,
+}
+
+impl Stale {
+    fn and(self, other: Stale) -> Stale {
+        Stale {
+            sessions: self.sessions || other.sessions,
+            transcripts: self.transcripts || other.transcripts,
+        }
+    }
+}
+
 type Changes = GraphqlSubscription;
 
-/// What a subscription watches: the work views' tool calls, or the mailbox.
+/// What a subscription watches: the work views' tool calls, the mailbox, or one of the chat's
+/// collections.
 #[derive(Clone, Copy)]
 enum Feed {
     Work,
     Mailbox,
+    Chat(&'static str),
 }
 
 enum Watched {
@@ -183,6 +253,7 @@ enum Watched {
     Renew(Feed),
     Read(Box<Read>),
     Asked(Box<Asked>),
+    Chatted(Box<ChatRead>),
     Tree(Result<Vec<Change>, String>),
     /// A sign-in's answer, with the token `CancelSignIn` cancels for it.
     SignedIn(CancellationToken, Result<SavedAccount, String>),
@@ -306,10 +377,168 @@ fn prompts_not_live(error: Option<&str>) -> String {
     format!("prompts are not live: the next turn, or opening a session, reads them again{error}")
 }
 
-const PICK_AGAIN: &str = "pick this session again to see the answer to your reply";
+/// Each native file edit's recorded changes, by its tool call: `None` once read and found
+/// unrecorded. A recorded edit never changes, so each is read once.
+type Edits = RapidHashMap<String, Option<Vec<Change>>>;
 
-/// The goal's first request is written to the node, not started as this connection's turn.
-pub(super) const GOAL_SET: &str = "pick this session again to follow the goal";
+/// One reread of the open sessions, done off the chat loop.
+struct ChatRead {
+    /// The chat subscriptions it opened first, those that were not live.
+    changes: Vec<(&'static str, Option<Result<Changes, String>>)>,
+    /// The node's sessions and requests, when they were stale.
+    store: Option<Result<ClientStore, String>>,
+    sessions: Vec<SessionRead>,
+}
+
+/// What a reread asks of one open session.
+struct Asking {
+    session: String,
+    requester: Option<String>,
+    /// Its tab's opening the read is for: a read that lands after the tab opened again is
+    /// older than what the opening told.
+    opened: u64,
+    /// The sequence its next message takes, when its transcript is not read again.
+    next: u32,
+}
+
+struct SessionRead {
+    session: String,
+    opened: u64,
+    transcript: Option<Result<items::Transcript, String>>,
+    /// The edits the transcript read found, to remember.
+    edits: Vec<(String, Option<Vec<Change>>)>,
+    live: Result<Vec<ChatLine>, String>,
+    children: Option<Result<Vec<CausedSession>, String>>,
+}
+
+async fn read_chat(
+    work: Work,
+    node: String,
+    stale: Stale,
+    subscribe: Vec<&'static str>,
+    observed: Arc<ClientStore>,
+    asking: Vec<Asking>,
+    edits: Edits,
+) -> ChatRead {
+    let mut changes = Vec::with_capacity(subscribe.len());
+    for collection in subscribe {
+        let document = chat_document(collection, &node);
+        changes.push((collection, watch(&work, &document, true).await));
+    }
+    let access = work.access();
+    let store = match stale.sessions {
+        true => Some(load_node_snapshot_on(&access, &node).await),
+        false => None,
+    };
+    let store = store.map(|read| read.map_err(|error| format!("{error:#}")));
+    let observed = match &store {
+        Some(Ok(store)) => store,
+        _ => observed.as_ref(),
+    };
+    let mut sessions = Vec::with_capacity(asking.len());
+    for asked in asking {
+        sessions.push(read_session(&access, &node, observed, asked, stale, &edits).await);
+    }
+    ChatRead {
+        changes,
+        store,
+        sessions,
+    }
+}
+
+/// `stale` says what to read beside the live text of a running turn: the transcript, and the
+/// subagents with the sessions.
+async fn read_session(
+    access: &ConfigAccess,
+    node: &str,
+    observed: &ClientStore,
+    asked: Asking,
+    stale: Stale,
+    edits: &Edits,
+) -> SessionRead {
+    let Asking {
+        session,
+        requester,
+        opened,
+        mut next,
+    } = asked;
+    let requester = requester.as_deref();
+    let (transcript, edits) = match stale.transcripts {
+        true => match read_transcript(access, node, &session, requester, edits).await {
+            Ok((transcript, edits)) => {
+                next = transcript.next;
+                (Some(Ok(transcript)), edits)
+            }
+            Err(error) => (Some(Err(error)), Vec::new()),
+        },
+        false => (None, Vec::new()),
+    };
+    let running = observed.derive_turn_for_node(&session, node);
+    let live = match running.is_some_and(|state| !state.is_terminal()) {
+        true => load_session_live_text_on(access, observed, &session, node).await,
+        false => Ok(None),
+    };
+    let live = live.map_err(|error| format!("{error:#}")).map(|live| {
+        let shown = live.as_ref().map(
+            |CanonicalLiveText {
+                 reasoning, content, ..
+             }| { items::live(next, reasoning, content) },
+        );
+        shown.unwrap_or_default()
+    });
+    let children = match stale.sessions {
+        true => {
+            let scope = SessionScope {
+                node_did: node.to_string(),
+                session_id: session.clone(),
+                requester_did: requester.map(str::to_string),
+            };
+            let caused = load_caused_sessions_as(access, &[scope]).await;
+            Some(caused.map_err(|error| format!("{error:#}")))
+        }
+        false => None,
+    };
+    SessionRead {
+        session,
+        opened,
+        transcript,
+        edits,
+        live,
+        children,
+    }
+}
+
+/// The session's newest page, with each finished file edit's recorded changes read once.
+async fn read_transcript(
+    access: &ConfigAccess,
+    node: &str,
+    session: &str,
+    requester: Option<&str>,
+    known: &Edits,
+) -> Result<(items::Transcript, Vec<(String, Option<Vec<Change>>)>), String> {
+    let failed = |error: anyhow::Error| format!("{error:#}");
+    let (node_did, window) = (Some(node), TranscriptWindow::Tip);
+    let page =
+        load_session_transcript_window_on(access, session, node_did, requester, window, None);
+    let page = page.await.map_err(failed)?;
+    let compactions = load_session_compaction_entries_on(access, session, node, requester);
+    let compactions = compactions.await.map_err(failed)?;
+    let mut read = Vec::new();
+    for (tool, request) in items::finished_edits(&page, session) {
+        if known.contains_key(&tool) {
+            continue;
+        }
+        // A failed read is read again with the next change.
+        if let Ok(recorded) = tool_file_changes_on(access, node, session, &request, &tool).await {
+            let changes = recorded.map(|recorded| items::changes(&recorded, &request));
+            read.push((tool, changes));
+        }
+    }
+    let mut edits = known.clone();
+    edits.extend(read.iter().cloned());
+    let transcript = items::transcript(&page, &compactions, session, &edits);
+    Ok((transcript, read))
+}
 
 /// A pack change asked for while another runs.
 const BUSY: &str = "A pack change is still running";
@@ -320,32 +549,53 @@ pub(super) fn closed(error: Option<String>) -> String {
     format!("runtime closed: check `gents status`, then reopen the shell{error}")
 }
 
-/// A runtime that publishes its runnable agents serves each on its own route. A pinned one
-/// publishes none and serves only its bound agent, at `remote`.
-fn agent_url(remote: &str, identity: &RuntimeIdentity, agent: &str) -> String {
-    match (&identity.runnable_agents, resolve_endpoint(remote)) {
-        (Some(_), Ok(RemoteEndpoint::WebSocket { authority, .. })) => {
-            format!("ws://{authority}{}", agent_route_target(agent))
-        }
-        _ => remote.to_string(),
-    }
+/// What an open session's tab was last told.
+#[derive(Default)]
+struct Chat {
+    /// Each line by its item id.
+    lines: RapidHashMap<String, ChatLine>,
+    /// The sequence its next message takes, which a running turn's live text is shown under.
+    next: u32,
+    /// The running request the tab shows as its turn.
+    turn: Option<String>,
+    /// The session's requester, which scopes its transcript.
+    requester: Option<String>,
+    /// Counts the tab's openings: each replaces its lines.
+    opened: u64,
 }
 
 struct Source {
-    /// In the order the shell lists the agents.
-    clients: Vec<(String, Arc<Client>)>,
     updates: Sender<Input>,
     /// Sessions a tab has opened or sent to.
     open: RapidHashSet<String>,
+    /// What each of `open` was last told.
+    chats: RapidHashMap<String, Chat>,
+    /// This node's agents as setup lists them, which names subagents.
+    agents: Vec<AgentView>,
+    /// The agents the shell lists, which a turn may go to.
+    shown_agents: Vec<String>,
+    /// The node's sessions and requests as last read, which the running turns are found in.
+    store: Arc<ClientStore>,
+    /// The sessions list last told.
+    listed: Vec<Session>,
+    /// The chat collections whose subscription is open.
+    chat_live: RapidHashSet<&'static str>,
+    /// A chat reread is out, and `chat_again` is what one more asked for meanwhile reads.
+    chatting: bool,
+    chat_again: Option<Stale>,
+    edits: Edits,
+    /// Requests the user stopped: one still running until the runtime stops it is not shown
+    /// as the tab's turn again.
+    interrupted: RapidHashSet<String>,
     /// Each listed subagent's parent session.
     parents: RapidHashMap<String, String>,
-    /// Threads resumed on their connection, which from then on reports their turns.
-    resumed: RapidHashSet<String>,
     /// Each listed session's subagent rows, which its running rows lead with.
     children: RapidHashMap<String, Vec<Running>>,
     work: Result<Work, String>,
     /// This home, whose installed workflows a menu lists even when `work` is off.
     home: PathBuf,
+    /// Where the Working Tree is read.
+    tree: Option<PathBuf>,
     runtime: Handle,
     watching: mpsc::UnboundedSender<Watched>,
     /// Whether the tool-call subscription is open, so the views need no reread until it says.
@@ -355,17 +605,16 @@ struct Source {
     again: bool,
     jobs: Shown<Job>,
     background: Shown<BackgroundCall>,
-    /// This home's node, as the runtime names it: the mailbox's requester and replier.
+    /// This home's node: the sessions' node, the mailbox's requester and replier.
     principal: String,
     /// Whether the mailbox subscription is open, so the prompts need no reread until it says.
     mailbox_live: bool,
     /// A mailbox read is out, and `ask_again` asks for one more when it lands.
     asking: bool,
     ask_again: bool,
-    /// A working-tree read is out, and `tree_again` names the agent of one more asked for
-    /// meanwhile.
+    /// A working-tree read is out, and `tree_again` asks for one more meanwhile.
     reading_tree: bool,
-    tree_again: Option<String>,
+    tree_again: bool,
     /// The prompts each open session was last told.
     told: RapidHashMap<String, Vec<Prompt>>,
     /// Listed subagents with an open question or approval, which their parent's row names.
@@ -379,8 +628,8 @@ struct Source {
     pack_page: u32,
     /// Held through each pack change, so another is refused while it runs.
     pack_changes: Arc<tokio::sync::Mutex<()>>,
-    /// Each agent's last listed skills, whose entry a skill turn sends.
-    skills: RapidHashMap<String, Vec<codex::SkillMetadata>>,
+    /// Each agent's last listed skills, whose ids a skill turn may send.
+    skills: RapidHashMap<String, Vec<String>>,
 }
 
 impl Source {
@@ -392,14 +641,23 @@ impl Source {
         watching: mpsc::UnboundedSender<Watched>,
     ) -> Source {
         Source {
-            clients: Vec::new(),
             updates,
             open: RapidHashSet::new(),
+            chats: RapidHashMap::new(),
+            agents: Vec::new(),
+            shown_agents: Vec::new(),
+            store: Arc::default(),
+            listed: Vec::new(),
+            chat_live: RapidHashSet::new(),
+            chatting: false,
+            chat_again: None,
+            edits: RapidHashMap::new(),
+            interrupted: RapidHashSet::new(),
             parents: RapidHashMap::new(),
-            resumed: RapidHashSet::new(),
             children: RapidHashMap::new(),
             work,
             home,
+            tree: None,
             runtime,
             watching,
             live: false,
@@ -412,7 +670,7 @@ impl Source {
             asking: false,
             ask_again: false,
             reading_tree: false,
-            tree_again: None,
+            tree_again: false,
             told: RapidHashMap::new(),
             waiting: RapidHashSet::new(),
             signing_in: None,
@@ -433,30 +691,15 @@ impl Source {
         self.tell(Update::Connection(Connection::Lost(why)));
     }
 
-    fn client(&self, agent: &str) -> Option<&Arc<Client>> {
-        self.clients
-            .iter()
-            .find(|(id, _)| id == agent)
-            .map(|(_, client)| client)
-    }
-
     async fn handle(&mut self, intent: Intent) {
         match intent {
-            Intent::Open { session, agent } => {
-                self.open(session, &agent).await;
-            }
+            Intent::Open { session, .. } => self.open(session).await,
             Intent::Send {
                 tab,
                 session,
                 agent,
                 text,
-            } => {
-                let text = codex::UserInput::Text {
-                    text,
-                    text_elements: Vec::new(),
-                };
-                self.send(tab, session, &agent, vec![text]).await
-            }
+            } => self.send(tab, session, &agent, text, Vec::new()).await,
             Intent::ReadSkills { agent } => self.read_skills(agent).await,
             Intent::SendSkill {
                 tab,
@@ -465,22 +708,12 @@ impl Source {
                 skill,
                 text,
             } => {
-                let mut listed = self.skills.get(&agent).into_iter().flatten();
-                let Some(listed) = listed.find(|listed| skill_id(listed) == skill) else {
+                let listed = self.skills.get(&agent).into_iter().flatten();
+                if !listed.into_iter().any(|listed| *listed == skill) {
                     let message = format!("unknown skill /{skill}");
                     return self.tell(Update::StartFailed { tab, message });
-                };
-                let mut input = vec![codex::UserInput::Skill {
-                    name: listed.name.clone(),
-                    path: listed.path.to_path_buf(),
-                }];
-                if !text.is_empty() {
-                    input.push(codex::UserInput::Text {
-                        text,
-                        text_elements: Vec::new(),
-                    });
                 }
-                self.send(tab, session, &agent, input).await
+                self.send(tab, session, &agent, text, vec![skill]).await
             }
             Intent::SetGoal {
                 tab,
@@ -488,20 +721,11 @@ impl Source {
                 agent,
                 objective,
             } => self.goal(tab, session, &agent, objective).await,
-            Intent::Interrupt {
-                session,
-                agent,
-                turn,
-            } => self.interrupt(session, &agent, turn).await,
+            Intent::Interrupt { session, turn, .. } => self.interrupt(session, turn).await,
             Intent::Refresh => self.reread_work(),
             Intent::Dismiss { item, .. } => self.dismiss(&item).await,
-            Intent::Reply {
-                session,
-                agent,
-                item,
-                text,
-            } => self.reply(session, &agent, &item, &text).await,
-            Intent::WorkingTree { agent } => self.read_tree(agent),
+            Intent::Reply { item, text, .. } => self.reply(&item, &text).await,
+            Intent::WorkingTree { .. } => self.read_tree(),
             Intent::ReadMenu(menu) => self.read_menu(menu),
             Intent::ReadProfiles { agent } => self.read_profiles(agent),
             Intent::SaveKeys(keys) => self.save_keys(keys),
@@ -926,73 +1150,21 @@ impl Source {
     /// One read at a time, off the chat loop, as `reread_work` reads: a slow git diff holds up
     /// no other intent, and one asked for while a read is out runs after it lands, so the
     /// newest answer lands last.
-    fn read_tree(&mut self, agent: String) {
+    fn read_tree(&mut self) {
         if self.reading_tree {
-            self.tree_again = Some(agent);
+            self.tree_again = true;
             return;
         }
-        let Some(client) = self.client(&agent).cloned() else {
-            return self.tell(Update::WorkingTree(Err("not connected".to_string())));
+        let Some(tree) = self.tree.clone() else {
+            let unread = "no working directory to read".to_string();
+            return self.tell(Update::WorkingTree(Err(unread)));
         };
         self.reading_tree = true;
         let done = self.watching.clone();
         self.runtime.spawn(async move {
-            // The runtime resolves a relative folder against its tool root.
-            let params = codex::GitDiffToRemoteParams { cwd: ".".into() };
-            let read = client
-                .request::<_, codex::GitDiffToRemoteResponse>("gitDiffToRemote", &params)
-                .await;
-            let tree = match read {
-                Ok(answer) => Ok(git_changes(&answer.diff)),
-                Err(ClientError::Rpc { message, .. }) => Err(message),
-                Err(error) => Err(error.to_string()),
-            };
-            let _ = done.send(Watched::Tree(tree));
+            let read = git::diff_to_remote(&tree).await;
+            let _ = done.send(Watched::Tree(read.map(|diff| git_changes(&diff))));
         });
-    }
-
-    /// `agent` names the connection that sent `note`. A spawn or a send on an open session
-    /// relists its subagents, and so does a turn ending on it or on one of them.
-    /// After the subscription ends, a turn or subagent change subscribes again.
-    async fn notified(&mut self, agent: &str, note: codex::ServerNotification) {
-        use codex::ServerNotification as Note;
-        let turned = matches!(note, Note::TurnStarted(_) | Note::TurnCompleted(_));
-        let mut relist = Vec::new();
-        match &note {
-            Note::TurnCompleted(completed) => {
-                let thread = &completed.thread_id;
-                relist.extend(self.open.get(thread).cloned());
-                relist.extend(self.parents.get(thread).cloned());
-            }
-            Note::ItemStarted(codex::ItemStartedNotification {
-                thread_id, item, ..
-            })
-            | Note::ItemCompleted(codex::ItemCompletedNotification {
-                thread_id, item, ..
-            }) if matches!(item, codex::ThreadItem::CollabAgentToolCall { .. })
-                && self.open.contains(thread_id) =>
-            {
-                relist.push(thread_id.clone());
-            }
-            _ => {}
-        }
-        let ended = matches!(note, Note::TurnCompleted(_));
-        for update in items::updates(note) {
-            self.tell(update);
-        }
-        if ended {
-            self.tell(Update::Sessions(self.sessions().await));
-        }
-        let relisted = !relist.is_empty();
-        for session in relist {
-            self.subagents(&session, agent).await;
-        }
-        if !self.live && (turned || relisted) {
-            self.reread_work();
-        }
-        if !self.mailbox_live && turned {
-            self.reread_prompts();
-        }
     }
 
     /// One reread at a time, off the chat loop: a change while one is out asks for one more.
@@ -1035,6 +1207,19 @@ impl Source {
         match event {
             Watched::Changed(Feed::Work) => self.reread_work(),
             Watched::Changed(Feed::Mailbox) => self.reread_prompts(),
+            Watched::Changed(Feed::Chat(collection)) => {
+                // A turn starting or ending, or a session starting, subscribes the views again
+                // once their feed has ended.
+                if matches!(collection, "AgentRequest" | "AgentSession") {
+                    if !self.live {
+                        self.reread_work();
+                    }
+                    if !self.mailbox_live {
+                        self.reread_prompts();
+                    }
+                }
+                self.reread_chat(stale(collection));
+            }
             Watched::Ended(Feed::Work, error) => {
                 self.live = false;
                 if let Some(error) = error {
@@ -1047,6 +1232,10 @@ impl Source {
                 self.mailbox_live = false;
                 self.tell(Update::Notice(prompts_not_live(error.as_deref())));
             }
+            // The loop ends the source on it: the shell has no chat without its feed.
+            Watched::Ended(Feed::Chat(collection), _) => {
+                self.chat_live.remove(collection);
+            }
             Watched::Renew(Feed::Work) => {
                 self.live = false;
                 self.reread_work();
@@ -1055,13 +1244,18 @@ impl Source {
                 self.mailbox_live = false;
                 self.reread_prompts();
             }
+            Watched::Renew(Feed::Chat(collection)) => {
+                self.chat_live.remove(collection);
+                self.reread_chat(stale(collection));
+            }
             Watched::Read(read) => self.landed(*read),
             Watched::Asked(asked) => self.asked(*asked),
+            Watched::Chatted(read) => self.chatted(*read),
             Watched::Tree(tree) => {
                 self.reading_tree = false;
                 self.tell(Update::WorkingTree(tree));
-                if let Some(agent) = self.tree_again.take() {
-                    self.read_tree(agent);
+                if std::mem::take(&mut self.tree_again) {
+                    self.read_tree();
                 }
             }
             // Uncancelled, it is the waiting sign-in's: only its answer or a cancel frees the
@@ -1201,157 +1395,304 @@ impl Source {
         children.chain(jobs).collect()
     }
 
-    /// Every agent's threads, newest first.
-    async fn sessions(&self) -> Vec<Session> {
-        let today = chrono::Local::now().date_naive();
-        let mut threads = Vec::new();
-        for (agent, client) in &self.clients {
-            let listed = self.threads(client, None).await;
-            threads.extend(listed.into_iter().map(|thread| (thread, agent)));
-        }
-        threads.sort_by_key(|(thread, _)| Reverse(thread.updated_at));
-        threads
-            .iter()
-            .map(|(thread, agent)| items::session(thread, agent, today))
-            .collect()
-    }
-
-    /// Every page of the connection's threads of `source_kinds`. A failed page becomes a notice.
-    async fn threads(
-        &self,
-        client: &Client,
-        source_kinds: Option<Vec<codex::ThreadSourceKind>>,
-    ) -> Vec<codex::Thread> {
-        let mut threads = Vec::new();
-        let mut cursor = None;
-        loop {
-            let params = codex::ThreadListParams {
-                cursor: cursor.take(),
-                limit: Some(100),
-                sort_key: Some(codex::ThreadSortKey::UpdatedAt),
-                sort_direction: None,
-                model_providers: None,
-                source_kinds: source_kinds.clone(),
-                archived: None,
-                cwd: None,
-                use_state_db_only: false,
-                search_term: None,
-            };
-            let page = client
-                .request::<_, codex::ThreadListResponse>("thread/list", &params)
-                .await;
-            match page {
-                Ok(page) => {
-                    threads.extend(page.data);
-                    cursor = page.next_cursor;
-                }
-                Err(error) => self.tell(Update::Notice(error.to_string())),
+    /// A chat subscription opened for `collection` goes live; why one failed is returned to tell.
+    fn chat_watched(
+        &mut self,
+        collection: &'static str,
+        changes: Option<Result<Changes, String>>,
+    ) -> Option<String> {
+        match changes? {
+            Ok(changes) => {
+                self.chat_live.insert(collection);
+                let watching = self.watching.clone();
+                self.runtime
+                    .spawn(forward(changes, Feed::Chat(collection), watching));
+                None
             }
-            if cursor.is_none() {
-                return threads;
-            }
+            Err(error) => Some(error),
         }
     }
 
-    /// The endpoint lists and resumes a subagent only on the connection of its root session's
-    /// agent, whatever agent the subagent runs, so the parent's connection serves it. Its rows
-    /// come oldest first. Each working subagent is resumed once: only a connection that has
-    /// resumed a subagent reports its turns, so that is how its end is heard.
-    async fn subagents(&mut self, session: &str, agent: &str) {
-        let Some(client) = self.client(agent) else {
+    /// One reread at a time, off the chat loop, as `reread_work` reads: a change while one is
+    /// out asks for one more, which reads all that the changes since made stale.
+    fn reread_chat(&mut self, stale: Stale) {
+        let Ok(work) = self.work.clone() else {
             return;
         };
-        let kinds = vec![
-            codex::ThreadSourceKind::SubAgent,
-            codex::ThreadSourceKind::SubAgentThreadSpawn,
-        ];
-        let mut children = self.threads(client, Some(kinds)).await;
-        children.retain(|thread| items::parent(thread) == Some(session));
-        children.sort_by_key(|thread| thread.created_at);
-        let mut rows = Vec::with_capacity(children.len());
-        for listed in children {
-            let working = matches!(listed.status, codex::ThreadStatus::Active { .. });
-            let thread = if working && !self.resumed.contains(&listed.id) {
-                match self.resume(agent, &listed.id).await {
-                    Ok(resumed) => {
-                        self.resumed.insert(resumed.id.clone());
-                        resumed
-                    }
-                    Err(message) => {
-                        self.tell(Update::Notice(message));
-                        listed
-                    }
-                }
-            } else {
-                listed
-            };
-            self.parents.insert(thread.id.clone(), session.to_string());
-            rows.push(items::subagent(&thread));
+        if self.chatting {
+            self.chat_again = Some(self.chat_again.unwrap_or_default().and(stale));
+            return;
         }
-        self.children.insert(session.to_string(), rows);
-        self.tell(Update::Running {
-            session: session.to_string(),
-            rows: self.running(session),
+        self.chatting = true;
+        let subscribe = CHAT
+            .into_iter()
+            .filter(|collection| !self.chat_live.contains(collection));
+        let subscribe = subscribe.collect();
+        let asking = self.chats.iter().map(|(session, chat)| Asking {
+            session: session.clone(),
+            requester: chat.requester.clone(),
+            opened: chat.opened,
+            next: chat.next,
+        });
+        let asking = asking.collect();
+        let (node, observed) = (self.principal.clone(), self.store.clone());
+        let (edits, done) = (self.edits.clone(), self.watching.clone());
+        self.runtime.spawn(async move {
+            let read = read_chat(work, node, stale, subscribe, observed, asking, edits).await;
+            let _ = done.send(Watched::Chatted(Box::new(read)));
         });
     }
 
-    /// Resume returns every turn. Asking it to exclude them would also drop the baseline the
-    /// runtime continues a running turn from.
-    async fn resume(&self, agent: &str, thread: &str) -> Result<codex::Thread, String> {
-        let client = self.client(agent).ok_or_else(|| not_connected(agent))?;
-        let params = codex::ThreadResumeParams {
-            thread_id: thread.to_string(),
-            ..Default::default()
-        };
-        client
-            .request::<_, codex::ThreadResumeResponse>("thread/resume", &params)
-            .await
-            .map(|resumed| resumed.thread)
-            .map_err(|error| error.to_string())
+    fn chatted(&mut self, read: ChatRead) {
+        self.chatting = false;
+        let mut failed = None;
+        for (collection, changes) in read.changes {
+            if let Some(error) = self.chat_watched(collection, changes) {
+                failed.get_or_insert(error);
+            }
+        }
+        if let Some(error) = failed {
+            self.tell(Update::Notice(chat_not_live(&error)));
+        }
+        match read.store {
+            Some(Ok(store)) => {
+                self.store = Arc::new(store);
+                self.tell_sessions();
+                self.tell_turns();
+            }
+            Some(Err(error)) => self.tell(Update::Notice(error)),
+            None => {}
+        }
+        for session in read.sessions {
+            self.chatted_session(session);
+        }
+        if let Some(stale) = self.chat_again.take() {
+            self.reread_chat(stale);
+        }
     }
 
-    /// Whether the session has a turn in progress.
-    async fn open(&mut self, session: String, agent: &str) -> bool {
-        let thread = match self.resume(agent, &session).await {
-            Ok(thread) => thread,
-            Err(message) => {
-                self.tell(Update::Notice(message));
-                return false;
-            }
+    /// A read for an earlier opening of its tab is older than that opening told, so it tells
+    /// nothing.
+    fn chatted_session(&mut self, read: SessionRead) {
+        let SessionRead {
+            session,
+            opened,
+            transcript,
+            edits,
+            live,
+            children,
+        } = read;
+        let Some(chat) = self.chats.get_mut(&session) else {
+            return;
         };
+        if chat.opened != opened {
+            return;
+        }
+        self.edits.extend(edits);
+        match transcript {
+            Some(Ok(transcript)) => {
+                chat.next = transcript.next;
+                self.tell_lines(&session, transcript.lines);
+            }
+            Some(Err(error)) => self.tell(Update::Notice(error)),
+            None => {}
+        }
+        match live {
+            Ok(lines) => self.tell_live(&session, lines),
+            Err(error) => self.tell(Update::Notice(error)),
+        }
+        match children {
+            Some(Ok(children)) => self.tell_children(&session, &children, false),
+            Some(Err(error)) => self.tell(Update::Notice(error)),
+            None => {}
+        }
+    }
+
+    /// The sessions list, when it changed.
+    fn tell_sessions(&mut self) {
+        let listed = items::sessions(&self.store, &self.principal, today());
+        if listed != self.listed {
+            self.listed = listed.clone();
+            self.tell(Update::Sessions(listed));
+        }
+    }
+
+    /// Each open session's turn that ended, with why when it failed, then any that started.
+    fn tell_turns(&mut self) {
+        let mut told = Vec::new();
+        for (session, chat) in &mut self.chats {
+            let now = turn_of(&self.store, &self.principal, &self.interrupted, session);
+            if chat.turn == now {
+                continue;
+            }
+            if let Some(turn) = chat.turn.take() {
+                let failed = failure(&self.store, &turn);
+                let session = session.clone();
+                told.push(Update::TurnEnded { session, turn });
+                told.extend(failed.map(Update::Notice));
+            }
+            if let Some(turn) = now.clone() {
+                let session = session.clone();
+                told.push(Update::Turn { session, turn });
+            }
+            chat.turn = now;
+        }
+        for update in told {
+            self.tell(update);
+        }
+    }
+
+    /// Each line that is new or differs from the one its tab shows.
+    fn tell_lines(&mut self, session: &str, lines: Vec<ChatLine>) {
+        let Some(chat) = self.chats.get_mut(session) else {
+            return;
+        };
+        let mut told = Vec::new();
+        for line in lines {
+            let id = line.item.clone().unwrap_or_default();
+            if chat.lines.get(&id) == Some(&line) {
+                continue;
+            }
+            chat.lines.insert(id, line.clone());
+            let session = session.to_string();
+            told.push(Update::Item { session, line });
+        }
+        for update in told {
+            self.tell(update);
+        }
+    }
+
+    /// A running turn's text arrives whole: what it added to the line its tab shows is told
+    /// as a delta, and anything else replaces the line.
+    fn tell_live(&mut self, session: &str, lines: Vec<ChatLine>) {
+        let Some(chat) = self.chats.get_mut(session) else {
+            return;
+        };
+        let mut told = Vec::new();
+        for line in lines {
+            let id = line.item.clone().unwrap_or_default();
+            let shown = chat.lines.get(&id).filter(|shown| shown.tone == line.tone);
+            let added = shown.and_then(|shown| line.text.strip_prefix(shown.text.as_str()));
+            let session = session.to_string();
+            match added {
+                Some("") => {}
+                Some(added) => told.push(Update::Delta {
+                    session,
+                    item: id.clone(),
+                    text: added.to_string(),
+                    tone: line.tone,
+                }),
+                None => told.push(Update::Item {
+                    session,
+                    line: line.clone(),
+                }),
+            }
+            chat.lines.insert(id, line);
+        }
+        for update in told {
+            self.tell(update);
+        }
+    }
+
+    /// The session's own subagents, oldest first; its rows are told when they changed, or
+    /// `always`.
+    fn tell_children(&mut self, session: &str, caused: &[CausedSession], always: bool) {
+        let own = caused
+            .iter()
+            .filter(|child| child.caused_by_scope.session_id == session);
+        let mut rows = Vec::new();
+        for child in own {
+            let parent = session.to_string();
+            self.parents.insert(child.scope.session_id.clone(), parent);
+            rows.push(items::subagent(child, &self.agents));
+        }
+        let changed = self.children.get(session) != Some(&rows);
+        self.children.insert(session.to_string(), rows);
+        if changed || always {
+            self.tell(Update::Running {
+                session: session.to_string(),
+                rows: self.running(session),
+            });
+        }
+    }
+
+    /// Reads the session afresh: its running turn, which is told first so the shell never
+    /// draws its card, then its transcript, the turn's text so far and its subagents.
+    async fn open(&mut self, session: String) {
+        let Ok(work) = self.work.clone() else {
+            return;
+        };
+        let access = work.access();
+        match load_node_snapshot_on(&access, &self.principal).await {
+            Ok(store) => self.store = Arc::new(store),
+            Err(error) => return self.tell(Update::Notice(format!("{error:#}"))),
+        }
+        let listed = self.store.sessions.iter();
+        let mut listed = listed.filter(|row| row.node_did == self.principal);
+        let found = listed.find(|row| row.session_id == session);
+        let kept = self
+            .chats
+            .get(&session)
+            .and_then(|chat| chat.requester.clone());
+        let requester = found.and_then(|row| row.requester_did.clone()).or(kept);
+        let asked = Asking {
+            session: session.clone(),
+            requester: requester.clone(),
+            opened: 0,
+            next: 0,
+        };
+        let every = Stale {
+            sessions: true,
+            transcripts: true,
+        };
+        let node = &self.principal;
+        let read = read_session(&access, node, &self.store, asked, every, &self.edits).await;
+        let transcript = match read.transcript {
+            Some(Ok(transcript)) => transcript,
+            Some(Err(error)) => return self.tell(Update::Notice(error)),
+            None => items::Transcript::default(),
+        };
+        self.edits.extend(read.edits);
         if self.open.insert(session.clone()) {
             self.reread_work();
         }
-        self.resumed.insert(session.clone());
-        let turns = thread.turns;
-        let running = turns
-            .iter()
-            .rfind(|turn| turn.status == codex::TurnStatus::InProgress);
-        // Told before the transcript, so the shell never draws the running turn's card.
-        if let Some(running) = running {
-            self.tell(Update::Turn {
-                session: session.clone(),
-                turn: running.id.clone(),
-            });
+        let turn = turn_of(&self.store, &self.principal, &self.interrupted, &session);
+        let chat = self.chats.entry(session.clone()).or_default();
+        chat.opened += 1;
+        chat.requester = requester;
+        chat.next = transcript.next;
+        chat.turn = turn.clone();
+        let shown = transcript.lines.iter();
+        let shown = shown.map(|line| (line.item.clone().unwrap_or_default(), line.clone()));
+        chat.lines = shown.collect();
+        if let Some(turn) = turn {
+            let session = session.clone();
+            self.tell(Update::Turn { session, turn });
         }
-        let lines = turns
-            .iter()
-            .flat_map(|turn| {
-                turn.items
-                    .iter()
-                    .flat_map(|item| items::lines(item, &turn.id))
-            })
-            .flat_map(|line| [line, blank()])
-            .collect();
+        let lines = transcript.lines.into_iter();
+        let lines = lines.flat_map(|line| [line, blank()]).collect();
+        let opened = session.clone();
         self.tell(Update::Opened {
-            session: session.clone(),
+            session: opened,
             lines,
         });
-        self.subagents(&session, agent).await;
+        match read.live {
+            Ok(lines) => self.tell_live(&session, lines),
+            Err(error) => self.tell(Update::Notice(error)),
+        }
+        match read.children {
+            Some(Ok(children)) => self.tell_children(&session, &children, true),
+            Some(Err(error)) => {
+                self.tell(Update::Notice(error));
+                let rows = self.running(&session);
+                let session = session.clone();
+                self.tell(Update::Running { session, rows });
+            }
+            None => {}
+        }
         // A new tab shows no prompts until it is told them.
         self.told.remove(&session);
         self.reread_prompts();
-        running.is_some()
     }
 
     /// Through the served mailbox owner, which refuses a question that needs an answer.
@@ -1367,10 +1708,8 @@ impl Source {
         self.reread_prompts();
     }
 
-    /// The reply is a request caused by the item. The endpoint streams no other client's
-    /// request, so the session is resumed once to show the reply, and its answer when it is
-    /// already there.
-    async fn reply(&mut self, session: String, agent: &str, item: &str, text: &str) {
+    /// The reply is a request caused by the item, which the session's feed then shows.
+    async fn reply(&mut self, item: &str, text: &str) {
         let Ok(work) = self.work.clone() else {
             return;
         };
@@ -1381,58 +1720,57 @@ impl Source {
             let reply = work::reply_from_text(text, &item).map_err(anyhow::Error::msg)?;
             mailbox::reply_to(&work.endpoint, &item, reply).await
         };
-        match replied.await {
-            Ok(_) => self.replied(session, agent).await,
-            Err(error) => {
-                self.tell(Update::Notice(format!("{error:#}")));
-                self.reread_prompts();
-            }
+        if let Err(error) = replied.await {
+            self.tell(Update::Notice(format!("{error:#}")));
         }
+        self.reread_prompts();
     }
 
-    async fn replied(&mut self, session: String, agent: &str) {
-        if self.open(session, agent).await {
-            self.tell(Update::Notice(PICK_AGAIN.to_string()));
-        }
-    }
-
-    /// The endpoint lists every node skill; the context read narrows them to the agent's, as
-    /// admission does. With work off it cannot, and admission refuses one outside the context.
+    /// The node's enabled skills, sorted by name, narrowed to the agent's context as admission
+    /// narrows them.
     async fn read_skills(&mut self, agent: String) {
-        let Some(client) = self.client(&agent) else {
-            return self.tell(Update::Notice(not_connected(&agent)));
+        let work = match self.work.clone() {
+            Ok(work) => work,
+            Err(off) => return self.skills_unread(agent, off),
         };
-        let params = codex::SkillsListParams::default();
-        let listed = match client
-            .request::<_, codex::SkillsListResponse>("skills/list", &params)
-            .await
-        {
-            Ok(listed) => listed.data,
+        let (access, node) = (work.access(), self.principal.clone());
+        let read = async {
+            let rows = query_collection_sorted(&access, SKILL_SPEC, &node).await?;
+            let allowed = forms::skill::allowed(&access, &node, &agent).await?;
+            anyhow::Ok((rows, allowed))
+        };
+        let (rows, allowed) = match read.await {
+            Ok(read) => read,
             Err(error) => return self.skills_unread(agent, format!("{error:#}")),
         };
-        if let Some(error) = listed.iter().flat_map(|entry| &entry.errors).next() {
-            let message = error.message.clone();
-            return self.skills_unread(agent, message);
-        }
-        let mut skills: Vec<_> = listed.into_iter().flat_map(|entry| entry.skills).collect();
-        skills.retain(|skill| skill.enabled);
-        if let Ok(work) = &self.work {
-            match forms::skill::allowed(&work.access(), &self.principal, &agent).await {
-                Ok(allowed) => {
-                    skills.retain(|skill| allowed.iter().any(|id| id == skill_id(skill)))
-                }
-                Err(error) => return self.skills_unread(agent, format!("{error:#}")),
-            }
-        }
-        let rows = skills.iter().map(|skill| Skill {
-            id: skill_id(skill).to_string(),
-            about: match skill.description.as_str() {
-                "" => skill.name.clone(),
-                description => description.to_string(),
-            },
+        let text = |row: &Value, field: &str| {
+            let text = row[field].as_str().map(str::trim).unwrap_or_default();
+            text.to_string()
+        };
+        let mut skills: Vec<_> = rows
+            .iter()
+            .filter(|row| row["enabled"] != Value::Bool(false))
+            .map(|row| {
+                (
+                    text(row, "skill_id"),
+                    text(row, "name"),
+                    text(row, "description"),
+                )
+            })
+            .filter(|(id, ..)| !id.is_empty() && allowed.contains(id))
+            .map(|(id, name, about)| {
+                let name = if name.is_empty() { id.clone() } else { name };
+                (name, id, about)
+            })
+            .collect();
+        skills.sort();
+        let rows = skills.iter().map(|(name, id, about)| Skill {
+            id: id.clone(),
+            about: if about.is_empty() { name } else { about }.clone(),
         });
         let rows = rows.collect();
-        self.skills.insert(agent.clone(), skills);
+        let ids = skills.into_iter().map(|(_, id, _)| id).collect();
+        self.skills.insert(agent.clone(), ids);
         self.tell(Update::Skills {
             agent,
             skills: rows,
@@ -1449,72 +1787,53 @@ impl Source {
         });
     }
 
-    /// The session to start on: `session`, or a new one told as `Started`. `None` once a failed
-    /// start is told as `StartFailed`.
-    async fn session_for(
-        &self,
-        tab: u64,
-        session: Option<String>,
-        client: &Client,
-    ) -> Option<String> {
-        if session.is_some() {
-            return session;
-        }
-        let params = codex::ThreadStartParams::default();
-        match client
-            .request::<_, codex::ThreadStartResponse>("thread/start", &params)
-            .await
-        {
-            Ok(started) => {
-                let session = started.thread.id;
-                self.tell(Update::Started {
-                    tab,
-                    session: session.clone(),
-                });
-                Some(session)
-            }
-            Err(error) => {
-                let message = error.to_string();
-                self.tell(Update::StartFailed { tab, message });
-                None
-            }
-        }
+    /// The session to start on: `session`, or a new one told as `Started`, which its first
+    /// request makes.
+    fn session_for(&self, tab: u64, session: Option<String>) -> String {
+        session.unwrap_or_else(|| {
+            let session = uuid::Uuid::new_v4().to_string();
+            self.tell(Update::Started {
+                tab,
+                session: session.clone(),
+            });
+            session
+        })
     }
 
-    /// A tab with no session gets one first, and `Started` or `StartFailed` either way.
+    /// A tab with no session gets one first, and `Started` either way. A refused turn is told
+    /// as `StartFailed`.
     async fn send(
         &mut self,
         tab: u64,
         session: Option<String>,
         agent: &str,
-        input: Vec<codex::UserInput>,
+        text: String,
+        skills: Vec<String>,
     ) {
-        let Some(client) = self.client(agent) else {
+        let work = match self.work.clone() {
+            Ok(work) => work,
+            Err(message) => return self.tell(Update::StartFailed { tab, message }),
+        };
+        if !self.shown_agents.iter().any(|shown| shown == agent) {
             let message = not_connected(agent);
             return self.tell(Update::StartFailed { tab, message });
-        };
-        let Some(session) = self.session_for(tab, session, client).await else {
-            return;
-        };
-        let params = codex::TurnStartParams {
-            thread_id: session.clone(),
-            input,
-            ..Default::default()
-        };
-        let started = client
-            .request::<_, codex::TurnStartResponse>("turn/start", &params)
-            .await;
+        }
+        let session = self.session_for(tab, session);
+        let submitted = submit(&work, &self.principal, &session, agent, &text, skills).await;
         if self.open.insert(session.clone()) {
             self.reread_work();
         }
-        match started {
-            Ok(started) => self.tell(Update::Turn {
-                session,
-                turn: started.turn.id,
-            }),
+        match submitted {
+            Ok(submitted) => {
+                let chat = self.chats.entry(session.clone()).or_default();
+                chat.requester = chat.requester.take().or(submitted.requester_did);
+                chat.turn = Some(submitted.request_id.clone());
+                let turn = submitted.request_id;
+                self.tell(Update::Turn { session, turn });
+            }
             Err(error) => self.tell(Update::StartFailed {
                 tab,
-                message: error.to_string(),
+                message: format!("{error:#}"),
             }),
         }
     }
@@ -1526,13 +1845,11 @@ impl Source {
             Ok(work) => work,
             Err(message) => return self.tell(Update::StartFailed { tab, message }),
         };
-        let Some(client) = self.client(agent) else {
+        if !self.shown_agents.iter().any(|shown| shown == agent) {
             let message = not_connected(agent);
             return self.tell(Update::StartFailed { tab, message });
-        };
-        let Some(session) = self.session_for(tab, session, client).await else {
-            return;
-        };
+        }
+        let session = self.session_for(tab, session);
         let principal = &self.principal;
         let submitted = async {
             // The owner requires a retry key, by which it recognises a retried submission.
@@ -1560,9 +1877,8 @@ impl Source {
         };
         match submitted.await {
             Ok(_) => {
-                self.open(session, agent).await;
-                self.tell(Update::Sessions(self.sessions().await));
-                self.tell(Update::Notice(GOAL_SET.to_string()));
+                self.open(session).await;
+                self.tell_sessions();
             }
             Err(error) => self.tell(Update::StartFailed {
                 tab,
@@ -1571,52 +1887,95 @@ impl Source {
         }
     }
 
-    /// The endpoint interrupts the thread's active turn whatever id it is given, so a turn
-    /// that has ended is only cleared: interrupting it would stop another client's newer turn.
-    async fn interrupt(&self, session: String, agent: &str, turn: String) {
-        let Some(client) = self.client(agent) else {
-            return self.tell(Update::Notice(not_connected(agent)));
+    /// Stops exactly the turn the tab shows. One the node already shows ended is only
+    /// cleared.
+    async fn interrupt(&mut self, session: String, turn: String) {
+        let Ok(work) = self.work.clone() else {
+            return;
         };
-        let params = codex::ThreadReadParams {
-            thread_id: session.clone(),
-            include_turns: true,
-        };
-        let read = match client
-            .request::<_, codex::ThreadReadResponse>("thread/read", &params)
-            .await
-        {
-            Ok(read) => read,
-            Err(error) => return self.tell(Update::Notice(error.to_string())),
-        };
-        let running = read
-            .thread
-            .turns
-            .iter()
-            .any(|shown| shown.id == turn && shown.status == codex::TurnStatus::InProgress);
-        if running {
-            let params = codex::TurnInterruptParams {
-                thread_id: session.clone(),
-                turn_id: turn.clone(),
-            };
-            if let Err(error) = client
-                .request::<_, codex::TurnInterruptResponse>("turn/interrupt", &params)
-                .await
-            {
-                return self.tell(Update::Notice(error.to_string()));
+        if !ended(&work.access(), &self.principal, &turn).await {
+            let stopped = interrupt_request_on(&work.access(), &self.principal, &turn).await;
+            if let Err(error) = stopped {
+                return self.tell(Update::Notice(error));
+            }
+        }
+        self.interrupted.insert(turn.clone());
+        if let Some(chat) = self.chats.get_mut(&session) {
+            if chat.turn.as_ref() == Some(&turn) {
+                chat.turn = None;
             }
         }
         self.tell(Update::TurnEnded { session, turn });
     }
 }
 
-fn not_connected(agent: &str) -> String {
-    format!("agent {agent} is not connected to this shell")
+/// The user's message, queued as the desktop queues one: it steers a running turn.
+async fn submit(
+    work: &Work,
+    node: &str,
+    session: &str,
+    agent: &str,
+    text: &str,
+    skills: Vec<String>,
+) -> anyhow::Result<crate::SubmittedRequest> {
+    let input = RequestInput {
+        selected_skill_ids: skills,
+        ..Default::default()
+    };
+    let (access, steer) = (work.access(), QueueDelivery::Steer);
+    let input =
+        gents::request::lifecycle::prepare_user_message_input(&access, node, session, input, steer);
+    let options = crate::RequestSubmitOptions {
+        input: Some(input.await?),
+        ..Default::default()
+    };
+    let (session, agent) = (Some(session), Some(agent));
+    let endpoint = &work.endpoint;
+    let prepared =
+        crate::prepare_agent_request(endpoint, node, text, session, agent, None, options);
+    crate::submit_prepared_agent_request_committed(endpoint, &prepared.await?).await
 }
 
-/// The endpoint lists a skill at a path named for its id, which a skill input is read back by.
-fn skill_id(skill: &codex::SkillMetadata) -> &str {
-    let name = skill.path.file_name().and_then(|name| name.to_str());
-    name.unwrap_or_default()
+/// The session's running request, unless the user stopped it.
+fn turn_of(
+    store: &ClientStore,
+    node: &str,
+    stopped: &RapidHashSet<String>,
+    session: &str,
+) -> Option<String> {
+    let request = store.turn_request_id_for_session_for_node(session, node)?;
+    let state = store.derive_turn_for_request_for_node(&request, node)?;
+    (!state.is_terminal() && !stopped.contains(&request)).then_some(request)
+}
+
+/// Whether `request` has ended, as the node has it now; a request that cannot be read is
+/// taken to run, so the interrupt owner says why it cannot be stopped.
+async fn ended(access: &ConfigAccess, node: &str, request: &str) -> bool {
+    let query = crate::request_terminal_query(request, None);
+    let rows = crate::graphql_rows(access, "AgentRequest", &query).await;
+    let mut rows = rows.into_iter().flatten();
+    rows.any(|row| {
+        row["node_did"] == node
+            && RequestLifecycleState::is_terminal_str(row["lifecycle_state"].as_str())
+    })
+}
+
+/// Why `request` failed, when it did.
+fn failure(store: &ClientStore, request: &str) -> Option<String> {
+    use RequestLifecycleState::{Dead, Failed};
+    let row = store.request_row(request)?;
+    let failed = matches!(row.lifecycle_state, Some(Failed | Dead));
+    let reason = row.failure_reason.as_deref().map(str::trim);
+    let reason = reason.filter(|reason| failed && !reason.is_empty())?;
+    Some(items::clean(reason))
+}
+
+fn chat_not_live(error: &str) -> String {
+    format!("sessions are not live: reopen the shell to follow them ({error})")
+}
+
+fn not_connected(agent: &str) -> String {
+    format!("agent {agent} is not open in this shell")
 }
 
 /// The shell puts a blank after each new item's line; an opened transcript matches it.
@@ -1631,69 +1990,13 @@ fn blank() -> ChatLine {
 
 #[cfg(test)]
 mod tests {
-    use gents::pack::PackChangeError;
-    use serde_json::json;
+    use std::time::Duration;
 
-    use super::super::tests::{
-        agents_a_and_b, connect, home_serving, quiet, resumes_of, thread, thread_answer, turn,
-        user_message, within, FakeRuntime,
-    };
+    use gents::pack::PackChangeError;
+
+    use super::super::tests::{home_serving, within};
     use super::*;
     use crate::commands::eval::testing::test_runtime_handle;
-
-    /// The source after a reply to `s1` was submitted, on agent `a`, whose resume shows the reply
-    /// as the turn `r9` in `status`.
-    async fn after_a_reply(status: &'static str) -> (FakeRuntime, Vec<Update>) {
-        let fake = FakeRuntime::start(agents_a_and_b(), move |_, method, params| match method {
-            "thread/resume" => {
-                let mut shown = thread(params["threadId"].as_str().unwrap(), 100);
-                let reply = user_message("u9", "Decision on Release channel: Stable (stable)");
-                shown["turns"] = json!([turn("r9", status, json!([reply]))]);
-                Some(Ok(thread_answer(shown)))
-            }
-            _ => quiet(method),
-        })
-        .await;
-        let (events, _received) = mpsc::unbounded_channel();
-        let client = connect(&fake, "a", events).await;
-        let (updates, told) = std::sync::mpsc::channel();
-        let (watching, _watched) = mpsc::unbounded_channel();
-        let off = Err(String::new());
-        let mut source = Source::new(
-            updates,
-            off,
-            PathBuf::new(),
-            test_runtime_handle(),
-            watching,
-        );
-        source.clients.push(("a".to_string(), Arc::new(client)));
-
-        source.replied("s1".to_string(), "a").await;
-
-        let told = told.try_iter().map(|input| match input {
-            Input::Runtime(update) => update,
-            other => panic!("{other:?}"),
-        });
-        (fake, told.collect())
-    }
-
-    #[tokio::test]
-    async fn a_reply_resumes_its_session_once_and_says_to_pick_it_again_while_it_runs() {
-        let (fake, told) = after_a_reply("inProgress").await;
-
-        assert_eq!(resumes_of(&fake, "s1"), 1);
-        assert!(
-            matches!(&told[1], Update::Opened { session, lines } if session == "s1" && lines[0].text.starts_with("Decision on")),
-            "{told:?}"
-        );
-        let running = Update::Turn {
-            session: "s1".to_string(),
-            turn: "r9".to_string(),
-        };
-        assert_eq!(told[0], running, "ctrl-c can stop the answer: {told:?}");
-        let pick = Update::Notice(PICK_AGAIN.to_string());
-        assert_eq!(told.last(), Some(&pick), "{told:?}");
-    }
 
     const OFF: &str = "jobs are off";
 
@@ -2138,17 +2441,5 @@ mod tests {
         let rows = Err(closed(None));
         let menu = MenuId::Packs;
         assert_eq!(next(&told).await, Update::Menu { menu, rows });
-    }
-
-    #[tokio::test]
-    async fn an_answered_reply_says_nothing_more() {
-        let (_, told) = after_a_reply("completed").await;
-
-        assert!(
-            !told
-                .iter()
-                .any(|update| matches!(update, Update::Notice(_))),
-            "{told:?}"
-        );
     }
 }

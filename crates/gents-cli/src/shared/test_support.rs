@@ -13,7 +13,6 @@ pub(crate) fn node_builder() -> defra_node::NodeBuilder {
 /// household and wrote its config.
 pub(crate) struct Served {
     pub(crate) node: std::sync::Arc<defra_node::Node>,
-    pub(crate) graphql: String,
     pub(crate) user: gents::store::config_client::GraphqlEndpoint,
     _user_key: tempfile::TempDir,
 }
@@ -78,7 +77,6 @@ pub(crate) async fn served_config(mut config: Value) -> Served {
     Served {
         node,
         user: user_endpoint(&graphql, &user),
-        graphql,
         _user_key: keys,
     }
 }
@@ -720,7 +718,7 @@ async fn forward(
 }
 
 /// Relays one signing conversation unchanged between the client and the node.
-async fn pipe_websocket(
+pub(crate) async fn pipe_websocket(
     client: axum::extract::ws::WebSocket,
     upstream: String,
     parts: axum::http::request::Parts,

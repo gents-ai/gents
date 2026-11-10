@@ -22,6 +22,8 @@ use crate::shared::StoredInitConfig;
 mod setup;
 mod yolo;
 
+pub(crate) use yolo::node_readiness;
+
 const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
 /// A runtime publishes an agent it did not have at start once it reconciles the new
 /// documents, and nothing tells another process when that has happened.
@@ -89,8 +91,8 @@ impl InterfaceEndpoint {
         runtime: Handle,
     ) -> Result<()> {
         match self {
-            Self::Shell { remote } => {
-                crate::commands::shell::open(home, &remote, agent, prompt, resume, runtime).await
+            Self::Shell { .. } => {
+                crate::commands::shell::open(home, agent, prompt, resume, runtime).await
             }
             Self::Codex { remote } => {
                 open_codex(CodexArgs {
