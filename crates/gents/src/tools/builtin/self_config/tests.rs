@@ -1337,6 +1337,38 @@ async fn config_call(
         .await
 }
 
+/// A digest names a stored pack. One the store does not hold is answered
+/// with where a just-built pack is, not an OS error and a home path.
+#[tokio::test]
+async fn a_digest_the_store_does_not_hold_points_at_the_built_pack_file() {
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_fixture, tools) = signed_pack_tool("pack-absent-digest", plugins).await;
+    let absent = format!("sha256:{}", "ab".repeat(32));
+    for verb in ["update", "install"] {
+        let error = config_call(&tools, &["pack", verb, &absent, "--digest", &absent])
+            .await
+            .unwrap_err()
+            .to_string();
+        let failure: Value = serde_json::from_str(&error[error.find('{').unwrap()..]).unwrap();
+        let message = failure["error"].as_str().unwrap();
+        assert!(
+            message.contains("not in this node's pack store"),
+            "{failure}"
+        );
+        assert!(message.contains("./FILE.pack"), "{failure}");
+        assert!(!message.contains("os error"), "{failure}");
+        assert!(
+            !message.contains(home.path().to_str().unwrap()),
+            "{failure}"
+        );
+        assert_eq!(
+            failure["recovery"]["next_call"]["argv"],
+            json!(["pack", "list"]),
+            "{failure}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn pack_list_pages_the_packs_the_home_store_holds() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");

@@ -116,7 +116,18 @@ impl PackInstaller {
                 .as_deref()
                 .context("local packs require a runtime plugin home")?;
             let archive = match local {
-                crate::pack::local::LocalName::Digest(_) => crate::pack::local::open(&local, home)?,
+                crate::pack::local::LocalName::Digest(digest) => {
+                    if !crate::pack::store::PackStore::new(home).contains(digest)? {
+                        return Err(command::CommandGuidance {
+                            message: format!(
+                                "{digest} is not in this node's pack store. A digest opens only a pack the store already holds: one that is installed, or was previewed from its file. A pack that pack build just wrote is a file: name the .pack path the build returned as `out`, spelled ./FILE.pack, in pack preview install or pack preview update. pack list shows what the store holds"
+                            ),
+                            next_call: json!({"argv":["pack","list"]}),
+                        }
+                        .into());
+                    }
+                    crate::pack::local::open(&local, home)?
+                }
                 crate::pack::local::LocalName::Path(path) => {
                     // Effective authority, not the process ceiling alone: a
                     // narrower agent selection (or WorkspaceRoot policy) must
