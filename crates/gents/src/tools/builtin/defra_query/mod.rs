@@ -99,6 +99,9 @@ pub struct DefraQueryTool {
     node: Arc<EmbeddedNode>,
     scope: CollectionScope,
     actor: Option<::identity::Did>,
+    /// Whether the calling agent holds the `tools` category of `config`,
+    /// which decides who a refused write verb is told can grant writes.
+    holds_tools: bool,
 }
 
 impl DefraQueryTool {
@@ -107,7 +110,12 @@ impl DefraQueryTool {
             node,
             scope,
             actor: None,
+            holds_tools: false,
         }
+    }
+    pub fn with_tools_category(mut self, held: bool) -> Self {
+        self.holds_tools = held;
+        self
     }
     pub fn with_actor(mut self, actor: ::identity::Did) -> Self {
         self.actor = Some(actor);
@@ -142,6 +150,7 @@ impl Tool for DefraQueryTool {
         };
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
+            Err(error) if error.is::<command::WriteVerb>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":crate::tools::builtin::defra_write::write_grant_guidance(self.holds_tools, None, args.collection.as_slice())})).into()),
             Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
             Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
         }
@@ -152,8 +161,13 @@ pub fn build_defra_query_tool(
     node: Arc<EmbeddedNode>,
     scope: CollectionScope,
     actor: ::identity::Did,
+    holds_tools: bool,
 ) -> Box<dyn ToolDyn> {
-    Box::new(DefraQueryTool::new(node, scope).with_actor(actor))
+    Box::new(
+        DefraQueryTool::new(node, scope)
+            .with_actor(actor)
+            .with_tools_category(holds_tools),
+    )
 }
 
 #[cfg(test)]

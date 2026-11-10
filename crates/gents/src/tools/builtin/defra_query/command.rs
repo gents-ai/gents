@@ -45,6 +45,16 @@ impl From<DefraQueryParams> for QueryParams {
     }
 }
 
+/// The words a model reaches for when it wants to change a document.
+const WRITE_VERBS: [&str; 7] = [
+    "write", "create", "insert", "update", "delete", "mutate", "add",
+];
+
+/// `query` was asked to change a document: it only reads.
+#[derive(Debug, thiserror::Error)]
+#[error("query only reads; it has no {0} command. Writes go through the write tool")]
+pub(super) struct WriteVerb(pub(super) String);
+
 pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
         None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows; search ranks keywords with BM25. Configuration uses config; schema definitions use schema."),
@@ -133,6 +143,9 @@ pub async fn execute_command(
         );
         ensure!(argv.len() <= 2, "help accepts one command");
         return Ok(json!({"help":query_help(argv.get(1).copied())?}));
+    }
+    if let Some(verb) = argv.first().filter(|verb| WRITE_VERBS.contains(verb)) {
+        return Err(WriteVerb((*verb).to_owned()).into());
     }
     ensure!(
         argv.len() == 1,

@@ -433,7 +433,10 @@ impl ToolSurface {
                     &runtime.node_did,
                     runtime.plugin_home(),
                     agent.as_ref(),
-                )?,
+                )?
+                .with_tools_category(
+                    self.self_config.enabled && self.self_config.categories.contains("tools"),
+                ),
             ));
         }
         if self.enable_p2p_tool {
@@ -478,6 +481,7 @@ impl ToolSurface {
                 runtime.node.clone(),
                 self.defra_query_scope.clone(),
                 datastore_actor.clone().expect("query actor was validated"),
+                self.self_config.enabled && self.self_config.categories.contains("tools"),
             ));
         }
         if !self.application_write_collections.is_empty() {

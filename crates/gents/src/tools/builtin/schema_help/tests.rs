@@ -112,6 +112,7 @@ fn runtime_owned_tool(node: &Arc<EmbeddedNode>) -> SchemaTool {
         node_did: runtime.to_string(),
         access: ConfigAccess::local_as(node.clone(), runtime),
         home: None,
+        caller: None,
     }
 }
 
@@ -163,6 +164,41 @@ async fn schema_preview_and_publication_expose_ignored_native_directives() {
     let result = call(&tool, preview["next_call"]["args"].clone()).await;
     assert_eq!(result["committed"], true);
     assert_eq!(result["warnings"], preview["warnings"]);
+    // The receipt says how the new collection becomes writable. This agent
+    // does not hold the tools category, so it is told who grants it.
+    let access = &result["result"]["write_access"];
+    assert_eq!(access["writable"], false, "{result}");
+    assert!(access.get("next_call").is_none(), "{result}");
+    let how = access["how"].as_str().unwrap();
+    assert!(
+        how.contains("write tool")
+            && how.contains("datastore.write_collections")
+            && how.contains("WarningProbe")
+            && how.contains("you do not hold the tools category"),
+        "{result}"
+    );
+    // An agent that holds it gets the exact call.
+    let holder = tool.clone().with_tools_category(true);
+    let created = call(
+        &holder,
+        json!({"argv":["collection","preview","create"],"options":{
+            "sdl":"type GrantProbe { code: String }"
+        }}),
+    )
+    .await;
+    let created = call(&holder, created["next_call"]["args"].clone()).await;
+    let access = &created["result"]["write_access"];
+    assert_eq!(access["next_call"]["tool"], "config", "{created}");
+    assert_eq!(
+        access["next_call"]["args"]["argv"],
+        json!(["tools", "edit"]),
+        "{created}"
+    );
+    assert_eq!(
+        access["next_call"]["args"]["set"]["datastore"]["write_collections"],
+        json!(["GrantProbe"]),
+        "{created}"
+    );
 
     let valid = call(
         &tool,
@@ -1062,6 +1098,7 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
         access: ConfigAccess::local(node.clone()),
         node_did: node_did.clone(),
         home: Some(home.path().to_owned()),
+        caller: None,
     };
     let access = ConfigAccess::local(node.clone());
     apply(

@@ -138,6 +138,10 @@ pub struct SchemaTool {
     access: ConfigAccess,
     node_did: String,
     home: Option<std::path::PathBuf>,
+    /// The calling agent and whether it holds the `tools` category of
+    /// `config`: what a create receipt needs to say how the new collection
+    /// becomes writable.
+    caller: Option<(String, bool)>,
 }
 
 impl SchemaTool {
@@ -147,6 +151,7 @@ impl SchemaTool {
             node_did: node.node_identity_did().unwrap_or_default().to_owned(),
             access: ConfigAccess::local(node),
             home: None,
+            caller: None,
         }
     }
 
@@ -166,7 +171,42 @@ impl SchemaTool {
             )?,
             node_did: node_did.to_owned(),
             home: home.map(ToOwned::to_owned),
+            caller: Some((agent.did().to_owned(), false)),
         })
+    }
+
+    /// Whether the calling agent holds the `tools` category of `config`.
+    pub fn with_tools_category(mut self, held: bool) -> Self {
+        if let Some((_, holds_tools)) = &mut self.caller {
+            *holds_tools = held;
+        }
+        self
+    }
+
+    /// How the calling agent writes to the collections it just created.
+    async fn write_access(&self, collections: &[String]) -> Option<Value> {
+        let (agent_did, holds_tools) = self.caller.as_ref()?;
+        let datastore = self
+            .access
+            .transact_readonly("schema.write_grant", |txn| {
+                Box::pin(async move {
+                    crate::documents::load_agent_context_and_tools_in_txn(
+                        txn,
+                        &self.node_did,
+                        agent_did,
+                    )
+                    .await
+                })
+            })
+            .await
+            .ok()
+            .and_then(|(_, tools)| tools)
+            .map(|tools| tools.datastore.unwrap_or_default());
+        Some(crate::tools::builtin::defra_write::write_grant_guidance(
+            *holds_tools,
+            datastore.as_ref(),
+            collections,
+        ))
     }
 
     /// The application collection `name` and what emptying or removing it
@@ -443,7 +483,13 @@ impl SchemaTool {
                     &plan.artifact_digest,
                 )
                 .await?;
-                json!({"collections":installed.collection_contracts.keys().collect::<Vec<_>>()})
+                let collections: Vec<String> =
+                    installed.collection_contracts.keys().cloned().collect();
+                let mut receipt = json!({"collections": collections});
+                if let Some(write_access) = self.write_access(&collections).await {
+                    receipt["write_access"] = write_access;
+                }
+                receipt
             }
             ["collection", "update"] => {
                 let mut patch = option("patch")?
