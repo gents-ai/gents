@@ -614,7 +614,8 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         artifacts.join("evidence.json"),
         serde_json::to_vec_pretty(&json!({
             "owner_did":owner, "lead_agent_did":&agents.lead, "worker_agent_dids":&agents.workers,
-            "endpoints":endpoints, "configured_backend_capacity":[32,32],
+            "lanes":lanes.iter().map(|(endpoint, model)| json!({"endpoint":endpoint, "model":model})).collect::<Vec<_>>(),
+            "configured_backend_capacity":[32,32],
             "provider_peak_overlap":peaks, "lead_sessions":sessions, "requests":requests,
             "fires":fires, "outcomes":outcomes, "inference_calls":calls,
             "observed_busy_queue":observed_busy_queue
