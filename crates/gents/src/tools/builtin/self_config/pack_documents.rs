@@ -7,7 +7,7 @@ impl PackInstaller {
         args: &PackInstallParams,
         distribution: &ConfigPackDistribution,
         commit: bool,
-        edited: crate::pack::DriftPolicy,
+        edited: super::pack_installer::EditedDecision,
     ) -> anyhow::Result<String> {
         let access = self.core.access()?;
         let node_binding = self.core.refresh_node_binding().await?;

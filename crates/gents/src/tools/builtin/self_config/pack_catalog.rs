@@ -316,9 +316,10 @@ impl PackInstaller {
         &self,
         package: &str,
         with_collections: bool,
-        edited: pack::DriftPolicy,
+        edited: Option<&str>,
         words: &[String],
     ) -> anyhow::Result<String> {
+        let edited = Self::edited_decision(edited)?;
         let args = PackInstallParams {
             package: package.to_owned(),
             variables: BTreeMap::new(),

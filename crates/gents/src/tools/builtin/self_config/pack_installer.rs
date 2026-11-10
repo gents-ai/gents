@@ -1,6 +1,9 @@
 use super::*;
-use crate::pack::{authoring, PackKind};
-use crate::plugin::authority;
+use crate::pack::{
+    authoring, edited_installed_documents, plugin_pin_conflicts, store::PackStore, DriftPolicy,
+    PackKind, PluginPinConflict,
+};
+use crate::plugin::{authority, store::content_digest_hex};
 
 /// Install document and plugins-only packs from the home's pack store or the registry through the
 /// canonical resolver, package publication, and activation owners. The running
@@ -21,6 +24,9 @@ pub(super) struct PackInstallParams {
     pub inference_slots: crate::pack::PackInferenceBindings,
     pub expected_digest: Option<String>,
 }
+
+/// The drift decision as the document installer takes it.
+pub(super) type EditedDecision = DriftPolicy;
 
 /// The pack kinds this installer installs: document and plugins-only packs.
 pub(super) struct ConfigPackDistribution(pub(super) crate::pack::resolve::ResolvedNamedPack);
@@ -117,7 +123,7 @@ impl PackInstaller {
                 .context("local packs require a runtime plugin home")?;
             let archive = match local {
                 crate::pack::local::LocalName::Digest(digest) => {
-                    if !crate::pack::store::PackStore::new(home).contains(digest)? {
+                    if !PackStore::new(home).contains(digest)? {
                         return Err(command::CommandGuidance {
                             message: format!(
                                 "{digest} is not in this node's pack store. A digest opens only a pack the store already holds: one that is installed, or was previewed from its file. A pack that pack build just wrote is a file: name the .pack path the build returned as `out`, spelled ./FILE.pack, in pack preview install or pack preview update. pack list shows what the store holds"
@@ -364,7 +370,7 @@ impl PackInstaller {
         coordinate: &str,
         removal: bool,
     ) -> anyhow::Result<Option<Value>> {
-        let edited = crate::pack::edited_installed_documents(
+        let edited = edited_installed_documents(
             &self.core.access()?,
             self.core.node_did(),
             coordinate,
@@ -385,7 +391,7 @@ impl PackInstaller {
     pub(super) async fn pin_conflicts(
         &self,
         distribution: &ConfigPackDistribution,
-    ) -> anyhow::Result<Vec<crate::pack::PluginPinConflict>> {
+    ) -> anyhow::Result<Vec<PluginPinConflict>> {
         let manifest = distribution.manifest();
         let mut replacements = BTreeMap::new();
         for plugin in &manifest.metadata.plugins {
@@ -393,14 +399,11 @@ impl PackInstaller {
                 format!("{}/{}", manifest.metadata.namespace, plugin.name),
                 format!(
                     "sha256:{}",
-                    crate::plugin::store::content_digest_hex(
-                        distribution.0.archive.asset(&plugin.artifact)?
-                    )
+                    content_digest_hex(distribution.0.archive.asset(&plugin.artifact)?)
                 ),
             );
         }
-        crate::pack::plugin_pin_conflicts(&self.core.access()?, self.core.node_did(), &replacements)
-            .await
+        plugin_pin_conflicts(&self.core.access()?, self.core.node_did(), &replacements).await
     }
 
     /// Refuses an install that replaces a plugin some Tools pins to another
@@ -448,10 +451,10 @@ impl PackInstaller {
         &self,
         coordinate: &str,
         removal: bool,
-        edited: crate::pack::DriftPolicy,
+        edited: DriftPolicy,
         words: &[String],
     ) -> anyhow::Result<()> {
-        if edited != crate::pack::DriftPolicy::Refuse {
+        if edited != DriftPolicy::Refuse {
             return Ok(());
         }
         let Some(found) = self.edited_documents(coordinate, removal).await? else {
@@ -506,13 +509,25 @@ impl PackInstaller {
         }
     }
 
+    /// `options.edited`: what an install, update or removal does with
+    /// documents edited since the pack was installed. Absent refuses them.
+    pub(super) fn edited_decision(word: Option<&str>) -> anyhow::Result<DriftPolicy> {
+        match word {
+            None => Ok(DriftPolicy::Refuse),
+            Some(word) => DriftPolicy::parse(word).with_context(|| {
+                format!("options.edited is \"overwrite\" or \"keep\", not {word:?}; pack preview says what each does")
+            }),
+        }
+    }
+
     pub(super) async fn apply(
         &self,
         operation: &str,
         args: PackInstallParams,
-        edited: crate::pack::DriftPolicy,
+        edited: Option<&str>,
         words: &[String],
     ) -> anyhow::Result<String> {
+        let edited = Self::edited_decision(edited)?;
         let distribution = self.resolve(operation, &args).await?;
         let expected = args.expected_digest.as_deref().context(
             "pack install/update requires --digest from config pack preview; preview pins the exact artifact being authorized",
@@ -546,7 +561,7 @@ impl PackInstaller {
 
 /// The `tools update` that moves `conflict`'s pins to the replacement. The
 /// whole `integrations` field is sent because `set` replaces a field.
-pub(super) fn pin_move_call(conflict: &crate::pack::PluginPinConflict) -> Value {
+pub(super) fn pin_move_call(conflict: &PluginPinConflict) -> Value {
     json!({
         "argv": ["tools", "update"],
         "options": {"agent": conflict.agent, "shared": "acknowledge"},

@@ -171,7 +171,7 @@ impl ConfigCommandTool {
             "install" | "update" => {
                 let (change, edited) = parse_pack_change(&argv[1..])?;
                 self.execution.enter_mutation();
-                installer.apply(verb, change, edited, argv).await
+                installer.apply(verb, change, edited.as_deref(), argv).await
             }
             "remove" => {
                 let rest = argv[1..]
@@ -187,7 +187,7 @@ impl ConfigCommandTool {
                         && parsed.options.keys().all(|name| name == "edited"),
                     "pack remove takes one PACKAGE and optionally --with-collections and options.edited (overwrite or keep)"
                 );
-                let edited = parse_edited(&parsed)?;
+                let edited = parsed.one("edited")?;
                 self.execution.enter_mutation();
                 installer
                     .remove(&parsed.positionals[0], with_collections, edited, argv)
@@ -198,18 +198,7 @@ impl ConfigCommandTool {
     }
 }
 
-/// `options.edited`: what an install, update or removal does with documents
-/// edited since the pack was installed. Absent refuses them.
-fn parse_edited(parsed: &ParsedArgs) -> Result<crate::pack::DriftPolicy> {
-    match parsed.one("edited")? {
-        None => Ok(crate::pack::DriftPolicy::Refuse),
-        Some(word) => crate::pack::DriftPolicy::parse(word).with_context(|| {
-            format!("options.edited is \"overwrite\" or \"keep\", not {word:?}; pack preview says what each does")
-        }),
-    }
-}
-
-fn parse_pack_change(argv: &[String]) -> Result<(PackInstallParams, crate::pack::DriftPolicy)> {
+fn parse_pack_change(argv: &[String]) -> Result<(PackInstallParams, Option<String>)> {
     let package = argv
         .first()
         .context("pack operation requires PACKAGE")?
@@ -252,6 +241,6 @@ fn parse_pack_change(argv: &[String]) -> Result<(PackInstallParams, crate::pack:
             inference_slots: pairs("inference-slot")?,
             expected_digest: parsed.one("digest")?.map(ToOwned::to_owned),
         },
-        parse_edited(&parsed)?,
+        parsed.one("edited")?.map(ToOwned::to_owned),
     ))
 }
