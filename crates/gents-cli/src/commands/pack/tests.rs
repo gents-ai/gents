@@ -193,7 +193,8 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
     std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
     let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
-    let source = super::source::PackSource::received(archive);
+    let source =
+        super::source::PackSource::received(archive, gents::pack::PackSource::Installed).unwrap();
     let preview = super::install::install_variable_preview(&source, "did:key:node").unwrap();
     assert_eq!(preview["kind"], "install_literal");
     assert_eq!(preview["uses"][0]["path"], "/node/node_did");
@@ -230,7 +231,9 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
     let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
     let source = super::source::PackSource::received(
         gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
-    );
+        gents::pack::PackSource::Installed,
+    )
+    .unwrap();
     let config: gents::documents::PackConfig = serde_json::from_value(json!({
         "node": {"node_did": "did:key:node"},
         "tools": [{"node_did": "did:key:node", "tools_id": "demo-tools", "display_name": "installed value"}]

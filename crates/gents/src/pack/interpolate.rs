@@ -190,22 +190,13 @@ mod install_variable_conformance {
 
     #[test]
     fn variable_precedence_matches_the_executable_model() {
-        let output = std::process::Command::new("lake")
-            .args([
-                "env",
-                "lean",
-                "--run",
-                "Proofs/Conformance/PackInstallVariables.lean",
-            ])
-            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs"))
-            .output()
-            .expect("run the pack-variable model");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let cases: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        let output = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.PackInstallVariables:olean",
+            "Proofs/Conformance/PackInstallVariables.lean",
+        )
+        .unwrap();
+        let cases: Vec<Value> = serde_json::from_str(&output).unwrap();
         assert_eq!(cases.len(), 72);
         for case in cases {
             let nested = |key: &str| {

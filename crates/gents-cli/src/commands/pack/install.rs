@@ -28,7 +28,7 @@ pub(super) fn has_plugin_references(config: &serde_json::Value) -> bool {
         })
 }
 
-pub(super) fn parse_dependency_variables(
+pub(crate) fn parse_dependency_variables(
     values: &[String],
 ) -> Result<gents::pack::DependencyVariableOverrides> {
     let mut result = gents::pack::DependencyVariableOverrides::new();

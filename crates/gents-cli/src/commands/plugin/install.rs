@@ -51,6 +51,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         let pack_args = crate::cli::PackInstallArgs {
             package: args.name.clone(),
             inference_slots: Vec::new(),
+            dependency_variables: Vec::new(),
             preview: false,
             scope: crate::cli::ScopeArgs {
                 home: Some(home.clone()),

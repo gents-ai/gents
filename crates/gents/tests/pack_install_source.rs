@@ -82,6 +82,7 @@ async fn document_install_records_portable_source_and_history() {
         None,
         Some(&archive),
         &|_| None,
+        &Default::default(),
     )
     .await
     .unwrap();

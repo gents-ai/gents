@@ -52,7 +52,7 @@ pub use installation::{
     declared_readers, document_pack_schema_paths, ensure_plugins_unreferenced,
     hosted_document_graph, install_documents_with_plugins, install_prepared_document_graph,
     install_prepared_document_pack, installed_catalog, installed_pack_documents, installed_packs,
-    list_installed_packs, load_pack_upgrade_config, plugin_data_unique_keys, prepare_document_pack_archive,
+    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_archive,
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
     prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_store_change,
     record_plugin_store_change_as, record_staged_plugin_store_change, referenced_pack_digests,
@@ -71,8 +71,8 @@ pub use installation::{
 };
 pub use loader::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config,
-    ensure_pack_leaves_default_unselected, load_dependency_config_with_variables, load_pack_config,
-    load_pack_config_with_variables, pin_pack_plugins,
+    ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
+    DependencyVariableResolver,
 };
 pub use manifest_validation::{validate_manifest, validate_pack_manifest};
 pub use plugin::{

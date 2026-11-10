@@ -4,62 +4,91 @@ use serde_json::Value;
 use super::{asset_path, interpolate, validate_pack_manifest, PackInstallOptions, PackManifest};
 use crate::documents::{EvalCase, PackConfig};
 
-/// Captures only values referenced by the authored configuration. A repeated
-/// variable is resolved once so one installation cannot observe two values.
-pub fn load_pack_config_with_variables(
-    manifest: &PackManifest,
-    options: &PackInstallOptions,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-    environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<(
-    PackConfig,
-    std::collections::BTreeMap<String, Option<String>>,
-)> {
-    let captured = std::cell::RefCell::new(std::collections::BTreeMap::new());
-    let config = load_pack_config(manifest, options, read_asset, &|name| {
-        let mut values = captured.borrow_mut();
-        values
-            .entry(name.to_owned())
-            .or_insert_with(|| environment(name))
-            .clone()
-    })?;
-    Ok((config, captured.into_inner()))
+/// Resolves a dependency's install variables (Lean
+/// `Configuration.resolvePackInstallVariable`) and records each referenced value
+/// once. Without overrides the ambient environment applies; with overrides an
+/// installed dependency keeps its recorded values and never reads ambient ones.
+pub struct DependencyVariableResolver<'a> {
+    installed: bool,
+    previous: &'a std::collections::BTreeMap<String, Option<String>>,
+    overrides: Option<&'a std::collections::BTreeMap<String, Option<String>>>,
+    environment: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    captured: std::sync::Mutex<std::collections::BTreeMap<String, Option<String>>>,
+    unknown: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
-pub fn load_dependency_config_with_variables(
-    manifest: &PackManifest,
-    options: &PackInstallOptions,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-    installed: bool,
-    previous: &std::collections::BTreeMap<String, Option<String>>,
-    overrides: &std::collections::BTreeMap<String, Option<String>>,
-    environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<(
-    PackConfig,
-    std::collections::BTreeMap<String, Option<String>>,
-)> {
-    let unknown = std::cell::RefCell::new(std::collections::BTreeSet::new());
-    let result = load_pack_config_with_variables(manifest, options, read_asset, &|name| {
-        let prior = previous.get(name).cloned();
-        let explicit = overrides.get(name).cloned();
-        let ambient = if !installed && explicit.is_none() {
-            environment(name)
-        } else {
-            None
-        };
-        match interpolate::resolve_install_variable(true, installed, prior, explicit, ambient) {
-            Some(value) => value,
-            None => {
-                unknown.borrow_mut().insert(name.to_owned());
-                None
-            }
+impl<'a> DependencyVariableResolver<'a> {
+    pub fn new(
+        installed: bool,
+        previous: &'a std::collections::BTreeMap<String, Option<String>>,
+        overrides: Option<&'a std::collections::BTreeMap<String, Option<String>>>,
+        environment: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Self {
+        Self {
+            installed,
+            previous,
+            overrides,
+            environment,
+            captured: Default::default(),
+            unknown: Default::default(),
         }
-    });
-    let unknown = unknown.into_inner();
-    anyhow::ensure!(unknown.is_empty(),
-        "installed dependency has unknown variable bindings: {}; explicitly configure them before reinstalling",
-        unknown.into_iter().collect::<Vec<_>>().join(", "));
-    result
+    }
+
+    pub fn resolve(&self, name: &str) -> Option<String> {
+        let mut captured = self.captured.lock().unwrap_or_else(|e| e.into_inner());
+        captured
+            .entry(name.to_owned())
+            .or_insert_with(|| {
+                let Some(overrides) = self.overrides else {
+                    return (self.environment)(name);
+                };
+                let explicit = overrides.get(name).cloned();
+                let ambient = if !self.installed && explicit.is_none() {
+                    (self.environment)(name)
+                } else {
+                    None
+                };
+                interpolate::resolve_install_variable(
+                    true,
+                    self.installed,
+                    self.previous.get(name).cloned(),
+                    explicit,
+                    ambient,
+                )
+                .unwrap_or_else(|| {
+                    self.unknown
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(name.to_owned());
+                    None
+                })
+            })
+            .clone()
+    }
+
+    /// The captured values, refusing unknown recorded bindings and overrides
+    /// the configuration never references.
+    pub fn finish(self) -> Result<std::collections::BTreeMap<String, Option<String>>> {
+        let unknown = self.unknown.into_inner().unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(unknown.is_empty(),
+            "installed dependency has unknown variable bindings: {}; explicitly configure them before reinstalling",
+            unknown.into_iter().collect::<Vec<_>>().join(", "));
+        let captured = self
+            .captured
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner());
+        for name in self
+            .overrides
+            .into_iter()
+            .flat_map(|overrides| overrides.keys())
+        {
+            anyhow::ensure!(
+                captured.contains_key(name),
+                "dependency does not use variable {name:?}"
+            );
+        }
+        Ok(captured)
+    }
 }
 
 pub fn load_pack_config(

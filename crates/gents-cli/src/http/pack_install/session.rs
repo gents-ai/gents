@@ -384,6 +384,9 @@ async fn run_inner(
         let requested = crate::commands::pack::parse_inference_slot_bindings(
             &received.request.inference_slots,
         )?;
+        let overrides = crate::commands::pack::parse_dependency_variables(
+            &received.request.dependency_variables,
+        )?;
         let mut prepared = gents::pack::prepare_document_pack_archive(
             &access,
             &state.node_did,
@@ -397,6 +400,7 @@ async fn run_inner(
             gents::pack::InstalledVia::Operator,
             Some(&home),
             &|name| std::env::var(name).ok(),
+            &overrides,
         )
         .await?;
         crate::commands::pack::PackSource::record_graph_sources(

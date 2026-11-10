@@ -25,7 +25,7 @@ pub use declared_access::declared_readers;
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
     document_pack_schema_paths, hosted_document_graph, install_documents_with_plugins,
-    install_prepared_document_graph, install_prepared_document_pack, load_pack_upgrade_config, plugin_data_unique_keys,
+    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
     prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
     prepare_document_pack_install, prepare_hosted_document_pack_archive,
     DependencyVariableOverrides, HostedDocumentGraph, HostedPackPreparation, PreparedDependency,
@@ -205,12 +205,16 @@ struct Record {
     version: Option<String>,
     digest: Option<String>,
     documents: BTreeMap<String, RecordedDocument>,
+    /// A record written before install values were recorded reads as empty, so
+    /// every variable it renders is an unknown prior binding that a dependent
+    /// install refuses instead of guessing (Lean `resolvePackInstallVariable`).
     variables: BTreeMap<String, Option<String>>,
     plugins: Vec<InstalledPackPlugin>,
     history: Vec<String>,
     source: Option<PackSource>,
     source_history: Vec<PackSourceHistory>,
     required_by: BTreeSet<String>,
+    /// Missing legacy records default to explicit ownership.
     explicit: bool,
     plugin_store: bool,
 }
@@ -365,23 +369,14 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
             .into_iter()
             .map(|document| (key(&document.collection, &document.id), document))
             .collect(),
-        variables: serde_json::from_value(
-            row.get("variables")
-                .cloned()
-                .context("installation record is missing variables")?,
-        )
-        .context("invalid installation variable bindings")?,
+        variables: decode_record_field(row, "variables", owner, coordinate)?,
         plugins: decode_record_field(row, "plugins", owner, coordinate)?,
         history: decode_record_field(row, "history", owner, coordinate)?,
         source: decode_record_field(row, "source", owner, coordinate)?,
         source_history: decode_record_field(row, "source_history", owner, coordinate)?,
         required_by: required_by.into_iter().collect(),
-        explicit: row["explicit"]
-            .as_bool()
-            .context("installation record is missing explicit ownership")?,
-        plugin_store: row["plugin_store"]
-            .as_bool()
-            .context("installation record is missing plugin store state")?,
+        explicit: row.get("explicit").and_then(Value::as_bool).unwrap_or(true),
+        plugin_store: row["plugin_store"].as_bool().unwrap_or(false),
     })
 }
 
@@ -626,6 +621,10 @@ async fn write_record_in_txn(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the installation record inputs a graph stage carries"
+)]
 pub(crate) async fn install_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,

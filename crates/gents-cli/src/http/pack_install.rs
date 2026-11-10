@@ -188,6 +188,7 @@ pub(crate) async fn encode_install_request(
         .collect::<Vec<_>>();
     let node_did = owner.to_owned();
     let inference_slots = args.inference_slots.clone();
+    let dependency_variables = args.dependency_variables.clone();
     let wire = args.wire.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (
         args.drift.overwrite,
@@ -204,6 +205,7 @@ pub(crate) async fn encode_install_request(
             root_source,
             dependency_sources,
             inference_slots,
+            dependency_variables,
             overwrite,
             keep,
             preview,
