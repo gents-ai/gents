@@ -13,6 +13,7 @@ import {
   type SessionGoalRead,
 } from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
+import { equal } from "./fleetStore";
 
 export type SessionFacts = {
   rowsRevision: number;
@@ -124,16 +125,7 @@ export function writeSessionGoalRead(store: SessionStore, read: SessionGoalRead)
 
 /* an unchanged load keeps its object, so its readers do not render again */
 export function writeSessionLoad(store: SessionStore, load: SessionLoadState) {
-  const held = store.getState().load;
-  if (
-    held.phase === load.phase &&
-    held.sessionId === load.sessionId &&
-    held.nodeDid === load.nodeDid &&
-    held.found === load.found &&
-    held.error === load.error &&
-    held.reread === load.reread
-  )
-    return;
+  if (equal(store.getState().load, load)) return;
   store.setState({ load });
 }
 
